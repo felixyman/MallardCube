@@ -25,6 +25,7 @@ mod kpis;
 mod measure_groups;
 mod measuregroup_dimensions;
 mod execute;
+mod tmschema;
 
 use parser::{parse_xmla, XmlaRequest};
 
@@ -50,6 +51,41 @@ fn default_headers() -> HeaderMap {
     headers
 }
 
+/// Extracts `<open>...</close>` (first occurrence) verbatim from `body`.
+/// Returns the trimmed inner contents, or None if either tag is missing.
+fn extract_block<'a>(body: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let start = body.find(open)? + open.len();
+    let end = body[start..].find(close)? + start;
+    Some(body[start..end].trim())
+}
+
+/// Print the `<RestrictionList>` and `<PropertyList>` blocks from a Discover
+/// request body, when present. Helps us see what Excel is actually asking for.
+fn log_discover_context(body: &str) {
+    if let Some(restrictions) = extract_block(body, "<RestrictionList", "</RestrictionList>") {
+        // <RestrictionList ...> — strip leading attrs up to the first '>' so we
+        // print just the inner XML.
+        let inner = match restrictions.find('>') {
+            Some(idx) => restrictions[idx + 1..].trim(),
+            None => restrictions,
+        };
+        if !inner.is_empty() {
+            println!("🎯 RestrictionList:\n{}", inner);
+        } else {
+            println!("🎯 RestrictionList: (empty)");
+        }
+    }
+    if let Some(properties) = extract_block(body, "<PropertyList", "</PropertyList>") {
+        let inner = match properties.find('>') {
+            Some(idx) => properties[idx + 1..].trim(),
+            None => properties,
+        };
+        if !inner.is_empty() {
+            println!("⚙️  PropertyList:\n{}", inner);
+        }
+    }
+}
+
 async fn handle_xmla(body: String) -> impl IntoResponse {
     if body.contains("<RequestType>") {
         let req_start = body.find("<RequestType>").unwrap() + 13;
@@ -60,6 +96,8 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
     let headers = default_headers();
     let request = parse_xmla(&body);
     println!("📥 Fick anrop, tolkade som: {:?}", request);
+
+    log_discover_context(&body);
 
     if body.contains("<Execute") {
         println!("🔍 Rå Execute från Excel:\n{}", body);
@@ -131,6 +169,47 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         XmlaRequest::MdschemaMeasureGroupDimensions => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
             measuregroup_dimensions::get_measuregroup_dimensions_response()
+        }
+
+        XmlaRequest::TmschemaModel => {
+            println!("📥 TMSCHEMA_MODEL");
+            tmschema::get_tmschema_model_response()
+        }
+        XmlaRequest::TmschemaTables => {
+            println!("📥 TMSCHEMA_TABLES");
+            tmschema::get_tmschema_tables_response()
+        }
+        XmlaRequest::TmschemaColumns => {
+            println!("📥 TMSCHEMA_COLUMNS");
+            tmschema::get_tmschema_columns_response()
+        }
+        XmlaRequest::TmschemaMeasures => {
+            println!("📥 TMSCHEMA_MEASURES");
+            tmschema::get_tmschema_measures_response()
+        }
+        XmlaRequest::TmschemaHierarchies => {
+            println!("📥 TMSCHEMA_HIERARCHIES");
+            tmschema::get_tmschema_hierarchies_response()
+        }
+        XmlaRequest::TmschemaLevels => {
+            println!("📥 TMSCHEMA_LEVELS");
+            tmschema::get_tmschema_levels_response()
+        }
+        XmlaRequest::TmschemaRelationships => {
+            println!("📥 TMSCHEMA_RELATIONSHIPS");
+            tmschema::get_tmschema_relationships_response()
+        }
+        XmlaRequest::TmschemaPartitions => {
+            println!("📥 TMSCHEMA_PARTITIONS");
+            tmschema::get_tmschema_partitions_response()
+        }
+        XmlaRequest::DiscoverXmlMetadata => {
+            println!("📥 DISCOVER_XML_METADATA");
+            tmschema::get_discover_xml_metadata_response()
+        }
+        XmlaRequest::DiscoverCalcDependency => {
+            println!("📥 DISCOVER_CALC_DEPENDENCY");
+            tmschema::get_discover_calc_dependency_response()
         }
 
         XmlaRequest::Unknown => {

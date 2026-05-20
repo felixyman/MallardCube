@@ -25,48 +25,31 @@ const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="HIERARCHY_DISPLAY_FOLDER" name="HIERARCHY_DISPLAY_FOLDER" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="INSTANCE_SELECTION" name="INSTANCE_SELECTION" type="xsd:int" minOccurs="0"/>
                 <xsd:element sql:field="GROUPING_BEHAVIOR" name="GROUPING_BEHAVIOR" type="xsd:int" minOccurs="0"/>
-                <xsd:element sql:field="STRUCTURE_TYPE" name="STRUCTURE_TYPE" type="xsd:string" minOccurs="0"/>"#;
+                <xsd:element sql:field="STRUCTURE_TYPE" name="STRUCTURE_TYPE" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
 const HIER_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_NAME>Measures</HIERARCHY_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
-            <HIERARCHY_CAPTION>Measures</HIERARCHY_CAPTION>
-            <DIMENSION_TYPE>2</DIMENSION_TYPE>
-            <HIERARCHY_CARDINALITY>1</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>[Measures].[Total Försäljning]</DEFAULT_MEMBER>
-            <STRUCTURE>3</STRUCTURE>
+            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_NAME>Produktkategori</HIERARCHY_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <HIERARCHY_CAPTION>Produktkategori</HIERARCHY_CAPTION>
+            <DIMENSION_TYPE>3</DIMENSION_TYPE>
+            <HIERARCHY_CARDINALITY>50</HIERARCHY_CARDINALITY>
+            <DEFAULT_MEMBER>[Produktkategori].[Produktkategori].[All]</DEFAULT_MEMBER>
+            <ALL_MEMBER>[Produktkategori].[Produktkategori].[All]</ALL_MEMBER>
+            <STRUCTURE>0</STRUCTURE>
             <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
             <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
             <HIERARCHY_IS_VISIBLE>true</HIERARCHY_IS_VISIBLE>
             <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
-            <INSTANCE_SELECTION>1</INSTANCE_SELECTION>
+            <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
+            <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
             <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
-            <STRUCTURE_TYPE>Flat</STRUCTURE_TYPE>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_NAME>Produktkategori</HIERARCHY_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <HIERARCHY_CAPTION>Produktkategori</HIERARCHY_CAPTION>
-            <DIMENSION_TYPE>0</DIMENSION_TYPE>
-            <HIERARCHY_CARDINALITY>50</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>[Produktkategori].[All Produktkategorier]</DEFAULT_MEMBER>
-            <ALL_MEMBER>[Produktkategori].[All Produktkategorier]</ALL_MEMBER>
-            <STRUCTURE>3</STRUCTURE>
-            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
-            <HIERARCHY_ORDINAL>1</HIERARCHY_ORDINAL>
-            <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
-            <HIERARCHY_IS_VISIBLE>true</HIERARCHY_IS_VISIBLE>
-            <HIERARCHY_ORIGIN>1</HIERARCHY_ORIGIN>
-            <INSTANCE_SELECTION>1</INSTANCE_SELECTION>
-            <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
-            <STRUCTURE_TYPE>Flat</STRUCTURE_TYPE>
+            <STRUCTURE_TYPE>Natural</STRUCTURE_TYPE>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>"#;
 
 pub fn get_hierarchies_response() -> String {

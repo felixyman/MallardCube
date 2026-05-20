@@ -34,9 +34,11 @@ const MEASURE_ROWS: &str = r#"          <row>
             <NUMERIC_SCALE>2</NUMERIC_SCALE>
             <MEASURE_UNITS>SEK</MEASURE_UNITS>
             <DESCRIPTION>Vår totala försäljning</DESCRIPTION>
+            <EXPRESSION>SUM('Faktatabell'[Sales])</EXPRESSION>
             <MEASURE_IS_VISIBLE>true</MEASURE_IS_VISIBLE>
             <MEASURE_UNQUALIFIED_CAPTION>Total Försäljning (SEK)</MEASURE_UNQUALIFIED_CAPTION>
             <MEASUREGROUP_NAME>Faktatabell</MEASUREGROUP_NAME>
+            <MEASURE_DISPLAY_FOLDER></MEASURE_DISPLAY_FOLDER>
             <DEFAULT_FORMAT_STRING>#,##0.00 SEK</DEFAULT_FORMAT_STRING>
           </row>"#;
 

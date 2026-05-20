@@ -9,13 +9,24 @@ const TABLE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="TABLE_
                 <xsd:element sql:field="TABLE_PROPID" name="TABLE_PROPID" type="xsd:unsignedInt" minOccurs="0"/>
                 <xsd:element sql:field="DATE_CREATED" name="DATE_CREATED" type="xsd:dateTime" minOccurs="0"/>
                 <xsd:element sql:field="DATE_MODIFIED" name="DATE_MODIFIED" type="xsd:dateTime" minOccurs="0"/>
-                <xsd:element sql:field="TABLE_OLAP_TYPE" name="TABLE_OLAP_TYPE" type="xsd:string" minOccurs="0"/>"#;
+                <xsd:element sql:field="TABLE_OLAP_TYPE" name="TABLE_OLAP_TYPE" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string" minOccurs="0"/>"#;
 
 const TABLE_ROWS: &str = r#"          <row>
             <TABLE_CATALOG>KTH_KEX_MALLOY_CUBE</TABLE_CATALOG>
+            <TABLE_SCHEMA>Model</TABLE_SCHEMA>
             <TABLE_NAME>Faktatabell</TABLE_NAME>
-            <TABLE_TYPE>TABLE</TABLE_TYPE>
+            <TABLE_TYPE>SYSTEM TABLE</TABLE_TYPE>
             <TABLE_OLAP_TYPE>MEASURE_GROUP</TABLE_OLAP_TYPE>
+            <CUBE_NAME>Model</CUBE_NAME>
+          </row>
+          <row>
+            <TABLE_CATALOG>KTH_KEX_MALLOY_CUBE</TABLE_CATALOG>
+            <TABLE_SCHEMA>Model</TABLE_SCHEMA>
+            <TABLE_NAME>Produktkategori</TABLE_NAME>
+            <TABLE_TYPE>TABLE</TABLE_TYPE>
+            <TABLE_OLAP_TYPE>CUBE_DIMENSION</TABLE_OLAP_TYPE>
+            <CUBE_NAME>Model</CUBE_NAME>
           </row>"#;
 
 pub fn get_tables_response() -> String {

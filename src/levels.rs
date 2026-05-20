@@ -24,51 +24,35 @@ const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALO
                 <xsd:element sql:field="LEVEL_UNIQUE_NAME_SQL_COLUMN_NAME" name="LEVEL_UNIQUE_NAME_SQL_COLUMN_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="LEVEL_ATTRIBUTE_HIERARCHY_NAME" name="LEVEL_ATTRIBUTE_HIERARCHY_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="LEVEL_KEY_CARDINALITY" name="LEVEL_KEY_CARDINALITY" type="xsd:unsignedInt" minOccurs="0"/>
-                <xsd:element sql:field="LEVEL_ORIGIN" name="LEVEL_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>"#;
+                <xsd:element sql:field="LEVEL_ORIGIN" name="LEVEL_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>
+                <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
 const LEVEL_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>Measures</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Measures].[Measures]</LEVEL_UNIQUE_NAME>
-            <LEVEL_CAPTION>Measures</LEVEL_CAPTION>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>0</LEVEL_TYPE>
-            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>5</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>6</LEVEL_ORIGIN>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
             <LEVEL_NAME>(All)</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[(All)]</LEVEL_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[(All)]</LEVEL_UNIQUE_NAME>
             <LEVEL_CAPTION>(All)</LEVEL_CAPTION>
             <LEVEL_NUMBER>0</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
             <LEVEL_TYPE>1</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
             <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
           <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
             <LEVEL_NAME>Produktkategori</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
             <LEVEL_CAPTION>Produktkategori</LEVEL_CAPTION>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>50</LEVEL_CARDINALITY>
@@ -79,6 +63,7 @@ const LEVEL_ROWS: &str = r#"          <row>
             <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>50</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>"#;
 
 pub fn get_levels_response() -> String {

@@ -537,6 +537,67 @@ const SCHEMA_ROWSET_DATA: &str = r#"          <row>
             <Restrictions><Name>KEY</Name><Type>xsd:string</Type></Restrictions>
             <RestrictionsMask>1</RestrictionsMask>
           </row>
+          <row>
+            <SchemaName>TMSCHEMA_MODEL</SchemaName>
+            <SchemaGuid>F1B5C3AB-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>1</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_TABLES</SchemaName>
+            <SchemaGuid>F1B5C3AC-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>Name</Name><Type>xsd:string</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_COLUMNS</SchemaName>
+            <SchemaGuid>F1B5C3AD-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>TableID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_MEASURES</SchemaName>
+            <SchemaGuid>F1B5C3AE-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>TableID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_HIERARCHIES</SchemaName>
+            <SchemaGuid>F1B5C3AF-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>TableID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_LEVELS</SchemaName>
+            <SchemaGuid>F1B5C3B0-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>HierarchyID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_RELATIONSHIPS</SchemaName>
+            <SchemaGuid>F1B5C3B1-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>1</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>TMSCHEMA_PARTITIONS</SchemaName>
+            <SchemaGuid>F1B5C3B2-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>ID</Name><Type>xsd:long</Type></Restrictions>
+            <Restrictions><Name>TableID</Name><Type>xsd:long</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
+          <row>
+            <SchemaName>DISCOVER_CALC_DEPENDENCY</SchemaName>
+            <SchemaGuid>F1B5C3B3-7CD1-4F77-89A8-9DE3D0C9DBC0</SchemaGuid>
+            <Restrictions><Name>DATABASE_NAME</Name><Type>xsd:string</Type></Restrictions>
+            <Restrictions><Name>OBJECT_TYPE</Name><Type>xsd:string</Type></Restrictions>
+            <RestrictionsMask>3</RestrictionsMask>
+          </row>
 "#;
 
 pub fn get_schemas_response() -> String {
