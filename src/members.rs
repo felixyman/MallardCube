@@ -19,31 +19,15 @@ const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
 const MEMBER_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Measures].[Measures]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>0</MEMBER_ORDINAL>
-            <MEMBER_NAME>Total Sales</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Measures].[Total Sales]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>2</MEMBER_TYPE>
-            <MEMBER_CAPTION>Total Sales</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_COUNT>0</PARENT_COUNT>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[ProductCategory]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[ProductCategory]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[ProductCategory].[(All)]</LEVEL_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[ProductCategory].[ProductCategory]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[ProductCategory].[ProductCategory].[(All)]</LEVEL_UNIQUE_NAME>
             <LEVEL_NUMBER>0</LEVEL_NUMBER>
             <MEMBER_ORDINAL>0</MEMBER_ORDINAL>
-            <MEMBER_NAME>All ProductCategoryer</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[ProductCategory].[All ProductCategoryer]</MEMBER_UNIQUE_NAME>
+            <MEMBER_NAME>All</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[ProductCategory].[ProductCategory].[All]</MEMBER_UNIQUE_NAME>
             <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_CAPTION>All ProductCategoryer</MEMBER_CAPTION>
+            <MEMBER_CAPTION>All</MEMBER_CAPTION>
             <CHILDREN_CARDINALITY>50</CHILDREN_CARDINALITY>
             <PARENT_LEVEL>0</PARENT_LEVEL>
             <PARENT_COUNT>0</PARENT_COUNT>
@@ -52,12 +36,12 @@ const MEMBER_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[ProductCategory]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[ProductCategory]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[ProductCategory].[ProductCategory]</LEVEL_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[ProductCategory].[ProductCategory]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[ProductCategory].[ProductCategory].[ProductCategory]</LEVEL_UNIQUE_NAME>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
             <MEMBER_ORDINAL>1</MEMBER_ORDINAL>
             <MEMBER_NAME>Category A</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[ProductCategory].[Category A]</MEMBER_UNIQUE_NAME>
+            <MEMBER_UNIQUE_NAME>[ProductCategory].[ProductCategory].&amp;[Category A]</MEMBER_UNIQUE_NAME>
             <MEMBER_TYPE>3</MEMBER_TYPE>
             <MEMBER_CAPTION>Category A</MEMBER_CAPTION>
             <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>

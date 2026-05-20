@@ -31,9 +31,10 @@ const CUBE_ROWS: &str = r#"          <row>
             <IS_LINKABLE>false</IS_LINKABLE>
             <IS_WRITE_ENABLED>false</IS_WRITE_ENABLED>
             <IS_SQL_ENABLED>false</IS_SQL_ENABLED>
-            <CUBE_CAPTION>Malloy Analytics Cube</CUBE_CAPTION>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-            <PREFERRED_QUERY_PATTERNS>3</PREFERRED_QUERY_PATTERNS>
+            <CUBE_CAPTION>Model</CUBE_CAPTION>
+            <BASE_CUBE_NAME>Model</BASE_CUBE_NAME>
+            <CUBE_SOURCE>2</CUBE_SOURCE>
+            <PREFERRED_QUERY_PATTERNS>1</PREFERRED_QUERY_PATTERNS>
           </row>"#;
 
 pub fn get_cubes_response() -> String {
