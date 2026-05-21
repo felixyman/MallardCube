@@ -33,8 +33,13 @@ xmla_proxy/src/
   sets.rs              — MDSCHEMA_SETS (empty)
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs (advertised but Excel does not query them)
-  execute.rs           — ExecuteResponse with MDX SELECT + DAX EVALUATE branches
+  execute.rs           — ExecuteResponse: MDX SELECT (flat rowset) + DAX EVALUATE +
+                         cellset (mddataset) for drilldown queries
 ```
+
+## Reference docs
+  docs/cellset-reference.md   — Exact cellset XML format, property declarations,
+                                 common crash errors, and generation recipe.
 
 ## XmlaRequest variants (all handled in main.rs)
 DiscoverProperties, DiscoverSchemaRowsets, DiscoverLiterals,
@@ -46,15 +51,23 @@ DiscoverXmlMetadata, DiscoverCalcDependency,
 BeginSession, ExecuteEmpty, ExecuteStatement(String), Unknown.
 
 ## What works
-- Full discover handshake; Excel reaches the PivotTable without the previous cube-selection dialog blocker.
+- Full discover handshake; Excel reaches the PivotTable without issues.
 - PivotTable Fields renders correctly: `Σ Faktatabell` + `Total Försäljning (SEK)`,
   and `Produktkategori` table + `Produktkategori` hierarchy.
 - Session management (BeginSession, EndSession, empty Execute).
 - `X-Transport-Caps-Negotiation-Flags: 0,0,0,0,0` header.
-- MDX `SELECT ... FROM [Model]` returns a minimal rowset.
+- MDX `SELECT ... FROM [Model]` flat rowset returns a minimal result.
 - DAX `EVALUATE` falls through to a placeholder single-row response.
+- **Cellset (mddataset) responses** for multidimensional MDX queries with
+  DIMENSION PROPERTIES / CELL PROPERTIES. Excel renders member labels in
+  the pivot. Currently hard-coded for one hierarchy + one member.
 - Request logging: every Discover prints the `<RestrictionList>` and `<PropertyList>`
-  inner XML to stdout, which makes it cheap to learn what Excel actually asks for.
+  inner XML to stdout.
+
+## Current blocker
+**None.** The proxy now completes the full lifecycle: field list → drag fields
+→ MDX query → cellset response → pivot renders. Remaining work is generalizing
+the cellset from hard-coded data and hooking up real backends (DuckDB → Malloy).
 
 ## Observed Excel session pattern (current trace)
 ```
@@ -105,22 +118,41 @@ No `DIMENSION_VISIBILITY=1` filter — Excel takes whatever rows we return.
 4. **`DISCOVER_LITERALS Format=Tabular` is SOAP rowset format**, not Tabular model.
 5. **Restriction filtering is not what blocked rendering** — leaving it for later
    when sourcing live data.
+6. **`DEFAULT_HIERARCHY` must resolve to an existing hierarchy.** When we removed
+   the `[Measures]` hierarchy from `MDSCHEMA_HIERARCHIES` while keeping the
+   dimension with `DEFAULT_HIERARCHY=[Measures]`, Excel refused to issue MDX
+   queries because the cube model was internally inconsistent.
+7. **Cellset response (mddataset) format is non-negotiable for multidimensional MDX.**
+   Flat rowset responses are rejected by Excel for queries with DIMENSION PROPERTIES
+   or CELL PROPERTIES clauses. The correct format is documented in
+   `docs/cellset-reference.md`.
+8. **Every Guild column in every rowset schema must have row data**, even though
+   the MS-SSAS spec marks them all as `minOccurs="0"`. Missing GUIDs cause silent
+   rejection: empty/unnamed nodes (DIMENSION_GUID), cube validation failure
+   (CUBE_GUID), and MDX refusal (HIERARCHY_GUID, LEVEL_GUID, MEASURE_GUID).
+9. **MDSCHEMA_PROPERTIES must return HIERARCHY_UNIQUE_NAME on every row** when
+   Excel filters by hierarchy. Without it, Excel sees zero matching properties
+   and silently aborts the MDX phase.
+10. **Metadata consistency is paramount.** Every reference must resolve:
+    `DEFAULT_HIERARCHY` → actual hierarchy row, level references in
+    MDSCHEMA_PROPERTIES → actual level rows, `DIMENSION_UNIQUE_NAME` references
+    in member data → actual dimension rows. Excel silently rejects the cube
+    when references are dangling.
 
 ## Next candidate workstreams
-1. **Test pivot drag-drop end to end.** Confirm MDX execute returns the placeholder
-   number when a measure is dragged into Values.
-2. **Audit other MDSCHEMA rowsets for missing GUID columns.** Add `HIERARCHY_GUID`,
-   `LEVEL_GUID`, `MEASURE_GUID`, `MEMBER_GUID` row data to head off the next
-   surprise. Schema columns are already declared; only row data is missing.
-3. **Vec<Row> + restriction filter refactor.** Pre-req for sourcing rows from
-   DuckDB. Each rowset module exposes `fn columns() -> &[Column]`,
-   `fn rows() -> Vec<Row>`; a shared serializer in `response.rs` parses
-   `<RestrictionList>` from the request and filters before emitting XML.
-4. **Real MDX → Malloy → DuckDB transpilation** in `execute.rs`. Currently a
-   constant placeholder. Touchstones: `EVALUATE`, `SELECT ... FROM [Model]`.
-5. **Cleanup.** TMSCHEMA stubs are inert. `mdschema_properties.rs` placeholder for
-   PROPERTY_TYPE=2 (cell properties) should be reviewed once we move to real
-   queries.
+1. **Generalize the cellset response.** Move from hard-coded XML to a generic
+   cellset builder that takes `Vec<Member>` and `Vec<Cell>` from any query result.
+2. **Vec<Row> + restriction filter refactor.** Pre-req for sourcing rows from
+   DuckDB. Each rowset module exposes `fn rows() -> Vec<Row>`; a shared
+   serializer in `response.rs` parses `<RestrictionList>` from the request
+   and filters before emitting XML.
+3. **Real DuckDB integration.** Load a demo Parquet/CSV, issue SQL for the
+   Produktkategori drilldown, encode results as a cellset. First truly live pivot.
+4. **MDX transpilation.** Parse the `DrilldownLevel({[All]})` pattern, extract
+   the hierarchy name, map to a DuckDB table → generate SQL → return real data.
+5. **Malloy bridge.** Translate MDX AST to Malloy source, compile to SQL,
+   execute against DuckDB. The "MDX → Malloy → modern backends" goal.
+6. **Cleanup.** TMSCHEMA stubs are inert. Remove or keep as placeholder stubs.
 
 ## Hard-coded constants (search-and-replace targets when going live)
 - Catalog name: `KTH_KEX_MALLOY_CUBE`
