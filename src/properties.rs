@@ -32,7 +32,7 @@ const PROPERTIES: &[Property] = &[
         prop_type: "long",
         access_type: "ReadWrite",
         is_required: false,
-        value: Some("0"),
+        value: Some("9"),
     },
     Property {
         name: "DbpropMsmdActivityID",
@@ -80,7 +80,7 @@ const PROPERTIES: &[Property] = &[
         prop_type: "string",
         access_type: "Read",
         is_required: false,
-        value: Some("1.0.0"),
+        value: Some("16.0.0.0"),
     },
     Property {
         name: "MdpropMdxSubqueries",

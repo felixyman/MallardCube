@@ -22,10 +22,15 @@ const CUBE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
 
 const CUBE_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <SCHEMA_NAME>Model</SCHEMA_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <CUBE_TYPE>CUBE</CUBE_TYPE>
+            <CUBE_GUID>00000000-0000-0000-0000-000000000010</CUBE_GUID>
+            <CREATED_ON>2026-05-20T12:00:00.000000</CREATED_ON>
             <LAST_SCHEMA_UPDATE>2026-05-20T12:00:00.000000</LAST_SCHEMA_UPDATE>
+            <SCHEMA_UPDATED_BY>RustProxy</SCHEMA_UPDATED_BY>
             <LAST_DATA_UPDATE>2026-05-20T12:00:00.000000</LAST_DATA_UPDATE>
+            <DATA_UPDATED_BY>RustProxy</DATA_UPDATED_BY>
             <DESCRIPTION>Byggt med Rust och DuckDB!</DESCRIPTION>
             <IS_DRILLTHROUGH_ENABLED>true</IS_DRILLTHROUGH_ENABLED>
             <IS_LINKABLE>false</IS_LINKABLE>
@@ -33,8 +38,8 @@ const CUBE_ROWS: &str = r#"          <row>
             <IS_SQL_ENABLED>false</IS_SQL_ENABLED>
             <CUBE_CAPTION>Model</CUBE_CAPTION>
             <BASE_CUBE_NAME>Model</BASE_CUBE_NAME>
-            <CUBE_SOURCE>2</CUBE_SOURCE>
-            <PREFERRED_QUERY_PATTERNS>1</PREFERRED_QUERY_PATTERNS>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+            <PREFERRED_QUERY_PATTERNS>0</PREFERRED_QUERY_PATTERNS>
           </row>"#;
 
 pub fn get_cubes_response() -> String {

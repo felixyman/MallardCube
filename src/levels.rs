@@ -30,10 +30,31 @@ const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALO
 const LEVEL_ROWS: &str = r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>MeasuresLevel</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>[Measures].[MeasuresLevel]</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-000000000060</LEVEL_GUID>
+            <LEVEL_CAPTION>MeasuresLevel</LEVEL_CAPTION>
+            <LEVEL_NUMBER>0</LEVEL_NUMBER>
+            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
+            <LEVEL_TYPE>0</LEVEL_TYPE>
+            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
+            <LEVEL_DBTYPE>5</LEVEL_DBTYPE>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>6</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
             <LEVEL_NAME>(All)</LEVEL_NAME>
             <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[(All)]</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-000000000030</LEVEL_GUID>
             <LEVEL_CAPTION>(All)</LEVEL_CAPTION>
             <LEVEL_NUMBER>0</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
@@ -53,6 +74,7 @@ const LEVEL_ROWS: &str = r#"          <row>
             <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
             <LEVEL_NAME>Produktkategori</LEVEL_NAME>
             <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-000000000031</LEVEL_GUID>
             <LEVEL_CAPTION>Produktkategori</LEVEL_CAPTION>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>50</LEVEL_CARDINALITY>

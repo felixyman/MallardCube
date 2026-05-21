@@ -28,6 +28,7 @@ const MEASURE_ROWS: &str = r#"          <row>
             <MEASURE_NAME>Total Försäljning</MEASURE_NAME>
             <MEASURE_UNIQUE_NAME>[Measures].[Total Försäljning]</MEASURE_UNIQUE_NAME>
             <MEASURE_CAPTION>Total Försäljning (SEK)</MEASURE_CAPTION>
+            <MEASURE_GUID>00000000-0000-0000-0000-000000000040</MEASURE_GUID>
             <MEASURE_AGGREGATOR>1</MEASURE_AGGREGATOR>
             <DATA_TYPE>5</DATA_TYPE>
             <NUMERIC_PRECISION>18</NUMERIC_PRECISION>
