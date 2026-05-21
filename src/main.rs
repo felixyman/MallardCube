@@ -26,6 +26,7 @@ mod measure_groups;
 mod measuregroup_dimensions;
 mod execute;
 mod tmschema;
+mod cellset;
 
 use parser::{parse_xmla, XmlaRequest};
 
