@@ -1,4 +1,5 @@
 use crate::response::wrap_in_soap_envelope;
+use crate::cellset;
 
 pub fn get_empty_execute_response() -> String {
     wrap_in_soap_envelope(
@@ -10,33 +11,156 @@ pub fn get_empty_execute_response() -> String {
     )
 }
 
-/// Returns true when the statement looks like a DAX query (starts with EVALUATE,
-/// optionally after DEFINE blocks/whitespace).
 fn is_dax(statement: &str) -> bool {
     let trimmed = statement.trim_start();
     let upper = trimmed.to_uppercase();
     upper.starts_with("EVALUATE") || upper.starts_with("DEFINE")
 }
 
-/// Returns true when the MDX is a multidimensional cellset query
-/// (has DIMENSION PROPERTIES or CELL PROPERTIES clauses).
-fn is_cellset_query(mdx: &str) -> bool {
-    mdx.contains("DIMENSION PROPERTIES") || mdx.contains("CELL PROPERTIES")
+fn is_mdx_select(mdx: &str) -> bool {
+    mdx.trim_start().to_uppercase().starts_with("SELECT")
 }
 
 pub fn get_execute_statement_response(statement: &str) -> String {
     if is_dax(statement) {
         get_execute_dax_response(statement)
-    } else if is_cellset_query(statement) {
+    } else if is_mdx_select(statement) {
         get_execute_cellset_response(statement)
     } else {
         get_execute_mdx_response(statement)
     }
 }
 
+// ---- helpers for building cellset data ----
+
+fn produktkategori_dim_props(name: &str) -> Vec<(String, String)> {
+    vec![
+        ("PARENT_UNIQUE_NAME".into(), "[Produktkategori].[Produktkategori].[All]".into()),
+        ("HIERARCHY_UNIQUE_NAME".into(), "[Produktkategori].[Produktkategori]".into()),
+        ("MEMBER_NAME".into(), name.to_string()),
+        ("MEMBER_KEY".into(), name.to_string()),
+        ("MEMBER_TYPE".into(), "3".into()),
+        ("MEMBER_VALUE".into(), name.to_string()),
+        ("PARENT_LEVEL".into(), "0".into()),
+        ("PARENT_COUNT".into(), "1".into()),
+        ("CHILDREN_CARDINALITY".into(), "0".into()),
+    ]
+}
+
+fn produktkategori_dim_decls() -> Vec<(String, String, String)> {
+    let p = "[Produktkategori].[Produktkategori]";
+    vec![
+        ("PARENT_UNIQUE_NAME".into(),   format!("{p}.[PARENT_UNIQUE_NAME]"),   "xsd:string".into()),
+        ("HIERARCHY_UNIQUE_NAME".into(),format!("{p}.[HIERARCHY_UNIQUE_NAME]"),"xsd:string".into()),
+        ("MEMBER_NAME".into(),          format!("{p}.[MEMBER_NAME]"),          "xsd:string".into()),
+        ("MEMBER_KEY".into(),           format!("{p}.[MEMBER_KEY]"),           "xsd:string".into()),
+        ("MEMBER_TYPE".into(),          format!("{p}.[MEMBER_TYPE]"),          "xsd:int".into()),
+        ("MEMBER_VALUE".into(),         format!("{p}.[MEMBER_VALUE]"),         "xsd:string".into()),
+        ("PARENT_LEVEL".into(),         format!("{p}.[PARENT_LEVEL]"),         "xsd:int".into()),
+        ("PARENT_COUNT".into(),         format!("{p}.[PARENT_COUNT]"),         "xsd:int".into()),
+        ("CHILDREN_CARDINALITY".into(), format!("{p}.[CHILDREN_CARDINALITY]"), "xsd:unsignedInt".into()),
+    ]
+}
+
+fn measurement_cell(ordinal: u32) -> cellset::CellConfig {
+    cellset::CellConfig {
+        ordinal,
+        value: 1250000.5,
+        fmt_value: "1,250,000.50 SEK".into(),
+        format_string: "#,##0.00 SEK".into(),
+        back_color: String::new(),
+        fore_color: String::new(),
+    }
+}
+
+fn measures_slicer_member() -> cellset::MemberConfig {
+    cellset::MemberConfig {
+        u_name: "[Measures].[Total Försäljning]".into(),
+        caption: "Total Försäljning (SEK)".into(),
+        l_name: "[Measures].[MeasuresLevel]".into(),
+        l_num: 0,
+        display_info: 3,
+        dim_props: vec![],
+    }
+}
+
+fn slicer_axis() -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: "SlicerAxis".into(),
+        hier_name: "[Measures]".into(),
+        members: vec![measures_slicer_member()],
+        dim_prop_decls: vec![],
+    }
+}
+
+// ---- cellset response builders ----
+
+/// Shape 1: slicer-only (e.g. dimension removed, measure stays).
+/// `SELECT FROM [Model] WHERE ([Measures]...) CELL PROPERTIES ...`
+fn build_slicer_only() -> String {
+    let resp = cellset::CellsetResponse {
+        cube_name: "Model".into(),
+        axes: vec![slicer_axis()],
+        cells: vec![measurement_cell(0)],
+    };
+    cellset::render_cellset(&resp)
+}
+
+/// Shape 2: hierarchy drilldown (e.g. first drag of Produktkategori to Rows).
+/// `SELECT ... DrilldownLevel({[All]}) ... ON COLUMNS ...`
+fn build_drilldown() -> String {
+    let names = ["Kategori A", "Kategori B", "Kategori C", "Kategori D"];
+    let mut members = Vec::new();
+    for (_i, &name) in names.iter().enumerate() {
+        let u_name = format!("[Produktkategori].[Produktkategori].&amp;[{}]", name);
+        members.push(cellset::MemberConfig {
+            u_name,
+            caption: name.to_string(),
+            l_name: "[Produktkategori].[Produktkategori].[Produktkategori]".into(),
+            l_num: 1,
+            display_info: 3,
+            dim_props: produktkategori_dim_props(name),
+        });
+    }
+
+    let mut cells = Vec::new();
+    for i in 0..members.len() {
+        cells.push(measurement_cell(i as u32));
+    }
+
+    let axis0 = cellset::AxisConfig {
+        name: "Axis0".into(),
+        hier_name: "[Produktkategori].[Produktkategori]".into(),
+        members,
+        dim_prop_decls: produktkategori_dim_decls(),
+    };
+
+    let resp = cellset::CellsetResponse {
+        cube_name: "Model".into(),
+        axes: vec![axis0, slicer_axis()],
+        cells,
+    };
+    cellset::render_cellset(&resp)
+}
+
+fn get_execute_cellset_response(mdx: &str) -> String {
+    let has_axes = mdx.contains("ON COLUMNS") || mdx.contains("ON ROWS");
+    let is_drilldown = mdx.contains("[Produktkategori]")
+        && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
+
+    if is_drilldown {
+        build_drilldown()
+    } else if !has_axes {
+        build_slicer_only()
+    } else {
+        // multi-axis query we don't yet pattern-match — minimal fallback
+        build_slicer_only()
+    }
+}
+
 fn get_execute_mdx_response(mdx: &str) -> String {
     let has_measures = mdx.contains("Measures") || mdx.contains("measures");
-    let measure_name = "Total_Försäljning";
+    let measure_name = "Total_Forsaljning";
     let measure_value = if has_measures { "1250000.5" } else { "" };
 
     let inner = format!(
@@ -63,134 +187,6 @@ fn get_execute_mdx_response(mdx: &str) -> String {
         val = measure_value,
     );
     wrap_in_soap_envelope(&inner)
-}
-
-/// Returns a multidimensional cellset XML response for hierarchy enumeration
-/// queries (DrilldownLevel from All). Currently hard-coded for the
-/// Produktkategori hierarchy with one member (Kategori A).
-fn get_execute_cellset_response(mdx: &str) -> String {
-    let is_drilldown = mdx.contains("DrilldownLevel") && mdx.contains("[Produktkategori]");
-
-    if is_drilldown {
-        let inner = r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
-      <return>
-        <root xmlns="urn:schemas-microsoft-com:xml-analysis:mddataset"
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-              xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-          <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:mddataset"
-                       elementFormDefault="qualified"
-                       xmlns="urn:schemas-microsoft-com:xml-analysis:mddataset">
-            <xsd:element name="root">
-              <xsd:complexType>
-                <xsd:sequence>
-                  <xsd:any namespace="http://www.w3.org/2001/XMLSchema"
-                           processContents="strict" minOccurs="0"/>
-                  <xsd:element name="OlapInfo" minOccurs="0"/>
-                  <xsd:element name="Axes" minOccurs="0"/>
-                  <xsd:element name="CellData" minOccurs="0"/>
-                </xsd:sequence>
-              </xsd:complexType>
-            </xsd:element>
-          </xsd:schema>
-          <OlapInfo>
-            <CubeInfo>
-              <Cube>
-                <CubeName>Model</CubeName>
-              </Cube>
-            </CubeInfo>
-            <AxesInfo>
-              <AxisInfo name="Axis0">
-                <HierarchyInfo name="[Produktkategori].[Produktkategori]">
-                  <UName name="[Produktkategori].[Produktkategori].[MEMBER_UNIQUE_NAME]" type="xsd:string"/>
-                  <Caption name="[Produktkategori].[Produktkategori].[MEMBER_CAPTION]" type="xsd:string"/>
-                  <LName name="[Produktkategori].[Produktkategori].[LEVEL_UNIQUE_NAME]" type="xsd:string"/>
-                  <LNum name="[Produktkategori].[Produktkategori].[LEVEL_NUMBER]" type="xsd:int"/>
-                  <DisplayInfo name="[Produktkategori].[Produktkategori].[DISPLAY_INFO]" type="xsd:unsignedInt"/>
-                  <PARENT_UNIQUE_NAME name="[Produktkategori].[Produktkategori].[PARENT_UNIQUE_NAME]" type="xsd:string"/>
-                  <HIERARCHY_UNIQUE_NAME name="[Produktkategori].[Produktkategori].[HIERARCHY_UNIQUE_NAME]" type="xsd:string"/>
-                  <MEMBER_NAME name="[Produktkategori].[Produktkategori].[MEMBER_NAME]" type="xsd:string"/>
-                  <MEMBER_KEY name="[Produktkategori].[Produktkategori].[MEMBER_KEY]" type="xsd:string"/>
-                  <MEMBER_TYPE name="[Produktkategori].[Produktkategori].[MEMBER_TYPE]" type="xsd:int"/>
-                  <MEMBER_VALUE name="[Produktkategori].[Produktkategori].[MEMBER_VALUE]" type="xsd:string"/>
-                  <LEVEL_UNIQUE_NAME name="[Produktkategori].[Produktkategori].[LEVEL_UNIQUE_NAME]" type="xsd:string"/>
-                  <PARENT_LEVEL name="[Produktkategori].[Produktkategori].[PARENT_LEVEL]" type="xsd:int"/>
-                  <PARENT_COUNT name="[Produktkategori].[Produktkategori].[PARENT_COUNT]" type="xsd:int"/>
-                  <CHILDREN_CARDINALITY name="[Produktkategori].[Produktkategori].[CHILDREN_CARDINALITY]" type="xsd:unsignedInt"/>
-                </HierarchyInfo>
-              </AxisInfo>
-              <AxisInfo name="SlicerAxis">
-                <HierarchyInfo name="[Measures]">
-                  <UName name="[Measures].[MEMBER_UNIQUE_NAME]" type="xsd:string"/>
-                  <Caption name="[Measures].[MEMBER_CAPTION]" type="xsd:string"/>
-                  <LName name="[Measures].[LEVEL_UNIQUE_NAME]" type="xsd:string"/>
-                  <LNum name="[Measures].[LEVEL_NUMBER]" type="xsd:int"/>
-                  <DisplayInfo name="[Measures].[DISPLAY_INFO]" type="xsd:unsignedInt"/>
-                </HierarchyInfo>
-              </AxisInfo>
-            </AxesInfo>
-            <CellInfo>
-              <Value name="VALUE"/>
-              <FmtValue name="FORMATTED_VALUE" type="xsd:string"/>
-              <FormatString name="FORMAT_STRING" type="xsd:string"/>
-              <BackColor name="BACK_COLOR" type="xsd:string"/>
-              <ForeColor name="FORE_COLOR" type="xsd:string"/>
-            </CellInfo>
-          </OlapInfo>
-          <Axes>
-            <Axis name="Axis0">
-              <Tuples>
-                <Tuple>
-                  <Member Hierarchy="[Produktkategori].[Produktkategori]">
-                    <UName>[Produktkategori].[Produktkategori].&amp;[Kategori A]</UName>
-                    <Caption>Kategori A</Caption>
-                    <LName>[Produktkategori].[Produktkategori].[Produktkategori]</LName>
-                    <LNum>1</LNum>
-                    <DisplayInfo>3</DisplayInfo>
-                    <PARENT_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</PARENT_UNIQUE_NAME>
-                    <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-                    <MEMBER_NAME>Kategori A</MEMBER_NAME>
-                    <MEMBER_KEY>Kategori A</MEMBER_KEY>
-                    <MEMBER_TYPE>3</MEMBER_TYPE>
-                    <MEMBER_VALUE>Kategori A</MEMBER_VALUE>
-                    <PARENT_LEVEL>0</PARENT_LEVEL>
-                    <PARENT_COUNT>1</PARENT_COUNT>
-                    <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-                  </Member>
-                </Tuple>
-              </Tuples>
-            </Axis>
-            <Axis name="SlicerAxis">
-              <Tuples>
-                <Tuple>
-                  <Member Hierarchy="[Measures]">
-                    <UName>[Measures].[Total Försäljning]</UName>
-                    <Caption>Total Försäljning (SEK)</Caption>
-                    <LName>[Measures].[MeasuresLevel]</LName>
-                    <LNum>0</LNum>
-                    <DisplayInfo>3</DisplayInfo>
-                  </Member>
-                </Tuple>
-              </Tuples>
-            </Axis>
-          </Axes>
-          <CellData>
-            <Cell CellOrdinal="0">
-              <Value xsi:type="xsd:double">1250000.5</Value>
-              <FmtValue>1,250,000.50 SEK</FmtValue>
-              <FormatString>#,##0.00 SEK</FormatString>
-              <BackColor></BackColor>
-              <ForeColor></ForeColor>
-            </Cell>
-          </CellData>
-        </root>
-      </return>
-    </ExecuteResponse>"#;
-        wrap_in_soap_envelope(inner)
-    } else {
-        // Unknown cellset query shape — fall back to the MDX path
-        // This will likely fail, but it's better than crashing.
-        get_execute_mdx_response(mdx)
-    }
 }
 
 /// Minimal DAX EVALUATE response: returns a single-row rowset with the

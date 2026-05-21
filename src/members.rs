@@ -28,7 +28,7 @@ const MEMBER_ROWS: &str = r#"          <row>
             <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</MEMBER_UNIQUE_NAME>
             <MEMBER_TYPE>1</MEMBER_TYPE>
             <MEMBER_CAPTION>All</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>50</CHILDREN_CARDINALITY>
+            <CHILDREN_CARDINALITY>4</CHILDREN_CARDINALITY>
             <PARENT_LEVEL>0</PARENT_LEVEL>
             <PARENT_COUNT>0</PARENT_COUNT>
           </row>
@@ -44,6 +44,54 @@ const MEMBER_ROWS: &str = r#"          <row>
             <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori A]</MEMBER_UNIQUE_NAME>
             <MEMBER_TYPE>3</MEMBER_TYPE>
             <MEMBER_CAPTION>Kategori A</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_COUNT>1</PARENT_COUNT>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>2</MEMBER_ORDINAL>
+            <MEMBER_NAME>Kategori B</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori B]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>3</MEMBER_TYPE>
+            <MEMBER_CAPTION>Kategori B</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_COUNT>1</PARENT_COUNT>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>3</MEMBER_ORDINAL>
+            <MEMBER_NAME>Kategori C</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori C]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>3</MEMBER_TYPE>
+            <MEMBER_CAPTION>Kategori C</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_COUNT>1</PARENT_COUNT>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>4</MEMBER_ORDINAL>
+            <MEMBER_NAME>Kategori D</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori D]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>3</MEMBER_TYPE>
+            <MEMBER_CAPTION>Kategori D</MEMBER_CAPTION>
             <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
             <PARENT_LEVEL>0</PARENT_LEVEL>
             <PARENT_COUNT>1</PARENT_COUNT>
