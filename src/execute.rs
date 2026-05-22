@@ -1,5 +1,6 @@
 use crate::response::wrap_in_soap_envelope;
 use crate::cellset;
+use crate::backend::Backend;
 
 pub fn get_empty_execute_response() -> String {
     wrap_in_soap_envelope(
@@ -103,6 +104,68 @@ fn parse_cell_properties(mdx: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_category_filter(mdx: &str) -> Option<String> {
+    let start = mdx.find("[Produktkategori].[Produktkategori].")?;
+    let rest = &mdx[start..];
+    if rest.contains("[Produktkategori].[Produktkategori].[All]") {
+        return None;
+    }
+    if let Some(amp) = rest.find("&amp;[") {
+        let begin = amp + 5;
+        let end = rest[begin..].find(']')? + begin;
+        return Some(rest[begin..end].to_string());
+    }
+    if let Some(amp) = rest.find("&[") {
+        let begin = amp + 2;
+        let end = rest[begin..].find(']')? + begin;
+        return Some(rest[begin..end].to_string());
+    }
+    None
+}
+
+fn parse_mdx_filters(mdx: &str) -> Vec<String> {
+    if let Some(where_filter) = parse_category_filter(mdx) {
+        return vec![where_filter];
+    }
+    let sub_start = match mdx.find("SELECT ({") {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let sub_rest = &mdx[sub_start..];
+    let sub_end = match sub_rest.find("})") {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let members_str = &sub_rest["SELECT ({".len()..sub_end];
+    let mut result = Vec::new();
+    for member in members_str.split(',') {
+        let member = member.trim();
+        if let Some(amp_start) = member.find("&[") {
+            let begin = amp_start + 2;
+            if let Some(end) = member[begin..].find(']') {
+                result.push(member[begin..begin + end].to_string());
+            }
+        } else if let Some(amp_start) = member.find("&amp;[") {
+            let begin = amp_start + 5;
+            if let Some(end) = member[begin..].find(']') {
+                result.push(member[begin..begin + end].to_string());
+            }
+        }
+    }
+    result
+}
+
+fn cchildren_target_is_measures(mdx: &str) -> bool {
+    if let Some(start) = mdx.find("FilteredMembers As '") {
+        let rest = &mdx[start..];
+        if let Some(end) = rest.find('\'') {
+            let set = &rest["FilteredMembers As '".len()..end];
+            return set.contains("[Measures]") && !set.contains("[Produktkategori]");
+        }
+    }
+    false
+}
+
 fn includes_prop(props: &[String], name: &str) -> bool {
     props.iter().any(|prop| prop == name)
 }
@@ -110,6 +173,7 @@ fn includes_prop(props: &[String], name: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SemanticQueryKind {
     ChildrenCountForAll,
+    ChildrenCountMeasures,
     SlicerAllAndMeasure,
     MeasureChildrenEmpty,
     LeafChildrenEmpty,
@@ -125,12 +189,14 @@ struct SemanticQuery {
     kind: SemanticQueryKind,
     dim_props: Vec<String>,
     cell_props: Vec<String>,
+    category_filters: Vec<String>,
 }
 
 fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let upper = mdx.to_uppercase();
     let dim_props = parse_dimension_properties(mdx);
     let cell_props = parse_cell_properties(mdx);
+    let category_filters = parse_mdx_filters(mdx);
     let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
     let has_rows = upper.contains("ON ROWS");
     let has_cols = upper.contains("ON COLUMNS");
@@ -139,7 +205,11 @@ fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let is_drilldown = has_product && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
 
     let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
-        SemanticQueryKind::ChildrenCountForAll
+        if cchildren_target_is_measures(mdx) {
+            SemanticQueryKind::ChildrenCountMeasures
+        } else {
+            SemanticQueryKind::ChildrenCountForAll
+        }
     } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])") {
         SemanticQueryKind::SlicerAllAndMeasure
     } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
@@ -164,6 +234,7 @@ fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         kind,
         dim_props,
         cell_props,
+        category_filters,
     }
 }
 
@@ -197,6 +268,7 @@ fn produktkategori_dim_props_leaf(name: &str, requested: &[String]) -> Vec<(Stri
 }
 
 fn produktkategori_dim_props_all(requested: &[String]) -> Vec<(String, String)> {
+    let count = Backend::get().category_count();
     filter_dim_props(vec![
         ("HIERARCHY_UNIQUE_NAME".into(), PRODUKTKATEGORI_HIER.into()),
         ("MEMBER_NAME".into(), "All".into()),
@@ -205,7 +277,7 @@ fn produktkategori_dim_props_all(requested: &[String]) -> Vec<(String, String)> 
         ("MEMBER_VALUE".into(), "All".into()),
         ("PARENT_LEVEL".into(), "0".into()),
         ("PARENT_COUNT".into(), "0".into()),
-        ("CHILDREN_CARDINALITY".into(), "4".into()),
+        ("CHILDREN_CARDINALITY".into(), count.to_string()),
     ], requested)
 }
 
@@ -263,18 +335,23 @@ fn produktkategori_all_member(requested: &[String]) -> cellset::MemberConfig {
     }
 }
 
-fn produktkategori_leaf_members(requested: &[String]) -> Vec<cellset::MemberConfig> {
-    ["Kategori A", "Kategori B", "Kategori C", "Kategori D"]
+fn produktkategori_leaf_members_from(names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
+    names
         .iter()
         .map(|name| produktkategori_leaf_member(name, requested))
         .collect()
 }
 
-fn measurement_cell(ordinal: u32) -> cellset::CellConfig {
+fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
+    let fmt = if value.fract() == 0.0 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.2}", value)
+    };
     cellset::CellConfig {
         ordinal,
-        value: 1250000.5,
-        fmt_value: "1,250,000.50 SEK".into(),
+        value,
+        fmt_value: format!("{} SEK", fmt),
         format_string: "#,##0.00 SEK".into(),
         back_color: String::new(),
         fore_color: String::new(),
@@ -386,24 +463,25 @@ fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> ce
 
 // ---- cellset response builders ----
 
-/// Shape 1: slicer-only (e.g. dimension removed, measure stays).
-/// `SELECT FROM [Model] WHERE ([Measures]...) CELL PROPERTIES ...`
-fn build_slicer_only(cell_props: &[String]) -> String {
+fn build_slicer_only(cell_props: &[String], filters: &[String]) -> String {
+    let total = Backend::get().total_for_categories(filters);
     render_response(
         vec![slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()])],
-        vec![measurement_cell(0)],
+        vec![measurement_cell(0, total)],
         cell_props,
     )
 }
 
-/// Shape 2: hierarchy drilldown (e.g. first drag of Produktkategori to Rows).
-/// `SELECT ... DrilldownLevel({[All]}) ... ON COLUMNS ...`
-fn build_drilldown(dim_props: &[String], cell_props: &[String]) -> String {
-    let members = produktkategori_leaf_members(dim_props);
+fn build_drilldown(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
+    let data = Backend::get().sales_for_categories(filters);
+    let members = produktkategori_leaf_members_from(
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        dim_props,
+    );
 
     let mut cells = Vec::new();
-    for i in 0..members.len() {
-        cells.push(measurement_cell(i as u32));
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
     }
 
     render_response(
@@ -416,13 +494,15 @@ fn build_drilldown(dim_props: &[String], cell_props: &[String]) -> String {
     )
 }
 
-/// Shape 3: measure on columns + Produktkategori on rows.
-/// Excel pivot with one Values measure and one Rows hierarchy.
-fn build_measure_by_category(dim_props: &[String], cell_props: &[String]) -> String {
-    let axis1_members = produktkategori_leaf_members(dim_props);
+fn build_measure_by_category(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
+    let data = Backend::get().sales_for_categories(filters);
+    let axis1_members = produktkategori_leaf_members_from(
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        dim_props,
+    );
     let mut cells = Vec::new();
-    for i in 0..axis1_members.len() {
-        cells.push(measurement_cell(i as u32));
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
     }
 
     render_response(
@@ -436,33 +516,39 @@ fn build_measure_by_category(dim_props: &[String], cell_props: &[String]) -> Str
     )
 }
 
-fn build_slicer_all_and_measure(dim_props: &[String], cell_props: &[String]) -> String {
+fn build_slicer_all_and_measure(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
+    let total = Backend::get().total_for_categories(filters);
     render_response(
         vec![slicer_axis_with_members(
             vec![produktkategori_hierarchy(dim_props), measures_hierarchy()],
             vec![produktkategori_all_member(dim_props), measures_total_member()],
         )],
-        vec![measurement_cell(0)],
+        vec![measurement_cell(0, total)],
         cell_props,
     )
 }
 
 fn build_all_level_members(dim_props: &[String], cell_props: &[String]) -> String {
+    let total = Backend::get().total_sales();
     render_response(
         vec![
             single_member_axis("Axis0", produktkategori_hierarchy(dim_props), produktkategori_all_member(dim_props)),
             slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
         ],
-        vec![measurement_cell(0)],
+        vec![measurement_cell(0, total)],
         cell_props,
     )
 }
 
-fn build_leaf_level_members(dim_props: &[String], cell_props: &[String]) -> String {
-    let members = produktkategori_leaf_members(dim_props);
+fn build_leaf_level_members(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
+    let data = Backend::get().sales_for_categories(filters);
+    let members = produktkategori_leaf_members_from(
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        dim_props,
+    );
     let mut cells = Vec::new();
-    for i in 0..members.len() {
-        cells.push(measurement_cell(i as u32));
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
     }
 
     render_response(
@@ -498,24 +584,41 @@ fn build_measure_children_empty(cell_props: &[String]) -> String {
 }
 
 fn build_cchildren_for_all(dim_props: &[String], cell_props: &[String]) -> String {
+    let count = Backend::get().category_count();
     render_response(
         vec![
             single_member_axis("Axis0", produktkategori_hierarchy(dim_props), produktkategori_all_member(dim_props)),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             empty_slicer_axis(),
         ],
-        vec![count_cell(0, 4)],
+        vec![count_cell(0, count)],
+        cell_props,
+    )
+}
+
+fn build_cchildren_for_measures(_dim_props: &[String], cell_props: &[String]) -> String {
+    render_response(
+        vec![
+            single_member_axis("Axis0", measures_hierarchy(), measures_total_member()),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            empty_slicer_axis(),
+        ],
+        vec![count_cell(0, 0)],
         cell_props,
     )
 }
 
 fn execute_semantic_query(query: &SemanticQuery) -> String {
+    let filters = &query.category_filters;
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => {
             build_cchildren_for_all(&query.dim_props, &query.cell_props)
         }
+        SemanticQueryKind::ChildrenCountMeasures => {
+            build_cchildren_for_measures(&query.dim_props, &query.cell_props)
+        }
         SemanticQueryKind::SlicerAllAndMeasure => {
-            build_slicer_all_and_measure(&query.dim_props, &query.cell_props)
+            build_slicer_all_and_measure(&query.dim_props, &query.cell_props, filters)
         }
         SemanticQueryKind::MeasureChildrenEmpty => {
             build_measure_children_empty(&query.cell_props)
@@ -527,16 +630,16 @@ fn execute_semantic_query(query: &SemanticQuery) -> String {
             build_all_level_members(&query.dim_props, &query.cell_props)
         }
         SemanticQueryKind::LeafLevelMembers => {
-            build_leaf_level_members(&query.dim_props, &query.cell_props)
+            build_leaf_level_members(&query.dim_props, &query.cell_props, filters)
         }
         SemanticQueryKind::MeasureByCategory => {
-            build_measure_by_category(&query.dim_props, &query.cell_props)
+            build_measure_by_category(&query.dim_props, &query.cell_props, filters)
         }
         SemanticQueryKind::DrilldownCategories => {
-            build_drilldown(&query.dim_props, &query.cell_props)
+            build_drilldown(&query.dim_props, &query.cell_props, filters)
         }
         SemanticQueryKind::SlicerOnly => {
-            build_slicer_only(&query.cell_props)
+            build_slicer_only(&query.cell_props, filters)
         }
     }
 }
@@ -549,7 +652,7 @@ fn get_execute_cellset_response(mdx: &str) -> String {
 fn get_execute_mdx_response(mdx: &str) -> String {
     let has_measures = mdx.contains("Measures") || mdx.contains("measures");
     let measure_name = "Total_Forsaljning";
-    let measure_value = if has_measures { "1250000.5" } else { "" };
+    let measure_value = if has_measures { Backend::get().total_sales() } else { 0.0 };
 
     let inner = format!(
         r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
@@ -577,12 +680,8 @@ fn get_execute_mdx_response(mdx: &str) -> String {
     wrap_in_soap_envelope(&inner)
 }
 
-/// Minimal DAX EVALUATE response: returns a single-row rowset with the
-/// `Faktatabell[Total Försäljning (SEK)]` measure column.
 fn get_execute_dax_response(_dax: &str) -> String {
-    // DAX result columns are normally named `'Table'[Column]` — Excel will
-    // accept the bracketed form. We use a column name aligned with the
-    // measure caption so a drag-to-Values renders the expected number.
+    let total = Backend::get().total_sales();
     let col_xml_name = "Faktatabell_x005B_Total_x0020_Försäljning_x0020__x0028_SEK_x0029__x005D_";
     let col_sql_field = "[Faktatabell].[Total Försäljning (SEK)]";
 
@@ -601,13 +700,14 @@ fn get_execute_dax_response(_dax: &str) -> String {
             </xsd:complexType>
           </xsd:schema>
           <row>
-            <{xname}>1250000.5</{xname}>
+            <{xname}>{val}</{xname}>
           </row>
         </root>
       </return>
     </ExecuteResponse>"#,
         sqlf = col_sql_field,
         xname = col_xml_name,
+        val = total,
     );
     wrap_in_soap_envelope(&inner)
 }

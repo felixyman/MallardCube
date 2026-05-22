@@ -1,0 +1,125 @@
+use rusqlite::Connection;
+use std::sync::{Mutex, OnceLock};
+
+pub struct Backend {
+    conn: Mutex<Connection>,
+}
+
+fn instance() -> &'static Backend {
+    static BACKEND: OnceLock<Backend> = OnceLock::new();
+    BACKEND.get_or_init(|| Backend::new().expect("failed to initialise SQLite"))
+}
+
+impl Backend {
+    pub fn get() -> &'static Self {
+        instance()
+    }
+
+    pub fn new() -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE faktatabell (
+                 produktkategori TEXT NOT NULL,
+                 sales REAL NOT NULL
+             );
+             INSERT INTO faktatabell VALUES
+                 ('Kategori A', 300000.0),
+                 ('Kategori B', 250000.0),
+                 ('Kategori C', 400000.0),
+                 ('Kategori D', 300000.5);
+             ",
+        )?;
+        Ok(Backend {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    pub fn total_sales(&self) -> f64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(sales), 0) FROM faktatabell",
+            [],
+            |row| row.get::<_, f64>(0),
+        )
+        .unwrap_or(0.0)
+    }
+
+    pub fn total_sales_for(&self, category: &str) -> f64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(sales), 0) FROM faktatabell WHERE produktkategori = ?1",
+            [category],
+            |row| row.get::<_, f64>(0),
+        )
+        .unwrap_or(0.0)
+    }
+
+    pub fn sales_for_categories(&self, cats: &[String]) -> Vec<(String, f64)> {
+        if cats.is_empty() {
+            return self.sales_by_category();
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = (1..=cats.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT produktkategori, SUM(sales) FROM faktatabell WHERE produktkategori IN ({}) GROUP BY 1 ORDER BY 1",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            cats.iter().map(|c| c as &dyn rusqlite::types::ToSql).collect();
+        let mut stmt = conn.prepare(&sql).expect("prepare sales_for_categories");
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .expect("query_map sales_for_categories");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn total_for_categories(&self, cats: &[String]) -> f64 {
+        if cats.is_empty() {
+            return self.total_sales();
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = (1..=cats.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT COALESCE(SUM(sales), 0) FROM faktatabell WHERE produktkategori IN ({})",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            cats.iter().map(|c| c as &dyn rusqlite::types::ToSql).collect();
+        conn.query_row(&sql, params.as_slice(), |row| row.get::<_, f64>(0))
+            .unwrap_or(0.0)
+    }
+
+    pub fn sales_by_category(&self) -> Vec<(String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT produktkategori, SUM(sales) FROM faktatabell GROUP BY 1 ORDER BY 1")
+            .expect("prepare sales_by_category");
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .expect("query_map sales_by_category");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn category_names(&self) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT produktkategori FROM faktatabell ORDER BY 1")
+            .expect("prepare category_names");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query_map category_names");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn category_count(&self) -> u32 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(DISTINCT produktkategori) FROM faktatabell",
+            [],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap_or(0)
+    }
+}
