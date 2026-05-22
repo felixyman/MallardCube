@@ -54,6 +54,7 @@ pub struct CellsetResponse {
     pub cube_name: String,
     pub axes: Vec<AxisConfig>,
     pub cells: Vec<CellConfig>,
+    pub include_value: bool,
     pub include_fmt_value: bool,
     pub include_format_string: bool,
     pub include_back_color: bool,
@@ -148,13 +149,15 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
     let mut out = String::new();
     out.push_str("          <CellData>\n");
     for cell in cells {
-        out.push_str(&format!(
-            r#"            <Cell CellOrdinal="{ord}">
-              <Value xsi:type="xsd:double">{val}</Value>
+        out.push_str(&format!(r#"            <Cell CellOrdinal="{ord}">
+"#, ord = cell.ordinal));
+        if resp.include_value {
+            out.push_str(&format!(
+                r#"              <Value xsi:type="xsd:double">{val}</Value>
 "#,
-            ord = cell.ordinal,
-            val = cell.value,
-        ));
+                val = cell.value,
+            ));
+        }
         if resp.include_fmt_value {
             out.push_str(&format!("              <FmtValue>{}</FmtValue>\n", cell.fmt_value));
         }
@@ -230,7 +233,9 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
     olap_info.push_str("            </AxesInfo>\n");
     // CellInfo
     olap_info.push_str("            <CellInfo>\n");
-    olap_info.push_str("              <Value name=\"VALUE\"/>\n");
+    if r.include_value {
+        olap_info.push_str("              <Value name=\"VALUE\"/>\n");
+    }
     if r.include_fmt_value {
         olap_info.push_str("              <FmtValue name=\"FORMATTED_VALUE\" type=\"xsd:string\"/>\n");
     }
