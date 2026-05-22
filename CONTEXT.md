@@ -27,14 +27,22 @@ xmla_proxy/src/
   measure_groups.rs    — MDSCHEMA_MEASUREGROUPS (Faktatabell)
   measuregroup_dimensions.rs — MDSCHEMA_MEASUREGROUP_DIMENSIONS
                          (Faktatabell↔[Measures], Faktatabell↔[Produktkategori])
-  members.rs           — MDSCHEMA_MEMBERS (2 rows for Produktkategori)
-  mdschema_properties.rs — MDSCHEMA_PROPERTIES (3 placeholder member properties)
+  members.rs           — MDSCHEMA_MEMBERS (static XML output, typed filter logic)
+                         TREE_OP per spec: 0x01=CHILDREN, 0x04=PARENT, 0x08=SELF, 0x20=ANCESTORS
+  mdschema_properties.rs — MDSCHEMA_PROPERTIES (PROPERTY_TYPE 1/2/5 with correct
+                         HierarchyInfo-qualified property names and LEVEL_UNIQUE_NAME)
   literals.rs          — DISCOVER_LITERALS
   sets.rs              — MDSCHEMA_SETS (empty)
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs (advertised but Excel does not query them)
   execute.rs           — ExecuteResponse: MDX SELECT (flat rowset) + DAX EVALUATE +
-                         cellset (mddataset) for drilldown queries
+                         cellset (mddataset) for drilldown / slicer-only / Members queries
+  cellset.rs           — Generic cellset XML builder (types: MemberConfig, AxisConfig,
+                         CellConfig, CellsetResponse). Drives execute.rs cellset path.
+  rowset.rs            — Typed rowset infrastructure (Row, ColumnDef, Rowset).
+                         Built for Vec<Row> refactor; currently unused (members.rs
+                         reverted to static XML because serializer format triggers
+                         MSOLAP crash when schema column order differs).
 ```
 
 ## Reference docs
@@ -138,21 +146,44 @@ No `DIMENSION_VISIBILITY=1` filter — Excel takes whatever rows we return.
     MDSCHEMA_PROPERTIES → actual level rows, `DIMENSION_UNIQUE_NAME` references
     in member data → actual dimension rows. Excel silently rejects the cube
     when references are dangling.
+11. **MSOLAP's rowset parser is extremely sensitive to column order and layout.**
+    The `Rowset::to_xml()` serializer (rowset.rs) produces valid XML that differs
+    from the old hand-written strings only in edge-case formatting. Even minor
+    differences corrupt MSOLAP's internal state (crash on next unrelated request).
+    The safe path: keep hand-written static XML for output, add filtering logic
+    on top of the static strings. The Rowset infrastructure remains for future
+    modules where format sensitivity can be re-tested incrementally.
+12. **Cellset (mddataset) HierarchyInfo child elements are property DECLARATIONS,**
+    not data. They use `name` and `type` attributes to declare what properties
+    each Member element will carry. Every property that appears as a child of
+    `<Member>` must be pre-declared in the corresponding HierarchyInfo, and
+    undeclared member children cause `MDDSAxis::MoveToHierProperty` crashes.
+    Duplicate qualified names between standard 5 (UName/Caption/LName/LNum/DisplayInfo)
+    and intrinsic properties (MEMBER_UNIQUE_NAME/MEMBER_CAPTION/LEVEL_NUMBER/LEVEL_UNIQUE_NAME)
+    are NOT allowed — the standard 5 cover these.
+
+## Current blocker
+**Filter dropdown crashes Excel.** The Vec\<Row\> refactor for MDSCHEMA_MEMBERS
+introduced a serializer that corrupts MSOLAP's parser state. Members have been
+reverted to static XML output with TREE_OP filter logic operating on raw strings.
+The filter logic is correct (ANCESTORS returns sentinel, CHILDREN returns leaves)
+but Excel still crashes — likely a separate issue from the serializer change.
+Pending investigation when testing resumes.
 
 ## Next candidate workstreams
-1. **Generalize the cellset response.** Move from hard-coded XML to a generic
-   cellset builder that takes `Vec<Member>` and `Vec<Cell>` from any query result.
-2. **Vec<Row> + restriction filter refactor.** Pre-req for sourcing rows from
-   DuckDB. Each rowset module exposes `fn rows() -> Vec<Row>`; a shared
-   serializer in `response.rs` parses `<RestrictionList>` from the request
-   and filters before emitting XML.
-3. **Real DuckDB integration.** Load a demo Parquet/CSV, issue SQL for the
-   Produktkategori drilldown, encode results as a cellset. First truly live pivot.
-4. **MDX transpilation.** Parse the `DrilldownLevel({[All]})` pattern, extract
-   the hierarchy name, map to a DuckDB table → generate SQL → return real data.
-5. **Malloy bridge.** Translate MDX AST to Malloy source, compile to SQL,
-   execute against DuckDB. The "MDX → Malloy → modern backends" goal.
-6. **Cleanup.** TMSCHEMA stubs are inert. Remove or keep as placeholder stubs.
+1. **Debug the filter‑dropdown crash.** The MDSCHEMA_MEMBERS response format
+   is identical to the working pre‑refactor version. The crash trigger may be
+   external (e.g., Excel checks a different member or expects TREE_OP=0 before
+   TREE_OP=8). Full trace comparison from a known‑working session needed.
+2. **Vec<Row> refactor — next module.** The Rowset infrastructure exists and
+   compiles. Apply it to a simpler rowset (e.g. KPIS, SETS — empty rowsets)
+   first to validate the serializer against MSOLAP without member complexity.
+   If the empty rowset passes, the serializer bug is specific to member data;
+   otherwise it's a general serializer bug.
+3. **DuckDB integration.** Load a demo Parquet/CSV, generate SQL from the
+   drilldown MDX pattern, return real per‑category aggregate values.
+4. **MDX transpilation.** Parse the DrilldownLevel / Members patterns,
+   extract hierarchy name, map to DuckDB table → SQL → real results.
 
 ## Hard-coded constants (search-and-replace targets when going live)
 - Catalog name: `KTH_KEX_MALLOY_CUBE`

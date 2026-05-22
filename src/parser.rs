@@ -14,7 +14,7 @@ pub enum XmlaRequest {
     MdschemaHierarchies,
     MdschemaLevels,
     MdschemaProperties { property_type: Option<i32> },
-    MdschemaMembers,
+    MdschemaMembers { member_unique_name: Option<String>, tree_op: Option<i32> },
     MdschemaSets,
     MdschemaKpis,
     MdschemaMeasureGroups,
@@ -44,11 +44,15 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut in_statement = false;
     let mut is_begin_session = false;
     let mut in_property_type = false;
+    let mut in_member_unique_name = false;
+    let mut in_tree_op = false;
 
     let mut parsed_request_type = String::new();
     let mut requested_properties: Vec<String> = Vec::new();
     let mut statement_text = String::new();
     let mut property_type: Option<i32> = None;
+    let mut member_unique_name: Option<String> = None;
+    let mut tree_op: Option<i32> = None;
 
     loop {
         match reader.read_event() {
@@ -60,6 +64,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
                     b"Execute" => is_execute = true,
                     b"PROPERTY_TYPE" => in_property_type = true,
+                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
+                    b"TREE_OP" => in_tree_op = true,
                     _ => (),
                 }
             }
@@ -83,6 +89,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         if let Ok(v) = text.parse::<i32>() {
                             property_type = Some(v);
                         }
+                    } else if in_member_unique_name {
+                        member_unique_name = Some(text);
+                    } else if in_tree_op {
+                        if let Ok(v) = text.parse::<i32>() {
+                            tree_op = Some(v);
+                        }
                     }
                 }
             }
@@ -92,6 +104,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"PropertyName" => in_property_name = false,
                     b"Statement" => in_statement = false,
                     b"PROPERTY_TYPE" => in_property_type = false,
+                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
+                    b"TREE_OP" => in_tree_op = false,
                     _ => (),
                 }
             }
@@ -117,7 +131,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "MDSCHEMA_HIERARCHIES" => return XmlaRequest::MdschemaHierarchies,
         "MDSCHEMA_LEVELS" => return XmlaRequest::MdschemaLevels,
         "MDSCHEMA_PROPERTIES" => return XmlaRequest::MdschemaProperties { property_type },
-        "MDSCHEMA_MEMBERS" => return XmlaRequest::MdschemaMembers,
+        "MDSCHEMA_MEMBERS" => return XmlaRequest::MdschemaMembers { member_unique_name, tree_op },
         "MDSCHEMA_SETS" => return XmlaRequest::MdschemaSets,
         "MDSCHEMA_KPIS" => return XmlaRequest::MdschemaKpis,
         "MDSCHEMA_MEASUREGROUPS" => return XmlaRequest::MdschemaMeasureGroups,
