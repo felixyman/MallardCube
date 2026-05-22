@@ -33,18 +33,120 @@ pub fn get_execute_statement_response(statement: &str) -> String {
 
 // ---- helpers for building cellset data ----
 
-fn product_category_dim_props(name: &str) -> Vec<(String, String)> {
-    vec![
-        ("PARENT_UNIQUE_NAME".into(), "[ProductCategory].[ProductCategory].[All]".into()),
-        ("HIERARCHY_UNIQUE_NAME".into(), "[ProductCategory].[ProductCategory]".into()),
+const PRODUCTCATEGORY_HIER: &str = "[ProductCategory].[ProductCategory]";
+const PRODUCTCATEGORY_ALL_U: &str = "[ProductCategory].[ProductCategory].[All]";
+const PRODUCTCATEGORY_ALL_L: &str = "[ProductCategory].[ProductCategory].[(All)]";
+const PRODUCTCATEGORY_LEAF_L: &str = "[ProductCategory].[ProductCategory].[ProductCategory]";
+const MEASURES_HIER: &str = "[Measures]";
+const MEASURES_LEVEL: &str = "[Measures].[MeasuresLevel]";
+
+const PRODUCTCATEGORY_PROP_NAMES: &[&str] = &[
+    "PARENT_UNIQUE_NAME",
+    "HIERARCHY_UNIQUE_NAME",
+    "MEMBER_NAME",
+    "MEMBER_KEY",
+    "MEMBER_TYPE",
+    "MEMBER_VALUE",
+    "PARENT_LEVEL",
+    "PARENT_COUNT",
+    "CHILDREN_CARDINALITY",
+];
+
+fn clause_contents<'a>(mdx: &'a str, keyword: &str, terminators: &[&str]) -> Option<&'a str> {
+    let upper = mdx.to_uppercase();
+    let keyword_upper = keyword.to_uppercase();
+    let start = upper.find(&keyword_upper)? + keyword_upper.len();
+
+    let mut end = mdx.len();
+    for term in terminators {
+        let term_upper = term.to_uppercase();
+        if let Some(idx) = upper[start..].find(&term_upper) {
+            end = end.min(start + idx);
+        }
+    }
+
+    Some(mdx[start..end].trim())
+}
+
+fn parse_dimension_properties(mdx: &str) -> Vec<String> {
+    let Some(raw) = clause_contents(
+        mdx,
+        "DIMENSION PROPERTIES",
+        &[" ON COLUMNS", " ON ROWS", " FROM ", " CELL PROPERTIES"],
+    ) else {
+        return vec![];
+    };
+
+    let mut props = Vec::new();
+    for token in raw.split(',') {
+        let token_upper = token.trim().to_uppercase();
+        for prop in PRODUCTCATEGORY_PROP_NAMES {
+            if token_upper.ends_with(prop) {
+                if !props.iter().any(|p| p == prop) {
+                    props.push((*prop).to_string());
+                }
+                break;
+            }
+        }
+    }
+    props
+}
+
+fn parse_cell_properties(mdx: &str) -> Vec<String> {
+    let Some(raw) = clause_contents(mdx, "CELL PROPERTIES", &[]) else {
+        return vec![];
+    };
+
+    raw.split(',')
+        .map(|token| token.trim().to_uppercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn includes_prop(props: &[String], name: &str) -> bool {
+    props.iter().any(|prop| prop == name)
+}
+
+fn filter_dim_props(props: Vec<(String, String)>, requested: &[String]) -> Vec<(String, String)> {
+    props.into_iter()
+        .filter(|(tag, _)| includes_prop(requested, tag))
+        .collect()
+}
+
+fn filter_dim_prop_decls(
+    props: Vec<(String, String, String)>,
+    requested: &[String],
+) -> Vec<(String, String, String)> {
+    props.into_iter()
+        .filter(|(tag, _, _)| includes_prop(requested, tag))
+        .collect()
+}
+
+fn product_category_dim_props_leaf(name: &str, requested: &[String]) -> Vec<(String, String)> {
+    filter_dim_props(vec![
+        ("PARENT_UNIQUE_NAME".into(), PRODUCTCATEGORY_ALL_U.into()),
+        ("HIERARCHY_UNIQUE_NAME".into(), PRODUCTCATEGORY_HIER.into()),
         ("MEMBER_NAME".into(), name.to_string()),
         ("MEMBER_KEY".into(), name.to_string()),
-        ("MEMBER_TYPE".into(), "3".into()),
+        ("MEMBER_TYPE".into(), "1".into()),
         ("MEMBER_VALUE".into(), name.to_string()),
         ("PARENT_LEVEL".into(), "0".into()),
         ("PARENT_COUNT".into(), "1".into()),
         ("CHILDREN_CARDINALITY".into(), "0".into()),
-    ]
+    ], requested)
+}
+
+fn product_category_dim_props_all(requested: &[String]) -> Vec<(String, String)> {
+    filter_dim_props(vec![
+        ("HIERARCHY_UNIQUE_NAME".into(), PRODUCTCATEGORY_HIER.into()),
+        ("MEMBER_NAME".into(), "All".into()),
+        ("MEMBER_KEY".into(), "All".into()),
+        ("MEMBER_TYPE".into(), "2".into()),
+        ("MEMBER_VALUE".into(), "All".into()),
+        ("PARENT_LEVEL".into(), "0".into()),
+        ("PARENT_COUNT".into(), "0".into()),
+        ("CHILDREN_CARDINALITY".into(), "4".into()),
+    ], requested)
 }
 
 fn product_category_dim_decls() -> Vec<(String, String, String)> {
@@ -62,6 +164,52 @@ fn product_category_dim_decls() -> Vec<(String, String, String)> {
     ]
 }
 
+fn product_category_hierarchy(requested: &[String]) -> cellset::HierarchyConfig {
+    cellset::HierarchyConfig {
+        name: PRODUCTCATEGORY_HIER.into(),
+        dim_prop_decls: filter_dim_prop_decls(product_category_dim_decls(), requested),
+    }
+}
+
+fn measures_hierarchy() -> cellset::HierarchyConfig {
+    cellset::HierarchyConfig {
+        name: MEASURES_HIER.into(),
+        dim_prop_decls: vec![],
+    }
+}
+
+fn product_category_leaf_member(name: &str, requested: &[String]) -> cellset::MemberConfig {
+    let u_name = format!("[ProductCategory].[ProductCategory].&amp;[{}]", name);
+    cellset::MemberConfig {
+        hierarchy: PRODUCTCATEGORY_HIER.into(),
+        u_name,
+        caption: name.to_string(),
+        l_name: PRODUCTCATEGORY_LEAF_L.into(),
+        l_num: 1,
+        display_info: 3,
+        dim_props: product_category_dim_props_leaf(name, requested),
+    }
+}
+
+fn product_category_all_member(requested: &[String]) -> cellset::MemberConfig {
+    cellset::MemberConfig {
+        hierarchy: PRODUCTCATEGORY_HIER.into(),
+        u_name: PRODUCTCATEGORY_ALL_U.into(),
+        caption: "All".into(),
+        l_name: PRODUCTCATEGORY_ALL_L.into(),
+        l_num: 0,
+        display_info: 5,
+        dim_props: product_category_dim_props_all(requested),
+    }
+}
+
+fn product_category_leaf_members(requested: &[String]) -> Vec<cellset::MemberConfig> {
+    ["Category A", "Category B", "Category C", "Category D"]
+        .iter()
+        .map(|name| product_category_leaf_member(name, requested))
+        .collect()
+}
+
 fn measurement_cell(ordinal: u32) -> cellset::CellConfig {
     cellset::CellConfig {
         ordinal,
@@ -73,23 +221,105 @@ fn measurement_cell(ordinal: u32) -> cellset::CellConfig {
     }
 }
 
-fn measures_slicer_member() -> cellset::MemberConfig {
+fn count_cell(ordinal: u32, value: u32) -> cellset::CellConfig {
+    cellset::CellConfig {
+        ordinal,
+        value: value as f64,
+        fmt_value: value.to_string(),
+        format_string: "0".into(),
+        back_color: String::new(),
+        fore_color: String::new(),
+    }
+}
+
+fn measures_member(unique_name: &str, caption: &str) -> cellset::MemberConfig {
     cellset::MemberConfig {
-        u_name: "[Measures].[Total Sales]".into(),
-        caption: "Total Sales (SEK)".into(),
-        l_name: "[Measures].[MeasuresLevel]".into(),
+        hierarchy: MEASURES_HIER.into(),
+        u_name: unique_name.into(),
+        caption: caption.into(),
+        l_name: MEASURES_LEVEL.into(),
         l_num: 0,
-        display_info: 3,
+        display_info: 131072,
         dim_props: vec![],
     }
 }
 
-fn slicer_axis() -> cellset::AxisConfig {
+fn measures_total_member() -> cellset::MemberConfig {
+    measures_member("[Measures].[Total Sales]", "Total Sales (SEK)")
+}
+
+fn cchildren_member() -> cellset::MemberConfig {
+    measures_member("[Measures].[cChildren]", "cChildren")
+}
+
+fn tuples_from_members(members: Vec<cellset::MemberConfig>) -> Vec<cellset::TupleConfig> {
+    members
+        .into_iter()
+        .map(|member| cellset::TupleConfig { members: vec![member] })
+        .collect()
+}
+
+fn render_response(axes: Vec<cellset::AxisConfig>, cells: Vec<cellset::CellConfig>, cell_props: &[String]) -> String {
+    let resp = cellset::CellsetResponse {
+        cube_name: "Model".into(),
+        axes,
+        cells,
+        include_fmt_value: includes_prop(cell_props, "FORMATTED_VALUE"),
+        include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
+        include_back_color: includes_prop(cell_props, "BACK_COLOR"),
+        include_fore_color: includes_prop(cell_props, "FORE_COLOR"),
+    };
+    cellset::render_cellset(&resp)
+}
+
+fn slicer_axis_with_members(
+    hierarchies: Vec<cellset::HierarchyConfig>,
+    members: Vec<cellset::MemberConfig>,
+) -> cellset::AxisConfig {
     cellset::AxisConfig {
         name: "SlicerAxis".into(),
-        hier_name: "[Measures]".into(),
-        members: vec![measures_slicer_member()],
-        dim_prop_decls: vec![],
+        hierarchies,
+        tuples: vec![cellset::TupleConfig { members }],
+    }
+}
+
+fn empty_slicer_axis() -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: "SlicerAxis".into(),
+        hierarchies: vec![],
+        tuples: vec![cellset::TupleConfig { members: vec![] }],
+    }
+}
+
+fn measures_axis() -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies: vec![measures_hierarchy()],
+        tuples: vec![cellset::TupleConfig { members: vec![measures_total_member()] }],
+    }
+}
+
+fn single_member_axis(name: &str, hierarchy: cellset::HierarchyConfig, member: cellset::MemberConfig) -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: name.into(),
+        hierarchies: vec![hierarchy],
+        tuples: vec![cellset::TupleConfig { members: vec![member] }],
+    }
+}
+
+fn member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig, members: Vec<cellset::MemberConfig>) -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: name.into(),
+        hierarchies: vec![hierarchy],
+        tuples: tuples_from_members(members),
+    }
+}
+
+fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: name.into(),
+        hierarchies: vec![hierarchy],
+        tuples: vec![],
     }
 }
 
@@ -97,64 +327,159 @@ fn slicer_axis() -> cellset::AxisConfig {
 
 /// Shape 1: slicer-only (e.g. dimension removed, measure stays).
 /// `SELECT FROM [Model] WHERE ([Measures]...) CELL PROPERTIES ...`
-fn build_slicer_only() -> String {
-    let resp = cellset::CellsetResponse {
-        cube_name: "Model".into(),
-        axes: vec![slicer_axis()],
-        cells: vec![measurement_cell(0)],
-    };
-    cellset::render_cellset(&resp)
+fn build_slicer_only(cell_props: &[String]) -> String {
+    render_response(
+        vec![slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()])],
+        vec![measurement_cell(0)],
+        cell_props,
+    )
 }
 
 /// Shape 2: hierarchy drilldown (e.g. first drag of ProductCategory to Rows).
 /// `SELECT ... DrilldownLevel({[All]}) ... ON COLUMNS ...`
-fn build_drilldown() -> String {
-    let names = ["Category A", "Category B", "Category C", "Category D"];
-    let mut members = Vec::new();
-    for (_i, &name) in names.iter().enumerate() {
-        let u_name = format!("[ProductCategory].[ProductCategory].&amp;[{}]", name);
-        members.push(cellset::MemberConfig {
-            u_name,
-            caption: name.to_string(),
-            l_name: "[ProductCategory].[ProductCategory].[ProductCategory]".into(),
-            l_num: 1,
-            display_info: 3,
-            dim_props: product_category_dim_props(name),
-        });
-    }
+fn build_drilldown(dim_props: &[String], cell_props: &[String]) -> String {
+    let members = product_category_leaf_members(dim_props);
 
     let mut cells = Vec::new();
     for i in 0..members.len() {
         cells.push(measurement_cell(i as u32));
     }
 
-    let axis0 = cellset::AxisConfig {
-        name: "Axis0".into(),
-        hier_name: "[ProductCategory].[ProductCategory]".into(),
-        members,
-        dim_prop_decls: product_category_dim_decls(),
-    };
-
-    let resp = cellset::CellsetResponse {
-        cube_name: "Model".into(),
-        axes: vec![axis0, slicer_axis()],
+    render_response(
+        vec![
+            member_list_axis("Axis0", product_category_hierarchy(dim_props), members),
+            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+        ],
         cells,
-    };
-    cellset::render_cellset(&resp)
+        cell_props,
+    )
+}
+
+/// Shape 3: measure on columns + ProductCategory on rows.
+/// Excel pivot with one Values measure and one Rows hierarchy.
+fn build_measure_by_category(dim_props: &[String], cell_props: &[String]) -> String {
+    let axis1_members = product_category_leaf_members(dim_props);
+    let mut cells = Vec::new();
+    for i in 0..axis1_members.len() {
+        cells.push(measurement_cell(i as u32));
+    }
+
+    render_response(
+        vec![
+            measures_axis(),
+            member_list_axis("Axis1", product_category_hierarchy(dim_props), axis1_members),
+            empty_slicer_axis(),
+        ],
+        cells,
+        cell_props,
+    )
+}
+
+fn build_slicer_all_and_measure(dim_props: &[String], cell_props: &[String]) -> String {
+    render_response(
+        vec![slicer_axis_with_members(
+            vec![product_category_hierarchy(dim_props), measures_hierarchy()],
+            vec![product_category_all_member(dim_props), measures_total_member()],
+        )],
+        vec![measurement_cell(0)],
+        cell_props,
+    )
+}
+
+fn build_all_level_members(dim_props: &[String], cell_props: &[String]) -> String {
+    render_response(
+        vec![
+            single_member_axis("Axis0", product_category_hierarchy(dim_props), product_category_all_member(dim_props)),
+            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+        ],
+        vec![measurement_cell(0)],
+        cell_props,
+    )
+}
+
+fn build_leaf_level_members(dim_props: &[String], cell_props: &[String]) -> String {
+    let members = product_category_leaf_members(dim_props);
+    let mut cells = Vec::new();
+    for i in 0..members.len() {
+        cells.push(measurement_cell(i as u32));
+    }
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", product_category_hierarchy(dim_props), members),
+            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+        ],
+        cells,
+        cell_props,
+    )
+}
+
+fn build_leaf_children_empty(dim_props: &[String], cell_props: &[String]) -> String {
+    render_response(
+        vec![
+            empty_member_list_axis("Axis0", product_category_hierarchy(dim_props)),
+            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+        ],
+        vec![],
+        cell_props,
+    )
+}
+
+fn build_measure_children_empty(cell_props: &[String]) -> String {
+    render_response(
+        vec![
+            empty_member_list_axis("Axis0", measures_hierarchy()),
+            slicer_axis_with_members(vec![product_category_hierarchy(&[])], vec![product_category_all_member(&[])]),
+        ],
+        vec![],
+        cell_props,
+    )
+}
+
+fn build_cchildren_for_all(dim_props: &[String], cell_props: &[String]) -> String {
+    render_response(
+        vec![
+            single_member_axis("Axis0", product_category_hierarchy(dim_props), product_category_all_member(dim_props)),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            empty_slicer_axis(),
+        ],
+        vec![count_cell(0, 4)],
+        cell_props,
+    )
 }
 
 fn get_execute_cellset_response(mdx: &str) -> String {
-    let has_axes = mdx.contains("ON COLUMNS") || mdx.contains("ON ROWS");
-    let is_drilldown = mdx.contains("[ProductCategory]")
-        && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
+    let upper = mdx.to_uppercase();
+    let dim_props = parse_dimension_properties(mdx);
+    let cell_props = parse_cell_properties(mdx);
+    let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
+    let has_rows = upper.contains("ON ROWS");
+    let has_cols = upper.contains("ON COLUMNS");
+    let has_product = mdx.contains("[ProductCategory]");
+    let has_measures = mdx.contains("[Measures]");
+    let is_drilldown = has_product && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
 
-    if is_drilldown {
-        build_drilldown()
+    if mdx.contains("WITH MEMBER [Measures].cChildren") {
+        build_cchildren_for_all(&dim_props, &cell_props)
+    } else if mdx.contains("WHERE ([ProductCategory].[ProductCategory].[All],[Measures].[Total Sales])") {
+        build_slicer_all_and_measure(&dim_props, &cell_props)
+    } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Sales].Children})") {
+        build_measure_children_empty(&cell_props)
+    } else if mdx.contains("AddCalculatedMembers({[ProductCategory].[ProductCategory].&[") && mdx.contains("].Children})") {
+        build_leaf_children_empty(&dim_props, &cell_props)
+    } else if mdx.contains("AddCalculatedMembers({[ProductCategory].[ProductCategory].[(All)].Members})") {
+        build_all_level_members(&dim_props, &cell_props)
+    } else if mdx.contains("AddCalculatedMembers({[ProductCategory].[ProductCategory].[ProductCategory].Members})") {
+        build_leaf_level_members(&dim_props, &cell_props)
+    } else if has_rows && has_cols && has_product && has_measures {
+        build_measure_by_category(&dim_props, &cell_props)
+    } else if is_drilldown {
+        build_drilldown(&dim_props, &cell_props)
     } else if !has_axes {
-        build_slicer_only()
+        build_slicer_only(&cell_props)
     } else {
         // multi-axis query we don't yet pattern-match — minimal fallback
-        build_slicer_only()
+        build_slicer_only(&cell_props)
     }
 }
 
