@@ -27,6 +27,7 @@ mod measuregroup_dimensions;
 mod execute;
 mod tmschema;
 mod cellset;
+mod rowset;
 
 use parser::{parse_xmla, XmlaRequest};
 
@@ -147,9 +148,9 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
             mdschema_properties::get_mdschema_properties_response(property_type)
         }
-        XmlaRequest::MdschemaMembers => {
-            println!("📥 MDSCHEMA_MEMBERS");
-            members::get_members_response()
+        XmlaRequest::MdschemaMembers { member_unique_name, tree_op } => {
+            println!("📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})", member_unique_name, tree_op);
+            members::get_members_response(member_unique_name.as_deref(), tree_op)
         }
         XmlaRequest::DiscoverLiterals => {
             println!("📥 DISCOVER_LITERALS");
@@ -218,6 +219,10 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
             return (StatusCode::BAD_REQUEST, headers, "Okänt anrop".to_string());
         }
     };
+
+    if body.contains("MDSCHEMA_MEMBERS") {
+        println!("📤 RESPONSE (MdschemaMembers):\n{}", &response_body[..response_body.len().min(2000)]);
+    }
 
     (StatusCode::OK, headers, response_body)
 }
