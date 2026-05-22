@@ -28,6 +28,7 @@ mod execute;
 mod tmschema;
 mod cellset;
 mod rowset;
+mod backend;
 
 use parser::{parse_xmla, XmlaRequest};
 
