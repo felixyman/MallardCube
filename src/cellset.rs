@@ -12,6 +12,7 @@ use crate::response::wrap_in_soap_envelope;
 
 /// One member on an axis.
 pub struct MemberConfig {
+    pub hierarchy: String,
     pub u_name: String,
     pub caption: String,
     pub l_name: String,
@@ -20,6 +21,15 @@ pub struct MemberConfig {
     /// Extra dimension properties: (element_tag, value).  Do NOT include
     /// the standard five (UName / Caption / LName / LNum / DisplayInfo) here.
     pub dim_props: Vec<(String, String)>,
+}
+
+pub struct TupleConfig {
+    pub members: Vec<MemberConfig>,
+}
+
+pub struct HierarchyConfig {
+    pub name: String,
+    pub dim_prop_decls: Vec<(String, String, String)>,
 }
 
 /// One cell in CellData.
@@ -35,13 +45,8 @@ pub struct CellConfig {
 /// An axis description — name, hierarchy identity, and the member list.
 pub struct AxisConfig {
     pub name: String,               // "Axis0" | "SlicerAxis"
-    /// Full hierarchy unique name, e.g. "[Produktkategori].[Produktkategori]"
-    pub hier_name: String,
-    /// Members of this axis.
-    pub members: Vec<MemberConfig>,
-    /// Extra dimension-property *declarations* for the HierarchyInfo.
-    /// (tag, qualified_name, type).  The standard five are added automatically.
-    pub dim_prop_decls: Vec<(String, String, String)>,
+    pub hierarchies: Vec<HierarchyConfig>,
+    pub tuples: Vec<TupleConfig>,
 }
 
 /// Everything needed to produce the mddataset Execute response.
@@ -49,6 +54,10 @@ pub struct CellsetResponse {
     pub cube_name: String,
     pub axes: Vec<AxisConfig>,
     pub cells: Vec<CellConfig>,
+    pub include_fmt_value: bool,
+    pub include_format_string: bool,
+    pub include_back_color: bool,
+    pub include_fore_color: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,10 +68,9 @@ fn hier_qualified(prefix: &str, suffix: &str) -> String {
     format!("{}.{}", prefix, suffix)
 }
 
-/// Produce the <HierarchyInfo> block for one axis.
-fn render_hierarchy_info(axis: &AxisConfig) -> String {
+fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
     let mut out = String::new();
-    let p = &axis.hier_name; // qualified-name prefix
+    let p = &hier.name; // qualified-name prefix
 
     let standard: &[(&str, &str, &str)] = &[
         ("UName",      &hier_qualified(p, "[MEMBER_UNIQUE_NAME]"),  "xsd:string"),
@@ -77,7 +85,7 @@ fn render_hierarchy_info(axis: &AxisConfig) -> String {
 "#,
         ));
     }
-    for (tag, qname, typ) in &axis.dim_prop_decls {
+    for (tag, qname, typ) in &hier.dim_prop_decls {
         out.push_str(&format!(
             r#"                  <{tag} name="{qname}" type="{typ}"/>
 "#,
@@ -87,7 +95,7 @@ fn render_hierarchy_info(axis: &AxisConfig) -> String {
 }
 
 /// Produce the <Member> XML for one member.
-fn render_member(m: &MemberConfig, hier: &str) -> String {
+fn render_member(m: &MemberConfig) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         r#"                  <Member Hierarchy="{hier}">
@@ -97,7 +105,7 @@ fn render_member(m: &MemberConfig, hier: &str) -> String {
                     <LNum>{ln}</LNum>
                     <DisplayInfo>{di}</DisplayInfo>
 "#,
-        hier = hier,
+        hier = m.hierarchy,
         u = m.u_name,
         c = m.caption,
         l = m.l_name,
@@ -121,9 +129,11 @@ fn render_axes(axes: &[AxisConfig]) -> String {
     for axis in axes {
         out.push_str(&format!("            <Axis name=\"{}\">\n", axis.name));
         out.push_str("              <Tuples>\n");
-        for m in &axis.members {
+        for tuple in &axis.tuples {
             out.push_str("                <Tuple>\n");
-            out.push_str(&render_member(m, &axis.hier_name));
+            for member in &tuple.members {
+                out.push_str(&render_member(member));
+            }
             out.push_str("                </Tuple>\n");
         }
         out.push_str("              </Tuples>\n");
@@ -134,26 +144,30 @@ fn render_axes(axes: &[AxisConfig]) -> String {
 }
 
 /// Produce the <CellData> block.
-fn render_cells(cells: &[CellConfig]) -> String {
+fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
     let mut out = String::new();
     out.push_str("          <CellData>\n");
     for cell in cells {
         out.push_str(&format!(
             r#"            <Cell CellOrdinal="{ord}">
               <Value xsi:type="xsd:double">{val}</Value>
-              <FmtValue>{fmt}</FmtValue>
-              <FormatString>{fs}</FormatString>
-              <BackColor>{bc}</BackColor>
-              <ForeColor>{fc}</ForeColor>
-            </Cell>
 "#,
             ord = cell.ordinal,
             val = cell.value,
-            fmt = cell.fmt_value,
-            fs = cell.format_string,
-            bc = cell.back_color,
-            fc = cell.fore_color,
         ));
+        if resp.include_fmt_value {
+            out.push_str(&format!("              <FmtValue>{}</FmtValue>\n", cell.fmt_value));
+        }
+        if resp.include_format_string {
+            out.push_str(&format!("              <FormatString>{}</FormatString>\n", cell.format_string));
+        }
+        if resp.include_back_color {
+            out.push_str(&format!("              <BackColor>{}</BackColor>\n", cell.back_color));
+        }
+        if resp.include_fore_color {
+            out.push_str(&format!("              <ForeColor>{}</ForeColor>\n", cell.fore_color));
+        }
+        out.push_str("            </Cell>\n");
     }
     out.push_str("          </CellData>\n");
     out
@@ -195,31 +209,45 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
     // AxesInfo
     olap_info.push_str("            <AxesInfo>\n");
     for axis in &r.axes {
-        olap_info.push_str(&format!(
-            "              <AxisInfo name=\"{name}\">\n                <HierarchyInfo name=\"{hier}\">\n",
-            name = axis.name,
-            hier = axis.hier_name,
-        ));
-        olap_info.push_str(&render_hierarchy_info(axis));
-        olap_info.push_str("                </HierarchyInfo>\n              </AxisInfo>\n");
+        if axis.hierarchies.is_empty() {
+            olap_info.push_str(&format!(
+                "              <AxisInfo name=\"{name}\">\n              </AxisInfo>\n",
+                name = axis.name,
+            ));
+        } else {
+            olap_info.push_str(&format!("              <AxisInfo name=\"{}\">\n", axis.name));
+            for hier in &axis.hierarchies {
+                olap_info.push_str(&format!(
+                    "                <HierarchyInfo name=\"{}\">\n",
+                    hier.name,
+                ));
+                olap_info.push_str(&render_hierarchy_info(hier));
+                olap_info.push_str("                </HierarchyInfo>\n");
+            }
+            olap_info.push_str("              </AxisInfo>\n");
+        }
     }
     olap_info.push_str("            </AxesInfo>\n");
     // CellInfo
-    olap_info.push_str(
-        r#"            <CellInfo>
-              <Value name="VALUE"/>
-              <FmtValue name="FORMATTED_VALUE" type="xsd:string"/>
-              <FormatString name="FORMAT_STRING" type="xsd:string"/>
-              <BackColor name="BACK_COLOR" type="xsd:string"/>
-              <ForeColor name="FORE_COLOR" type="xsd:string"/>
-            </CellInfo>
-          </OlapInfo>
-"#,
-    );
+    olap_info.push_str("            <CellInfo>\n");
+    olap_info.push_str("              <Value name=\"VALUE\"/>\n");
+    if r.include_fmt_value {
+        olap_info.push_str("              <FmtValue name=\"FORMATTED_VALUE\" type=\"xsd:string\"/>\n");
+    }
+    if r.include_format_string {
+        olap_info.push_str("              <FormatString name=\"FORMAT_STRING\" type=\"xsd:string\"/>\n");
+    }
+    if r.include_back_color {
+        olap_info.push_str("              <BackColor name=\"BACK_COLOR\" type=\"xsd:string\"/>\n");
+    }
+    if r.include_fore_color {
+        olap_info.push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:string\"/>\n");
+    }
+    olap_info.push_str("            </CellInfo>\n          </OlapInfo>\n");
 
     // --- Assemble ---
     let axes_xml = render_axes(&r.axes);
-    let cells_xml = render_cells(&r.cells);
+    let cells_xml = render_cells(&r.cells, r);
 
     let inner = format!(
         r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
