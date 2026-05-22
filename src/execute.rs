@@ -107,6 +107,66 @@ fn includes_prop(props: &[String], name: &str) -> bool {
     props.iter().any(|prop| prop == name)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticQueryKind {
+    ChildrenCountForAll,
+    SlicerAllAndMeasure,
+    MeasureChildrenEmpty,
+    LeafChildrenEmpty,
+    AllLevelMembers,
+    LeafLevelMembers,
+    MeasureByCategory,
+    DrilldownCategories,
+    SlicerOnly,
+}
+
+#[derive(Debug, Clone)]
+struct SemanticQuery {
+    kind: SemanticQueryKind,
+    dim_props: Vec<String>,
+    cell_props: Vec<String>,
+}
+
+fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
+    let upper = mdx.to_uppercase();
+    let dim_props = parse_dimension_properties(mdx);
+    let cell_props = parse_cell_properties(mdx);
+    let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
+    let has_rows = upper.contains("ON ROWS");
+    let has_cols = upper.contains("ON COLUMNS");
+    let has_product = mdx.contains("[Produktkategori]");
+    let has_measures = mdx.contains("[Measures]");
+    let is_drilldown = has_product && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
+
+    let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
+        SemanticQueryKind::ChildrenCountForAll
+    } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])") {
+        SemanticQueryKind::SlicerAllAndMeasure
+    } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
+        SemanticQueryKind::MeasureChildrenEmpty
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") && mdx.contains("].Children})") {
+        SemanticQueryKind::LeafChildrenEmpty
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})") {
+        SemanticQueryKind::AllLevelMembers
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})") {
+        SemanticQueryKind::LeafLevelMembers
+    } else if has_rows && has_cols && has_product && has_measures {
+        SemanticQueryKind::MeasureByCategory
+    } else if is_drilldown {
+        SemanticQueryKind::DrilldownCategories
+    } else if !has_axes {
+        SemanticQueryKind::SlicerOnly
+    } else {
+        SemanticQueryKind::SlicerOnly
+    };
+
+    SemanticQuery {
+        kind,
+        dim_props,
+        cell_props,
+    }
+}
+
 fn filter_dim_props(props: Vec<(String, String)>, requested: &[String]) -> Vec<(String, String)> {
     props.into_iter()
         .filter(|(tag, _)| includes_prop(requested, tag))
@@ -264,6 +324,7 @@ fn render_response(axes: Vec<cellset::AxisConfig>, cells: Vec<cellset::CellConfi
         cube_name: "Model".into(),
         axes,
         cells,
+        include_value: cell_props.is_empty() || includes_prop(cell_props, "VALUE"),
         include_fmt_value: includes_prop(cell_props, "FORMATTED_VALUE"),
         include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
         include_back_color: includes_prop(cell_props, "BACK_COLOR"),
@@ -448,39 +509,41 @@ fn build_cchildren_for_all(dim_props: &[String], cell_props: &[String]) -> Strin
     )
 }
 
-fn get_execute_cellset_response(mdx: &str) -> String {
-    let upper = mdx.to_uppercase();
-    let dim_props = parse_dimension_properties(mdx);
-    let cell_props = parse_cell_properties(mdx);
-    let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
-    let has_rows = upper.contains("ON ROWS");
-    let has_cols = upper.contains("ON COLUMNS");
-    let has_product = mdx.contains("[Produktkategori]");
-    let has_measures = mdx.contains("[Measures]");
-    let is_drilldown = has_product && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
-
-    if mdx.contains("WITH MEMBER [Measures].cChildren") {
-        build_cchildren_for_all(&dim_props, &cell_props)
-    } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])") {
-        build_slicer_all_and_measure(&dim_props, &cell_props)
-    } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
-        build_measure_children_empty(&cell_props)
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") && mdx.contains("].Children})") {
-        build_leaf_children_empty(&dim_props, &cell_props)
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})") {
-        build_all_level_members(&dim_props, &cell_props)
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})") {
-        build_leaf_level_members(&dim_props, &cell_props)
-    } else if has_rows && has_cols && has_product && has_measures {
-        build_measure_by_category(&dim_props, &cell_props)
-    } else if is_drilldown {
-        build_drilldown(&dim_props, &cell_props)
-    } else if !has_axes {
-        build_slicer_only(&cell_props)
-    } else {
-        // multi-axis query we don't yet pattern-match — minimal fallback
-        build_slicer_only(&cell_props)
+fn execute_semantic_query(query: &SemanticQuery) -> String {
+    match query.kind {
+        SemanticQueryKind::ChildrenCountForAll => {
+            build_cchildren_for_all(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::SlicerAllAndMeasure => {
+            build_slicer_all_and_measure(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::MeasureChildrenEmpty => {
+            build_measure_children_empty(&query.cell_props)
+        }
+        SemanticQueryKind::LeafChildrenEmpty => {
+            build_leaf_children_empty(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::AllLevelMembers => {
+            build_all_level_members(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::LeafLevelMembers => {
+            build_leaf_level_members(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::MeasureByCategory => {
+            build_measure_by_category(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::DrilldownCategories => {
+            build_drilldown(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::SlicerOnly => {
+            build_slicer_only(&query.cell_props)
+        }
     }
+}
+
+fn get_execute_cellset_response(mdx: &str) -> String {
+    let query = semantic_query_from_mdx(mdx);
+    execute_semantic_query(&query)
 }
 
 fn get_execute_mdx_response(mdx: &str) -> String {

@@ -3,7 +3,11 @@
 ## Goal
 Rust proxy that impersonates an SSAS server to satisfy Excel's MSOLAP client.
 Eventually: transpile MDX → Malloy → DuckDB.
-**Current status:** Excel renders the PivotTable Fields panel correctly with `Σ Faktatabell` (containing `Total Försäljning (SEK)`) and `Produktkategori` (containing the `Produktkategori` hierarchy). Drag/drop into the pivot has not been verified end-to-end yet.
+**Current status:** Excel renders the PivotTable Fields panel correctly, can drag
+`Produktkategori` to Rows and Filters, and no longer crashes when opening the
+filter dropdown. The proxy now survives Excel's `MDSCHEMA_MEMBERS` and MDX
+probe/query cycle. Remaining limitation: `Execute` still returns hard-coded
+values, so changing the filter does not yet change the data.
 
 ## Project structure
 ```
@@ -36,9 +40,13 @@ xmla_proxy/src/
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs (advertised but Excel does not query them)
   execute.rs           — ExecuteResponse: MDX SELECT (flat rowset) + DAX EVALUATE +
-                         cellset (mddataset) for drilldown / slicer-only / Members queries
-  cellset.rs           — Generic cellset XML builder (types: MemberConfig, AxisConfig,
-                         CellConfig, CellsetResponse). Drives execute.rs cellset path.
+                         cellset (mddataset) for drilldown / slicer-only / member probe
+                         queries. Currently pattern-matched on Excel MDX strings; next
+                         step is a semantic query layer for those patterns.
+  cellset.rs           — Generic cellset XML builder (types: MemberConfig, TupleConfig,
+                         HierarchyConfig, AxisConfig, CellConfig, CellsetResponse).
+                         Supports multi-member tuples on one axis and conditional cell
+                         property emission.
   rowset.rs            — Typed rowset infrastructure (Row, ColumnDef, Rowset).
                          Built for Vec<Row> refactor; currently unused (members.rs
                          reverted to static XML because serializer format triggers
@@ -68,14 +76,19 @@ BeginSession, ExecuteEmpty, ExecuteStatement(String), Unknown.
 - DAX `EVALUATE` falls through to a placeholder single-row response.
 - **Cellset (mddataset) responses** for multidimensional MDX queries with
   DIMENSION PROPERTIES / CELL PROPERTIES. Excel renders member labels in
-  the pivot. Currently hard-coded for one hierarchy + one member.
+  the pivot and now survives filter-tree probe queries (`Level.Members`,
+  `Member.Children`, `Ascendants(...)`, slicer-only `WHERE (...)`).
 - Request logging: every Discover prints the `<RestrictionList>` and `<PropertyList>`
   inner XML to stdout.
+- `MDSCHEMA_MEMBERS` now follows the spec column order and no longer crashes Excel
+  when the filter dropdown is opened.
 
 ## Current blocker
-**None.** The proxy now completes the full lifecycle: field list → drag fields
-→ MDX query → cellset response → pivot renders. Remaining work is generalizing
-the cellset from hard-coded data and hooking up real backends (DuckDB → Malloy).
+**Real data execution is not implemented.** The XMLA/protocol side is now far enough
+for Excel to browse, drag, and issue MDX probe queries, but `Execute` still returns
+hard-coded values and hard-coded member lists. Report filters therefore do not yet
+change the data. The next architectural step is to replace ad hoc MDX string
+branching with a semantic query model for the Excel MDX subset.
 
 ## Observed Excel session pattern (current trace)
 ```
@@ -162,28 +175,18 @@ No `DIMENSION_VISIBILITY=1` filter — Excel takes whatever rows we return.
     and intrinsic properties (MEMBER_UNIQUE_NAME/MEMBER_CAPTION/LEVEL_NUMBER/LEVEL_UNIQUE_NAME)
     are NOT allowed — the standard 5 cover these.
 
-## Current blocker
-**Filter dropdown crashes Excel.** The Vec\<Row\> refactor for MDSCHEMA_MEMBERS
-introduced a serializer that corrupts MSOLAP's parser state. Members have been
-reverted to static XML output with TREE_OP filter logic operating on raw strings.
-The filter logic is correct (ANCESTORS returns sentinel, CHILDREN returns leaves)
-but Excel still crashes — likely a separate issue from the serializer change.
-Pending investigation when testing resumes.
-
 ## Next candidate workstreams
-1. **Debug the filter‑dropdown crash.** The MDSCHEMA_MEMBERS response format
-   is identical to the working pre‑refactor version. The crash trigger may be
-   external (e.g., Excel checks a different member or expects TREE_OP=0 before
-   TREE_OP=8). Full trace comparison from a known‑working session needed.
-2. **Vec<Row> refactor — next module.** The Rowset infrastructure exists and
+1. **Semantic query layer.** Replace `execute.rs` substring-driven builders with a
+   semantic model for the current Excel MDX subset:
+   `DrilldownLevel`, `Level.Members`, `Member.Children`, slicer-only `WHERE (...)`,
+   and the `cChildren + Ascendants(...)` probe.
+2. **DuckDB demo backend.** Execute the semantic query model against a single narrow
+   schema (`produktkategori`, `sales`) so filters and grouped totals return real data.
+3. **Malloy generation.** Once the semantic layer is stable, generate Malloy from the
+   semantic query model rather than from raw MDX strings.
+4. **Vec<Row> refactor — next safe module.** The Rowset infrastructure exists and
    compiles. Apply it to a simpler rowset (e.g. KPIS, SETS — empty rowsets)
-   first to validate the serializer against MSOLAP without member complexity.
-   If the empty rowset passes, the serializer bug is specific to member data;
-   otherwise it's a general serializer bug.
-3. **DuckDB integration.** Load a demo Parquet/CSV, generate SQL from the
-   drilldown MDX pattern, return real per‑category aggregate values.
-4. **MDX transpilation.** Parse the DrilldownLevel / Members patterns,
-   extract hierarchy name, map to DuckDB table → SQL → real results.
+   first to validate the serializer incrementally.
 
 ## Hard-coded constants (search-and-replace targets when going live)
 - Catalog name: `KTH_KEX_MALLOY_CUBE`
