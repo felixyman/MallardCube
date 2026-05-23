@@ -321,6 +321,7 @@ pub enum SemanticQueryKind {
     MeasureByCategory,
     DrilldownCategories,
     SlicerOnly,
+    CrossJoinProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -350,7 +351,9 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let has_measures = mdx.contains("[Measures]");
     let is_drilldown = has_visible_dim && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
 
-    let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
+    let kind = if mdx.contains("CrossJoin(") {
+        SemanticQueryKind::CrossJoinProbe
+    } else if mdx.contains("WITH MEMBER [Measures].cChildren") {
         if cchildren_target_is_measures(mdx) {
             SemanticQueryKind::ChildrenCountMeasures
         } else if cchildren_target_is_product_leaf(mdx) {

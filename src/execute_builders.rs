@@ -603,6 +603,30 @@ fn build_cchildren_for_measures(query: &SemanticQuery) -> String {
     )
 }
 
+fn build_crossjoin_probe(query: &SemanticQuery) -> String {
+    // CrossJoin(DrilldownLevel(Produktkategori.All), DrilldownLevel(Region.All))
+    // is a two-hierarchy axis probe sent when clicking a second field.
+    // Return the first dimension's drilldown to keep the sheet unchanged.
+    let dim = "Produktkategori";
+    let data = Backend::get().grouped_by_produktkategori(&[]);
+    let members = leaf_members_from(dim,
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &query.dim_props,
+    );
+    let mut cells = Vec::new();
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
+    }
+    render_response(
+        vec![
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
+            full_slicer_axis(query),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
 // ---- public API consumed by execute.rs dispatch ----
 
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
@@ -621,6 +645,7 @@ pub fn execute_semantic_query(query: &SemanticQuery) -> String {
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query),
         SemanticQueryKind::SlicerOnly => build_slicer_only(query),
+        SemanticQueryKind::CrossJoinProbe => build_crossjoin_probe(query),
     }
 }
 
