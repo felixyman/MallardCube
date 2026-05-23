@@ -324,7 +324,7 @@ fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> ce
 }
 
 fn row_dim(query: &SemanticQuery) -> &str {
-    query.row_dimension.as_deref().unwrap_or("Produktkategori")
+    query.axis_dimensions.first().map(|s| s.as_str()).unwrap_or("Produktkategori")
 }
 
 fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> cellset::MemberConfig {
@@ -398,12 +398,11 @@ const ALL_DIMS: &[&str] = &["Measures", "Produktkategori", "Region"];
 /// Build a SlicerAxis that includes every cube dimension not on the visible axis,
 /// in stable metadata-ordinal order (Measures, Produktkategori, Region).
 fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
-    let row_dim = row_dim(query);
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
 
     for &dim in ALL_DIMS {
-        if dim == row_dim { continue; }
+        if query.axis_dimensions.contains(&dim.to_string()) { continue; }
 
         if dim == "Measures" {
             hierarchies.push(measures_hierarchy());
@@ -443,7 +442,11 @@ fn build_slicer_only(query: &SemanticQuery) -> String {
 }
 
 fn build_drilldown(query: &SemanticQuery) -> String {
-    let dim = row_dim(query);
+    let dims = &query.axis_dimensions;
+    if dims.len() >= 2 {
+        return build_drilldown_multi(query);
+    }
+    let dim = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
     let data = fetch_grouped(dim, &query.filters);
     let members = leaf_members_from(dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
@@ -460,6 +463,36 @@ fn build_drilldown(query: &SemanticQuery) -> String {
             member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
             full_slicer_axis(query),
         ],
+        cells,
+        &query.cell_props,
+    )
+}
+
+fn build_drilldown_multi(query: &SemanticQuery) -> String {
+    let dims = &query.axis_dimensions;
+    let data = Backend::get().grouped_pairs();
+    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
+    for dim in dims {
+        hierarchies.push(hierarchy_for(dim, &query.dim_props));
+    }
+
+    let mut tuples: Vec<cellset::TupleConfig> = Vec::new();
+    let mut cells = Vec::new();
+    for (i, (kat, region, value)) in data.iter().enumerate() {
+        let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
+        let region_member = leaf_member_for("Region", region, &query.dim_props);
+        tuples.push(cellset::TupleConfig { members: vec![kat_member, region_member] });
+        cells.push(measurement_cell(i as u32, *value));
+    }
+
+    let axis = cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![axis, full_slicer_axis(query)],
         cells,
         &query.cell_props,
     )
@@ -603,30 +636,6 @@ fn build_cchildren_for_measures(query: &SemanticQuery) -> String {
     )
 }
 
-fn build_crossjoin_probe(query: &SemanticQuery) -> String {
-    // CrossJoin(DrilldownLevel(Produktkategori.All), DrilldownLevel(Region.All))
-    // is a two-hierarchy axis probe sent when clicking a second field.
-    // Return the first dimension's drilldown to keep the sheet unchanged.
-    let dim = "Produktkategori";
-    let data = Backend::get().grouped_by_produktkategori(&[]);
-    let members = leaf_members_from(dim,
-        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        &query.dim_props,
-    );
-    let mut cells = Vec::new();
-    for (i, (_name, value)) in data.iter().enumerate() {
-        cells.push(measurement_cell(i as u32, *value));
-    }
-    render_response(
-        vec![
-            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
-            full_slicer_axis(query),
-        ],
-        cells,
-        &query.cell_props,
-    )
-}
-
 // ---- public API consumed by execute.rs dispatch ----
 
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
@@ -645,7 +654,6 @@ pub fn execute_semantic_query(query: &SemanticQuery) -> String {
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query),
         SemanticQueryKind::SlicerOnly => build_slicer_only(query),
-        SemanticQueryKind::CrossJoinProbe => build_crossjoin_probe(query),
     }
 }
 

@@ -3,242 +3,181 @@
 ## Goal
 Rust proxy that impersonates an SSAS server to satisfy Excel's MSOLAP client.
 Eventually: transpile MDX → Malloy → DuckDB.
-**Current status:** Excel renders the PivotTable Fields panel, can drag
-`Produktkategori` to Rows and Filters, the filter dropdown works, and changing
-the selected filter category now returns correct real-data values. The proxy
-survives the full metadata→probe→query cycle without errors, including the
-previously-crashing `cChildren + Ascendants(...)` leaf-member probe.
+**Current status:** Excel can place `Produktkategori` and `Region` on Rows,
+both together or independently, filter by either dimension, and add
+`Total Försäljning` to Values. All three cube dimensions (Measures,
+Produktkategori, Region) work correctly through the full metadata→probe→query
+cycle with real data from the SQLite backend. 43 unit tests.
 
-## Recent fixes (most recent first)
-### `cChildren + Ascendants(...)` leaf probe works (2026-05-23)
-- Removed `PARENT_UNIQUE_NAME` from `produktkategori_dim_props_all()` —
-  the All member must omit this property entirely even when declared in
-  HierarchyInfo (matches real SSAS behavior).
-- Fixed `cchildren_target_is_measures()`, `cchildren_target_is_product_leaf()`,
-  and `cchildren_filtered_member_name()` — the `FilteredMembers As '...'`
-  parser was finding the opening quote instead of the closing quote, so
-  leaf probes were misclassified or returned empty member names.
-- Fixed `is_mdx_select()` — `WITH MEMBER ...` MDX fell through to the
-  flat rowset path because `is_mdx_select` only checked for `SELECT` prefix.
-  Now also matches `WITH ... SELECT ...` patterns.
-- 23 unit tests added in `execute.rs` covering: routing, parsing
-  (dimension props, cell props, filters, cChildren helpers), semantic
-  classification (all known probe families), and response-shape assertions
-  for the fragile `cChildren + Ascendants` probe.
+## Recent fixes (2026-05-23)
 
-### Real data backend (2026-05-23)
-- `src/backend.rs` with in-memory SQLite (`rusqlite`): table `faktatabell`
-  with `produktkategori` + `sales`, demo rows for Kategori A/B/C/D.
-- `Execute` now uses `Backend` for totals and grouped values instead of
-  hard-coded `1250000.5`.
+### Two-visible-hierarchy CrossJoin support
+- Added `axis_dimensions: Vec<String>` to `SemanticQuery` — tracks all
+  visible axis hierarchies in order (1 for simple drilldown, 2 for CrossJoin).
+- Added `parse_axis_dimensions()` — extracts dimensions from the SELECT part
+  before `FROM [Model]`.
+- Added `build_drilldown_multi()` — builds Axis0 with two hierarchies and
+  cross-product tuples (e.g. `(Kategori A, North)`, `(Kategori A, South)`).
+- `full_slicer_axis()` skips all axis dimensions (not just `row_dimension`).
+- Backend: `grouped_pairs()` returns `Vec<(String, String, f64)>` for
+  `Produktkategori x Region` grouped queries.
 
-### Known limitation
-- `parse_category_filter` matches `[Produktkategori]` anywhere in the MDX
-  string (not just the WHERE clause), so multi-category subquery filter
-  extraction only captures the first category. Not yet blocking Excel
-  functionality but needs fixing before full multi-filter support.
+### CrossJoin SlicerAxis bug fix
+- `SlicerAllAndMeasure` was matching drilldown queries that had
+  `WHERE ([Region].[Region].[All],[Measures]...)` even when the query
+  also had `DrilldownLevel(...)` and `ON COLUMNS`.
+- Moved `SlicerAllAndMeasure` below `is_drilldown` and gated with `!has_axes`.
+- This was the root cause of "Total Försäljning won't go into Values."
+
+### Complete SlicerAxis (all off-axis dimensions)
+- `full_slicer_axis()` now includes EVERY cube dimension not on the visible
+  axis, in stable metadata-ordinal order (Measures, Produktkategori, Region).
+- Default All member emitted even when a dimension is not referenced in WHERE.
+- Off-axis slicer members use standard 5 properties only (not row-axis dim_props).
+
+### Dimension-tagged filter model
+- Replaced flat `category_filters: Vec<String>` with
+  `filters: Vec<DimensionFilter>` (dimension + members).
+- Replaced `dimension: Option<String>` with `row_dimension: Option<String>`.
+- Added `SlicerSelection` for off-axis dimensions in WHERE clause.
+- `parse_mdx_filters()` returns dimension-tagged filters instead of flat list.
+- Filter parsing is clause-aware: WHERE content extracted with balanced parens,
+  subquery `SELECT ({...})` parsed separately.
+
+### Multi-category subquery filter fix
+- Replaced `parse_category_filter()` (global string matching) with:
+  - `where_clause_payload()` (balanced-paren scanning)
+  - `extract_dimension_member_names()` (per-dimension member extraction)
+- Multi-category subquery filters now return all categories, not just the first.
+
+### Region dimension added
+- Backend: added `region` column to `faktatabell`, 8 demo rows covering
+  North/South × Kategori A-D.
+- Metadata: dimensions, hierarchies, levels, members, tables,
+  measuregroup_dimensions, mdschema_properties — all with Region entries.
+- Region-aware queries: `sales_by_region()`, `sales_for_regions()`,
+  `total_for_regions()`, `region_count()`.
+- Combined queries: `grouped_by_produktkategori(region_filter)`,
+  `grouped_by_region(kat_filter)`, `total_with_filters(region, kat)`.
+
+### Flat rowset routing fix
+- `is_mdx_select()` now matches `WITH ... SELECT ...` patterns.
+- `WITH MEMBER [Measures].cChildren ...` probes now reach the cellset path.
+
+### FilteredMembers parser fix
+- `cchildren_target_is_measures()`, `cchildren_target_is_product_leaf()`,
+  `cchildren_filtered_member_name()` — skip past the opening quote before
+  searching for the closing quote.
+
+### PARENT_UNIQUE_NAME omission for All member
+- `produktkategori_dim_props_all()` no longer emits `PARENT_UNIQUE_NAME`.
+
+### Debug file logging
+- `debug-last-run.log` created fresh on every `cargo run`.
+- Logs full Execute request/response XML and MDSCHEMA_MEMBERS response XML.
 
 ## Project structure
 ```
 xmla_proxy/src/
-  main.rs              — Router (POST /xmla), handle_xmla dispatch, headers,
-                         log_discover_context (RestrictionList + PropertyList logging)
-  parser.rs            — parse_xmla() → XmlaRequest enum (quick-xml streaming)
+  main.rs              — Router, dispatch, debug file logging, headers
+  parser.rs            — parse_xmla() → XmlaRequest enum (quick-xml)
   response.rs          — wrap_in_soap_envelope(), discover_rowset_envelope(), UUID_TYPE
-  properties.rs        — 14-property registry, filter-based DISCOVER_PROPERTIES response
-  schema_rowsets.rs    — DISCOVER_SCHEMA_ROWSETS (~60 entries incl. TMSCHEMA_* family)
-  catalogs.rs          — DBSCHEMA_CATALOGS (1 catalog: KTH_KEX_MALLOY_CUBE)
-  cubes.rs             — MDSCHEMA_CUBES (1 cube: Model, CUBE_SOURCE=2, PREFERRED_QUERY_PATTERNS=1)
-  tables.rs            — DBSCHEMA_TABLES (Faktatabell SYSTEM TABLE / MEASURE_GROUP +
-                         Produktkategori TABLE / CUBE_DIMENSION)
-  dimensions.rs        — MDSCHEMA_DIMENSIONS (2 dims: Measures TYPE=2 hidden,
-                         Produktkategori TYPE=3 visible) — includes DIMENSION_GUID,
-                         DIMENSION_MASTER_UNIQUE_NAME, CUBE_SOURCE
-  hierarchies.rs       — MDSCHEMA_HIERARCHIES (1 hierarchy: [Produktkategori].[Produktkategori])
-  levels.rs            — MDSCHEMA_LEVELS (2 levels: (All) hidden + Produktkategori visible)
-  measures.rs          — MDSCHEMA_MEASURES (1 measure: Total Försäljning, with DAX EXPRESSION)
+  properties.rs        — 14-property registry, filter-based DISCOVER_PROPERTIES
+  schema_rowsets.rs    — DISCOVER_SCHEMA_ROWSETS (~60 entries)
+  catalogs.rs          — DBSCHEMA_CATALOGS
+  cubes.rs             — MDSCHEMA_CUBES
+  tables.rs            — DBSCHEMA_TABLES (Faktatabell, Produktkategori, Region)
+  dimensions.rs        — MDSCHEMA_DIMENSIONS (Measures hidden, Produktkategori, Region)
+  hierarchies.rs       — MDSCHEMA_HIERARCHIES ([Measures], [Produktkategori], [Region])
+  levels.rs            — MDSCHEMA_LEVELS (MeasuresLevel, Prod.All/Prod, Region.All/Region)
+  measures.rs          — MDSCHEMA_MEASURES (Total Försäljning)
   measure_groups.rs    — MDSCHEMA_MEASUREGROUPS (Faktatabell)
   measuregroup_dimensions.rs — MDSCHEMA_MEASUREGROUP_DIMENSIONS
-                         (Faktatabell↔[Measures], Faktatabell↔[Produktkategori])
-  members.rs           — MDSCHEMA_MEMBERS (static XML output, typed filter logic)
-                         TREE_OP per spec: 0x01=CHILDREN, 0x04=PARENT, 0x08=SELF, 0x20=ANCESTORS
-  mdschema_properties.rs — MDSCHEMA_PROPERTIES (PROPERTY_TYPE 1/2/5 with correct
-                         HierarchyInfo-qualified property names and LEVEL_UNIQUE_NAME)
+  members.rs           — MDSCHEMA_MEMBERS (Produktkategori + Region members)
+  mdschema_properties.rs — MDSCHEMA_PROPERTIES (both dimensions)
   literals.rs          — DISCOVER_LITERALS
   sets.rs              — MDSCHEMA_SETS (empty)
   kpis.rs              — MDSCHEMA_KPIS (empty)
-  tmschema.rs          — TMSCHEMA_* stubs (advertised but Excel does not query them)
-  execute.rs           — Dispatch + semantic query layer (SemanticQueryKind,
-                         SemanticQuery) + MDX parsing/extraction helpers +
-                         cellset response builders. 23 unit tests.
-  backend.rs           — SQLite demo backend (rusqlite): faktatabell schema,
-                         category sales data, filtered totals.
-  cellset.rs           — Generic cellset XML builder (MemberConfig, TupleConfig,
-                         HierarchyConfig, AxisConfig, CellConfig, CellsetResponse).
-                         Supports multi-member tuples, multi-hierarchy axes, and
-                         conditional cell property emission.
-  rowset.rs            — Typed rowset infrastructure (Row, ColumnDef, Rowset).
-                         Built for Vec<Row> refactor; currently unused (members.rs
-                         reverted to static XML because serializer format triggers
-                         MSOLAP crash when schema column order differs).
+  tmschema.rs          — TMSCHEMA_* stubs
+  execute.rs           — Thin dispatch (42 lines) + 43 unit tests
+  execute_builders.rs  — Cellset response builders; all build_* functions,
+                         full_slicer_axis, multi-hierarchy Axis0 builder
+  mdx_semantic.rs      — MDX parsing, extraction, semantic classification
+                         (SemanticQueryKind, SemanticQuery, DimensionFilter,
+                         SlicerSelection, parse_axis_dimensions)
+  backend.rs           — SQLite backend (rusqlite): faktatabell with
+                         produktkategori, region, sales; grouped/filtered queries
+  cellset.rs           — Generic cellset XML builder (mddataset)
+  rowset.rs            — Rowset infrastructure (currently unused)
 ```
-
-## Reference docs
-  docs/cellset-reference.md   — Exact cellset XML format, property declarations,
-                                 common crash errors, and generation recipe.
-
-## XmlaRequest variants (all handled in main.rs)
-DiscoverProperties, DiscoverSchemaRowsets, DiscoverLiterals,
-DbSchemaCatalogs, MdschemaCubes, DbschemaTables, MdschemaDimensions, MdschemaMeasures,
-MdschemaHierarchies, MdschemaLevels, MdschemaProperties, MdschemaMembers,
-MdschemaSets, MdschemaKpis, MdschemaMeasureGroups, MdschemaMeasureGroupDimensions,
-TmschemaModel/Tables/Columns/Measures/Hierarchies/Levels/Relationships/Partitions,
-DiscoverXmlMetadata, DiscoverCalcDependency,
-BeginSession, ExecuteEmpty, ExecuteStatement(String), Unknown.
 
 ## What works
 - Full discover handshake; Excel reaches the PivotTable without issues.
-- PivotTable Fields renders correctly: `Σ Faktatabell` + `Total Försäljning (SEK)`,
-  and `Produktkategori` table + `Produktkategori` hierarchy.
+- PivotTable Fields renders: `Σ Faktatabell`, `Total Försäljning (SEK)`,
+  `Produktkategori`, `Region`.
 - Session management (BeginSession, EndSession, empty Execute).
 - `X-Transport-Caps-Negotiation-Flags: 0,0,0,0,0` header.
-- MDX `SELECT ... FROM [Model]` flat rowset returns a real total.
-- DAX `EVALUATE` falls through to a placeholder single-row response.
-- **Cellset (mddataset) responses** for all observed Excel MDX probe families:
-  `All.Members`, `All.Children`, `Level.Children`, `Leaf.Children`,
-  `Measure.Children`, `DrilldownLevel`, `cChildren + Ascendants(...)`,
-  slicer-only `WHERE (...)`, and `WHERE (All, Measure)`.
-- Filter dropdown opens and changing the selected category updates the
-  pivot with real data from the SQLite backend.
-- Request logging: every Discover prints the `<RestrictionList>` and `<PropertyList>`
-  inner XML to stdout.
-- `MDSCHEMA_MEMBERS` follows the spec column order and no longer crashes Excel
-  when the filter dropdown is opened.
-- 23 unit tests in `execute.rs` (routing, parsing, classification, response shape).
+- **Single-dimension drilldown**: `DrilldownLevel` for Produktkategori or Region.
+- **Two-dimension CrossJoin**: `Produktkategori` and `Region` both on Rows.
+- **Cross-dimension filtering**:
+  - Produktkategori on Rows + Region in Filter
+  - Region on Rows + Produktkategori in Filter
+  - All, single member, and switching between them
+- **Slicer-only** `WHERE (...)` queries for both dimensions.
+- **Probe queries**: `All.Members`, `All.Children`, `Leaf.Children`,
+  `Measure.Children`, `cChildren + Ascendants(...)` for both dimensions.
+- Filter dropdown opens and changes with real data.
+- Debug logging to `debug-last-run.log` (resets each run).
+- `MDSCHEMA_MEMBERS` filter logic is dimension-agnostic (PARENT/ANCESTORS use actual parent names, not hardcoded Produktkategori All).
+- 43 unit tests in `execute.rs` (routing, parsing, classification, response shape, combined dimensions, multi-hierarchy).
 
-## Current blocker
-**None.** The XMLA/protocol side and the filter/pivot cycle are now working
-end-to-end with real data. The next step is structural cleanup before adding
-new features.
+## What does not yet work
+- **Expand/collapse on 2-hierarchy axis**: Excel sends `DrilldownMember(CrossJoin(...), excluded_set, ...)` to collapse a category leaf. This query shape is not yet parsed or built.
+- Full N-way MDX generalization — parsing is still substring-driven for the observed Excel subset.
 
-## Next candidate workstreams
-1. **Module split.** `execute.rs` (770 lines) does 4 jobs: dispatch, MDX
-   parsing/extraction, semantic classification, and cellset construction.
-   Split into `mdx_semantic.rs` (parsing + classification) and
-   `execute_builders.rs` (cellset builders), keeping `execute.rs` for
-   dispatch only.
-2. **`nom`-based MDX parser.** Replace substring-driven parsing inside
-   `semantic_query_from_mdx()` with a proper parser. Keep the same
-   `SemanticQuery` output type and the same 23 tests to prevent regressions.
-3. **Malloy generation.** Generate Malloy from the semantic query model
-   rather than from raw MDX strings.
-4. **DuckDB backend.** Swap out the SQLite demo backend once Malloy
-   generation is stable.
-5. **Vec<Row> refactor — next safe module.** The Rowset infrastructure exists
-   and compiles. Apply it to a simpler rowset (e.g. KPIS, SETS — empty
-   rowsets) first to validate the serializer incrementally.
-```
-Session 1 (probe):
-  DISCOVER_PROPERTIES(filtered) ×3
-  DISCOVER_SCHEMA_ROWSETS
-  DBSCHEMA_CATALOGS
-  MDSCHEMA_CUBES
-  DBSCHEMA_TABLES
-  EndSession
+## Next workstreams
+1. **`nom`-based MDX parser.** Replace substring-driven parsing in
+   `mdx_semantic.rs` with a proper parser. Keep the same `SemanticQuery`
+   output type and existing 43 tests.
+2. **`DrilldownMember` expand/collapse support.** Once `nom` is in place,
+   add parsing and builder support for the collapse query shape Excel sends
+   when collapsing a leaf node on a 2-hierarchy axis.
+3. **ExecutionPlan layer.** Introduce a backend-neutral execution plan
+   between `SemanticQuery` and the builder/backend.
+4. **Malloy generation.** Generate Malloy from the execution plan.
+5. **DuckDB backend.** Swap out SQLite once Malloy is stable.
+6. **Vec<Row> refactor.** Apply the Rowset infrastructure to a simpler
+   rowset (e.g. KPIS, SETS — empty) first.
 
-Session 2 (real):
-  DISCOVER_PROPERTIES ×3
-  DISCOVER_SCHEMA_ROWSETS
-  MDSCHEMA_PROPERTIES (PROPERTY_TYPE=2 → MDPROP_CELL)
-  MDSCHEMA_CUBES ×2
-  DISCOVER_SCHEMA_ROWSETS (SchemaName=MDSCHEMA_HIERARCHIES)  ← support probe
-  MDSCHEMA_CUBES
-  MDSCHEMA_DIMENSIONS
-  MDSCHEMA_HIERARCHIES
-  MDSCHEMA_LEVELS
-  DISCOVER_SCHEMA_ROWSETS (SchemaName=MDSCHEMA_MEASURES)  ← support probe
-  MDSCHEMA_MEASURES
-  DISCOVER_LITERALS  (Format=Tabular = flat rowset format, NOT Tabular model)
-  MDSCHEMA_SETS
-  MDSCHEMA_KPIS
-  MDSCHEMA_CUBES
-  MDSCHEMA_MEASUREGROUPS
-  MDSCHEMA_MEASUREGROUP_DIMENSIONS
-  → PivotTable Fields panel renders
-```
+## Key lessons learned (additions since last update)
 
-Excel **never** queries (in this flow): MDSCHEMA_MEMBERS, DBSCHEMA_COLUMNS, TMSCHEMA_*,
-DISCOVER_XML_METADATA. Restrictions are minimal — `CATALOG_NAME` + `CUBE_NAME` at most.
-No `DIMENSION_VISIBILITY=1` filter — Excel takes whatever rows we return.
+13. **Excel uses `CrossJoin(DrilldownLevel(...), DrilldownLevel(...))` to
+    place a second field on Rows.** The proxy must detect this shape and
+    build a multi-hierarchy Axis0 with cross-product tuples. Responding
+    with a single-hierarchy axis causes Excel to leave the field unchecked
+    or change sheet data incorrectly.
 
-## Key lessons learned
-1. **Excel ignores `*_IS_VISIBLE` flags in the field-list pane.** Hiding a system dim
-   requires either removing it entirely from MDSCHEMA_DIMENSIONS or providing the
-   right identifying columns so Excel's own special-case logic kicks in.
-2. **`DIMENSION_GUID` and `DIMENSION_MASTER_UNIQUE_NAME` are de-facto required**
-   on every MDSCHEMA_DIMENSIONS row, even though the spec marks them optional.
-   Without them, captions are suppressed AND the system [Measures] dim leaks
-   into the field list as an empty unnamed node.
-3. **Excel stays in MDX/multidim mode** even with `CUBE_SOURCE=2` and
-   `PREFERRED_QUERY_PATTERNS=1`. `DbpropMsmdMDXCompatibility=1` in the request
-   property list confirms it. TMSCHEMA_* rowsets are never queried.
-4. **`DISCOVER_LITERALS Format=Tabular` is SOAP rowset format**, not Tabular model.
-5. **Restriction filtering is not what blocked rendering** — leaving it for later
-   when sourcing live data.
-6. **`DEFAULT_HIERARCHY` must resolve to an existing hierarchy.** When we removed
-   the `[Measures]` hierarchy from `MDSCHEMA_HIERARCHIES` while keeping the
-   dimension with `DEFAULT_HIERARCHY=[Measures]`, Excel refused to issue MDX
-   queries because the cube model was internally inconsistent.
-7. **Cellset response (mddataset) format is non-negotiable for multidimensional MDX.**
-   Flat rowset responses are rejected by Excel for queries with DIMENSION PROPERTIES
-   or CELL PROPERTIES clauses. The correct format is documented in
-   `docs/cellset-reference.md`.
-8. **Every Guild column in every rowset schema must have row data**, even though
-   the MS-SSAS spec marks them all as `minOccurs="0"`. Missing GUIDs cause silent
-   rejection: empty/unnamed nodes (DIMENSION_GUID), cube validation failure
-   (CUBE_GUID), and MDX refusal (HIERARCHY_GUID, LEVEL_GUID, MEASURE_GUID).
-9. **MDSCHEMA_PROPERTIES must return HIERARCHY_UNIQUE_NAME on every row** when
-   Excel filters by hierarchy. Without it, Excel sees zero matching properties
-   and silently aborts the MDX phase.
-10. **Metadata consistency is paramount.** Every reference must resolve:
-    `DEFAULT_HIERARCHY` → actual hierarchy row, level references in
-    MDSCHEMA_PROPERTIES → actual level rows, `DIMENSION_UNIQUE_NAME` references
-    in member data → actual dimension rows. Excel silently rejects the cube
-    when references are dangling.
-11. **MSOLAP's rowset parser is extremely sensitive to column order and layout.**
-    The `Rowset::to_xml()` serializer (rowset.rs) produces valid XML that differs
-    from the old hand-written strings only in edge-case formatting. Even minor
-    differences corrupt MSOLAP's internal state (crash on next unrelated request).
-    The safe path: keep hand-written static XML for output, add filtering logic
-    on top of the static strings. The Rowset infrastructure remains for future
-    modules where format sensitivity can be re-tested incrementally.
-12. **Cellset (mddataset) HierarchyInfo child elements are property DECLARATIONS,**
-    not data. They use `name` and `type` attributes to declare what properties
-    each Member element will carry. Every property that appears as a child of
-    `<Member>` must be pre-declared in the corresponding HierarchyInfo, and
-    undeclared member children cause `MDDSAxis::MoveToHierProperty` crashes.
-    Duplicate qualified names between standard 5 (UName/Caption/LName/LNum/DisplayInfo)
-    and intrinsic properties (MEMBER_UNIQUE_NAME/MEMBER_CAPTION/LEVEL_NUMBER/LEVEL_UNIQUE_NAME)
-    are NOT allowed — the standard 5 cover these.
+14. **SlicerAxis must contain every off-axis cube dimension**, not just
+    dimensions mentioned in the WHERE clause. Dimensions not referenced
+    in WHERE still need their default All member on SlicerAxis. Order must
+    be stable by metadata ordinal.
 
-## Next candidate workstreams
-1. **Semantic query layer.** Replace `execute.rs` substring-driven builders with a
-   semantic model for the current Excel MDX subset:
-   `DrilldownLevel`, `Level.Members`, `Member.Children`, slicer-only `WHERE (...)`,
-   and the `cChildren + Ascendants(...)` probe.
-2. **DuckDB demo backend.** Execute the semantic query model against a single narrow
-   schema (`produktkategori`, `sales`) so filters and grouped totals return real data.
-3. **Malloy generation.** Once the semantic layer is stable, generate Malloy from the
-   semantic query model rather than from raw MDX strings.
-4. **Vec<Row> refactor — next safe module.** The Rowset infrastructure exists and
-   compiles. Apply it to a simpler rowset (e.g. KPIS, SETS — empty rowsets)
-   first to validate the serializer incrementally.
+15. **Off-axis SlicerAxis members must use standard 5 properties only.**
+    Inheriting row-axis dimension properties (PARENT_UNIQUE_NAME, MEMBER_KEY,
+    etc.) on SlicerAxis members confuses Excel.
 
-## Hard-coded constants (search-and-replace targets when going live)
+16. **Classification order matters.** `SlicerAllAndMeasure` must be gated
+    behind drilldown/axis checks, otherwise a drilldown query with
+    `WHERE (All, Measure)` is misclassified as slicer-only.
+
+17. **`DrilldownMember(CrossJoin(...), excluded, hierarchy)` is the query
+    shape Excel uses for 2-hierarchy expand/collapse.** Not yet supported.
+
+## Hard-coded constants
 - Catalog name: `KTH_KEX_MALLOY_CUBE`
 - Cube name: `Model`
 - Measure name: `Total Försäljning` (caption `Total Försäljning (SEK)`)
 - Measure group: `Faktatabell`
-- Dimension: `Produktkategori`
+- Dimensions: `Produktkategori`, `Region`
 - Session ID: `RUST-SESSION-456` (in response.rs)
-- Placeholder MDX/DAX result: `1250000.5`
+- Cube dimension ordinal order: `ALL_DIMS = ["Measures", "Produktkategori", "Region"]` (in execute_builders.rs)

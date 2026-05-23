@@ -280,4 +280,15 @@ impl Backend {
         conn.query_row(&sql, param_refs.as_slice(), |row| row.get::<_, f64>(0))
             .unwrap_or(0.0)
     }
+
+    pub fn grouped_pairs(&self) -> Vec<(String, String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT produktkategori, region, SUM(sales) FROM faktatabell GROUP BY 1, 2 ORDER BY 1, 2")
+            .expect("prepare grouped_pairs");
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?)))
+            .expect("query_map grouped_pairs");
+        rows.filter_map(|r| r.ok()).collect()
+    }
 }

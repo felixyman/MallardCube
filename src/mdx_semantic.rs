@@ -321,7 +321,6 @@ pub enum SemanticQueryKind {
     MeasureByCategory,
     DrilldownCategories,
     SlicerOnly,
-    CrossJoinProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,10 +331,23 @@ pub struct SemanticQuery {
     /// Dimension-tagged filter members.
     pub filters: Vec<DimensionFilter>,
     pub cchildren_leaf_name: Option<String>,
-    /// Visible dimension on the query axis (Rows/Columns), or None for slicer-only.
+    /// Visible dimension on the query axis, or None for slicer-only.
     pub row_dimension: Option<String>,
+    /// All visible dimensions on the query axis in order (1 for simple, 2+ for CrossJoin).
+    pub axis_dimensions: Vec<String>,
     /// Off-axis dimensions from the WHERE clause (including All selections).
     pub slicers: Vec<SlicerSelection>,
+}
+
+fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let select_part = mdx.find("FROM [Model]").map(|i| &mdx[..i]).unwrap_or(mdx);
+    for dim in &["Produktkategori", "Region"] {
+        if select_part.contains(dim) || select_part.contains(&format!("[{dim}]")) {
+            result.push(dim.to_string());
+        }
+    }
+    result
 }
 
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
@@ -351,9 +363,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let has_measures = mdx.contains("[Measures]");
     let is_drilldown = has_visible_dim && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
 
-    let kind = if mdx.contains("CrossJoin(") {
-        SemanticQueryKind::CrossJoinProbe
-    } else if mdx.contains("WITH MEMBER [Measures].cChildren") {
+    let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
         if cchildren_target_is_measures(mdx) {
             SemanticQueryKind::ChildrenCountMeasures
         } else if cchildren_target_is_product_leaf(mdx) {
@@ -363,25 +373,31 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         }
     } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
         SemanticQueryKind::MeasureChildrenEmpty
-    } else if (mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") || mdx.contains("AddCalculatedMembers({[Region].[Region].&["))
-        && mdx.contains("].Children})") {
+    } else if (mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[")
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].&["))
+        && mdx.contains("].Children})")
+    {
         SemanticQueryKind::LeafChildrenEmpty
     } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[(All)].Members})") {
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[(All)].Members})")
+    {
         SemanticQueryKind::AllLevelMembers
     } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[All].Children})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[All].Children})") {
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[All].Children})")
+    {
         SemanticQueryKind::LeafLevelMembers
     } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[Region].Members})") {
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[Region].Members})")
+    {
         SemanticQueryKind::LeafLevelMembers
     } else if has_rows && has_cols && has_visible_dim && has_measures {
         SemanticQueryKind::MeasureByCategory
     } else if is_drilldown {
         SemanticQueryKind::DrilldownCategories
-    } else if !has_axes
-        && (mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
-            || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])")) {
+    } else if !has_axes && (
+        mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
+            || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])"))
+    {
         SemanticQueryKind::SlicerAllAndMeasure
     } else if !has_axes {
         SemanticQueryKind::SlicerOnly
@@ -396,6 +412,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         filters,
         cchildren_leaf_name: cchildren_filtered_member_name(mdx),
         row_dimension,
+        axis_dimensions: parse_axis_dimensions(mdx),
         slicers: parse_slicer_dimensions(mdx),
     }
 }
