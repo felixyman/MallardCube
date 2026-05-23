@@ -25,6 +25,11 @@ pub const PRODUKTKATEGORI_LEAF_L: &str = "[Produktkategori].[Produktkategori].[P
 pub const MEASURES_HIER: &str = "[Measures]";
 pub const MEASURES_LEVEL: &str = "[Measures].[MeasuresLevel]";
 
+pub const REGION_HIER: &str = "[Region].[Region]";
+pub const REGION_ALL_U: &str = "[Region].[Region].[All]";
+pub const REGION_ALL_L: &str = "[Region].[Region].[(All)]";
+pub const REGION_LEAF_L: &str = "[Region].[Region].[Region]";
+
 pub const PRODUKTKATEGORI_PROP_NAMES: &[&str] = &[
     "PARENT_UNIQUE_NAME",
     "HIERARCHY_UNIQUE_NAME",
@@ -94,29 +99,73 @@ pub fn parse_cell_properties(mdx: &str) -> Vec<String> {
 
 // ---- filter extraction ----
 
-fn parse_category_filter(mdx: &str) -> Option<String> {
-    let start = mdx.find("[Produktkategori].[Produktkategori].")?;
-    let rest = &mdx[start..];
-    if rest.contains("[Produktkategori].[Produktkategori].[All]") {
-        return None;
+/// Extract the content of `WHERE (...)` using balanced-paren scanning.
+fn where_clause_payload(mdx: &str) -> Option<&str> {
+    let start = mdx.find("WHERE (")?;
+    let after_where = &mdx[start + "WHERE (".len()..];
+    let mut depth: u32 = 1;
+    let mut end = 0;
+    for (i, ch) in after_where.char_indices() {
+        if ch == '(' { depth += 1; }
+        if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                end = i;
+                break;
+            }
+        }
     }
-    if let Some(amp) = rest.find("&amp;[") {
-        let begin = amp + 5;
-        let end = rest[begin..].find(']')? + begin;
-        return Some(rest[begin..end].to_string());
+    if end == 0 { return None; }
+    Some(after_where[..end].trim())
+}
+
+/// Extract member names for a given dimension prefix from a member-set slice.
+fn extract_dimension_member_names(slice: &str, dim_pattern: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let pattern = &format!("{}.", dim_pattern);
+
+    let mut search_from = 0;
+    while let Some(start) = slice[search_from..].find(pattern) {
+        let abs_start = search_from + start;
+        let after_pattern = &slice[abs_start + pattern.len()..];
+
+        if after_pattern.starts_with("[All]") {
+            search_from = abs_start + pattern.len() + "[All]".len();
+            continue;
+        }
+
+        if let Some(amp_start) = after_pattern.find("&[") {
+            let begin = abs_start + pattern.len() + amp_start + 2;
+            if let Some(end) = slice[begin..].find(']') {
+                names.push(slice[begin..begin + end].to_string());
+                search_from = begin + end;
+                continue;
+            }
+        }
+        if let Some(amp_start) = after_pattern.find("&amp;[") {
+            let begin = abs_start + pattern.len() + amp_start + 5;
+            if let Some(end) = slice[begin..].find(']') {
+                names.push(slice[begin..begin + end].to_string());
+                search_from = begin + end;
+                continue;
+            }
+        }
+
+        search_from = abs_start + pattern.len();
     }
-    if let Some(amp) = rest.find("&[") {
-        let begin = amp + 2;
-        let end = rest[begin..].find(']')? + begin;
-        return Some(rest[begin..end].to_string());
-    }
-    None
+    names
 }
 
 pub fn parse_mdx_filters(mdx: &str) -> Vec<String> {
-    if let Some(where_filter) = parse_category_filter(mdx) {
-        return vec![where_filter];
+    if let Some(where_payload) = where_clause_payload(mdx) {
+        for dim in [PRODUKTKATEGORI_HIER, REGION_HIER] {
+            let names = extract_dimension_member_names(where_payload, dim);
+            if !names.is_empty() {
+                return names;
+            }
+        }
     }
+
     let sub_start = match mdx.find("SELECT ({") {
         Some(p) => p,
         None => return vec![],
@@ -127,22 +176,13 @@ pub fn parse_mdx_filters(mdx: &str) -> Vec<String> {
         None => return vec![],
     };
     let members_str = &sub_rest["SELECT ({".len()..sub_end];
-    let mut result = Vec::new();
-    for member in members_str.split(',') {
-        let member = member.trim();
-        if let Some(amp_start) = member.find("&[") {
-            let begin = amp_start + 2;
-            if let Some(end) = member[begin..].find(']') {
-                result.push(member[begin..begin + end].to_string());
-            }
-        } else if let Some(amp_start) = member.find("&amp;[") {
-            let begin = amp_start + 5;
-            if let Some(end) = member[begin..].find(']') {
-                result.push(member[begin..begin + end].to_string());
-            }
+    for dim in [PRODUKTKATEGORI_HIER, REGION_HIER] {
+        let names = extract_dimension_member_names(members_str, dim);
+        if !names.is_empty() {
+            return names;
         }
     }
-    result
+    vec![]
 }
 
 // ---- cChildren probe helpers ----
@@ -217,6 +257,18 @@ pub struct SemanticQuery {
     pub cell_props: Vec<String>,
     pub category_filters: Vec<String>,
     pub cchildren_leaf_name: Option<String>,
+    /// Detected dimension from MDX: "Produktkategori" or "Region".
+    pub dimension: Option<String>,
+}
+
+fn dimension_key_from_mdx(mdx: &str) -> Option<&'static str> {
+    if mdx.contains("[Region]") {
+        Some("Region")
+    } else if mdx.contains("[Produktkategori]") {
+        Some("Produktkategori")
+    } else {
+        None
+    }
 }
 
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
@@ -227,9 +279,9 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
     let has_rows = upper.contains("ON ROWS");
     let has_cols = upper.contains("ON COLUMNS");
-    let has_product = mdx.contains("[Produktkategori]");
+    let has_visible_dim = mdx.contains("[Produktkategori]") || mdx.contains("[Region]");
     let has_measures = mdx.contains("[Measures]");
-    let is_drilldown = has_product && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
+    let is_drilldown = has_visible_dim && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
 
     let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
         if cchildren_target_is_measures(mdx) {
@@ -239,19 +291,24 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         } else {
             SemanticQueryKind::ChildrenCountForAll
         }
-    } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])") {
+    } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
+        || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])") {
         SemanticQueryKind::SlicerAllAndMeasure
     } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
         SemanticQueryKind::MeasureChildrenEmpty
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") && mdx.contains("].Children})") {
+    } else if (mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") || mdx.contains("AddCalculatedMembers({[Region].[Region].&["))
+        && mdx.contains("].Children})") {
         SemanticQueryKind::LeafChildrenEmpty
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})") {
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})")
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[(All)].Members})") {
         SemanticQueryKind::AllLevelMembers
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[All].Children})") {
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[All].Children})")
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[All].Children})") {
         SemanticQueryKind::LeafLevelMembers
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})") {
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})")
+        || mdx.contains("AddCalculatedMembers({[Region].[Region].[Region].Members})") {
         SemanticQueryKind::LeafLevelMembers
-    } else if has_rows && has_cols && has_product && has_measures {
+    } else if has_rows && has_cols && has_visible_dim && has_measures {
         SemanticQueryKind::MeasureByCategory
     } else if is_drilldown {
         SemanticQueryKind::DrilldownCategories
@@ -267,5 +324,6 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         cell_props,
         category_filters,
         cchildren_leaf_name: cchildren_filtered_member_name(mdx),
+        dimension: dimension_key_from_mdx(mdx).map(|s| s.to_string()),
     }
 }

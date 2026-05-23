@@ -127,6 +127,68 @@ const MEMBER_ROWS: &str = r#"          <row>
             <MEMBER_KEY>Kategori D</MEMBER_KEY>
             <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
             <IS_DATAMEMBER>false</IS_DATAMEMBER>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Region].[Region].[(All)]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>0</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>0</MEMBER_ORDINAL>
+            <MEMBER_NAME>All</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Region].[Region].[All]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>2</MEMBER_TYPE>
+            <MEMBER_GUID>00000000-0000-0000-0000-000000000200</MEMBER_GUID>
+            <MEMBER_CAPTION>All</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>2</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_COUNT>0</PARENT_COUNT>
+            <MEMBER_KEY>All</MEMBER_KEY>
+            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
+            <IS_DATAMEMBER>false</IS_DATAMEMBER>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Region].[Region].[Region]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>1</MEMBER_ORDINAL>
+            <MEMBER_NAME>North</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Region].[Region].&amp;[North]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>1</MEMBER_TYPE>
+            <MEMBER_GUID>00000000-0000-0000-0000-000000000201</MEMBER_GUID>
+            <MEMBER_CAPTION>North</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_UNIQUE_NAME>[Region].[Region].[All]</PARENT_UNIQUE_NAME>
+            <PARENT_COUNT>1</PARENT_COUNT>
+            <MEMBER_KEY>North</MEMBER_KEY>
+            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
+            <IS_DATAMEMBER>false</IS_DATAMEMBER>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>[Region].[Region].[Region]</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>2</MEMBER_ORDINAL>
+            <MEMBER_NAME>South</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>[Region].[Region].&amp;[South]</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>1</MEMBER_TYPE>
+            <MEMBER_GUID>00000000-0000-0000-0000-000000000202</MEMBER_GUID>
+            <MEMBER_CAPTION>South</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>0</PARENT_LEVEL>
+            <PARENT_UNIQUE_NAME>[Region].[Region].[All]</PARENT_UNIQUE_NAME>
+            <PARENT_COUNT>1</PARENT_COUNT>
+            <MEMBER_KEY>South</MEMBER_KEY>
+            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
+            <IS_DATAMEMBER>false</IS_DATAMEMBER>
           </row>"#;
 
 // ---- filter helpers ----
@@ -228,12 +290,16 @@ pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -
             find_children_of(filter).join("\n")
         }
         (Some(filter), Some(4)) => {
-            // 0x04 = PARENT — for a leaf member, return its parent (All)
+            // 0x04 = PARENT — for a leaf member, return its parent
             if let Some(leaf) = find_member_row(filter) {
-                if leaf.contains("<PARENT_COUNT>1</PARENT_COUNT>") {
-                    find_member_row("[Produktkategori].[Produktkategori].[All]")
-                        .map(|r| r.to_string())
-                        .unwrap_or_default()
+                if let Some(pun) = tag_content(leaf, "PARENT_UNIQUE_NAME") {
+                    if !pun.is_empty() {
+                        find_member_row(pun)
+                            .map(|r| r.to_string())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
                 } else {
                     String::new()
                 }
@@ -249,14 +315,15 @@ pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -
         }
         (Some(filter), Some(32)) => {
             // 0x20 = ANCESTORS — return parent chain up to All.
-            // For root member (PARENT_COUNT=0), return empty.
             if let Some(row) = find_member_row(filter) {
                 if row.contains("<PARENT_COUNT>0</PARENT_COUNT>") {
                     String::new()
-                } else {
-                    find_member_row("[Produktkategori].[Produktkategori].[All]")
+                } else if let Some(pun) = tag_content(row, "PARENT_UNIQUE_NAME") {
+                    find_member_row(pun)
                         .map(|r| r.to_string())
                         .unwrap_or_default()
+                } else {
+                    String::new()
                 }
             } else {
                 String::new()

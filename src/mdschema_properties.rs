@@ -72,6 +72,17 @@ fn member_property_rows() -> String {
             out.push('\n');
         }
     }
+    // Region member properties
+    const R_DIM: &str = "[Region]";
+    const R_HIER: &str = "[Region].[Region]";
+    const R_LEVEL_ALL: &str = "[Region].[Region].[(All)]";
+    const R_LEVEL_LEAF: &str = "[Region].[Region].[Region]";
+    for level in [R_LEVEL_ALL, R_LEVEL_LEAF] {
+        for (name, content) in props.iter() {
+            out.push_str(&member_property_row(R_DIM, R_HIER, level, name, *content));
+            out.push('\n');
+        }
+    }
     // Also emit member properties for the hidden [Measures] hierarchy so
     // Excel can construct references to [Measures].[Total Försäljning].
     const M_DIM: &str = "[Measures]";
@@ -153,6 +164,27 @@ fn member_value_rows() -> String {
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{DIM}</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_UNIQUE_NAME>{HIER}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
+            <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
+            <PROPERTY_CAPTION>MEMBER_VALUE</PROPERTY_CAPTION>
+            <PROPERTY_TYPE>5</PROPERTY_TYPE>
+            <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>
+          </row>
+"#,
+        ));
+    }
+    // Region MEMBER_VALUE rows
+    const R_DIM: &str = "[Region]";
+    const R_HIER: &str = "[Region].[Region]";
+    const R_LEVEL_ALL: &str = "[Region].[Region].[(All)]";
+    const R_LEVEL_LEAF: &str = "[Region].[Region].[Region]";
+    for level in [R_LEVEL_ALL, R_LEVEL_LEAF] {
+        out.push_str(&format!(
+            r#"          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{R_DIM}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{R_HIER}</HIERARCHY_UNIQUE_NAME>
             <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
             <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
             <PROPERTY_CAPTION>MEMBER_VALUE</PROPERTY_CAPTION>

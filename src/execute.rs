@@ -58,6 +58,14 @@ mod tests {
 
     const MDX_SUBQUERY_FILTERS: &str = "SELECT FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]}) ON COLUMNS FROM [Model]) WHERE ([Measures].[Total Försäljning])";
 
+    const MDX_REGION_SLICER: &str = "SELECT  FROM [Model] WHERE ([Region].[Region].&[North],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_REGION_DRILLDOWN: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_REGION_ALL_MEMBERS: &str = "SELECT {AddCalculatedMembers({[Region].[Region].[(All)].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Model] CELL PROPERTIES CELL_ORDINAL";
+
+    const MDX_REGION_SLICER_ALL: &str = "SELECT  FROM [Model] WHERE ([Region].[Region].[All],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
     fn assert_in_order(haystack: &str, first: &str, second: &str) {
         let f = haystack.find(first)
             .unwrap_or_else(|| panic!("missing substring: {first}"));
@@ -140,11 +148,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_mdx_filters_extracts_single_where_category_from_subquery() {
-        // Known limitation: parse_category_filter matches Produktkategori
-        // anywhere in the MDX, so subqueries only yield the first category.
+    fn parse_mdx_filters_extracts_multiple_subquery_categories() {
+        // WHERE has only measures, so categories come from the subquery.
         let filters = parse_mdx_filters(MDX_SUBQUERY_FILTERS);
-        assert_eq!(filters, vec!["Kategori A"]);
+        assert_eq!(filters, vec!["Kategori A", "Kategori C"]);
+    }
+
+    #[test]
+    fn parse_mdx_filters_uses_slicer_not_subquery_when_slicer_has_product() {
+        let mdx = "SELECT FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori A]}) ON COLUMNS FROM [Model]) WHERE ([Produktkategori].[Produktkategori].&[Kategori B],[Measures].[Total Försäljning])";
+        let filters = parse_mdx_filters(mdx);
+        assert_eq!(filters, vec!["Kategori B"]);
     }
 
     #[test]
@@ -248,5 +262,48 @@ mod tests {
         let xml = get_execute_statement_response(MDX_CCHILDREN_LEAF);
         assert!(xml.contains(r#"<Cell CellOrdinal="0">"#));
         assert!(xml.contains(r#"<Cell CellOrdinal="1">"#));
+    }
+
+    // --- Region dimension ---
+
+    #[test]
+    fn parse_region_slicer_filter() {
+        let filters = parse_mdx_filters(MDX_REGION_SLICER);
+        assert_eq!(filters, vec!["North"]);
+    }
+
+    #[test]
+    fn semantic_query_classifies_region_drilldown() {
+        let q = semantic_query_from_mdx(MDX_REGION_DRILLDOWN);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories);
+        assert_eq!(q.dimension.as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn semantic_query_classifies_region_all_members() {
+        let q = semantic_query_from_mdx(MDX_REGION_ALL_MEMBERS);
+        assert_eq!(q.kind, SemanticQueryKind::AllLevelMembers);
+        assert_eq!(q.dimension.as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn semantic_query_classifies_region_slicer_all() {
+        let q = semantic_query_from_mdx(MDX_REGION_SLICER_ALL);
+        assert_eq!(q.kind, SemanticQueryKind::SlicerAllAndMeasure);
+        assert_eq!(q.dimension.as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn region_all_members_response_uses_region_hierarchy() {
+        let xml = get_execute_statement_response(MDX_REGION_ALL_MEMBERS);
+        assert!(xml.contains("[Region].[Region]"));
+        assert!(xml.contains("[Region].[Region].[All]"));
+    }
+
+    #[test]
+    fn region_slicer_response_returns_north_total() {
+        let xml = get_execute_statement_response(MDX_REGION_SLICER);
+        // North total = 100000 + 150000 + 200000 + 200000 = 650000
+        assert!(xml.contains("650000"));
     }
 }

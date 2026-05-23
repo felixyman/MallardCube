@@ -28,6 +28,14 @@ pub fn get_measuregroup_dimensions_response() -> String {
             <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
             <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
             <DIMENSION_IS_FACT_DIMENSION>false</DIMENSION_IS_FACT_DIMENSION>
+          </row>
+          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <MEASUREGROUP_NAME>Faktatabell</MEASUREGROUP_NAME>
+            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
+            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
+            <DIMENSION_IS_FACT_DIMENSION>false</DIMENSION_IS_FACT_DIMENSION>
           </row>"#
     )
 }

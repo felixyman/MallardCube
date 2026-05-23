@@ -12,6 +12,7 @@ use crate::mdx_semantic::{
     includes_prop, SemanticQuery, SemanticQueryKind,
     PRODUKTKATEGORI_HIER, PRODUKTKATEGORI_ALL_U, PRODUKTKATEGORI_ALL_L,
     PRODUKTKATEGORI_LEAF_L, MEASURES_HIER, MEASURES_LEVEL,
+    REGION_HIER, REGION_ALL_U, REGION_ALL_L, REGION_LEAF_L,
 };
 
 // ---- dimension property helpers ----
@@ -72,6 +73,87 @@ fn produktkategori_dim_decls() -> Vec<(String, String, String)> {
         ("PARENT_COUNT".into(),         format!("{p}.[PARENT_COUNT]"),         "xsd:int".into()),
         ("CHILDREN_CARDINALITY".into(), format!("{p}.[CHILDREN_CARDINALITY]"), "xsd:unsignedInt".into()),
     ]
+}
+
+// ---- Region dimension property/member/hierarchy builders ----
+
+fn region_dim_props_leaf(name: &str, requested: &[String]) -> Vec<(String, String)> {
+    filter_dim_props(vec![
+        ("PARENT_UNIQUE_NAME".into(), REGION_ALL_U.into()),
+        ("HIERARCHY_UNIQUE_NAME".into(), REGION_HIER.into()),
+        ("MEMBER_NAME".into(), name.to_string()),
+        ("MEMBER_KEY".into(), name.to_string()),
+        ("MEMBER_TYPE".into(), "1".into()),
+        ("MEMBER_VALUE".into(), name.to_string()),
+        ("PARENT_LEVEL".into(), "0".into()),
+        ("PARENT_COUNT".into(), "1".into()),
+        ("CHILDREN_CARDINALITY".into(), "0".into()),
+    ], requested)
+}
+
+fn region_dim_props_all(requested: &[String]) -> Vec<(String, String)> {
+    let count = Backend::get().region_count();
+    filter_dim_props(vec![
+        ("HIERARCHY_UNIQUE_NAME".into(), REGION_HIER.into()),
+        ("MEMBER_NAME".into(), "All".into()),
+        ("MEMBER_KEY".into(), "All".into()),
+        ("MEMBER_TYPE".into(), "2".into()),
+        ("MEMBER_VALUE".into(), "All".into()),
+        ("PARENT_LEVEL".into(), "0".into()),
+        ("PARENT_COUNT".into(), "0".into()),
+        ("CHILDREN_CARDINALITY".into(), count.to_string()),
+    ], requested)
+}
+
+fn region_dim_decls() -> Vec<(String, String, String)> {
+    let p = "[Region].[Region]";
+    vec![
+        ("PARENT_UNIQUE_NAME".into(),   format!("{p}.[PARENT_UNIQUE_NAME]"),   "xsd:string".into()),
+        ("HIERARCHY_UNIQUE_NAME".into(),format!("{p}.[HIERARCHY_UNIQUE_NAME]"),"xsd:string".into()),
+        ("MEMBER_NAME".into(),          format!("{p}.[MEMBER_NAME]"),          "xsd:string".into()),
+        ("MEMBER_KEY".into(),           format!("{p}.[MEMBER_KEY]"),           "xsd:string".into()),
+        ("MEMBER_TYPE".into(),          format!("{p}.[MEMBER_TYPE]"),          "xsd:int".into()),
+        ("MEMBER_VALUE".into(),         format!("{p}.[MEMBER_VALUE]"),         "xsd:string".into()),
+        ("PARENT_LEVEL".into(),         format!("{p}.[PARENT_LEVEL]"),         "xsd:int".into()),
+        ("PARENT_COUNT".into(),         format!("{p}.[PARENT_COUNT]"),         "xsd:int".into()),
+        ("CHILDREN_CARDINALITY".into(), format!("{p}.[CHILDREN_CARDINALITY]"), "xsd:unsignedInt".into()),
+    ]
+}
+
+fn region_hierarchy(requested: &[String]) -> cellset::HierarchyConfig {
+    cellset::HierarchyConfig {
+        name: REGION_HIER.into(),
+        dim_prop_decls: filter_dim_prop_decls(region_dim_decls(), requested),
+    }
+}
+
+fn region_leaf_member(name: &str, requested: &[String]) -> cellset::MemberConfig {
+    let u_name = format!("[Region].[Region].&amp;[{}]", name);
+    cellset::MemberConfig {
+        hierarchy: REGION_HIER.into(),
+        u_name,
+        caption: name.to_string(),
+        l_name: REGION_LEAF_L.into(),
+        l_num: 1,
+        display_info: 3,
+        dim_props: region_dim_props_leaf(name, requested),
+    }
+}
+
+fn region_all_member(requested: &[String]) -> cellset::MemberConfig {
+    cellset::MemberConfig {
+        hierarchy: REGION_HIER.into(),
+        u_name: REGION_ALL_U.into(),
+        caption: "All".into(),
+        l_name: REGION_ALL_L.into(),
+        l_num: 0,
+        display_info: 5,
+        dim_props: region_dim_props_all(requested),
+    }
+}
+
+fn region_leaf_members_from(names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
+    names.iter().map(|name| region_leaf_member(name, requested)).collect()
 }
 
 // ---- member/cell/axis constructors ----
@@ -241,22 +323,80 @@ fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> ce
     }
 }
 
+fn dim_key(query: &SemanticQuery) -> &str {
+    query.dimension.as_deref().unwrap_or("Produktkategori")
+}
+
+fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> cellset::MemberConfig {
+    match dim {
+        "Region" => region_leaf_member(name, requested),
+        _ => produktkategori_leaf_member(name, requested),
+    }
+}
+
+fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
+    match dim {
+        "Region" => region_all_member(requested),
+        _ => produktkategori_all_member(requested),
+    }
+}
+
+fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::HierarchyConfig {
+    match dim {
+        "Region" => region_hierarchy(requested),
+        _ => produktkategori_hierarchy(requested),
+    }
+}
+
+fn leaf_members_from(dim: &str, names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
+    match dim {
+        "Region" => region_leaf_members_from(names, requested),
+        _ => produktkategori_leaf_members_from(names, requested),
+    }
+}
+
+fn fetch_sales(dim: &str, filters: &[String]) -> Vec<(String, f64)> {
+    let backend = Backend::get();
+    match dim {
+        "Region" => backend.sales_for_regions(filters),
+        _ => backend.sales_for_categories(filters),
+    }
+}
+
+fn fetch_total(dim: &str, filters: &[String]) -> f64 {
+    let backend = Backend::get();
+    match dim {
+        "Region" => backend.total_for_regions(filters),
+        _ => backend.total_for_categories(filters),
+    }
+}
+
+fn dimension_count(dim: &str) -> u32 {
+    let backend = Backend::get();
+    match dim {
+        "Region" => backend.region_count(),
+        _ => backend.category_count(),
+    }
+}
+
 // ---- cellset response builders ----
 
-fn build_slicer_only(cell_props: &[String], filters: &[String]) -> String {
-    let total = Backend::get().total_for_categories(filters);
+fn build_slicer_only(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let total = fetch_total(dim, &query.category_filters);
     render_response(
         vec![slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()])],
         vec![measurement_cell(0, total)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_drilldown(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
-    let data = Backend::get().sales_for_categories(filters);
-    let members = produktkategori_leaf_members_from(
+fn build_drilldown(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let data = fetch_sales(dim, &query.category_filters);
+    let members = leaf_members_from(dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        dim_props,
+        &query.dim_props,
     );
 
     let mut cells = Vec::new();
@@ -266,19 +406,20 @@ fn build_drilldown(dim_props: &[String], cell_props: &[String], filters: &[Strin
 
     render_response(
         vec![
-            member_list_axis("Axis0", produktkategori_hierarchy(dim_props), members),
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
             slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
         ],
         cells,
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_measure_by_category(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
-    let data = Backend::get().sales_for_categories(filters);
-    let axis1_members = produktkategori_leaf_members_from(
+fn build_measure_by_category(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let data = fetch_sales(dim, &query.category_filters);
+    let axis1_members = leaf_members_from(dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        dim_props,
+        &query.dim_props,
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
@@ -288,43 +429,46 @@ fn build_measure_by_category(dim_props: &[String], cell_props: &[String], filter
     render_response(
         vec![
             measures_axis(),
-            member_list_axis("Axis1", produktkategori_hierarchy(dim_props), axis1_members),
+            member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
             empty_slicer_axis(),
         ],
         cells,
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_slicer_all_and_measure(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
-    let total = Backend::get().total_for_categories(filters);
+fn build_slicer_all_and_measure(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let total = fetch_total(dim, &query.category_filters);
     render_response(
         vec![slicer_axis_with_members(
-            vec![produktkategori_hierarchy(dim_props), measures_hierarchy()],
-            vec![produktkategori_all_member(dim_props), measures_total_member()],
+            vec![hierarchy_for(dim, &query.dim_props), measures_hierarchy()],
+            vec![all_member_for(dim, &query.dim_props), measures_total_member()],
         )],
         vec![measurement_cell(0, total)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_all_level_members(dim_props: &[String], cell_props: &[String]) -> String {
+fn build_all_level_members(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
     let total = Backend::get().total_sales();
     render_response(
         vec![
-            single_member_axis("Axis0", produktkategori_hierarchy(dim_props), produktkategori_all_member(dim_props)),
+            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for(dim, &query.dim_props)),
             empty_slicer_axis(),
         ],
         vec![measurement_cell(0, total)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_leaf_level_members(dim_props: &[String], cell_props: &[String], filters: &[String]) -> String {
-    let data = Backend::get().sales_for_categories(filters);
-    let members = produktkategori_leaf_members_from(
+fn build_leaf_level_members(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let data = fetch_sales(dim, &query.category_filters);
+    let members = leaf_members_from(dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        dim_props,
+        &query.dim_props,
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
@@ -333,65 +477,68 @@ fn build_leaf_level_members(dim_props: &[String], cell_props: &[String], filters
 
     render_response(
         vec![
-            member_list_axis("Axis0", produktkategori_hierarchy(dim_props), members),
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
             empty_slicer_axis(),
         ],
         cells,
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_leaf_children_empty(dim_props: &[String], cell_props: &[String]) -> String {
+fn build_leaf_children_empty(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
     render_response(
         vec![
-            empty_member_list_axis("Axis0", produktkategori_hierarchy(dim_props)),
+            empty_member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props)),
             empty_slicer_axis(),
         ],
         vec![],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_measure_children_empty(cell_props: &[String]) -> String {
+fn build_measure_children_empty(query: &SemanticQuery) -> String {
     render_response(
         vec![
             empty_member_list_axis("Axis0", measures_hierarchy()),
             empty_slicer_axis(),
         ],
         vec![],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_cchildren_for_all(dim_props: &[String], cell_props: &[String]) -> String {
-    let count = Backend::get().category_count();
+fn build_cchildren_for_all(query: &SemanticQuery) -> String {
+    let dim = dim_key(query);
+    let count = dimension_count(dim);
     render_response(
         vec![
-            single_member_axis("Axis0", produktkategori_hierarchy(dim_props), produktkategori_all_member(dim_props)),
+            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for(dim, &query.dim_props)),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             empty_slicer_axis(),
         ],
         vec![count_cell(0, count)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_cchildren_for_leaf_product(dim_props: &[String], cell_props: &[String], name: &str) -> String {
-    let leaf = produktkategori_leaf_member(name, dim_props);
-    let all = produktkategori_all_member(dim_props);
-    let real_count = Backend::get().category_count();
+fn build_cchildren_for_leaf_product(query: &SemanticQuery, name: &str) -> String {
+    let dim = dim_key(query);
+    let leaf = leaf_member_for(dim, name, &query.dim_props);
+    let all = all_member_for(dim, &query.dim_props);
+    let real_count = dimension_count(dim);
     render_response(
         vec![
-            member_list_axis("Axis0", produktkategori_hierarchy(dim_props), vec![all, leaf]),
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), vec![all, leaf]),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             empty_slicer_axis(),
         ],
         vec![count_cell(0, real_count), count_cell(1, 0)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
-fn build_cchildren_for_measures(_dim_props: &[String], cell_props: &[String]) -> String {
+fn build_cchildren_for_measures(query: &SemanticQuery) -> String {
     render_response(
         vec![
             single_member_axis("Axis0", measures_hierarchy(), measures_total_member()),
@@ -399,49 +546,28 @@ fn build_cchildren_for_measures(_dim_props: &[String], cell_props: &[String]) ->
             empty_slicer_axis(),
         ],
         vec![count_cell(0, 0)],
-        cell_props,
+        &query.cell_props,
     )
 }
 
 // ---- public API consumed by execute.rs dispatch ----
 
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
-    let filters = &query.category_filters;
     match query.kind {
-        SemanticQueryKind::ChildrenCountForAll => {
-            build_cchildren_for_all(&query.dim_props, &query.cell_props)
-        }
+        SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query),
         SemanticQueryKind::ChildrenCountLeafProduct => {
             let name = query.cchildren_leaf_name.as_deref().unwrap_or("");
-            build_cchildren_for_leaf_product(&query.dim_props, &query.cell_props, name)
+            build_cchildren_for_leaf_product(query, name)
         }
-        SemanticQueryKind::ChildrenCountMeasures => {
-            build_cchildren_for_measures(&query.dim_props, &query.cell_props)
-        }
-        SemanticQueryKind::SlicerAllAndMeasure => {
-            build_slicer_all_and_measure(&query.dim_props, &query.cell_props, filters)
-        }
-        SemanticQueryKind::MeasureChildrenEmpty => {
-            build_measure_children_empty(&query.cell_props)
-        }
-        SemanticQueryKind::LeafChildrenEmpty => {
-            build_leaf_children_empty(&query.dim_props, &query.cell_props)
-        }
-        SemanticQueryKind::AllLevelMembers => {
-            build_all_level_members(&query.dim_props, &query.cell_props)
-        }
-        SemanticQueryKind::LeafLevelMembers => {
-            build_leaf_level_members(&query.dim_props, &query.cell_props, filters)
-        }
-        SemanticQueryKind::MeasureByCategory => {
-            build_measure_by_category(&query.dim_props, &query.cell_props, filters)
-        }
-        SemanticQueryKind::DrilldownCategories => {
-            build_drilldown(&query.dim_props, &query.cell_props, filters)
-        }
-        SemanticQueryKind::SlicerOnly => {
-            build_slicer_only(&query.cell_props, filters)
-        }
+        SemanticQueryKind::ChildrenCountMeasures => build_cchildren_for_measures(query),
+        SemanticQueryKind::SlicerAllAndMeasure => build_slicer_all_and_measure(query),
+        SemanticQueryKind::MeasureChildrenEmpty => build_measure_children_empty(query),
+        SemanticQueryKind::LeafChildrenEmpty => build_leaf_children_empty(query),
+        SemanticQueryKind::AllLevelMembers => build_all_level_members(query),
+        SemanticQueryKind::LeafLevelMembers => build_leaf_level_members(query),
+        SemanticQueryKind::MeasureByCategory => build_measure_by_category(query),
+        SemanticQueryKind::DrilldownCategories => build_drilldown(query),
+        SemanticQueryKind::SlicerOnly => build_slicer_only(query),
     }
 }
 
