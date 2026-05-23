@@ -206,11 +206,6 @@ fn has_dot_children(input: &str) -> bool {
     input.contains(".Children")
 }
 
-fn has_where_all_measure(input: &str) -> bool {
-    input.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
-        || input.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])")
-}
-
 fn has_with_member_cchildren(input: &str) -> bool {
     input.contains("WITH MEMBER [Measures].cChildren")
 }
@@ -263,6 +258,101 @@ pub fn find_where_clause(input: &str) -> Option<Vec<MemberRef>> {
     where_clause(sub).ok().map(|(_, m)| m)
 }
 
+// ---- query-shape detection ----
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CChildrenTarget {
+    None,
+    All,
+    Measures,
+    ProductLeaf(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalculatedMembersPat {
+    None,
+    MeasureChildrenEmpty,
+    LeafChildrenEmpty,
+    AllLevelMembers,
+    LeafLevelMembers,
+}
+
+fn detect_cchildren_target(input: &str) -> CChildrenTarget {
+    let Some(start) = input.find("FilteredMembers As '") else {
+        return CChildrenTarget::None;
+    };
+    let after_open = &input[start + "FilteredMembers As '".len()..];
+    let Some(end) = after_open.find('\'') else {
+        return CChildrenTarget::None;
+    };
+    let set = &after_open[..end];
+
+    if set.contains("[Measures]") && !set.contains("[Produktkategori]") && !set.contains("[Region]") {
+        return CChildrenTarget::Measures;
+    }
+
+    if (set.contains("[Produktkategori]") || set.contains("[Region]"))
+        && (set.contains("&[") || set.contains("&amp;["))
+    {
+        if let Some(amp) = set.find("&[") {
+            let begin = amp + 2;
+            if let Some(closing) = set[begin..].find(']') {
+                return CChildrenTarget::ProductLeaf(set[begin..begin + closing].to_string());
+            }
+        }
+        if let Some(amp) = set.find("&amp;[") {
+            let begin = amp + 5;
+            if let Some(closing) = set[begin..].find(']') {
+                return CChildrenTarget::ProductLeaf(set[begin..begin + closing].to_string());
+            }
+        }
+    }
+
+    CChildrenTarget::All
+}
+
+fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
+    let Some(pos) = input.to_uppercase().find("ADDCALCULATEDMEMBERS({") else {
+        return CalculatedMembersPat::None;
+    };
+    let rest = &input[pos..];
+
+    if rest.contains("[Measures]") && rest.contains(".Children}") {
+        return CalculatedMembersPat::MeasureChildrenEmpty;
+    }
+
+    if (rest.contains(".&[") || rest.contains(".&amp;[")) && rest.contains(".Children}") {
+        return CalculatedMembersPat::LeafChildrenEmpty;
+    }
+
+    if rest.contains("[(All)]") && (rest.contains(".Members}") || rest.contains(".MEMBERS}")) {
+        return CalculatedMembersPat::AllLevelMembers;
+    }
+
+    if rest.contains("[All]") && (rest.contains(".Children}") || rest.contains(".CHILDREN}")) {
+        return CalculatedMembersPat::LeafLevelMembers;
+    }
+
+    if rest.contains(".Members}") || rest.contains(".MEMBERS}") {
+        return CalculatedMembersPat::LeafLevelMembers;
+    }
+
+    CalculatedMembersPat::None
+}
+
+fn has_drilldown_member(input: &str) -> bool {
+    input.contains("DrilldownMember(")
+}
+
+fn has_measures_in_where_or_cols(input: &str) -> bool {
+    input.to_uppercase().contains("[MEASURES]")
+}
+
+fn is_slicer_all_measure(input: &str) -> bool {
+    input.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
+        || input.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])")
+}
+
 // ---- complete mdx parse ----
 
 #[derive(Debug, Clone, PartialEq)]
@@ -277,9 +367,13 @@ pub struct ParsedMdx {
     pub has_dot_children: bool,
     pub has_with_member_cchildren: bool,
     pub has_where_all_measure: bool,
+    pub has_drilldown_member: bool,
+    pub has_measures: bool,
     pub where_members: Vec<MemberRef>,
     pub subquery_members: Vec<MemberRef>,
     pub main_dim: DimKey,
+    pub cchildren_target: CChildrenTarget,
+    pub calculated_members_pat: CalculatedMembersPat,
 }
 
 pub fn parse_mdx(input: &str) -> ParsedMdx {
@@ -303,10 +397,14 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         has_dot_members: has_dot_members(input),
         has_dot_children: has_dot_children(input),
         has_with_member_cchildren: has_with_member_cchildren(input),
-        has_where_all_measure: has_where_all_measure(input),
+        has_where_all_measure: is_slicer_all_measure(input),
+        has_drilldown_member: has_drilldown_member(input),
+        has_measures: has_measures_in_where_or_cols(input),
         where_members,
         subquery_members,
         main_dim: detect_axis_dimension(before_from),
+        cchildren_target: detect_cchildren_target(input),
+        calculated_members_pat: detect_calculated_members_pat(input),
     }
 }
 

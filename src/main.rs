@@ -28,6 +28,7 @@ mod measure_groups;
 mod measuregroup_dimensions;
 mod execute;
 mod execute_builders;
+mod axis_members;
 mod mdx_semantic;
 mod mdx_parser;
 mod tmschema;

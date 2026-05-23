@@ -4,402 +4,20 @@
 /// mddataset XML response, backed by the current `Backend`.
 ///
 /// Also contains the flat-rowset fallback responses for MDX and DAX.
+///
+/// Member/cell/axis/slicer helpers live in `axis_members`.
 
 use crate::response::wrap_in_soap_envelope;
-use crate::cellset;
 use crate::backend::Backend;
 use crate::engine::plan::{PlanResult, execute_plan, plan_from_semantic};
-use crate::mdx_semantic::{
-    includes_prop, SemanticQuery, SemanticQueryKind, DimensionFilter,
-    PRODUKTKATEGORI_HIER, PRODUKTKATEGORI_ALL_U, PRODUKTKATEGORI_ALL_L,
-    PRODUKTKATEGORI_LEAF_L, MEASURES_HIER, MEASURES_LEVEL,
-    REGION_HIER, REGION_ALL_U, REGION_ALL_L, REGION_LEAF_L,
+use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::axis_members::{
+    render_response, full_slicer_axis, measures_axis,
+    single_member_axis, member_list_axis, empty_member_list_axis,
+    row_dim, leaf_member_for, all_member_for, hierarchy_for, leaf_members_from,
+    measurement_cell, count_cell, measures_hierarchy, measures_total_member,
+    cchildren_member,
 };
-
-// ---- dimension property helpers ----
-
-fn filter_dim_props(props: Vec<(String, String)>, requested: &[String]) -> Vec<(String, String)> {
-    props.into_iter()
-        .filter(|(tag, _)| includes_prop(requested, tag))
-        .collect()
-}
-
-fn filter_dim_prop_decls(
-    props: Vec<(String, String, String)>,
-    requested: &[String],
-) -> Vec<(String, String, String)> {
-    props.into_iter()
-        .filter(|(tag, _, _)| includes_prop(requested, tag))
-        .collect()
-}
-
-fn produktkategori_dim_props_leaf(name: &str, requested: &[String]) -> Vec<(String, String)> {
-    filter_dim_props(vec![
-        ("PARENT_UNIQUE_NAME".into(), PRODUKTKATEGORI_ALL_U.into()),
-        ("HIERARCHY_UNIQUE_NAME".into(), PRODUKTKATEGORI_HIER.into()),
-        ("MEMBER_NAME".into(), name.to_string()),
-        ("MEMBER_KEY".into(), name.to_string()),
-        ("MEMBER_TYPE".into(), "1".into()),
-        ("MEMBER_VALUE".into(), name.to_string()),
-        ("PARENT_LEVEL".into(), "0".into()),
-        ("PARENT_COUNT".into(), "1".into()),
-        ("CHILDREN_CARDINALITY".into(), "0".into()),
-    ], requested)
-}
-
-fn produktkategori_dim_props_all(requested: &[String]) -> Vec<(String, String)> {
-    let count = Backend::get().category_count();
-    filter_dim_props(vec![
-        ("HIERARCHY_UNIQUE_NAME".into(), PRODUKTKATEGORI_HIER.into()),
-        ("MEMBER_NAME".into(), "All".into()),
-        ("MEMBER_KEY".into(), "All".into()),
-        ("MEMBER_TYPE".into(), "2".into()),
-        ("MEMBER_VALUE".into(), "All".into()),
-        ("PARENT_LEVEL".into(), "0".into()),
-        ("PARENT_COUNT".into(), "0".into()),
-        ("CHILDREN_CARDINALITY".into(), count.to_string()),
-    ], requested)
-}
-
-fn produktkategori_dim_decls() -> Vec<(String, String, String)> {
-    let p = "[Produktkategori].[Produktkategori]";
-    vec![
-        ("PARENT_UNIQUE_NAME".into(),   format!("{p}.[PARENT_UNIQUE_NAME]"),   "xsd:string".into()),
-        ("HIERARCHY_UNIQUE_NAME".into(),format!("{p}.[HIERARCHY_UNIQUE_NAME]"),"xsd:string".into()),
-        ("MEMBER_NAME".into(),          format!("{p}.[MEMBER_NAME]"),          "xsd:string".into()),
-        ("MEMBER_KEY".into(),           format!("{p}.[MEMBER_KEY]"),           "xsd:string".into()),
-        ("MEMBER_TYPE".into(),          format!("{p}.[MEMBER_TYPE]"),          "xsd:int".into()),
-        ("MEMBER_VALUE".into(),         format!("{p}.[MEMBER_VALUE]"),         "xsd:string".into()),
-        ("PARENT_LEVEL".into(),         format!("{p}.[PARENT_LEVEL]"),         "xsd:int".into()),
-        ("PARENT_COUNT".into(),         format!("{p}.[PARENT_COUNT]"),         "xsd:int".into()),
-        ("CHILDREN_CARDINALITY".into(), format!("{p}.[CHILDREN_CARDINALITY]"), "xsd:unsignedInt".into()),
-    ]
-}
-
-// ---- Region dimension property/member/hierarchy builders ----
-
-fn region_dim_props_leaf(name: &str, requested: &[String]) -> Vec<(String, String)> {
-    filter_dim_props(vec![
-        ("PARENT_UNIQUE_NAME".into(), REGION_ALL_U.into()),
-        ("HIERARCHY_UNIQUE_NAME".into(), REGION_HIER.into()),
-        ("MEMBER_NAME".into(), name.to_string()),
-        ("MEMBER_KEY".into(), name.to_string()),
-        ("MEMBER_TYPE".into(), "1".into()),
-        ("MEMBER_VALUE".into(), name.to_string()),
-        ("PARENT_LEVEL".into(), "0".into()),
-        ("PARENT_COUNT".into(), "1".into()),
-        ("CHILDREN_CARDINALITY".into(), "0".into()),
-    ], requested)
-}
-
-fn region_dim_props_all(requested: &[String]) -> Vec<(String, String)> {
-    let count = Backend::get().region_count();
-    filter_dim_props(vec![
-        ("HIERARCHY_UNIQUE_NAME".into(), REGION_HIER.into()),
-        ("MEMBER_NAME".into(), "All".into()),
-        ("MEMBER_KEY".into(), "All".into()),
-        ("MEMBER_TYPE".into(), "2".into()),
-        ("MEMBER_VALUE".into(), "All".into()),
-        ("PARENT_LEVEL".into(), "0".into()),
-        ("PARENT_COUNT".into(), "0".into()),
-        ("CHILDREN_CARDINALITY".into(), count.to_string()),
-    ], requested)
-}
-
-fn region_dim_decls() -> Vec<(String, String, String)> {
-    let p = "[Region].[Region]";
-    vec![
-        ("PARENT_UNIQUE_NAME".into(),   format!("{p}.[PARENT_UNIQUE_NAME]"),   "xsd:string".into()),
-        ("HIERARCHY_UNIQUE_NAME".into(),format!("{p}.[HIERARCHY_UNIQUE_NAME]"),"xsd:string".into()),
-        ("MEMBER_NAME".into(),          format!("{p}.[MEMBER_NAME]"),          "xsd:string".into()),
-        ("MEMBER_KEY".into(),           format!("{p}.[MEMBER_KEY]"),           "xsd:string".into()),
-        ("MEMBER_TYPE".into(),          format!("{p}.[MEMBER_TYPE]"),          "xsd:int".into()),
-        ("MEMBER_VALUE".into(),         format!("{p}.[MEMBER_VALUE]"),         "xsd:string".into()),
-        ("PARENT_LEVEL".into(),         format!("{p}.[PARENT_LEVEL]"),         "xsd:int".into()),
-        ("PARENT_COUNT".into(),         format!("{p}.[PARENT_COUNT]"),         "xsd:int".into()),
-        ("CHILDREN_CARDINALITY".into(), format!("{p}.[CHILDREN_CARDINALITY]"), "xsd:unsignedInt".into()),
-    ]
-}
-
-fn region_hierarchy(requested: &[String]) -> cellset::HierarchyConfig {
-    cellset::HierarchyConfig {
-        name: REGION_HIER.into(),
-        dim_prop_decls: filter_dim_prop_decls(region_dim_decls(), requested),
-    }
-}
-
-fn region_leaf_member(name: &str, requested: &[String]) -> cellset::MemberConfig {
-    let u_name = format!("[Region].[Region].&amp;[{}]", name);
-    cellset::MemberConfig {
-        hierarchy: REGION_HIER.into(),
-        u_name,
-        caption: name.to_string(),
-        l_name: REGION_LEAF_L.into(),
-        l_num: 1,
-        display_info: 3,
-        dim_props: region_dim_props_leaf(name, requested),
-    }
-}
-
-fn region_all_member(requested: &[String]) -> cellset::MemberConfig {
-    cellset::MemberConfig {
-        hierarchy: REGION_HIER.into(),
-        u_name: REGION_ALL_U.into(),
-        caption: "All".into(),
-        l_name: REGION_ALL_L.into(),
-        l_num: 0,
-        display_info: 5,
-        dim_props: region_dim_props_all(requested),
-    }
-}
-
-fn region_leaf_members_from(names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
-    names.iter().map(|name| region_leaf_member(name, requested)).collect()
-}
-
-// ---- member/cell/axis constructors ----
-
-fn produktkategori_hierarchy(requested: &[String]) -> cellset::HierarchyConfig {
-    cellset::HierarchyConfig {
-        name: PRODUKTKATEGORI_HIER.into(),
-        dim_prop_decls: filter_dim_prop_decls(produktkategori_dim_decls(), requested),
-    }
-}
-
-fn measures_hierarchy() -> cellset::HierarchyConfig {
-    cellset::HierarchyConfig {
-        name: MEASURES_HIER.into(),
-        dim_prop_decls: vec![],
-    }
-}
-
-fn produktkategori_leaf_member(name: &str, requested: &[String]) -> cellset::MemberConfig {
-    let u_name = format!("[Produktkategori].[Produktkategori].&amp;[{}]", name);
-    cellset::MemberConfig {
-        hierarchy: PRODUKTKATEGORI_HIER.into(),
-        u_name,
-        caption: name.to_string(),
-        l_name: PRODUKTKATEGORI_LEAF_L.into(),
-        l_num: 1,
-        display_info: 3,
-        dim_props: produktkategori_dim_props_leaf(name, requested),
-    }
-}
-
-fn produktkategori_all_member(requested: &[String]) -> cellset::MemberConfig {
-    cellset::MemberConfig {
-        hierarchy: PRODUKTKATEGORI_HIER.into(),
-        u_name: PRODUKTKATEGORI_ALL_U.into(),
-        caption: "All".into(),
-        l_name: PRODUKTKATEGORI_ALL_L.into(),
-        l_num: 0,
-        display_info: 5,
-        dim_props: produktkategori_dim_props_all(requested),
-    }
-}
-
-fn produktkategori_leaf_members_from(names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
-    names
-        .iter()
-        .map(|name| produktkategori_leaf_member(name, requested))
-        .collect()
-}
-
-fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
-    let fmt = if value.fract() == 0.0 {
-        format!("{:.0}", value)
-    } else {
-        format!("{:.2}", value)
-    };
-    cellset::CellConfig {
-        ordinal,
-        value,
-        fmt_value: format!("{} SEK", fmt),
-        format_string: "#,##0.00 SEK".into(),
-        back_color: String::new(),
-        fore_color: String::new(),
-    }
-}
-
-fn count_cell(ordinal: u32, value: u32) -> cellset::CellConfig {
-    cellset::CellConfig {
-        ordinal,
-        value: value as f64,
-        fmt_value: value.to_string(),
-        format_string: "0".into(),
-        back_color: String::new(),
-        fore_color: String::new(),
-    }
-}
-
-fn measures_member(unique_name: &str, caption: &str) -> cellset::MemberConfig {
-    cellset::MemberConfig {
-        hierarchy: MEASURES_HIER.into(),
-        u_name: unique_name.into(),
-        caption: caption.into(),
-        l_name: MEASURES_LEVEL.into(),
-        l_num: 0,
-        display_info: 131072,
-        dim_props: vec![],
-    }
-}
-
-fn measures_total_member() -> cellset::MemberConfig {
-    measures_member("[Measures].[Total Försäljning]", "Total Försäljning (SEK)")
-}
-
-fn cchildren_member() -> cellset::MemberConfig {
-    measures_member("[Measures].[cChildren]", "cChildren")
-}
-
-fn tuples_from_members(members: Vec<cellset::MemberConfig>) -> Vec<cellset::TupleConfig> {
-    members
-        .into_iter()
-        .map(|member| cellset::TupleConfig { members: vec![member] })
-        .collect()
-}
-
-fn render_response(axes: Vec<cellset::AxisConfig>, cells: Vec<cellset::CellConfig>, cell_props: &[String]) -> String {
-    let resp = cellset::CellsetResponse {
-        cube_name: "Model".into(),
-        axes,
-        cells,
-        include_value: cell_props.is_empty() || includes_prop(cell_props, "VALUE"),
-        include_fmt_value: includes_prop(cell_props, "FORMATTED_VALUE"),
-        include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
-        include_back_color: includes_prop(cell_props, "BACK_COLOR"),
-        include_fore_color: includes_prop(cell_props, "FORE_COLOR"),
-    };
-    cellset::render_cellset(&resp)
-}
-
-fn slicer_axis_with_members(
-    hierarchies: Vec<cellset::HierarchyConfig>,
-    members: Vec<cellset::MemberConfig>,
-) -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: "SlicerAxis".into(),
-        hierarchies,
-        tuples: vec![cellset::TupleConfig { members }],
-    }
-}
-
-fn empty_slicer_axis() -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: "SlicerAxis".into(),
-        hierarchies: vec![],
-        tuples: vec![cellset::TupleConfig { members: vec![] }],
-    }
-}
-
-fn measures_axis() -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: "Axis0".into(),
-        hierarchies: vec![measures_hierarchy()],
-        tuples: vec![cellset::TupleConfig { members: vec![measures_total_member()] }],
-    }
-}
-
-fn single_member_axis(name: &str, hierarchy: cellset::HierarchyConfig, member: cellset::MemberConfig) -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: name.into(),
-        hierarchies: vec![hierarchy],
-        tuples: vec![cellset::TupleConfig { members: vec![member] }],
-    }
-}
-
-fn member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig, members: Vec<cellset::MemberConfig>) -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: name.into(),
-        hierarchies: vec![hierarchy],
-        tuples: tuples_from_members(members),
-    }
-}
-
-fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: name.into(),
-        hierarchies: vec![hierarchy],
-        tuples: vec![],
-    }
-}
-
-fn row_dim(query: &SemanticQuery) -> &str {
-    query.axis_dimensions.first().map(|s| s.as_str()).unwrap_or("Produktkategori")
-}
-
-fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> cellset::MemberConfig {
-    match dim {
-        "Region" => region_leaf_member(name, requested),
-        _ => produktkategori_leaf_member(name, requested),
-    }
-}
-
-fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
-    match dim {
-        "Region" => region_all_member(requested),
-        _ => produktkategori_all_member(requested),
-    }
-}
-
-fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::HierarchyConfig {
-    match dim {
-        "Region" => region_hierarchy(requested),
-        _ => produktkategori_hierarchy(requested),
-    }
-}
-
-fn leaf_members_from(dim: &str, names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
-    match dim {
-        "Region" => region_leaf_members_from(names, requested),
-        _ => produktkategori_leaf_members_from(names, requested),
-    }
-}
-
-fn filter_members_for(dim: &str, filters: &[DimensionFilter]) -> Vec<String> {
-    filters.iter()
-        .find(|f| f.dimension == dim)
-        .map(|f| f.members.clone())
-        .unwrap_or_default()
-}
-
-/// All cube dimensions in ordinal order (the order they must appear on SlicerAxis).
-const ALL_DIMS: &[&str] = &["Measures", "Produktkategori", "Region"];
-
-/// Build a SlicerAxis that includes every cube dimension not on the visible axis,
-/// in stable metadata-ordinal order (Measures, Produktkategori, Region).
-fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
-    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
-    let mut members: Vec<cellset::MemberConfig> = Vec::new();
-
-    for &dim in ALL_DIMS {
-        if query.axis_dimensions.contains(&dim.to_string()) { continue; }
-
-        if dim == "Measures" {
-            hierarchies.push(measures_hierarchy());
-            members.push(measures_total_member());
-            continue;
-        }
-
-        hierarchies.push(hierarchy_for(dim, &[]));
-
-        let slc = query.slicers.iter().find(|s| s.dimension == dim);
-        if slc.map(|s| s.is_all).unwrap_or(true) {
-            members.push(all_member_for(dim, &[]));
-        } else {
-            let dim_members = filter_members_for(dim, &query.filters);
-            for name in &dim_members {
-                members.push(leaf_member_for(dim, name, &[]));
-            }
-        }
-    }
-
-    cellset::AxisConfig {
-        name: "SlicerAxis".into(),
-        hierarchies,
-        tuples: vec![cellset::TupleConfig { members }],
-    }
-}
 
 // ---- cellset response builders ----
 
@@ -454,12 +72,12 @@ fn build_drilldown_multi(query: &SemanticQuery, result: &PlanResult) -> String {
     };
     let has_exclusions = !query.excluded_members.is_empty();
 
-    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
+    let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
     for dim in dims {
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
     }
 
-    let mut tuples: Vec<cellset::TupleConfig> = Vec::new();
+    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
     for (kat, region, value) in all_data {
@@ -468,12 +86,12 @@ fn build_drilldown_multi(query: &SemanticQuery, result: &PlanResult) -> String {
         }
         let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
         let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(cellset::TupleConfig { members: vec![kat_member, region_member] });
+        tuples.push(crate::cellset::TupleConfig { members: vec![kat_member, region_member] });
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
 
-    let axis = cellset::AxisConfig {
+    let axis = crate::cellset::AxisConfig {
         name: "Axis0".into(),
         hierarchies,
         tuples,
@@ -494,12 +112,12 @@ fn build_drilldown_member(query: &SemanticQuery, result: &PlanResult) -> String 
     };
     let collapse_hier = query.drilldown_member_hierarchy.as_deref().unwrap_or("Region");
 
-    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
+    let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
     for dim in dims {
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
     }
 
-    let mut tuples: Vec<cellset::TupleConfig> = Vec::new();
+    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
 
@@ -516,7 +134,7 @@ fn build_drilldown_member(query: &SemanticQuery, result: &PlanResult) -> String 
         if collapse_hier == "Region" && is_excluded {
             if !seen_kats.contains(kat.as_str()) {
                 let total = total_map.get(kat.as_str()).copied().unwrap_or(0.0);
-                tuples.push(cellset::TupleConfig {
+                tuples.push(crate::cellset::TupleConfig {
                     members: vec![
                         leaf_member_for("Produktkategori", kat, &query.dim_props),
                         all_member_for("Region", &query.dim_props),
@@ -531,7 +149,7 @@ fn build_drilldown_member(query: &SemanticQuery, result: &PlanResult) -> String 
 
         if collapse_hier == "Produktkategori" && is_excluded {
             if !seen_regions.contains(region.as_str()) {
-                tuples.push(cellset::TupleConfig {
+                tuples.push(crate::cellset::TupleConfig {
                     members: vec![
                         all_member_for("Produktkategori", &query.dim_props),
                         leaf_member_for("Region", region, &query.dim_props),
@@ -546,12 +164,12 @@ fn build_drilldown_member(query: &SemanticQuery, result: &PlanResult) -> String 
 
         let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
         let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(cellset::TupleConfig { members: vec![kat_member, region_member] });
+        tuples.push(crate::cellset::TupleConfig { members: vec![kat_member, region_member] });
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
 
-    let axis = cellset::AxisConfig {
+    let axis = crate::cellset::AxisConfig {
         name: "Axis0".into(),
         hierarchies,
         tuples,

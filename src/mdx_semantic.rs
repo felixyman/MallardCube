@@ -2,6 +2,14 @@
 ///
 /// Converts raw Excel MDX probe/query strings into a `SemanticQuery`
 /// so that response builders don't need to touch MDX strings directly.
+///
+/// Classification is now driven by `ParsedMdx` — structural flags
+/// set by the nom parser — instead of bare `contains(...)` chains.
+
+use crate::mdx_parser::{
+    ParsedMdx, MemberRef, DimKey,
+    CChildrenTarget, CalculatedMembersPat,
+};
 
 pub fn is_dax(statement: &str) -> bool {
     let trimmed = statement.trim_start();
@@ -66,16 +74,15 @@ pub struct SlicerSelection {
     pub is_all: bool,
 }
 
-fn dim_key_str(dim: &crate::mdx_parser::DimKey) -> String {
+fn dim_key_str(dim: &DimKey) -> String {
     match dim {
-        crate::mdx_parser::DimKey::Region => "Region".into(),
-        crate::mdx_parser::DimKey::Produktkategori => "Produktkategori".into(),
-        crate::mdx_parser::DimKey::Measures => "Measures".into(),
+        DimKey::Region => "Region".into(),
+        DimKey::Produktkategori => "Produktkategori".into(),
+        DimKey::Measures => "Measures".into(),
     }
 }
 
-pub fn parse_mdx_filters(mdx: &str) -> Vec<DimensionFilter> {
-    let parsed = crate::mdx_parser::parse_mdx(mdx);
+fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
     let mut result: Vec<DimensionFilter> = Vec::new();
 
     let mut add_leaf = |result: &mut Vec<DimensionFilter>, dim_str: String, key: &str| {
@@ -86,16 +93,14 @@ pub fn parse_mdx_filters(mdx: &str) -> Vec<DimensionFilter> {
         }
     };
 
-    // Collect from WHERE clause
     for m in &parsed.where_members {
-        if let crate::mdx_parser::MemberRef::Leaf { dim, key } = m {
+        if let MemberRef::Leaf { dim, key } = m {
             add_leaf(&mut result, dim_key_str(dim), key);
         }
     }
 
-    // Also collect from ALL subquery nests (don't short-circuit)
     for m in &parsed.subquery_members {
-        if let crate::mdx_parser::MemberRef::Leaf { dim, key } = m {
+        if let MemberRef::Leaf { dim, key } = m {
             add_leaf(&mut result, dim_key_str(dim), key);
         }
     }
@@ -103,15 +108,14 @@ pub fn parse_mdx_filters(mdx: &str) -> Vec<DimensionFilter> {
     result
 }
 
-pub fn parse_slicer_dimensions(mdx: &str) -> Vec<SlicerSelection> {
-    let parsed = crate::mdx_parser::parse_mdx(mdx);
+fn slicers_from_parsed(parsed: &ParsedMdx) -> Vec<SlicerSelection> {
     let mut result = Vec::new();
     for mref in &parsed.where_members {
         match mref {
-            crate::mdx_parser::MemberRef::All(dim) => {
+            MemberRef::All(dim) => {
                 result.push(SlicerSelection { dimension: dim_key_str(dim), is_all: true });
             }
-            crate::mdx_parser::MemberRef::Leaf { dim, .. } => {
+            MemberRef::Leaf { dim, .. } => {
                 let dim_str = dim_key_str(dim);
                 if !result.iter().any(|s: &SlicerSelection| s.dimension == dim_str) {
                     result.push(SlicerSelection { dimension: dim_str, is_all: false });
@@ -123,52 +127,43 @@ pub fn parse_slicer_dimensions(mdx: &str) -> Vec<SlicerSelection> {
     result
 }
 
+// ---- public wrappers (for tests and standalone calls) ----
+
+pub fn parse_mdx_filters(mdx: &str) -> Vec<DimensionFilter> {
+    filters_from_parsed(&crate::mdx_parser::parse_mdx(mdx))
+}
+
+pub fn parse_slicer_dimensions(mdx: &str) -> Vec<SlicerSelection> {
+    slicers_from_parsed(&crate::mdx_parser::parse_mdx(mdx))
+}
+
+// ---- cChildren probe helpers (wrappers over parser for test compat) ----
+
+pub fn cchildren_target_is_measures(mdx: &str) -> bool {
+    matches!(
+        crate::mdx_parser::parse_mdx(mdx).cchildren_target,
+        CChildrenTarget::Measures,
+    )
+}
+
+pub fn cchildren_target_is_product_leaf(mdx: &str) -> bool {
+    matches!(
+        crate::mdx_parser::parse_mdx(mdx).cchildren_target,
+        CChildrenTarget::ProductLeaf(_),
+    )
+}
+
+pub fn cchildren_filtered_member_name(mdx: &str) -> Option<String> {
+    match crate::mdx_parser::parse_mdx(mdx).cchildren_target {
+        CChildrenTarget::ProductLeaf(name) => Some(name),
+        _ => None,
+    }
+}
+
 // ---- utilities ----
 
 pub fn includes_prop(props: &[String], name: &str) -> bool {
     props.iter().any(|prop| prop == name)
-}
-
-// ---- cChildren probe helpers (string-based, used by classification) ----
-
-pub fn cchildren_target_is_measures(mdx: &str) -> bool {
-    if let Some(start) = mdx.find("FilteredMembers As '") {
-        let after_open = &mdx[start + "FilteredMembers As '".len()..];
-        if let Some(end) = after_open.find('\'') {
-            let set = &after_open[..end];
-            return set.contains("[Measures]") && !set.contains("[Produktkategori]");
-        }
-    }
-    false
-}
-
-pub fn cchildren_target_is_product_leaf(mdx: &str) -> bool {
-    if let Some(start) = mdx.find("FilteredMembers As '") {
-        let after_open = &mdx[start + "FilteredMembers As '".len()..];
-        if let Some(end) = after_open.find('\'') {
-            let set = &after_open[..end];
-            return set.contains("[Produktkategori]") && (set.contains("&[") || set.contains("&amp;["));
-        }
-    }
-    false
-}
-
-pub fn cchildren_filtered_member_name(mdx: &str) -> Option<String> {
-    let key_start = mdx.find("FilteredMembers As '")?;
-    let after_open = &mdx[key_start + "FilteredMembers As '".len()..];
-    let set_end = after_open.find('\'')?;
-    let set = &after_open[..set_end];
-    if let Some(amp_start) = set.find("&[") {
-        let begin = amp_start + 2;
-        let end = set[begin..].find(']')? + begin;
-        return Some(set[begin..end].to_string());
-    }
-    if let Some(amp_start) = set.find("&amp;[") {
-        let begin = amp_start + 5;
-        let end = set[begin..].find(']')? + begin;
-        return Some(set[begin..end].to_string());
-    }
-    None
 }
 
 // ---- semantic query model ----
@@ -194,26 +189,20 @@ pub struct SemanticQuery {
     pub kind: SemanticQueryKind,
     pub dim_props: Vec<String>,
     pub cell_props: Vec<String>,
-    /// Dimension-tagged filter members.
     pub filters: Vec<DimensionFilter>,
     pub cchildren_leaf_name: Option<String>,
-    /// Visible dimension on the query axis, or None for slicer-only.
     pub row_dimension: Option<String>,
-    /// All visible dimensions on the query axis in order (1 for simple, 2+ for CrossJoin).
     pub axis_dimensions: Vec<String>,
-    /// Off-axis dimensions from the WHERE clause (including All selections).
     pub slicers: Vec<SlicerSelection>,
-    /// Excluded member keys for DrilldownMember collapse.
     pub excluded_members: Vec<String>,
-    /// Target hierarchy for DrilldownMember (e.g. "Region" or "Produktkategori").
     pub drilldown_member_hierarchy: Option<String>,
 }
 
 fn row_dimension_from_mdx(mdx: &str) -> Option<&'static str> {
     let select_end = mdx.find("FROM [Model]").unwrap_or(mdx.len());
-    if mdx[..select_end].contains("[Region]") {
+    if select_end < mdx.len() && mdx[..select_end].contains("[Region]") {
         Some("Region")
-    } else if mdx[..select_end].contains("[Produktkategori]") {
+    } else if select_end < mdx.len() && mdx[..select_end].contains("[Produktkategori]") {
         Some("Produktkategori")
     } else {
         None
@@ -222,17 +211,12 @@ fn row_dimension_from_mdx(mdx: &str) -> Option<&'static str> {
 
 fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
     let mut result = Vec::new();
-    // Only consider the axis expression, not DIMENSION PROPERTIES.
-    // Extract between the last "})" before FROM or the first "DIMENSION PROPERTIES".
     let from_pos = mdx.find("FROM [Model]").unwrap_or(mdx.len());
     let select_part = &mdx[..from_pos];
-    // Remove the DIMENSION PROPERTIES section to only look at the axis expr
     let axis_expr_end = select_part.find("DIMENSION PROPERTIES").unwrap_or(select_part.len());
     let axis_expr = &select_part[..axis_expr_end];
 
     for dim in &["Produktkategori", "Region"] {
-        // Only count if the dimension appears in the axis expression itself
-        // (DrilldownLevel, CrossJoin, Hierarchize)
         if axis_expr.contains(dim) || axis_expr.contains(&format!("[{dim}]")) {
             result.push(dim.to_string());
         }
@@ -240,72 +224,57 @@ fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
     result
 }
 
-pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
-    let upper = mdx.to_uppercase();
-    let dim_props = parse_dimension_properties(mdx);
-    let cell_props = parse_cell_properties(mdx);
-    let filters = parse_mdx_filters(mdx);
-    let row_dimension = row_dimension_from_mdx(mdx).map(|s| s.to_string());
-    let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
-    let has_rows = upper.contains("ON ROWS");
-    let has_cols = upper.contains("ON COLUMNS");
-    let has_visible_dim = mdx.contains("[Produktkategori]") || mdx.contains("[Region]");
-    let has_measures = mdx.contains("[Measures]");
-    let is_drilldown = has_visible_dim && (mdx.contains("DrilldownLevel") || mdx.contains(".Members"));
+// ---- main classification entry point ----
 
-    let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
-        if cchildren_target_is_measures(mdx) {
-            SemanticQueryKind::ChildrenCountMeasures
-        } else if cchildren_target_is_product_leaf(mdx) {
-            SemanticQueryKind::ChildrenCountLeafProduct
-        } else {
-            SemanticQueryKind::ChildrenCountForAll
+pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
+    let parsed = crate::mdx_parser::parse_mdx(mdx);
+
+    let kind = if parsed.has_with_member_cchildren {
+        match &parsed.cchildren_target {
+            CChildrenTarget::Measures => SemanticQueryKind::ChildrenCountMeasures,
+            CChildrenTarget::ProductLeaf(_) => SemanticQueryKind::ChildrenCountLeafProduct,
+            _ => SemanticQueryKind::ChildrenCountForAll,
         }
-    } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
-        SemanticQueryKind::MeasureChildrenEmpty
-    } else if (mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].&["))
-        && mdx.contains("].Children})")
-    {
-        SemanticQueryKind::LeafChildrenEmpty
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[(All)].Members})")
-    {
-        SemanticQueryKind::AllLevelMembers
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[All].Children})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[All].Children})")
-    {
-        SemanticQueryKind::LeafLevelMembers
-    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})")
-        || mdx.contains("AddCalculatedMembers({[Region].[Region].[Region].Members})")
-    {
-        SemanticQueryKind::LeafLevelMembers
-    } else if has_rows && has_cols && has_visible_dim && has_measures {
-        SemanticQueryKind::MeasureByCategory
-    } else if mdx.contains("DrilldownMember(") {
-        SemanticQueryKind::DrilldownMemberProbe
-    } else if is_drilldown {
-        SemanticQueryKind::DrilldownCategories
-    } else if !has_axes && (
-        mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
-            || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])"))
-    {
-        SemanticQueryKind::SlicerAllAndMeasure
-    } else if !has_axes {
-        SemanticQueryKind::SlicerOnly
     } else {
-        SemanticQueryKind::SlicerOnly
+        match &parsed.calculated_members_pat {
+            CalculatedMembersPat::MeasureChildrenEmpty => SemanticQueryKind::MeasureChildrenEmpty,
+            CalculatedMembersPat::LeafChildrenEmpty => SemanticQueryKind::LeafChildrenEmpty,
+            CalculatedMembersPat::AllLevelMembers => SemanticQueryKind::AllLevelMembers,
+            CalculatedMembersPat::LeafLevelMembers => SemanticQueryKind::LeafLevelMembers,
+            CalculatedMembersPat::None => {
+                if parsed.has_drilldown_member {
+                    SemanticQueryKind::DrilldownMemberProbe
+                } else if parsed.has_drilldown || parsed.has_dot_members {
+                    SemanticQueryKind::DrilldownCategories
+                } else if parsed.has_rows && parsed.has_cols && parsed.main_dim != DimKey::Measures && parsed.has_measures {
+                    SemanticQueryKind::MeasureByCategory
+                } else if !parsed.has_rows && !parsed.has_cols {
+                    if parsed.has_where_all_measure {
+                        SemanticQueryKind::SlicerAllAndMeasure
+                    } else {
+                        SemanticQueryKind::SlicerOnly
+                    }
+                } else {
+                    SemanticQueryKind::SlicerOnly
+                }
+            }
+        }
+    };
+
+    let cchildren_leaf_name = match &parsed.cchildren_target {
+        CChildrenTarget::ProductLeaf(name) => Some(name.clone()),
+        _ => None,
     };
 
     SemanticQuery {
         kind,
-        dim_props,
-        cell_props,
-        filters,
-        cchildren_leaf_name: cchildren_filtered_member_name(mdx),
-        row_dimension,
+        dim_props: parsed.dim_props.clone(),
+        cell_props: parsed.cell_props.clone(),
+        filters: filters_from_parsed(&parsed),
+        cchildren_leaf_name,
+        row_dimension: row_dimension_from_mdx(mdx).map(|s| s.to_string()),
         axis_dimensions: parse_axis_dimensions(mdx),
-        slicers: parse_slicer_dimensions(mdx),
+        slicers: slicers_from_parsed(&parsed),
         excluded_members: parse_excluded_members(mdx),
         drilldown_member_hierarchy: parse_drilldown_member_hierarchy(mdx),
     }
@@ -329,13 +298,10 @@ fn parse_excluded_members(mdx: &str) -> Vec<String> {
 }
 
 fn parse_drilldown_member_hierarchy(mdx: &str) -> Option<String> {
-    // DrilldownMember(CrossJoin(...), {-{...}}, [Region].[Region])
     let Some(excl_start) = mdx.find("{-{") else { return None; };
     let after_excl = &mdx[excl_start..];
-    // Find the closing }} of the excluded set
     let Some(close) = after_excl[2..].find("}}") else { return None; };
     let rest = &after_excl[2 + close + 2..];
-    // Next bracketed hierarchy: , [Region].[Region]
     let trimmed = rest.trim_start();
     let trimmed = trimmed.strip_prefix(',').unwrap_or(trimmed).trim_start();
     if !trimmed.starts_with('[') { return None; }

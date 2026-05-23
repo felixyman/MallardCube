@@ -12,6 +12,25 @@ via `DrilldownMember` is working. 62 unit tests.
 
 ## Recent fixes (2026-05-23)
 
+### ParsedMdx-driven classification
+- `ParsedMdx` now carries query-shape flags: `CChildrenTarget`,
+  `CalculatedMembersPat`, `has_drilldown_member`, `has_measures`.
+- `semantic_query_from_mdx()` classifies using these structural fields
+  instead of bare `contains(...)` chains.
+- Old wrapper functions (`cchildren_target_is_measures`, etc.) kept for
+  test backward compat.
+- `parse_mdx_filters()` and `parse_slicer_dimensions()` accept `&ParsedMdx`
+  internally; old `&str` wrappers call `parse_mdx` internally.
+- `detect_cchildren_target()` and `detect_calculated_members_pat()` in
+  mdx_parser.rs detect probe sub-types structurally.
+
+### ExecutionPlan layer
+- `engine/plan.rs`: `ExecutionPlan` (6 variants), `PlanResult` (6 variants),
+  `plan_from_semantic()`, `execute_plan()`.
+- `execute_builders.rs` builders consume `&PlanResult` instead of calling
+  `Backend` directly. Removed `fetch_grouped`, `fetch_total_with_filters`,
+  `dimension_count`, `kat_filter`, `region_filter` helper functions.
+
 ### `nom`-based MDX parser (mdx_parser.rs)
 - Added `nom = "7"` dependency and `src/mdx_parser.rs`.
 - Parses: member references (`MemberRef::All`, `Leaf`, `Measure`), `WHERE`
@@ -130,12 +149,13 @@ xmla_proxy/src/
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs
   execute.rs           — Thin dispatch (35 lines) + test module (62 tests)
-  execute_builders.rs  — Cellset response builders; all build_* functions,
-                         full_slicer_axis, multi-hierarchy Axis0, collapse
-  mdx_semantic.rs      — Semantic classification (SemanticQueryKind, SemanticQuery,
-                         DimensionFilter, SlicerSelection). Delegates parsing
-                         to mdx_parser. Still uses string heuristics for
-                         query-kind detection.
+  execute_builders.rs  — Cellset response builders (build_* functions) and
+                         flat-rowset fallback. Consumes axis_members.
+  axis_members.rs      — Dimension/member property helpers, hierarchy/member
+                         constructors, cell helpers, axis assembly, slicer builder
+  mdx_semantic.rs      — Semantic model (SemanticQueryKind, SemanticQuery,
+                         DimensionFilter, SlicerSelection). Classification
+                         now uses `ParsedMdx` struct, not string heuristics.
   mdx_parser.rs        — nom-based MDX parser for the Excel MDX subset
                          (member refs, WHERE, subquery, properties, axis shape)
   backend.rs           — SQLite backend (rusqlite): faktatabell with
@@ -174,26 +194,22 @@ xmla_proxy/src/
   combined dimensions, multi-hierarchy, collapse semantics).
 
 ## What does not yet work
-- Query-kind classification in `mdx_semantic.rs:semantic_query_from_mdx()` is
-  still largely string-heuristic (`contains(...)` chains). The `nom` parser
-  exists but isn't yet used for query-kind detection.
 - Full N-way MDX generalization — parsing covers the observed Excel subset
   but doesn't model the full MDX grammar.
-- `execute_builders.rs` still mixes axis/member shaping, plan execution,
-  and cellset rendering in one file (813 lines). Plan extraction is done,
-  but file splitting is pending.
 - No Malloy generation yet.
+- Some unused helper functions remain (`empty_slicer_axis`, `slicer_axis_with_members`).
 
 ## Next workstreams
 1. **ExecutionPlan layer.** **DONE** — `engine/plan.rs` provides
    `ExecutionPlan`, `PlanResult`, `plan_from_semantic()`, `execute_plan()`.
    Builders now consume `PlanResult` instead of calling `Backend` directly.
-2. **Query-kind from parsed MDX.** Move classification from string heuristics
-   onto the parsed `ParsedMdx` struct so that new query shapes are added by
-   extending the parser, not by adding more `contains(...)` branches.
-3. **Split execute_builders.rs.** Separate:
-   - Axis/member shaping (dimension-property helpers, hierarchy/member builders)
-   - Plan-to-cellset building
+2. **Query-kind from parsed MDX.** **DONE** — `ParsedMdx` now carries
+   `CChildrenTarget`, `CalculatedMembersPat`, `has_drilldown_member`,
+   `has_measures`. `semantic_query_from_mdx()` classifies from these fields.
+   Old wrapper functions kept for test backward compat.
+3. **Split execute_builders.rs.** **DONE** — split into:
+   - `axis_members.rs` (member/cell/axis/slicer helpers)
+   - `execute_builders.rs` (build_* functions + flat-rowset fallback)
 4. **File-structure reorg.** Group modules into subdirectories:
    `xmla/`, `mdx/`, `engine/`, `builders/`, `metadata/`.
 5. **Malloy generation.** Generate Malloy from the execution plan.
