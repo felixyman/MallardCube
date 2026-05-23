@@ -19,7 +19,10 @@ fn is_dax(statement: &str) -> bool {
 }
 
 fn is_mdx_select(mdx: &str) -> bool {
-    mdx.trim_start().to_uppercase().starts_with("SELECT")
+    let trimmed = mdx.trim_start();
+    let upper = trimmed.to_uppercase();
+    upper.starts_with("SELECT")
+        || (upper.starts_with("WITH") && upper.contains("SELECT "))
 }
 
 pub fn get_execute_statement_response(statement: &str) -> String {
@@ -157,13 +160,42 @@ fn parse_mdx_filters(mdx: &str) -> Vec<String> {
 
 fn cchildren_target_is_measures(mdx: &str) -> bool {
     if let Some(start) = mdx.find("FilteredMembers As '") {
-        let rest = &mdx[start..];
-        if let Some(end) = rest.find('\'') {
-            let set = &rest["FilteredMembers As '".len()..end];
+        let after_open = &mdx[start + "FilteredMembers As '".len()..];
+        if let Some(end) = after_open.find('\'') {
+            let set = &after_open[..end];
             return set.contains("[Measures]") && !set.contains("[Produktkategori]");
         }
     }
     false
+}
+
+fn cchildren_target_is_product_leaf(mdx: &str) -> bool {
+    if let Some(start) = mdx.find("FilteredMembers As '") {
+        let after_open = &mdx[start + "FilteredMembers As '".len()..];
+        if let Some(end) = after_open.find('\'') {
+            let set = &after_open[..end];
+            return set.contains("[Produktkategori]") && (set.contains("&[") || set.contains("&amp;["));
+        }
+    }
+    false
+}
+
+fn cchildren_filtered_member_name(mdx: &str) -> Option<String> {
+    let key_start = mdx.find("FilteredMembers As '")?;
+    let after_open = &mdx[key_start + "FilteredMembers As '".len()..];
+    let set_end = after_open.find('\'')?;
+    let set = &after_open[..set_end];
+    if let Some(amp_start) = set.find("&[") {
+        let begin = amp_start + 2;
+        let end = set[begin..].find(']')? + begin;
+        return Some(set[begin..end].to_string());
+    }
+    if let Some(amp_start) = set.find("&amp;[") {
+        let begin = amp_start + 5;
+        let end = set[begin..].find(']')? + begin;
+        return Some(set[begin..end].to_string());
+    }
+    None
 }
 
 fn includes_prop(props: &[String], name: &str) -> bool {
@@ -173,6 +205,7 @@ fn includes_prop(props: &[String], name: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SemanticQueryKind {
     ChildrenCountForAll,
+    ChildrenCountLeafProduct,
     ChildrenCountMeasures,
     SlicerAllAndMeasure,
     MeasureChildrenEmpty,
@@ -190,6 +223,7 @@ struct SemanticQuery {
     dim_props: Vec<String>,
     cell_props: Vec<String>,
     category_filters: Vec<String>,
+    cchildren_leaf_name: Option<String>,
 }
 
 fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
@@ -207,6 +241,8 @@ fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let kind = if mdx.contains("WITH MEMBER [Measures].cChildren") {
         if cchildren_target_is_measures(mdx) {
             SemanticQueryKind::ChildrenCountMeasures
+        } else if cchildren_target_is_product_leaf(mdx) {
+            SemanticQueryKind::ChildrenCountLeafProduct
         } else {
             SemanticQueryKind::ChildrenCountForAll
         }
@@ -218,6 +254,8 @@ fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         SemanticQueryKind::LeafChildrenEmpty
     } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[(All)].Members})") {
         SemanticQueryKind::AllLevelMembers
+    } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[All].Children})") {
+        SemanticQueryKind::LeafLevelMembers
     } else if mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].[Produktkategori].Members})") {
         SemanticQueryKind::LeafLevelMembers
     } else if has_rows && has_cols && has_product && has_measures {
@@ -235,6 +273,7 @@ fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         dim_props,
         cell_props,
         category_filters,
+        cchildren_leaf_name: cchildren_filtered_member_name(mdx),
     }
 }
 
@@ -533,7 +572,7 @@ fn build_all_level_members(dim_props: &[String], cell_props: &[String]) -> Strin
     render_response(
         vec![
             single_member_axis("Axis0", produktkategori_hierarchy(dim_props), produktkategori_all_member(dim_props)),
-            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+            empty_slicer_axis(),
         ],
         vec![measurement_cell(0, total)],
         cell_props,
@@ -554,7 +593,7 @@ fn build_leaf_level_members(dim_props: &[String], cell_props: &[String], filters
     render_response(
         vec![
             member_list_axis("Axis0", produktkategori_hierarchy(dim_props), members),
-            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+            empty_slicer_axis(),
         ],
         cells,
         cell_props,
@@ -565,7 +604,7 @@ fn build_leaf_children_empty(dim_props: &[String], cell_props: &[String]) -> Str
     render_response(
         vec![
             empty_member_list_axis("Axis0", produktkategori_hierarchy(dim_props)),
-            slicer_axis_with_members(vec![measures_hierarchy()], vec![measures_total_member()]),
+            empty_slicer_axis(),
         ],
         vec![],
         cell_props,
@@ -576,7 +615,7 @@ fn build_measure_children_empty(cell_props: &[String]) -> String {
     render_response(
         vec![
             empty_member_list_axis("Axis0", measures_hierarchy()),
-            slicer_axis_with_members(vec![produktkategori_hierarchy(&[])], vec![produktkategori_all_member(&[])]),
+            empty_slicer_axis(),
         ],
         vec![],
         cell_props,
@@ -592,6 +631,21 @@ fn build_cchildren_for_all(dim_props: &[String], cell_props: &[String]) -> Strin
             empty_slicer_axis(),
         ],
         vec![count_cell(0, count)],
+        cell_props,
+    )
+}
+
+fn build_cchildren_for_leaf_product(dim_props: &[String], cell_props: &[String], name: &str) -> String {
+    let leaf = produktkategori_leaf_member(name, dim_props);
+    let all = produktkategori_all_member(dim_props);
+    let real_count = Backend::get().category_count();
+    render_response(
+        vec![
+            member_list_axis("Axis0", produktkategori_hierarchy(dim_props), vec![all, leaf]),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            empty_slicer_axis(),
+        ],
+        vec![count_cell(0, real_count), count_cell(1, 0)],
         cell_props,
     )
 }
@@ -613,6 +667,10 @@ fn execute_semantic_query(query: &SemanticQuery) -> String {
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => {
             build_cchildren_for_all(&query.dim_props, &query.cell_props)
+        }
+        SemanticQueryKind::ChildrenCountLeafProduct => {
+            let name = query.cchildren_leaf_name.as_deref().unwrap_or("");
+            build_cchildren_for_leaf_product(&query.dim_props, &query.cell_props, name)
         }
         SemanticQueryKind::ChildrenCountMeasures => {
             build_cchildren_for_measures(&query.dim_props, &query.cell_props)
