@@ -29,6 +29,7 @@ mod measuregroup_dimensions;
 mod execute;
 mod execute_builders;
 mod mdx_semantic;
+mod mdx_parser;
 mod tmschema;
 mod cellset;
 mod rowset;

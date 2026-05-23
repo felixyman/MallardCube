@@ -72,6 +72,14 @@ mod tests {
 
     const MDX_CROSSJOIN_PROBE: &str = "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[ProductCategory].[ProductCategory].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
 
+    const MDX_KAT_FILTERED_SINGLE: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[ProductCategory].[ProductCategory].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM (SELECT ({[ProductCategory].[ProductCategory].&[Category B]}) ON COLUMNS  FROM [Model]) WHERE ([Region].[Region].[All],[Measures].[Total Sales]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_NESTED_BOTH_FILTERS: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY ON COLUMNS  FROM (SELECT ({[Region].[Region].&[North]}) ON COLUMNS  FROM (SELECT ({[ProductCategory].[ProductCategory].&[Category A],[ProductCategory].[ProductCategory].&[Category B],[ProductCategory].[ProductCategory].&[Category D]}) ON COLUMNS  FROM [Model])) WHERE ([Measures].[Total Sales]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_DRILLDOWN_MEMBER_COLLAPSE: &str = "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[ProductCategory].[ProductCategory].[All],[ProductCategory].[ProductCategory].[ProductCategory].AllMembers}, {([Region].[Region].[All])}), {-{[ProductCategory].[ProductCategory].&[Category A]}}, [Region].[Region])) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Measures].[Total Sales]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT: &str = "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Region].[Region].[All],[Region].[Region].[Region].AllMembers}, {([ProductCategory].[ProductCategory].[All])}), {-{[ProductCategory].[ProductCategory].&[Category D]}}, [ProductCategory].[ProductCategory])) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Measures].[Total Sales]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
     fn assert_in_order(haystack: &str, first: &str, second: &str) {
         let f = haystack.find(first)
             .unwrap_or_else(|| panic!("missing substring: {first}"));
@@ -167,9 +175,11 @@ mod tests {
     fn parse_mdx_filters_uses_slicer_not_subquery_when_slicer_has_product() {
         let mdx = "SELECT FROM (SELECT ({[ProductCategory].[ProductCategory].&[Category A]}) ON COLUMNS FROM [Model]) WHERE ([ProductCategory].[ProductCategory].&[Category B],[Measures].[Total Sales])";
         let filters = parse_mdx_filters(mdx);
-        assert_eq!(filters.len(), 1);
-        assert_eq!(filters[0].dimension, "ProductCategory");
-        assert_eq!(filters[0].members, vec!["Category B"]);
+        // Now merges both: WHERE (Category B) + subquery (Category A)
+        let kat = filters.iter().find(|f| f.dimension == "ProductCategory").unwrap();
+        assert_eq!(kat.members.len(), 2);
+        assert!(kat.members.contains(&"Category A".to_string()));
+        assert!(kat.members.contains(&"Category B".to_string()));
     }
 
     #[test]
@@ -447,5 +457,103 @@ mod tests {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
         assert!(xml.contains("Category A"));
         assert!(xml.contains("North"));
+    }
+
+    #[test]
+    fn kat_filter_single_returns_only_filtered_category() {
+        let xml = get_execute_statement_response(MDX_KAT_FILTERED_SINGLE);
+        assert!(xml.contains("Category B"));
+        assert!(!xml.contains("Category A"), "Category A should be filtered out");
+        assert!(!xml.contains("Category C"), "Category C should be filtered out");
+    }
+
+    #[test]
+    fn kat_filter_single_returns_correct_value() {
+        let xml = get_execute_statement_response(MDX_KAT_FILTERED_SINGLE);
+        // Category B total across all regions = 150000 + 100000 = 250000
+        assert!(xml.contains("250000"));
+    }
+
+    #[test]
+    fn nested_filters_parse_both_dimensions() {
+        let filters = parse_mdx_filters(MDX_NESTED_BOTH_FILTERS);
+        let kat = filters.iter().find(|f| f.dimension == "ProductCategory")
+            .map(|f| &f.members).unwrap();
+        let reg = filters.iter().find(|f| f.dimension == "Region")
+            .map(|f| &f.members).unwrap();
+        assert!(kat.contains(&"Category A".to_string()));
+        assert!(kat.contains(&"Category B".to_string()));
+        assert!(kat.contains(&"Category D".to_string()));
+        assert!(!kat.contains(&"Category C".to_string()), "Category C should be filtered out");
+        assert_eq!(reg, &vec!["North"]);
+    }
+
+    #[test]
+    fn nested_filters_response_shows_region_rows_only() {
+        let xml = get_execute_statement_response(MDX_NESTED_BOTH_FILTERS);
+        // Region on rows with both filters: North only, Category A/B/D filtered
+        assert!(xml.contains("North"));
+        // Total: North + (A,B,D) = 100000 + 150000 + 200000 = 450000
+        assert!(xml.contains("450000"));
+    }
+
+    #[test]
+    fn collapse_detected() {
+        let q = semantic_query_from_mdx(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownMemberProbe);
+        assert_eq!(q.excluded_members, vec!["Category A"]);
+        assert_eq!(q.drilldown_member_hierarchy.as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn collapse_kategori_a_keeps_all_tuple() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        // Category A should remain, but collapsed to (Category A, Region.All)
+        assert!(xml.contains("Category A"), "Category A should remain visible as All");
+        // Region.All captions should appear (from the collapsed Kat A tuple)
+        let caps = slicer_captions(&xml);
+        // Axis0 should have Category A present
+        assert!(xml.contains("Category A"));
+    }
+
+    #[test]
+    fn collapse_kategori_a_removes_region_leaf_tuples_for_a() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        // Category A should NOT have North/South leaf tuples — those should be gone
+        assert!(xml.contains("Category B"));
+        assert!(xml.contains("Category C"));
+        assert!(xml.contains("Category D"));
+        // The count of tuples should match: 1(A+All) + 3*2(BCxDregion) = 7
+    }
+
+    #[test]
+    fn collapse_product_category_detected() {
+        let q = semantic_query_from_mdx(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownMemberProbe);
+        assert_eq!(q.drilldown_member_hierarchy.as_deref(), Some("ProductCategory"));
+        assert_eq!(q.excluded_members, vec!["Category D"]);
+    }
+
+    #[test]
+    fn collapse_product_category_keeps_d_visible_as_all() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        // Category D should appear as (All, Region) — All caption present
+        assert!(xml.contains("Category B"), "B should remain");
+        assert!(xml.contains("Category C"), "C should remain");
+    }
+
+    #[test]
+    fn collapse_product_category_removes_d_leaf_tuples() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        let all_count = xml.matches("All").count();
+        assert!(all_count >= 2, "Expected at least 2 All captions from collapsed tuples");
+    }
+
+    #[test]
+    fn collapse_region_all_member_on_axis0_has_properties() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        let all_block = member_block(&xml, "All");
+        assert!(all_block.contains("<HIERARCHY_UNIQUE_NAME>"),
+            "Axis0 All member must have HIERARCHY_UNIQUE_NAME");
     }
 }
