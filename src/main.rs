@@ -34,6 +34,7 @@ mod tmschema;
 mod cellset;
 mod rowset;
 mod backend;
+mod engine;
 
 use parser::{parse_xmla, XmlaRequest};
 

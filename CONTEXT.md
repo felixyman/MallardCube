@@ -7,9 +7,39 @@ Eventually: transpile MDX → Malloy → DuckDB.
 both together or independently, filter by either dimension, and add
 `Total Försäljning` to Values. All three cube dimensions (Measures,
 Produktkategori, Region) work correctly through the full metadata→probe→query
-cycle with real data from the SQLite backend. 43 unit tests.
+cycle with real data from the SQLite backend. 2-hierarchy collapse/expand
+via `DrilldownMember` is working. 62 unit tests.
 
 ## Recent fixes (2026-05-23)
+
+### `nom`-based MDX parser (mdx_parser.rs)
+- Added `nom = "7"` dependency and `src/mdx_parser.rs`.
+- Parses: member references (`MemberRef::All`, `Leaf`, `Measure`), `WHERE`
+  clauses, subquery `SELECT ({...})` filters, `DIMENSION PROPERTIES`,
+  `CELL PROPERTIES`, axis shape detection.
+- `src/mdx_semantic.rs` delegates property parsing, filter extraction, and
+  slicer parsing to `mdx_parser` functions.
+- Unit tests for parser in `mdx_parser.rs`.
+
+### DrilldownMember expand/collapse support
+- `SemanticQueryKind::DrilldownMemberProbe` added.
+- New `SemanticQuery` fields: `excluded_members: Vec<String>`,
+  `drilldown_member_hierarchy: Option<String>`.
+- `parse_excluded_members()` extracts excluded member keys from `{-{...}}`.
+- `parse_drilldown_member_hierarchy()` extracts the target hierarchy.
+- `build_drilldown_member()` in `execute_builders.rs` handles two collapse
+  forms:
+  - Collapse Region under Produktkategori: excluded category stays as
+    `(Kategori X, Region.All)` with category total.
+  - Collapse Produktkategori under Region: excluded category collapses to
+    `(Produktkategori.All, Region)` per region with pair value.
+
+### Collapsed All member Axis0 property fix
+- Collapsed `All` members on Axis0 were using `&[]` (5 standard props),
+  while `HierarchyInfo` declared full dim props, causing a "null value"
+  rowset error in Excel.
+- Both collapse branches now use `&query.dim_props` for collapsed `All`
+  members, matching the `HierarchyInfo` declarations.
 
 ### Two-visible-hierarchy CrossJoin support
 - Added `axis_dimensions: Vec<String>` to `SemanticQuery` — tracks all
@@ -99,16 +129,23 @@ xmla_proxy/src/
   sets.rs              — MDSCHEMA_SETS (empty)
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs
-  execute.rs           — Thin dispatch (42 lines) + 43 unit tests
+  execute.rs           — Thin dispatch (35 lines) + test module (62 tests)
   execute_builders.rs  — Cellset response builders; all build_* functions,
-                         full_slicer_axis, multi-hierarchy Axis0 builder
-  mdx_semantic.rs      — MDX parsing, extraction, semantic classification
-                         (SemanticQueryKind, SemanticQuery, DimensionFilter,
-                         SlicerSelection, parse_axis_dimensions)
+                         full_slicer_axis, multi-hierarchy Axis0, collapse
+  mdx_semantic.rs      — Semantic classification (SemanticQueryKind, SemanticQuery,
+                         DimensionFilter, SlicerSelection). Delegates parsing
+                         to mdx_parser. Still uses string heuristics for
+                         query-kind detection.
+  mdx_parser.rs        — nom-based MDX parser for the Excel MDX subset
+                         (member refs, WHERE, subquery, properties, axis shape)
   backend.rs           — SQLite backend (rusqlite): faktatabell with
                          produktkategori, region, sales; grouped/filtered queries
   cellset.rs           — Generic cellset XML builder (mddataset)
   rowset.rs            — Rowset infrastructure (currently unused)
+  engine/
+    mod.rs             — Module declaration
+    plan.rs            — ExecutionPlan, PlanResult, plan_from_semantic(),
+                         execute_plan() — backend-neutral plan layer
 ```
 
 ## What works
@@ -118,7 +155,10 @@ xmla_proxy/src/
 - Session management (BeginSession, EndSession, empty Execute).
 - `X-Transport-Caps-Negotiation-Flags: 0,0,0,0,0` header.
 - **Single-dimension drilldown**: `DrilldownLevel` for Produktkategori or Region.
-- **Two-dimension CrossJoin**: `Produktkategori` and `Region` both on Rows.
+- **Two-dimension CrossJoin**: `Produktkategori` and `Region` both on Rows
+  (`CrossJoin(DrilldownLevel(...), DrilldownLevel(...))`).
+- **Expand/collapse on 2-hierarchy axis**: `DrilldownMember(CrossJoin(...),
+  excluded_set, hierarchy)` — both collapse directions work.
 - **Cross-dimension filtering**:
   - Produktkategori on Rows + Region in Filter
   - Region on Rows + Produktkategori in Filter
@@ -128,26 +168,39 @@ xmla_proxy/src/
   `Measure.Children`, `cChildren + Ascendants(...)` for both dimensions.
 - Filter dropdown opens and changes with real data.
 - Debug logging to `debug-last-run.log` (resets each run).
-- `MDSCHEMA_MEMBERS` filter logic is dimension-agnostic (PARENT/ANCESTORS use actual parent names, not hardcoded Produktkategori All).
-- 43 unit tests in `execute.rs` (routing, parsing, classification, response shape, combined dimensions, multi-hierarchy).
+- `MDSCHEMA_MEMBERS` filter logic is dimension-agnostic (PARENT/ANCESTORS
+  use actual parent names, not hardcoded Produktkategori All).
+- 62 unit tests (routing, parsing, classification, response shape,
+  combined dimensions, multi-hierarchy, collapse semantics).
 
 ## What does not yet work
-- **Expand/collapse on 2-hierarchy axis**: Excel sends `DrilldownMember(CrossJoin(...), excluded_set, ...)` to collapse a category leaf. This query shape is not yet parsed or built.
-- Full N-way MDX generalization — parsing is still substring-driven for the observed Excel subset.
+- Query-kind classification in `mdx_semantic.rs:semantic_query_from_mdx()` is
+  still largely string-heuristic (`contains(...)` chains). The `nom` parser
+  exists but isn't yet used for query-kind detection.
+- Full N-way MDX generalization — parsing covers the observed Excel subset
+  but doesn't model the full MDX grammar.
+- `execute_builders.rs` still mixes axis/member shaping, plan execution,
+  and cellset rendering in one file (813 lines). Plan extraction is done,
+  but file splitting is pending.
+- No Malloy generation yet.
 
 ## Next workstreams
-1. **`nom`-based MDX parser.** Replace substring-driven parsing in
-   `mdx_semantic.rs` with a proper parser. Keep the same `SemanticQuery`
-   output type and existing 43 tests.
-2. **`DrilldownMember` expand/collapse support.** Once `nom` is in place,
-   add parsing and builder support for the collapse query shape Excel sends
-   when collapsing a leaf node on a 2-hierarchy axis.
-3. **ExecutionPlan layer.** Introduce a backend-neutral execution plan
-   between `SemanticQuery` and the builder/backend.
-4. **Malloy generation.** Generate Malloy from the execution plan.
-5. **DuckDB backend.** Swap out SQLite once Malloy is stable.
-6. **Vec<Row> refactor.** Apply the Rowset infrastructure to a simpler
-   rowset (e.g. KPIS, SETS — empty) first.
+1. **ExecutionPlan layer.** **DONE** — `engine/plan.rs` provides
+   `ExecutionPlan`, `PlanResult`, `plan_from_semantic()`, `execute_plan()`.
+   Builders now consume `PlanResult` instead of calling `Backend` directly.
+2. **Query-kind from parsed MDX.** Move classification from string heuristics
+   onto the parsed `ParsedMdx` struct so that new query shapes are added by
+   extending the parser, not by adding more `contains(...)` branches.
+3. **Split execute_builders.rs.** Separate:
+   - Axis/member shaping (dimension-property helpers, hierarchy/member builders)
+   - Plan-to-cellset building
+4. **File-structure reorg.** Group modules into subdirectories:
+   `xmla/`, `mdx/`, `engine/`, `builders/`, `metadata/`.
+5. **Malloy generation.** Generate Malloy from the execution plan.
+6. **DuckDB backend.** Swap out SQLite once Malloy is stable.
+7. **Remove stale code.** Remove unused helper functions (currently warning
+   about `empty_slicer_axis`, `slicer_axis_with_members`, etc.).
+
 
 ## Key lessons learned (additions since last update)
 
@@ -170,8 +223,17 @@ xmla_proxy/src/
     behind drilldown/axis checks, otherwise a drilldown query with
     `WHERE (All, Measure)` is misclassified as slicer-only.
 
-17. **`DrilldownMember(CrossJoin(...), excluded, hierarchy)` is the query
-    shape Excel uses for 2-hierarchy expand/collapse.** Not yet supported.
+17. **Collapsed All members on visible axes need full dim props.** When
+    `DrilldownMember` collapses a leaf and replaces it with an `All` member
+    on Axis0, that All member must carry the same property set that the
+    corresponding `HierarchyInfo` declares on Axis0. Using minimal
+    (SlicerAxis-style) properties causes a "null value" rowset-store error.
+
+18. **`DrilldownMember(CrossJoin(...), excluded_set, hierarchy)` is the
+    query shape Excel uses for 2-hierarchy expand/collapse.** Two collapse
+    forms observed:
+    - Collapse Region under Produktkategori → `(Kat, Region.All)` with cat total
+    - Collapse Produktkategori under Region → `(Prod.All, Region)` per region
 
 ## Hard-coded constants
 - Catalog name: `KTH_KEX_MALLOY_CUBE`
