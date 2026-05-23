@@ -27,6 +27,14 @@ const TABLE_ROWS: &str = r#"          <row>
             <TABLE_TYPE>TABLE</TABLE_TYPE>
             <TABLE_OLAP_TYPE>CUBE_DIMENSION</TABLE_OLAP_TYPE>
             <CUBE_NAME>Model</CUBE_NAME>
+          </row>
+          <row>
+            <TABLE_CATALOG>KTH_KEX_MALLOY_CUBE</TABLE_CATALOG>
+            <TABLE_SCHEMA>Model</TABLE_SCHEMA>
+            <TABLE_NAME>Region</TABLE_NAME>
+            <TABLE_TYPE>TABLE</TABLE_TYPE>
+            <TABLE_OLAP_TYPE>CUBE_DIMENSION</TABLE_OLAP_TYPE>
+            <CUBE_NAME>Model</CUBE_NAME>
           </row>"#;
 
 pub fn get_tables_response() -> String {

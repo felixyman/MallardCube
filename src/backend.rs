@@ -20,13 +20,18 @@ impl Backend {
         conn.execute_batch(
             "CREATE TABLE fact_table (
                  product_category TEXT NOT NULL,
+                 region TEXT NOT NULL,
                  sales REAL NOT NULL
              );
              INSERT INTO fact_table VALUES
-                 ('Category A', 300000.0),
-                 ('Category B', 250000.0),
-                 ('Category C', 400000.0),
-                 ('Category D', 300000.5);
+                 ('Category A', 'North', 100000.0),
+                 ('Category A', 'South', 200000.0),
+                 ('Category B', 'North', 150000.0),
+                 ('Category B', 'South', 100000.0),
+                 ('Category C', 'North', 200000.0),
+                 ('Category C', 'South', 200000.0),
+                 ('Category D', 'North', 200000.0),
+                 ('Category D', 'South', 100500.5);
              ",
         )?;
         Ok(Backend {
@@ -117,6 +122,75 @@ impl Backend {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT COUNT(DISTINCT product_category) FROM fact_table",
+            [],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap_or(0)
+    }
+
+    pub fn sales_by_region(&self) -> Vec<(String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT region, SUM(sales) FROM fact_table GROUP BY 1 ORDER BY 1")
+            .expect("prepare sales_by_region");
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .expect("query_map sales_by_region");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn sales_for_regions(&self, regions: &[String]) -> Vec<(String, f64)> {
+        if regions.is_empty() {
+            return self.sales_by_region();
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = (1..=regions.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT region, SUM(sales) FROM fact_table WHERE region IN ({}) GROUP BY 1 ORDER BY 1",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            regions.iter().map(|c| c as &dyn rusqlite::types::ToSql).collect();
+        let mut stmt = conn.prepare(&sql).expect("prepare sales_for_regions");
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .expect("query_map sales_for_regions");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn total_for_regions(&self, regions: &[String]) -> f64 {
+        if regions.is_empty() {
+            return self.total_sales();
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = (1..=regions.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT COALESCE(SUM(sales), 0) FROM fact_table WHERE region IN ({})",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            regions.iter().map(|c| c as &dyn rusqlite::types::ToSql).collect();
+        conn.query_row(&sql, params.as_slice(), |row| row.get::<_, f64>(0))
+            .unwrap_or(0.0)
+    }
+
+    pub fn region_names(&self) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT region FROM fact_table ORDER BY 1")
+            .expect("prepare region_names");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query_map region_names");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn region_count(&self) -> u32 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(DISTINCT region) FROM fact_table",
             [],
             |row| row.get::<_, u32>(0),
         )
