@@ -436,15 +436,16 @@ mod tests {
     }
 
     #[test]
-    fn crossjoin_probe_is_detected() {
+    fn crossjoin_drilldown_has_both_dimensions() {
         let q = semantic_query_from_mdx(MDX_CROSSJOIN_PROBE);
-        assert_eq!(q.kind, SemanticQueryKind::CrossJoinProbe);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories);
+        assert_eq!(q.axis_dimensions, vec!["ProductCategory", "Region"]);
     }
 
     #[test]
-    fn crossjoin_probe_keeps_product_category_on_axis0() {
+    fn crossjoin_response_has_kategori_a() {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
-        assert!(xml.contains("[ProductCategory].[ProductCategory]"));
         assert!(xml.contains("Category A"));
+        assert!(xml.contains("North"));
     }
 }
