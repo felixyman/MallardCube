@@ -367,9 +367,11 @@ fn region_filter(filters: &[DimensionFilter]) -> Vec<String> {
 
 fn fetch_grouped(row_dim: &str, filters: &[DimensionFilter]) -> Vec<(String, f64)> {
     let backend = Backend::get();
+    let kf = kat_filter(filters);
+    let rf = region_filter(filters);
     match row_dim {
-        "Region" => backend.grouped_by_region(&kat_filter(filters)),
-        _ => backend.grouped_by_produktkategori(&region_filter(filters)),
+        "Region" => backend.grouped_by_region(&rf, &kf),
+        _ => backend.grouped_by_produktkategori(&rf, &kf),
     }
 }
 
@@ -470,7 +472,9 @@ fn build_drilldown(query: &SemanticQuery) -> String {
 
 fn build_drilldown_multi(query: &SemanticQuery) -> String {
     let dims = &query.axis_dimensions;
-    let data = Backend::get().grouped_pairs();
+    let all_data = Backend::get().grouped_pairs();
+    let has_exclusions = !query.excluded_members.is_empty();
+
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     for dim in dims {
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
@@ -478,11 +482,89 @@ fn build_drilldown_multi(query: &SemanticQuery) -> String {
 
     let mut tuples: Vec<cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
-    for (i, (kat, region, value)) in data.iter().enumerate() {
+    let mut ordinal = 0u32;
+    for (kat, region, value) in &all_data {
+        if has_exclusions && query.excluded_members.contains(kat) {
+            continue;
+        }
         let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
         let region_member = leaf_member_for("Region", region, &query.dim_props);
         tuples.push(cellset::TupleConfig { members: vec![kat_member, region_member] });
-        cells.push(measurement_cell(i as u32, *value));
+        cells.push(measurement_cell(ordinal, *value));
+        ordinal += 1;
+    }
+
+    let axis = cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![axis, full_slicer_axis(query)],
+        cells,
+        &query.cell_props,
+    )
+}
+
+fn build_drilldown_member(query: &SemanticQuery) -> String {
+    let dims = &query.axis_dimensions;
+    let all_data = Backend::get().grouped_pairs();
+    let collapse_hier = query.drilldown_member_hierarchy.as_deref().unwrap_or("Region");
+
+    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
+    for dim in dims {
+        hierarchies.push(hierarchy_for(dim, &query.dim_props));
+    }
+
+    let mut tuples: Vec<cellset::TupleConfig> = Vec::new();
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+
+    let excluded_kats: std::collections::HashSet<&str> =
+        query.excluded_members.iter().map(|s| s.as_str()).collect();
+    let mut seen_kats: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut seen_regions: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for (kat, region, value) in &all_data {
+        let is_excluded = excluded_kats.contains(kat.as_str());
+
+        if collapse_hier == "Region" && is_excluded {
+            if !seen_kats.contains(kat.as_str()) {
+                let total = Backend::get().total_sales_for(kat);
+                tuples.push(cellset::TupleConfig {
+                    members: vec![
+                        leaf_member_for("Produktkategori", kat, &query.dim_props),
+                        all_member_for("Region", &query.dim_props),
+                    ],
+                });
+                cells.push(measurement_cell(ordinal, total));
+                ordinal += 1;
+                seen_kats.insert(kat);
+            }
+            continue;
+        }
+
+        if collapse_hier == "Produktkategori" && is_excluded {
+            if !seen_regions.contains(region.as_str()) {
+                tuples.push(cellset::TupleConfig {
+                    members: vec![
+                        all_member_for("Produktkategori", &query.dim_props),
+                        leaf_member_for("Region", region, &query.dim_props),
+                    ],
+                });
+                cells.push(measurement_cell(ordinal, *value));
+                ordinal += 1;
+                seen_regions.insert(region);
+            }
+            continue;
+        }
+
+        let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
+        let region_member = leaf_member_for("Region", region, &query.dim_props);
+        tuples.push(cellset::TupleConfig { members: vec![kat_member, region_member] });
+        cells.push(measurement_cell(ordinal, *value));
+        ordinal += 1;
     }
 
     let axis = cellset::AxisConfig {
@@ -654,6 +736,7 @@ pub fn execute_semantic_query(query: &SemanticQuery) -> String {
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query),
         SemanticQueryKind::SlicerOnly => build_slicer_only(query),
+        SemanticQueryKind::DrilldownMemberProbe => build_drilldown_member(query),
     }
 }
 

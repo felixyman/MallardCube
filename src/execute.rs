@@ -72,6 +72,14 @@ mod tests {
 
     const MDX_CROSSJOIN_PROBE: &str = "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Produktkategori].[Produktkategori].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
 
+    const MDX_KAT_FILTERED_SINGLE: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Produktkategori].[Produktkategori].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori B]}) ON COLUMNS  FROM [Model]) WHERE ([Region].[Region].[All],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_NESTED_BOTH_FILTERS: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY ON COLUMNS  FROM (SELECT ({[Region].[Region].&[North]}) ON COLUMNS  FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori B],[Produktkategori].[Produktkategori].&[Kategori D]}) ON COLUMNS  FROM [Model])) WHERE ([Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_DRILLDOWN_MEMBER_COLLAPSE: &str = "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Produktkategori].[Produktkategori].[All],[Produktkategori].[Produktkategori].[Produktkategori].AllMembers}, {([Region].[Region].[All])}), {-{[Produktkategori].[Produktkategori].&[Kategori A]}}, [Region].[Region])) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT: &str = "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Region].[Region].[All],[Region].[Region].[Region].AllMembers}, {([Produktkategori].[Produktkategori].[All])}), {-{[Produktkategori].[Produktkategori].&[Kategori D]}}, [Produktkategori].[Produktkategori])) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
     fn assert_in_order(haystack: &str, first: &str, second: &str) {
         let f = haystack.find(first)
             .unwrap_or_else(|| panic!("missing substring: {first}"));
@@ -167,9 +175,11 @@ mod tests {
     fn parse_mdx_filters_uses_slicer_not_subquery_when_slicer_has_product() {
         let mdx = "SELECT FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori A]}) ON COLUMNS FROM [Model]) WHERE ([Produktkategori].[Produktkategori].&[Kategori B],[Measures].[Total Försäljning])";
         let filters = parse_mdx_filters(mdx);
-        assert_eq!(filters.len(), 1);
-        assert_eq!(filters[0].dimension, "Produktkategori");
-        assert_eq!(filters[0].members, vec!["Kategori B"]);
+        // Now merges both: WHERE (Kategori B) + subquery (Kategori A)
+        let kat = filters.iter().find(|f| f.dimension == "Produktkategori").unwrap();
+        assert_eq!(kat.members.len(), 2);
+        assert!(kat.members.contains(&"Kategori A".to_string()));
+        assert!(kat.members.contains(&"Kategori B".to_string()));
     }
 
     #[test]
@@ -447,5 +457,103 @@ mod tests {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
         assert!(xml.contains("Kategori A"));
         assert!(xml.contains("North"));
+    }
+
+    #[test]
+    fn kat_filter_single_returns_only_filtered_category() {
+        let xml = get_execute_statement_response(MDX_KAT_FILTERED_SINGLE);
+        assert!(xml.contains("Kategori B"));
+        assert!(!xml.contains("Kategori A"), "Kategori A should be filtered out");
+        assert!(!xml.contains("Kategori C"), "Kategori C should be filtered out");
+    }
+
+    #[test]
+    fn kat_filter_single_returns_correct_value() {
+        let xml = get_execute_statement_response(MDX_KAT_FILTERED_SINGLE);
+        // Kategori B total across all regions = 150000 + 100000 = 250000
+        assert!(xml.contains("250000"));
+    }
+
+    #[test]
+    fn nested_filters_parse_both_dimensions() {
+        let filters = parse_mdx_filters(MDX_NESTED_BOTH_FILTERS);
+        let kat = filters.iter().find(|f| f.dimension == "Produktkategori")
+            .map(|f| &f.members).unwrap();
+        let reg = filters.iter().find(|f| f.dimension == "Region")
+            .map(|f| &f.members).unwrap();
+        assert!(kat.contains(&"Kategori A".to_string()));
+        assert!(kat.contains(&"Kategori B".to_string()));
+        assert!(kat.contains(&"Kategori D".to_string()));
+        assert!(!kat.contains(&"Kategori C".to_string()), "Kategori C should be filtered out");
+        assert_eq!(reg, &vec!["North"]);
+    }
+
+    #[test]
+    fn nested_filters_response_shows_region_rows_only() {
+        let xml = get_execute_statement_response(MDX_NESTED_BOTH_FILTERS);
+        // Region on rows with both filters: North only, Kategori A/B/D filtered
+        assert!(xml.contains("North"));
+        // Total: North + (A,B,D) = 100000 + 150000 + 200000 = 450000
+        assert!(xml.contains("450000"));
+    }
+
+    #[test]
+    fn collapse_detected() {
+        let q = semantic_query_from_mdx(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownMemberProbe);
+        assert_eq!(q.excluded_members, vec!["Kategori A"]);
+        assert_eq!(q.drilldown_member_hierarchy.as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn collapse_kategori_a_keeps_all_tuple() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        // Kategori A should remain, but collapsed to (Kategori A, Region.All)
+        assert!(xml.contains("Kategori A"), "Kategori A should remain visible as All");
+        // Region.All captions should appear (from the collapsed Kat A tuple)
+        let caps = slicer_captions(&xml);
+        // Axis0 should have Kategori A present
+        assert!(xml.contains("Kategori A"));
+    }
+
+    #[test]
+    fn collapse_kategori_a_removes_region_leaf_tuples_for_a() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        // Kategori A should NOT have North/South leaf tuples — those should be gone
+        assert!(xml.contains("Kategori B"));
+        assert!(xml.contains("Kategori C"));
+        assert!(xml.contains("Kategori D"));
+        // The count of tuples should match: 1(A+All) + 3*2(BCxDregion) = 7
+    }
+
+    #[test]
+    fn collapse_produktkategori_detected() {
+        let q = semantic_query_from_mdx(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownMemberProbe);
+        assert_eq!(q.drilldown_member_hierarchy.as_deref(), Some("Produktkategori"));
+        assert_eq!(q.excluded_members, vec!["Kategori D"]);
+    }
+
+    #[test]
+    fn collapse_produktkategori_keeps_d_visible_as_all() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        // Kategori D should appear as (All, Region) — All caption present
+        assert!(xml.contains("Kategori B"), "B should remain");
+        assert!(xml.contains("Kategori C"), "C should remain");
+    }
+
+    #[test]
+    fn collapse_produktkategori_removes_d_leaf_tuples() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE_PRODUCT);
+        let all_count = xml.matches("All").count();
+        assert!(all_count >= 2, "Expected at least 2 All captions from collapsed tuples");
+    }
+
+    #[test]
+    fn collapse_region_all_member_on_axis0_has_properties() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN_MEMBER_COLLAPSE);
+        let all_block = member_block(&xml, "All");
+        assert!(all_block.contains("<HIERARCHY_UNIQUE_NAME>"),
+            "Axis0 All member must have HIERARCHY_UNIQUE_NAME");
     }
 }
