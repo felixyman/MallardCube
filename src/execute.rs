@@ -70,6 +70,8 @@ mod tests {
 
     const MDX_KAT_ROWS_REGION_ALL: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[ProductCategory].[ProductCategory].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Region].[Region].[All],[Measures].[Total Sales]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
 
+    const MDX_CROSSJOIN_PROBE: &str = "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[ProductCategory].[ProductCategory].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Region].[Region].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_CAPTION,[Region].[Region].[Region]MEMBER_NAME,[Region].[Region].[Region]MEMBER_UNIQUE_NAME,[Region].[Region].[Region]MEMBER_KEY,[Region].[Region].[Region]MEMBER_TYPE,[Region].[Region].[Region]MEMBER_VALUE,[Region].[Region].[Region]LEVEL_NUMBER,[Region].[Region].[Region]LEVEL_UNIQUE_NAME,[Region].[Region].[Region]PARENT_LEVEL,[Region].[Region].[Region]PARENT_UNIQUE_NAME,[Region].[Region].[Region]PARENT_COUNT,[Region].[Region].[Region]CHILDREN_CARDINALITY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_CAPTION,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_KEY,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_TYPE,[ProductCategory].[ProductCategory].[ProductCategory]MEMBER_VALUE,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_NUMBER,[ProductCategory].[ProductCategory].[ProductCategory]LEVEL_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_LEVEL,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_UNIQUE_NAME,[ProductCategory].[ProductCategory].[ProductCategory]PARENT_COUNT,[ProductCategory].[ProductCategory].[ProductCategory]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
     fn assert_in_order(haystack: &str, first: &str, second: &str) {
         let f = haystack.find(first)
             .unwrap_or_else(|| panic!("missing substring: {first}"));
@@ -431,5 +433,18 @@ mod tests {
         let xml = get_execute_statement_response(MDX_KAT_ROWS_REGION_ALL);
         assert!(xml.contains("Axis0"), "response must have Axis0 with ProductCategory members");
         assert!(xml.contains("[ProductCategory].[ProductCategory]"));
+    }
+
+    #[test]
+    fn crossjoin_probe_is_detected() {
+        let q = semantic_query_from_mdx(MDX_CROSSJOIN_PROBE);
+        assert_eq!(q.kind, SemanticQueryKind::CrossJoinProbe);
+    }
+
+    #[test]
+    fn crossjoin_probe_keeps_product_category_on_axis0() {
+        let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
+        assert!(xml.contains("[ProductCategory].[ProductCategory]"));
+        assert!(xml.contains("Category A"));
     }
 }
