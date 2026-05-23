@@ -24,12 +24,20 @@ via `DrilldownMember` is working. 62 unit tests.
 - `detect_cchildren_target()` and `detect_calculated_members_pat()` in
   mdx_parser.rs detect probe sub-types structurally.
 
-### ExecutionPlan layer
-- `engine/plan.rs`: `ExecutionPlan` (6 variants), `PlanResult` (6 variants),
+### Malloy-ready QueryPlan
+- Renamed `ExecutionPlan` → `QueryPlan`. Simplified to 4 variants:
+  `Total`, `GroupBy(dims, filters)`, `Count`, `Empty`.
+- `QueryResult` mirrors the plan: `Scalar`, `Grouped`, `Pairs`, `Count`, `Empty`.
+- Collapse logic moved out of the plan executor into the collapse builder
+  (calls `Backend::total_sales_for()` directly for per-excluded totals).
+- `GroupBy(2 dims)` is directly translatable to Malloy:
+  `group_by: dim1, dim2 aggregate: total_sales`.
+
+### QueryPlan layer
+- `engine/plan.rs`: `QueryPlan` (4 variants), `QueryResult` (5 variants),
   `plan_from_semantic()`, `execute_plan()`.
-- `execute_builders.rs` builders consume `&PlanResult` instead of calling
-  `Backend` directly. Removed `fetch_grouped`, `fetch_total_with_filters`,
-  `dimension_count`, `kat_filter`, `region_filter` helper functions.
+- `execute_builders.rs` builders consume `&QueryResult` instead of calling
+  `Backend` directly.
 
 ### `nom`-based MDX parser (mdx_parser.rs)
 - Added `nom = "7"` dependency and `src/mdx_parser.rs`.
@@ -164,8 +172,8 @@ xmla_proxy/src/
   rowset.rs            — Rowset infrastructure (currently unused)
   engine/
     mod.rs             — Module declaration
-    plan.rs            — ExecutionPlan, PlanResult, plan_from_semantic(),
-                         execute_plan() — backend-neutral plan layer
+    plan.rs            — QueryPlan, QueryResult, plan_from_semantic(),
+                         execute_plan() — Malloy-ready query IR
 ```
 
 ## What works
@@ -200,9 +208,8 @@ xmla_proxy/src/
 - Some unused helper functions remain (`empty_slicer_axis`, `slicer_axis_with_members`).
 
 ## Next workstreams
-1. **ExecutionPlan layer.** **DONE** — `engine/plan.rs` provides
-   `ExecutionPlan`, `PlanResult`, `plan_from_semantic()`, `execute_plan()`.
-   Builders now consume `PlanResult` instead of calling `Backend` directly.
+1. **ExecutionPlan layer.** **DONE** — renamed to `QueryPlan` (4 variants),
+   Malloy-ready. Builders consume `QueryResult`.
 2. **Query-kind from parsed MDX.** **DONE** — `ParsedMdx` now carries
    `CChildrenTarget`, `CalculatedMembersPat`, `has_drilldown_member`,
    `has_measures`. `semantic_query_from_mdx()` classifies from these fields.
@@ -210,9 +217,10 @@ xmla_proxy/src/
 3. **Split execute_builders.rs.** **DONE** — split into:
    - `axis_members.rs` (member/cell/axis/slicer helpers)
    - `execute_builders.rs` (build_* functions + flat-rowset fallback)
-4. **File-structure reorg.** Group modules into subdirectories:
-   `xmla/`, `mdx/`, `engine/`, `builders/`, `metadata/`.
-5. **Malloy generation.** Generate Malloy from the execution plan.
+4. **Malloy generation.** Generate Malloy from `QueryPlan`. Start with:
+   `Total`, `GroupBy(1)`, `GroupBy(2)`.
+5. **File-structure reorg.** Group modules into subdirectories:
+   `mdx/`, `engine/`, `builders/`, `metadata/`.
 6. **DuckDB backend.** Swap out SQLite once Malloy is stable.
 7. **Remove stale code.** Remove unused helper functions (currently warning
    about `empty_slicer_axis`, `slicer_axis_with_members`, etc.).

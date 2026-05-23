@@ -1,61 +1,53 @@
-/// Backend-neutral execution plan.
+/// Backend-neutral query plan.
 ///
 /// Describes what to compute, not how to format the XML response.
 /// Produced from a `SemanticQuery` and consumed by the cellset
 /// builders via `execute_plan`.
+///
+/// Designed to be translatable to both SQL (current) and Malloy (future).
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::Backend;
 
 // ---------------------------------------------------------------------------
-// Plan types
+// Query plan
 // ---------------------------------------------------------------------------
 
+/// A backend-neutral description of what data to fetch.
+///
+/// Variants:
+/// - `Total`      — single scalar (aggregate over all rows).
+/// - `GroupBy`    — grouping by 1 or more dimensions. Returns one row per group.
+/// - `Count`      — distinct-member count for one dimension.
+/// - `Empty`      — no data needed (empty result sets, some probes).
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionPlan {
-    /// Fetch a single scalar value.
+pub enum QueryPlan {
     Total {
         filters: Vec<DimensionFilter>,
     },
 
-    /// Fetch data grouped by one dimension.
-    GroupByOneDim {
-        dim: String,
+    GroupBy {
+        /// Dimensions to group by, in order (1 for single-dim, 2 for cross-join).
+        dims: Vec<String>,
         filters: Vec<DimensionFilter>,
     },
 
-    /// Fetch all cross-product pairs (no collapse).
-    GroupByTwoDims,
-
-    /// Fetch pairs with some dimension-members collapsed.
-    GroupByTwoDimsCollapse {
-        excluded_members: Vec<String>,
-        collapse_hierarchy: String,
-        filters: Vec<DimensionFilter>,
-    },
-
-    /// Count distinct members in a dimension.
-    DimensionCount {
+    Count {
         dim: String,
     },
 
-    /// No backend data needed.
     Empty,
 }
 
 // ---------------------------------------------------------------------------
-// Plan result types
+// Query result
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub enum PlanResult {
+pub enum QueryResult {
     Scalar(f64),
     Grouped(Vec<(String, f64)>),
-    Paired(Vec<(String, String, f64)>),
-    PairedCollapsed {
-        pairs: Vec<(String, String, f64)>,
-        total_per_excluded: Vec<(String, f64)>,
-    },
+    Pairs(Vec<(String, String, f64)>),
     Count(u32),
     Empty,
 }
@@ -79,7 +71,7 @@ fn region_filter(filters: &[DimensionFilter]) -> Vec<String> {
     filters_for_dim(filters, "Region")
 }
 
-pub fn plan_from_semantic(query: &SemanticQuery) -> ExecutionPlan {
+pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
     let dim = query.axis_dimensions.first()
         .map(|s| s.as_str())
         .unwrap_or("Produktkategori");
@@ -87,47 +79,39 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> ExecutionPlan {
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll
         | SemanticQueryKind::ChildrenCountLeafProduct => {
-            ExecutionPlan::DimensionCount { dim: dim.to_string() }
+            QueryPlan::Count { dim: dim.to_string() }
         }
 
         SemanticQueryKind::ChildrenCountMeasures
         | SemanticQueryKind::MeasureChildrenEmpty
         | SemanticQueryKind::LeafChildrenEmpty => {
-            ExecutionPlan::Empty
+            QueryPlan::Empty
         }
 
         SemanticQueryKind::SlicerAllAndMeasure
         | SemanticQueryKind::SlicerOnly => {
-            ExecutionPlan::Total {
+            QueryPlan::Total {
                 filters: query.filters.clone(),
             }
         }
 
         SemanticQueryKind::DrilldownCategories
         | SemanticQueryKind::LeafLevelMembers
-        | SemanticQueryKind::MeasureByCategory => {
-            if query.axis_dimensions.len() >= 2 {
-                ExecutionPlan::GroupByTwoDims
+        | SemanticQueryKind::MeasureByCategory
+        | SemanticQueryKind::DrilldownMemberProbe => {
+            let dims = if query.axis_dimensions.len() >= 2 {
+                query.axis_dimensions.clone()
             } else {
-                ExecutionPlan::GroupByOneDim {
-                    dim: dim.to_string(),
-                    filters: query.filters.clone(),
-                }
-            }
-        }
-
-        SemanticQueryKind::DrilldownMemberProbe => {
-            ExecutionPlan::GroupByTwoDimsCollapse {
-                excluded_members: query.excluded_members.clone(),
-                collapse_hierarchy: query.drilldown_member_hierarchy
-                    .clone()
-                    .unwrap_or_else(|| "Region".into()),
+                vec![dim.to_string()]
+            };
+            QueryPlan::GroupBy {
+                dims,
                 filters: query.filters.clone(),
             }
         }
 
         SemanticQueryKind::AllLevelMembers => {
-            ExecutionPlan::Total { filters: vec![] }
+            QueryPlan::Total { filters: vec![] }
         }
     }
 }
@@ -136,67 +120,42 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> ExecutionPlan {
 // Plan execution — calls Backend
 // ---------------------------------------------------------------------------
 
-pub fn execute_plan(plan: &ExecutionPlan) -> PlanResult {
+pub fn execute_plan(plan: &QueryPlan) -> QueryResult {
     match plan {
-        ExecutionPlan::Total { filters } => {
+        QueryPlan::Total { filters } => {
             let total = Backend::get().total_with_filters(
                 &region_filter(filters),
                 &kat_filter(filters),
             );
-            PlanResult::Scalar(total)
+            QueryResult::Scalar(total)
         }
 
-        ExecutionPlan::GroupByOneDim { dim, filters } => {
+        QueryPlan::GroupBy { dims, filters } => {
             let backend = Backend::get();
             let kf = kat_filter(filters);
             let rf = region_filter(filters);
-            let rows: Vec<(String, f64)> = match dim.as_str() {
-                "Region" => backend.grouped_by_region(&rf, &kf),
-                _ => backend.grouped_by_produktkategori(&rf, &kf),
-            };
-            PlanResult::Grouped(rows)
-        }
 
-        ExecutionPlan::GroupByTwoDims => {
-            let pairs = Backend::get().grouped_pairs();
-            PlanResult::Paired(pairs)
-        }
-
-        ExecutionPlan::GroupByTwoDimsCollapse {
-            excluded_members,
-            collapse_hierarchy,
-            filters: _filters,
-        } => {
-            let pairs = Backend::get().grouped_pairs();
-            let mut total_per_excluded: Vec<(String, f64)> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for ex in excluded_members {
-                if seen.insert(ex.clone()) {
-                    let total = match collapse_hierarchy.as_str() {
-                        "Region" => Backend::get().total_sales_for(ex),
-                        _ => {
-                            // For Produktkategori collapse, no per-member total needed;
-                            // the pair value itself is used.
-                            0.0
-                        }
-                    };
-                    total_per_excluded.push((ex.clone(), total));
-                }
-            }
-            PlanResult::PairedCollapsed {
-                pairs,
-                total_per_excluded,
+            if dims.len() >= 2 {
+                let pairs = backend.grouped_pairs();
+                QueryResult::Pairs(pairs)
+            } else {
+                let dim = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
+                let rows: Vec<(String, f64)> = match dim {
+                    "Region" => backend.grouped_by_region(&rf, &kf),
+                    _ => backend.grouped_by_produktkategori(&rf, &kf),
+                };
+                QueryResult::Grouped(rows)
             }
         }
 
-        ExecutionPlan::DimensionCount { dim } => {
+        QueryPlan::Count { dim } => {
             let count = match dim.as_str() {
                 "Region" => Backend::get().region_count(),
                 _ => Backend::get().category_count(),
             };
-            PlanResult::Count(count)
+            QueryResult::Count(count)
         }
 
-        ExecutionPlan::Empty => PlanResult::Empty,
+        QueryPlan::Empty => QueryResult::Empty,
     }
 }
