@@ -3,11 +3,40 @@
 ## Goal
 Rust proxy that impersonates an SSAS server to satisfy Excel's MSOLAP client.
 Eventually: transpile MDX → Malloy → DuckDB.
-**Current status:** Excel renders the PivotTable Fields panel correctly, can drag
-`Produktkategori` to Rows and Filters, and no longer crashes when opening the
-filter dropdown. The proxy now survives Excel's `MDSCHEMA_MEMBERS` and MDX
-probe/query cycle. Remaining limitation: `Execute` still returns hard-coded
-values, so changing the filter does not yet change the data.
+**Current status:** Excel renders the PivotTable Fields panel, can drag
+`Produktkategori` to Rows and Filters, the filter dropdown works, and changing
+the selected filter category now returns correct real-data values. The proxy
+survives the full metadata→probe→query cycle without errors, including the
+previously-crashing `cChildren + Ascendants(...)` leaf-member probe.
+
+## Recent fixes (most recent first)
+### `cChildren + Ascendants(...)` leaf probe works (2026-05-23)
+- Removed `PARENT_UNIQUE_NAME` from `produktkategori_dim_props_all()` —
+  the All member must omit this property entirely even when declared in
+  HierarchyInfo (matches real SSAS behavior).
+- Fixed `cchildren_target_is_measures()`, `cchildren_target_is_product_leaf()`,
+  and `cchildren_filtered_member_name()` — the `FilteredMembers As '...'`
+  parser was finding the opening quote instead of the closing quote, so
+  leaf probes were misclassified or returned empty member names.
+- Fixed `is_mdx_select()` — `WITH MEMBER ...` MDX fell through to the
+  flat rowset path because `is_mdx_select` only checked for `SELECT` prefix.
+  Now also matches `WITH ... SELECT ...` patterns.
+- 23 unit tests added in `execute.rs` covering: routing, parsing
+  (dimension props, cell props, filters, cChildren helpers), semantic
+  classification (all known probe families), and response-shape assertions
+  for the fragile `cChildren + Ascendants` probe.
+
+### Real data backend (2026-05-23)
+- `src/backend.rs` with in-memory SQLite (`rusqlite`): table `faktatabell`
+  with `produktkategori` + `sales`, demo rows for Kategori A/B/C/D.
+- `Execute` now uses `Backend` for totals and grouped values instead of
+  hard-coded `1250000.5`.
+
+### Known limitation
+- `parse_category_filter` matches `[Produktkategori]` anywhere in the MDX
+  string (not just the WHERE clause), so multi-category subquery filter
+  extraction only captures the first category. Not yet blocking Excel
+  functionality but needs fixing before full multi-filter support.
 
 ## Project structure
 ```
@@ -39,14 +68,15 @@ xmla_proxy/src/
   sets.rs              — MDSCHEMA_SETS (empty)
   kpis.rs              — MDSCHEMA_KPIS (empty)
   tmschema.rs          — TMSCHEMA_* stubs (advertised but Excel does not query them)
-  execute.rs           — ExecuteResponse: MDX SELECT (flat rowset) + DAX EVALUATE +
-                         cellset (mddataset) for drilldown / slicer-only / member probe
-                         queries. Currently pattern-matched on Excel MDX strings; next
-                         step is a semantic query layer for those patterns.
-  cellset.rs           — Generic cellset XML builder (types: MemberConfig, TupleConfig,
+  execute.rs           — Dispatch + semantic query layer (SemanticQueryKind,
+                         SemanticQuery) + MDX parsing/extraction helpers +
+                         cellset response builders. 23 unit tests.
+  backend.rs           — SQLite demo backend (rusqlite): faktatabell schema,
+                         category sales data, filtered totals.
+  cellset.rs           — Generic cellset XML builder (MemberConfig, TupleConfig,
                          HierarchyConfig, AxisConfig, CellConfig, CellsetResponse).
-                         Supports multi-member tuples on one axis and conditional cell
-                         property emission.
+                         Supports multi-member tuples, multi-hierarchy axes, and
+                         conditional cell property emission.
   rowset.rs            — Typed rowset infrastructure (Row, ColumnDef, Rowset).
                          Built for Vec<Row> refactor; currently unused (members.rs
                          reverted to static XML because serializer format triggers
@@ -72,25 +102,41 @@ BeginSession, ExecuteEmpty, ExecuteStatement(String), Unknown.
   and `Produktkategori` table + `Produktkategori` hierarchy.
 - Session management (BeginSession, EndSession, empty Execute).
 - `X-Transport-Caps-Negotiation-Flags: 0,0,0,0,0` header.
-- MDX `SELECT ... FROM [Model]` flat rowset returns a minimal result.
+- MDX `SELECT ... FROM [Model]` flat rowset returns a real total.
 - DAX `EVALUATE` falls through to a placeholder single-row response.
-- **Cellset (mddataset) responses** for multidimensional MDX queries with
-  DIMENSION PROPERTIES / CELL PROPERTIES. Excel renders member labels in
-  the pivot and now survives filter-tree probe queries (`Level.Members`,
-  `Member.Children`, `Ascendants(...)`, slicer-only `WHERE (...)`).
+- **Cellset (mddataset) responses** for all observed Excel MDX probe families:
+  `All.Members`, `All.Children`, `Level.Children`, `Leaf.Children`,
+  `Measure.Children`, `DrilldownLevel`, `cChildren + Ascendants(...)`,
+  slicer-only `WHERE (...)`, and `WHERE (All, Measure)`.
+- Filter dropdown opens and changing the selected category updates the
+  pivot with real data from the SQLite backend.
 - Request logging: every Discover prints the `<RestrictionList>` and `<PropertyList>`
   inner XML to stdout.
-- `MDSCHEMA_MEMBERS` now follows the spec column order and no longer crashes Excel
+- `MDSCHEMA_MEMBERS` follows the spec column order and no longer crashes Excel
   when the filter dropdown is opened.
+- 23 unit tests in `execute.rs` (routing, parsing, classification, response shape).
 
 ## Current blocker
-**Real data execution is not implemented.** The XMLA/protocol side is now far enough
-for Excel to browse, drag, and issue MDX probe queries, but `Execute` still returns
-hard-coded values and hard-coded member lists. Report filters therefore do not yet
-change the data. The next architectural step is to replace ad hoc MDX string
-branching with a semantic query model for the Excel MDX subset.
+**None.** The XMLA/protocol side and the filter/pivot cycle are now working
+end-to-end with real data. The next step is structural cleanup before adding
+new features.
 
-## Observed Excel session pattern (current trace)
+## Next candidate workstreams
+1. **Module split.** `execute.rs` (770 lines) does 4 jobs: dispatch, MDX
+   parsing/extraction, semantic classification, and cellset construction.
+   Split into `mdx_semantic.rs` (parsing + classification) and
+   `execute_builders.rs` (cellset builders), keeping `execute.rs` for
+   dispatch only.
+2. **`nom`-based MDX parser.** Replace substring-driven parsing inside
+   `semantic_query_from_mdx()` with a proper parser. Keep the same
+   `SemanticQuery` output type and the same 23 tests to prevent regressions.
+3. **Malloy generation.** Generate Malloy from the semantic query model
+   rather than from raw MDX strings.
+4. **DuckDB backend.** Swap out the SQLite demo backend once Malloy
+   generation is stable.
+5. **Vec<Row> refactor — next safe module.** The Rowset infrastructure exists
+   and compiles. Apply it to a simpler rowset (e.g. KPIS, SETS — empty
+   rowsets) first to validate the serializer incrementally.
 ```
 Session 1 (probe):
   DISCOVER_PROPERTIES(filtered) ×3
