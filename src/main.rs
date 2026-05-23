@@ -25,6 +25,8 @@ mod kpis;
 mod measure_groups;
 mod measuregroup_dimensions;
 mod execute;
+mod execute_builders;
+mod mdx_semantic;
 mod tmschema;
 mod cellset;
 mod rowset;
