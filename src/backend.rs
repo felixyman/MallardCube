@@ -196,4 +196,88 @@ impl Backend {
         )
         .unwrap_or(0)
     }
+
+    pub fn grouped_by_produktkategori(&self, region_filter: &[String]) -> Vec<(String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        if region_filter.is_empty() {
+            let mut stmt = conn
+                .prepare("SELECT produktkategori, SUM(sales) FROM faktatabell GROUP BY 1 ORDER BY 1")
+                .expect("prepare grouped_by_produktkategori");
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+                .expect("query_map grouped_by_produktkategori");
+            return rows.filter_map(|r| r.ok()).collect();
+        }
+        let placeholders: Vec<String> = (1..=region_filter.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT produktkategori, SUM(sales) FROM faktatabell WHERE region IN ({}) GROUP BY 1 ORDER BY 1",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            region_filter.iter().map(|r| r as &dyn rusqlite::types::ToSql).collect();
+        let mut stmt = conn.prepare(&sql).expect("prepare grouped_by_produktkategori filtered");
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .expect("query_map grouped_by_produktkategori filtered");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn grouped_by_region(&self, kat_filter: &[String]) -> Vec<(String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        if kat_filter.is_empty() {
+            let mut stmt = conn
+                .prepare("SELECT region, SUM(sales) FROM faktatabell GROUP BY 1 ORDER BY 1")
+                .expect("prepare grouped_by_region");
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+                .expect("query_map grouped_by_region");
+            return rows.filter_map(|r| r.ok()).collect();
+        }
+        let placeholders: Vec<String> = (1..=kat_filter.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT region, SUM(sales) FROM faktatabell WHERE produktkategori IN ({}) GROUP BY 1 ORDER BY 1",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            kat_filter.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
+        let mut stmt = conn.prepare(&sql).expect("prepare grouped_by_region filtered");
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .expect("query_map grouped_by_region filtered");
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn total_with_filters(&self, region_filter: &[String], kat_filter: &[String]) -> f64 {
+        let conn = self.conn.lock().unwrap();
+        let mut conditions = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut idx = 1;
+        if !region_filter.is_empty() {
+            let ph: Vec<String> = (idx..idx + region_filter.len()).map(|i| format!("?{}", i)).collect();
+            conditions.push(format!("region IN ({})", ph.join(",")));
+            for r in region_filter {
+                params.push(Box::new(r.clone()));
+            }
+            idx += region_filter.len();
+        }
+        if !kat_filter.is_empty() {
+            let ph: Vec<String> = (idx..idx + kat_filter.len()).map(|i| format!("?{}", i)).collect();
+            conditions.push(format!("produktkategori IN ({})", ph.join(",")));
+            for k in kat_filter {
+                params.push(Box::new(k.clone()));
+            }
+        }
+        let sql = if conditions.is_empty() {
+            "SELECT COALESCE(SUM(sales), 0) FROM faktatabell".to_string()
+        } else {
+            format!("SELECT COALESCE(SUM(sales), 0) FROM faktatabell WHERE {}", conditions.join(" AND "))
+        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        conn.query_row(&sql, param_refs.as_slice(), |row| row.get::<_, f64>(0))
+            .unwrap_or(0.0)
+    }
 }

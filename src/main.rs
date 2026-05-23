@@ -5,6 +5,8 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
+use std::sync::Mutex;
+use std::io::Write;
 
 mod parser;
 mod response;
@@ -34,8 +36,32 @@ mod backend;
 
 use parser::{parse_xmla, XmlaRequest};
 
+// --- debug file logging ---
+
+static DEBUG_LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+fn init_debug_log() {
+    let file = std::fs::File::create("debug-last-run.log")
+        .expect("failed to create debug-last-run.log");
+    *DEBUG_LOG.lock().unwrap() = Some(file);
+}
+
+fn debug_write(text: &str) {
+    if let Ok(mut guard) = DEBUG_LOG.lock() {
+        if let Some(ref mut file) = *guard {
+            let _ = writeln!(file, "{}", text);
+            let _ = file.flush();
+        }
+    }
+}
+
+// --- main ---
+
 #[tokio::main]
 async fn main() {
+    init_debug_log();
+    debug_write("===== SSAS-PROXY DEBUG LOG =====");
+
     let app = Router::new().route("/xmla", post(handle_xmla));
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     println!("🚀 Rust-XMLA Proxy (v3 - ModuleRefactor) snurrar på http://{}", addr);
@@ -145,7 +171,14 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         }
         XmlaRequest::ExecuteStatement(mdx) => {
             println!("📥 MDX Statement: {}", mdx);
-            execute::get_execute_statement_response(&mdx)
+            debug_write(&format!("===== EXECUTE REQUEST ====="));
+            debug_write(&format!("MDX: {}", mdx));
+            debug_write("REQUEST XML:");
+            debug_write(&body);
+            let resp = execute::get_execute_statement_response(&mdx);
+            debug_write("RESPONSE XML:");
+            debug_write(&resp);
+            resp
         }
         XmlaRequest::MdschemaProperties { property_type } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
@@ -153,7 +186,12 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         }
         XmlaRequest::MdschemaMembers { member_unique_name, tree_op } => {
             println!("📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})", member_unique_name, tree_op);
-            members::get_members_response(member_unique_name.as_deref(), tree_op)
+            debug_write(&format!("===== MDSCHEMA_MEMBERS REQUEST ====="));
+            debug_write(&format!("filter_member: {:?}, tree_op: {:?}", member_unique_name, tree_op));
+            let resp = members::get_members_response(member_unique_name.as_deref(), tree_op);
+            debug_write("RESPONSE XML:");
+            debug_write(&resp);
+            resp
         }
         XmlaRequest::DiscoverLiterals => {
             println!("📥 DISCOVER_LITERALS");

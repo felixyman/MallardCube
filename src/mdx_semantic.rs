@@ -156,16 +156,45 @@ fn extract_dimension_member_names(slice: &str, dim_pattern: &str) -> Vec<String>
     names
 }
 
-pub fn parse_mdx_filters(mdx: &str) -> Vec<String> {
+/// Dimension-tagged filter members.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionFilter {
+    pub dimension: String,
+    pub members: Vec<String>,
+}
+
+/// Off-axis dimension appearing in the WHERE clause.
+/// Carries the dimension and whether `[All]` was selected.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlicerSelection {
+    pub dimension: String,
+    pub is_all: bool,
+}
+
+fn dimension_key_for_hier(hier: &str) -> &str {
+    match hier {
+        "[Region].[Region]" => "Region",
+        _ => "Produktkategori",
+    }
+}
+
+pub fn parse_mdx_filters(mdx: &str) -> Vec<DimensionFilter> {
+    let visible_dims: &[&str] = &[PRODUKTKATEGORI_HIER, REGION_HIER];
+
+    // 1. Check WHERE clause for dimension-tagged filters
     if let Some(where_payload) = where_clause_payload(mdx) {
-        for dim in [PRODUKTKATEGORI_HIER, REGION_HIER] {
+        for dim in visible_dims {
             let names = extract_dimension_member_names(where_payload, dim);
             if !names.is_empty() {
-                return names;
+                return vec![DimensionFilter {
+                    dimension: dimension_key_for_hier(dim).to_string(),
+                    members: names,
+                }];
             }
         }
     }
 
+    // 2. Check subquery SELECT ({...}) for filters
     let sub_start = match mdx.find("SELECT ({") {
         Some(p) => p,
         None => return vec![],
@@ -176,13 +205,57 @@ pub fn parse_mdx_filters(mdx: &str) -> Vec<String> {
         None => return vec![],
     };
     let members_str = &sub_rest["SELECT ({".len()..sub_end];
-    for dim in [PRODUKTKATEGORI_HIER, REGION_HIER] {
+    for dim in visible_dims {
         let names = extract_dimension_member_names(members_str, dim);
         if !names.is_empty() {
-            return names;
+            return vec![DimensionFilter {
+                dimension: dimension_key_for_hier(dim).to_string(),
+                members: names,
+            }];
         }
     }
     vec![]
+}
+
+/// Detect dimensions referenced in the WHERE clause with their `[All]` member.
+/// These are off-axis slicer dimensions that must appear on SlicerAxis.
+pub fn parse_slicer_dimensions(mdx: &str) -> Vec<SlicerSelection> {
+    let mut result = Vec::new();
+    let where_payload = match where_clause_payload(mdx) {
+        Some(p) => p,
+        None => return result,
+    };
+
+    for (hier, dim_key) in [
+        (PRODUKTKATEGORI_HIER, "Produktkategori"),
+        (REGION_HIER, "Region"),
+    ] {
+        let pattern = format!("{}.", hier);
+        if where_payload.contains(&pattern) {
+            let is_all = where_payload.contains(&format!("{}.[All]", hier));
+            result.push(SlicerSelection {
+                dimension: dim_key.to_string(),
+                is_all,
+            });
+        }
+    }
+    result
+}
+
+/// Detect which visible dimension is on the query axis (ON COLUMNS/ON ROWS).
+fn row_dimension_from_mdx(mdx: &str) -> Option<&'static str> {
+    // Search for FROM [Model] to skip any subquery FROM clauses.
+    let select_end = mdx.find("FROM [Model]").unwrap_or_else(|| {
+        mdx.find("FROM [model]").unwrap_or(mdx.len())
+    });
+
+    if mdx[..select_end].contains("[Region]") {
+        Some("Region")
+    } else if mdx[..select_end].contains("[Produktkategori]") {
+        Some("Produktkategori")
+    } else {
+        None
+    }
 }
 
 // ---- cChildren probe helpers ----
@@ -255,27 +328,21 @@ pub struct SemanticQuery {
     pub kind: SemanticQueryKind,
     pub dim_props: Vec<String>,
     pub cell_props: Vec<String>,
-    pub category_filters: Vec<String>,
+    /// Dimension-tagged filter members.
+    pub filters: Vec<DimensionFilter>,
     pub cchildren_leaf_name: Option<String>,
-    /// Detected dimension from MDX: "Produktkategori" or "Region".
-    pub dimension: Option<String>,
-}
-
-fn dimension_key_from_mdx(mdx: &str) -> Option<&'static str> {
-    if mdx.contains("[Region]") {
-        Some("Region")
-    } else if mdx.contains("[Produktkategori]") {
-        Some("Produktkategori")
-    } else {
-        None
-    }
+    /// Visible dimension on the query axis (Rows/Columns), or None for slicer-only.
+    pub row_dimension: Option<String>,
+    /// Off-axis dimensions from the WHERE clause (including All selections).
+    pub slicers: Vec<SlicerSelection>,
 }
 
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let upper = mdx.to_uppercase();
     let dim_props = parse_dimension_properties(mdx);
     let cell_props = parse_cell_properties(mdx);
-    let category_filters = parse_mdx_filters(mdx);
+    let filters = parse_mdx_filters(mdx);
+    let row_dimension = row_dimension_from_mdx(mdx).map(|s| s.to_string());
     let has_axes = upper.contains("ON COLUMNS") || upper.contains("ON ROWS");
     let has_rows = upper.contains("ON ROWS");
     let has_cols = upper.contains("ON COLUMNS");
@@ -291,9 +358,6 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         } else {
             SemanticQueryKind::ChildrenCountForAll
         }
-    } else if mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
-        || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])") {
-        SemanticQueryKind::SlicerAllAndMeasure
     } else if mdx.contains("AddCalculatedMembers({[Measures].[Total Försäljning].Children})") {
         SemanticQueryKind::MeasureChildrenEmpty
     } else if (mdx.contains("AddCalculatedMembers({[Produktkategori].[Produktkategori].&[") || mdx.contains("AddCalculatedMembers({[Region].[Region].&["))
@@ -312,6 +376,10 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         SemanticQueryKind::MeasureByCategory
     } else if is_drilldown {
         SemanticQueryKind::DrilldownCategories
+    } else if !has_axes
+        && (mdx.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
+            || mdx.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])")) {
+        SemanticQueryKind::SlicerAllAndMeasure
     } else if !has_axes {
         SemanticQueryKind::SlicerOnly
     } else {
@@ -322,8 +390,9 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         kind,
         dim_props,
         cell_props,
-        category_filters,
+        filters,
         cchildren_leaf_name: cchildren_filtered_member_name(mdx),
-        dimension: dimension_key_from_mdx(mdx).map(|s| s.to_string()),
+        row_dimension,
+        slicers: parse_slicer_dimensions(mdx),
     }
 }

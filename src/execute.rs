@@ -66,6 +66,10 @@ mod tests {
 
     const MDX_REGION_SLICER_ALL: &str = "SELECT  FROM [Model] WHERE ([Region].[Region].[All],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
 
+    const MDX_KAT_ROWS_REGION_FILTER: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Produktkategori].[Produktkategori].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Region].[Region].&[North],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
+    const MDX_KAT_ROWS_REGION_ALL: &str = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Produktkategori].[Produktkategori].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_CAPTION,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_KEY,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_TYPE,[Produktkategori].[Produktkategori].[Produktkategori]MEMBER_VALUE,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_NUMBER,[Produktkategori].[Produktkategori].[Produktkategori]LEVEL_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_LEVEL,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_UNIQUE_NAME,[Produktkategori].[Produktkategori].[Produktkategori]PARENT_COUNT,[Produktkategori].[Produktkategori].[Produktkategori]CHILDREN_CARDINALITY ON COLUMNS  FROM [Model] WHERE ([Region].[Region].[All],[Measures].[Total Försäljning]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+
     fn assert_in_order(haystack: &str, first: &str, second: &str) {
         let f = haystack.find(first)
             .unwrap_or_else(|| panic!("missing substring: {first}"));
@@ -144,21 +148,26 @@ mod tests {
     #[test]
     fn parse_mdx_filters_extracts_single_where_category() {
         let filters = parse_mdx_filters(MDX_SLICER);
-        assert_eq!(filters, vec!["Kategori A"]);
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].dimension, "Produktkategori");
+        assert_eq!(filters[0].members, vec!["Kategori A"]);
     }
 
     #[test]
     fn parse_mdx_filters_extracts_multiple_subquery_categories() {
-        // WHERE has only measures, so categories come from the subquery.
         let filters = parse_mdx_filters(MDX_SUBQUERY_FILTERS);
-        assert_eq!(filters, vec!["Kategori A", "Kategori C"]);
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].dimension, "Produktkategori");
+        assert_eq!(filters[0].members, vec!["Kategori A", "Kategori C"]);
     }
 
     #[test]
     fn parse_mdx_filters_uses_slicer_not_subquery_when_slicer_has_product() {
         let mdx = "SELECT FROM (SELECT ({[Produktkategori].[Produktkategori].&[Kategori A]}) ON COLUMNS FROM [Model]) WHERE ([Produktkategori].[Produktkategori].&[Kategori B],[Measures].[Total Försäljning])";
         let filters = parse_mdx_filters(mdx);
-        assert_eq!(filters, vec!["Kategori B"]);
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].dimension, "Produktkategori");
+        assert_eq!(filters[0].members, vec!["Kategori B"]);
     }
 
     #[test]
@@ -269,28 +278,32 @@ mod tests {
     #[test]
     fn parse_region_slicer_filter() {
         let filters = parse_mdx_filters(MDX_REGION_SLICER);
-        assert_eq!(filters, vec!["North"]);
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].dimension, "Region");
+        assert_eq!(filters[0].members, vec!["North"]);
     }
 
     #[test]
     fn semantic_query_classifies_region_drilldown() {
         let q = semantic_query_from_mdx(MDX_REGION_DRILLDOWN);
         assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories);
-        assert_eq!(q.dimension.as_deref(), Some("Region"));
+        assert_eq!(q.row_dimension.as_deref(), Some("Region"));
     }
 
     #[test]
     fn semantic_query_classifies_region_all_members() {
         let q = semantic_query_from_mdx(MDX_REGION_ALL_MEMBERS);
         assert_eq!(q.kind, SemanticQueryKind::AllLevelMembers);
-        assert_eq!(q.dimension.as_deref(), Some("Region"));
+        assert_eq!(q.row_dimension.as_deref(), Some("Region"));
     }
 
     #[test]
     fn semantic_query_classifies_region_slicer_all() {
         let q = semantic_query_from_mdx(MDX_REGION_SLICER_ALL);
         assert_eq!(q.kind, SemanticQueryKind::SlicerAllAndMeasure);
-        assert_eq!(q.dimension.as_deref(), Some("Region"));
+        // No axis → no row dimension. All filter produces no members.
+        assert_eq!(q.row_dimension, None);
+        assert!(q.filters.is_empty());
     }
 
     #[test]
@@ -305,5 +318,118 @@ mod tests {
         let xml = get_execute_statement_response(MDX_REGION_SLICER);
         // North total = 100000 + 150000 + 200000 + 200000 = 650000
         assert!(xml.contains("650000"));
+    }
+
+    // --- combined dimension ---
+
+    #[test]
+    fn parse_slicer_dimensions_detects_region_all() {
+        let slicers = crate::mdx_semantic::parse_slicer_dimensions(MDX_REGION_SLICER_ALL);
+        assert_eq!(slicers.len(), 1);
+        assert_eq!(slicers[0].dimension, "Region");
+        assert!(slicers[0].is_all);
+    }
+
+    #[test]
+    fn parse_slicer_dimensions_detects_region_specific() {
+        let slicers = crate::mdx_semantic::parse_slicer_dimensions(MDX_REGION_SLICER);
+        assert_eq!(slicers.len(), 1);
+        assert_eq!(slicers[0].dimension, "Region");
+        assert!(!slicers[0].is_all);
+    }
+
+    #[test]
+    fn parse_slicer_dimensions_empty_when_no_visible_dim_in_where() {
+        let slicers = crate::mdx_semantic::parse_slicer_dimensions(
+            "SELECT FROM [Model] WHERE ([Measures].[Total Försäljning]) CELL PROPERTIES VALUE"
+        );
+        assert!(slicers.is_empty());
+    }
+
+    #[test]
+    fn semantic_query_has_slicer_for_region_all_in_where() {
+        let q = semantic_query_from_mdx(MDX_REGION_SLICER_ALL);
+        assert_eq!(q.slicers.len(), 1);
+        assert_eq!(q.slicers[0].dimension, "Region");
+        assert!(q.slicers[0].is_all);
+    }
+
+    #[test]
+    fn combined_drilldown_response_includes_region_hierarchy_on_slicer_axis() {
+        let xml = get_execute_statement_response(MDX_KAT_ROWS_REGION_FILTER);
+        assert!(xml.contains("SlicerAxis"));
+        assert!(xml.contains("[Region].[Region]"));
+    }
+
+    /// SlicerAxis caption extraction helper: finds the N-th Caption in SlicerAxis.
+    fn slicer_captions(xml: &str) -> Vec<String> {
+        // Find the actual <Axis name="SlicerAxis"> inside <Axes>.
+        // Skip over the info declaration in <AxesInfo> by looking for the second occurrence.
+        let first = xml.find(r#"name="SlicerAxis""#).expect("missing SlicerAxis");
+        let second = xml[first + 1..].find(r#"name="SlicerAxis""#).expect("missing second SlicerAxis");
+        let start = first + 1 + second;
+        let end = xml[start..].find("</Axis>").map(|i| start + i).unwrap_or(xml.len());
+        let slice = &xml[start..end];
+        let mut caps = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = slice[pos..].find("<Caption>") {
+            let abs = pos + i + "<Caption>".len();
+            let close = slice[abs..].find("</Caption>").unwrap();
+            caps.push(slice[abs..abs + close].to_string());
+            pos = abs + close + "</Caption>".len();
+        }
+        caps
+    }
+
+    #[test]
+    fn slicer_axis_includes_region_even_when_not_in_where() {
+        let xml = get_execute_statement_response(MDX_DRILLDOWN);
+        let caps = slicer_captions(&xml);
+        assert!(caps.iter().any(|c| c == "All"),
+                "SlicerAxis should include Region.All as default even when not in WHERE, caps: {:?}", caps);
+    }
+
+    #[test]
+    fn slicer_axis_has_region_all_for_kat_rows_query() {
+        let xml = get_execute_statement_response(MDX_KAT_ROWS_REGION_ALL);
+        let caps = slicer_captions(&xml);
+        // Should contain Total Försäljning (SEK) and All for Region
+        assert!(caps.iter().any(|c| c.contains("Total Försäljning")),
+                "SlicerAxis missing Total Försäljning, caps: {:?}", caps);
+        // Second "All" in slicer caps should be Region's All
+        let all_count = caps.iter().filter(|c| *c == "All").count();
+        assert!(all_count >= 1, "SlicerAxis missing Region.All, caps: {:?}", caps);
+    }
+
+    #[test]
+    fn semantic_query_combined_row_kat_filter_region() {
+        let q = semantic_query_from_mdx(MDX_KAT_ROWS_REGION_FILTER);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories);
+        assert_eq!(q.row_dimension.as_deref(), Some("Produktkategori"));
+        assert_eq!(q.filters.len(), 1);
+        assert_eq!(q.filters[0].dimension, "Region");
+        assert_eq!(q.filters[0].members, vec!["North"]);
+    }
+
+    #[test]
+    fn combined_kat_rows_region_filter_returns_filtered_totals() {
+        let xml = get_execute_statement_response(MDX_KAT_ROWS_REGION_FILTER);
+        assert!(xml.contains("100000"));
+        assert!(xml.contains("150000"));
+        assert!(xml.contains("200000"));
+    }
+
+    #[test]
+    fn drilldown_with_region_all_in_where_is_not_misclassified_as_slicer() {
+        let q = semantic_query_from_mdx(MDX_KAT_ROWS_REGION_ALL);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories,
+            "drilldown with WHERE (Region.All, Measures) must be DrilldownCategories, not {:?}", q.kind);
+    }
+
+    #[test]
+    fn drilldown_with_region_all_in_where_has_axis0() {
+        let xml = get_execute_statement_response(MDX_KAT_ROWS_REGION_ALL);
+        assert!(xml.contains("Axis0"), "response must have Axis0 with Produktkategori members");
+        assert!(xml.contains("[Produktkategori].[Produktkategori]"));
     }
 }
