@@ -1,0 +1,48 @@
+flowchart LR
+    Excel["🟢 Excel PivotTable
+    (MSOLAP Client)"]
+    XMLA["🔵 XMLA / SSAS
+    Compatibility Layer"]
+    MDX["MDX Request"]
+    Parsed["ParsedMdx
+    (nom parser)"]
+    Semantic["SemanticQuery 
+    (classification)"]
+    Plan["QueryPlan
+    (typed IR)"]
+    Model["SemanticModel
+    (dimensions, measures)"]
+    SQL["SQL Emitter
+    (engine/sql.rs)"]
+    Malloy["Malloy Emitter
+    (engine/malloy.rs)"]
+    DuckDB["DuckDB Backend
+    (runtime execution)"]
+    Cellset["Cellset / Rowset
+    Builder"]
+    Resp["🔵 XMLA Response"]
+    Probe["Probe / Metadata
+    Queries"]
+
+    Excel --> XMLA
+    XMLA --> MDX
+    MDX --> Parsed
+    Parsed --> Semantic
+    Semantic --> Plan
+    Model --> SQL
+    Model --> Malloy
+    Plan --> SQL
+    Plan --> Malloy
+    SQL --> DuckDB
+    DuckDB --> Cellset
+    Cellset --> Resp
+    Resp --> Excel
+
+    Probe --> XMLA
+    XMLA --> Cellset
+
+    style Malloy fill:#f9f,stroke:#333,stroke-dasharray: 5 5
+    style DuckDB fill:#3a3,stroke:#333,color:#fff
+    style Cellset fill:#36c,stroke:#333,color:#fff
+    style XMLA fill:#36c,stroke:#333,color:#fff
+    style Resp fill:#36c,stroke:#333,color:#fff

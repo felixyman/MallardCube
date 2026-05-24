@@ -1,0 +1,45 @@
+flowchart TD
+    subgraph Phase1["Phase 1: Foundation"]
+        A["✅ SQLite → DuckDB backend"]
+        B["✅ QueryPlan typed IR"]
+        C["✅ Malloy emitter"]
+        D["✅ SQL emitter"]
+        E["✅ Criterion benchmarks"]
+        F["✅ Symmetric collapse"]
+    end
+
+    subgraph Phase2["Phase 2: Caching"]
+        G["⬜ Normalized QueryPlan key"]
+        H["⬜ Cache SQL text"]
+        I["⬜ Cache Malloy text"]
+        J["⬜ Optional: cache QueryResult"]
+    end
+
+    subgraph Phase3["Phase 3: Malloy Runtime"]
+        K["⬜ Malloy → SQL compilation spike"]
+        L["⬜ Benchmark Malloy vs SQL paths"]
+        M["⬜ Decide: keep SQL or switch to Malloy"]
+    end
+
+    subgraph Phase4["Phase 4: Production"]
+        N["⬜ Result caching (if needed)"]
+        O["⬜ Arrow result layer (if needed)"]
+        P["⬜ File-structure reorg"]
+        Q["⬜ Remove dead code"]
+    end
+
+    Phase1 --> Phase2
+    Phase2 --> Phase3
+    Phase3 --> Phase4
+
+    style Phase1 fill:#3a3,stroke:#333,color:#fff
+    style Phase2 fill:#f90,stroke:#333,color:#fff
+    style Phase3 fill:#f9f,stroke:#333,color:#fff
+    style Phase4 fill:#ddd,stroke:#333
+
+    style A fill:#4a4,stroke:#333,color:#fff
+    style B fill:#4a4,stroke:#333,color:#fff
+    style C fill:#4a4,stroke:#333,color:#fff
+    style D fill:#4a4,stroke:#333,color:#fff
+    style E fill:#4a4,stroke:#333,color:#fff
+    style F fill:#4a4,stroke:#333,color:#fff
