@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use xmla_proxy::backend::{Backend, BenchmarkDataConfig};
+use xmla_proxy::backend::{Backend, BenchmarkDataConfig, QueryBackend};
+use xmla_proxy::backend_duckdb::DuckDbBackend;
 use xmla_proxy::engine::model::default_model;
 use xmla_proxy::engine::plan::{plan_from_semantic, execute_plan_with_backend};
 use xmla_proxy::engine::malloy::malloy_query;
@@ -101,7 +102,7 @@ fn bench_emit(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Scale benchmarks — dataset-dependent execution cost
+// Scale benchmarks — SQLite vs DuckDB, dataset-size-dependent
 // ---------------------------------------------------------------------------
 
 struct BenchCase {
@@ -124,14 +125,28 @@ const DATA_CONFIGS: &[(&str, fn() -> BenchmarkDataConfig)] = &[
     ("large",  BenchmarkDataConfig::large),
 ];
 
-fn bench_execute_scale(c: &mut Criterion) {
+trait SetupBackend: QueryBackend {
+    fn from_config(cfg: &BenchmarkDataConfig) -> Self;
+}
+
+impl SetupBackend for Backend {
+    fn from_config(cfg: &BenchmarkDataConfig) -> Self {
+        Backend::new_with_config(cfg).expect("sqlite init failed")
+    }
+}
+
+impl SetupBackend for DuckDbBackend {
+    fn from_config(cfg: &BenchmarkDataConfig) -> Self {
+        DuckDbBackend::new_with_config(cfg).expect("duckdb init failed")
+    }
+}
+
+fn bench_engine<B: SetupBackend>(c: &mut Criterion, engine: &str) {
     let model = default_model();
 
     for (size_label, config_fn) in DATA_CONFIGS {
-        let backend = Backend::new_with_config(&config_fn())
-            .expect("failed to create benchmark backend");
-
-        let mut group = c.benchmark_group(format!("execute_{}", size_label));
+        let backend = B::from_config(&config_fn());
+        let mut group = c.benchmark_group(format!("{}_{}", engine, size_label));
 
         for case in BENCH_CASES {
             let query = semantic_query_from_mdx(case.mdx);
@@ -151,14 +166,12 @@ fn bench_execute_scale(c: &mut Criterion) {
     }
 }
 
-fn bench_e2e_scale(c: &mut Criterion) {
+fn bench_e2e_engine<B: SetupBackend>(c: &mut Criterion, engine: &str) {
     let model = default_model();
 
     for (size_label, config_fn) in DATA_CONFIGS {
-        let backend = Backend::new_with_config(&config_fn())
-            .expect("failed to create benchmark backend");
-
-        let mut group = c.benchmark_group(format!("e2e_{}", size_label));
+        let backend = B::from_config(&config_fn());
+        let mut group = c.benchmark_group(format!("e2e_{}_{}", engine, size_label));
 
         for case in BENCH_CASES {
             group.bench_function(case.name, |b| {
@@ -176,6 +189,11 @@ fn bench_e2e_scale(c: &mut Criterion) {
     }
 }
 
+fn bench_execute_sqlite(c: &mut Criterion) { bench_engine::<Backend>(c, "sqlite"); }
+fn bench_execute_duckdb(c: &mut Criterion) { bench_engine::<DuckDbBackend>(c, "duckdb"); }
+fn bench_e2e_sqlite(c: &mut Criterion) { bench_e2e_engine::<Backend>(c, "sqlite"); }
+fn bench_e2e_duckdb(c: &mut Criterion) { bench_e2e_engine::<DuckDbBackend>(c, "duckdb"); }
+
 criterion_group!(
     pipeline,
     bench_parse,
@@ -186,8 +204,10 @@ criterion_group!(
 
 criterion_group!(
     scale,
-    bench_execute_scale,
-    bench_e2e_scale,
+    bench_execute_sqlite,
+    bench_execute_duckdb,
+    bench_e2e_sqlite,
+    bench_e2e_duckdb,
 );
 
 criterion_main!(pipeline, scale);

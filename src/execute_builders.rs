@@ -8,7 +8,7 @@
 /// Member/cell/axis/slicer helpers live in `axis_members`.
 
 use crate::response::wrap_in_soap_envelope;
-use crate::backend::Backend;
+use crate::backend::{Backend, QueryBackend};
 use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
 use crate::engine::model::{default_model, SemanticModel};
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
@@ -338,9 +338,9 @@ pub fn execute_semantic_query(query: &SemanticQuery) -> String {
     dispatch(query, &result)
 }
 
-pub fn execute_semantic_query_with_backend(
+pub fn execute_semantic_query_with_backend<B: QueryBackend>(
     query: &SemanticQuery,
-    backend: &Backend,
+    backend: &B,
     model: &SemanticModel,
 ) -> String {
     let plan = plan_from_semantic(query);
@@ -373,9 +373,9 @@ pub fn get_execute_cellset_response(mdx: &str) -> String {
     execute_semantic_query(&query)
 }
 
-pub fn get_execute_cellset_response_with_backend(
+pub fn get_execute_cellset_response_with_backend<B: QueryBackend>(
     mdx: &str,
-    backend: &Backend,
+    backend: &B,
     model: &SemanticModel,
 ) -> String {
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);

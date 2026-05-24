@@ -26,5 +26,6 @@ pub mod tmschema;
 pub mod cellset;
 pub mod rowset;
 pub mod backend;
+pub mod backend_duckdb;
 pub mod engine;
 pub mod test_fixtures;
