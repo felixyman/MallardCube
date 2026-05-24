@@ -10,3 +10,10 @@ tower-http = { version = "0.5", features = ["trace"] }
 quick-xml = "0.31"
 rusqlite = { version = "0.31", features = ["bundled"] }
 nom = "7"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pipeline"
+harness = false
