@@ -1,0 +1,35 @@
+sequenceDiagram
+    participant Excel as 🟢 Excel PivotTable
+    participant XMLA as 🔵 XMLA Layer
+    participant Parser as MDX Parser
+    participant Semantic as Semantic Layer
+    participant Plan as QueryPlan
+    participant Model as SemanticModel
+    participant DuckDB as DuckDB
+    participant Builder as Cellset Builder
+
+    Excel->>XMLA: DrilldownMember(CrossJoin(...), excluded, hierarchy)
+    XMLA->>Parser: parse MDX text
+    Parser-->>Semantic: ParsedMdx { has_drilldown_member, excluded set, ... }
+
+    Semantic->>Semantic: classify → DrilldownMemberProbe
+    Semantic->>Semantic: parse axis_dimensions (preserve order)
+    Semantic->>Semantic: parse_excluded_members (dimension-tagged)
+    Semantic-->>Plan: SemanticQuery { axis_dimensions, excluded_members, ... }
+
+    Plan->>Plan: plan_from_semantic → GroupBy { dims, filters }
+    Plan->>Model: get physical field mappings
+    Model-->>Plan: DimensionDef, MeasureDef
+
+    Plan->>Plan: sql_for_query_plan → SQL text
+    Plan->>DuckDB: execute SQL
+    DuckDB-->>Plan: QueryResult::Pairs(rows)
+
+    Plan-->>Builder: QueryResult + SemanticQuery
+
+    Builder->>Builder: map_pair_values (axis order)
+    Builder->>Builder: identify excluded members by dimension
+    Builder->>Builder: build collapsed tuples (ordered_pair)
+    Builder->>Builder: render cellset XML
+
+    Builder-->>Excel: 🔵 XMLA mddataset response
