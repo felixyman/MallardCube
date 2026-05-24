@@ -9,6 +9,7 @@ tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["trace"] }
 quick-xml = "0.31"
 rusqlite = { version = "0.31", features = ["bundled"] }
+duckdb = { version = "1.10503.1", features = ["bundled"] }
 nom = "7"
 
 [dev-dependencies]

@@ -7,7 +7,7 @@
 /// Designed to be translatable to both SQL (current) and Malloy (future).
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
-use crate::backend::Backend;
+use crate::backend::{Backend, QueryBackend};
 use crate::engine::model::SemanticModel;
 use crate::engine::sql::sql_for_query_plan;
 
@@ -187,10 +187,10 @@ pub fn execute_plan(plan: &QueryPlan, model: &SemanticModel) -> QueryResult {
     execute_plan_with_backend(plan, model, Backend::get())
 }
 
-pub fn execute_plan_with_backend(
+pub fn execute_plan_with_backend<B: QueryBackend>(
     plan: &QueryPlan,
     model: &SemanticModel,
-    backend: &Backend,
+    backend: &B,
 ) -> QueryResult {
     let sql = sql_for_query_plan(model, plan);
     if sql.is_empty() {

@@ -5,6 +5,15 @@ pub struct Backend {
     conn: Mutex<Connection>,
 }
 
+// ---- backend trait ----
+
+pub trait QueryBackend {
+    fn query_scalar(&self, sql: &str) -> f64;
+    fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)>;
+    fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)>;
+    fn query_count(&self, sql: &str) -> u32;
+}
+
 // ---- benchmark config ----
 
 #[derive(Debug, Clone)]
@@ -59,9 +68,63 @@ impl SeededRng {
     }
 }
 
+// ---- shared benchmark data ----
+
+pub struct FactRow {
+    pub produktkategori: String,
+    pub region: String,
+    pub sales: f64,
+}
+
+pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
+    let mut rng = SeededRng::new(config.seed);
+    let categories: Vec<String> =
+        (1..=config.category_count).map(|i| format!("Kategori {:03}", i)).collect();
+    let regions: Vec<String> =
+        (1..=config.region_count).map(|i| format!("Region {:02}", i)).collect();
+
+    let mut rows = Vec::with_capacity(config.row_count + 1);
+    for _ in 0..config.row_count {
+        let kat = &categories[rng.next() as usize % config.category_count];
+        let reg = &regions[rng.next() as usize % config.region_count];
+        let sales = 10_000.0 + (rng.next() as f64 % 100_000.0);
+        rows.push(FactRow {
+            produktkategori: kat.clone(),
+            region: reg.clone(),
+            sales,
+        });
+    }
+    rows.push(FactRow {
+        produktkategori: "Kategori SKEW".into(),
+        region: "Region SKEW".into(),
+        sales: 9_999_999.0,
+    });
+    rows
+}
+
 fn instance() -> &'static Backend {
     static BACKEND: OnceLock<Backend> = OnceLock::new();
     BACKEND.get_or_init(|| Backend::new().expect("failed to initialise SQLite"))
+}
+
+// ---- SQLite Backend impl of QueryBackend ----
+
+impl QueryBackend for Backend {
+    fn query_scalar(&self, sql: &str) -> f64 {
+        Backend::query_scalar(self, sql)
+    }
+
+    fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
+        Backend::query_grouped_1d(self, sql)
+    }
+
+    fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
+        Backend::query_pairs(self, sql)
+    }
+
+    fn query_count(&self, sql: &str) -> u32 {
+        Backend::query_count(self, sql)
+    }
 }
 
 impl Backend {
@@ -103,30 +166,15 @@ impl Backend {
              );",
         )?;
 
-        let mut rng = SeededRng::new(config.seed);
-        let categories: Vec<String> =
-            (1..=config.category_count).map(|i| format!("Kategori {:03}", i)).collect();
-        let regions: Vec<String> =
-            (1..=config.region_count).map(|i| format!("Region {:02}", i)).collect();
-
+        let rows = generate_rows(config);
         {
             let mut stmt = conn.prepare(
                 "INSERT INTO faktatabell (produktkategori, region, sales) VALUES (?1, ?2, ?3)"
             )?;
-
-            for i in 0..config.row_count {
-                let kat = &categories[rng.next() as usize % config.category_count];
-                let reg = &regions[rng.next() as usize % config.region_count];
-                let sales = 10_000.0 + (rng.next() as f64 % 100_000.0);
-                stmt.execute(rusqlite::params![kat, reg, sales])?;
+            for row in &rows {
+                stmt.execute(rusqlite::params![row.produktkategori, row.region, row.sales])?;
             }
         }
-
-        // add one skewed high-value row to ensure a known large aggregation
-        conn.execute(
-            "INSERT INTO faktatabell VALUES ('Kategori SKEW', 'Region SKEW', 9999999.0)",
-            [],
-        )?;
 
         Ok(Backend {
             conn: Mutex::new(conn),
