@@ -1,4 +1,6 @@
 use crate::response::discover_rowset_envelope;
+use crate::engine::model::default_model;
+use std::collections::BTreeSet;
 
 const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -11,12 +13,24 @@ const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field=
                 <xsd:element sql:field="MEASUREGROUP_SIZE" name="MEASUREGROUP_SIZE" type="xsd:long" minOccurs="0"/>"#;
 
 pub fn get_measure_groups_response() -> String {
-    discover_rowset_envelope("", MEASUREGROUP_ROW_FIELDS,
-        r#"          <row>
+    let model = default_model();
+    let mut rows = String::new();
+    let mut seen = BTreeSet::new();
+    for m in model.measures {
+        if seen.insert(m.measure_group_name) {
+            rows.push_str(&format!(
+                r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <MEASUREGROUP_NAME>Faktatabell</MEASUREGROUP_NAME>
-            <MEASUREGROUP_CAPTION>Faktatabell</MEASUREGROUP_CAPTION>
-          </row>"#
-    )
+            <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
+            <MEASUREGROUP_CAPTION>{}</MEASUREGROUP_CAPTION>
+          </row>
+"#,
+                m.measure_group_name,
+                m.measure_group_name,
+            ));
+        }
+    }
+
+    discover_rowset_envelope("", MEASUREGROUP_ROW_FIELDS, &rows)
 }
