@@ -9,7 +9,8 @@
 
 use crate::response::wrap_in_soap_envelope;
 use crate::backend::Backend;
-use crate::engine::plan::{QueryResult, execute_plan, plan_from_semantic};
+use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
+use crate::engine::model::{default_model, SemanticModel};
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
 use crate::axis_members::{
     render_response, full_slicer_axis, measures_axis,
@@ -333,7 +334,21 @@ fn build_cchildren_for_measures(query: &SemanticQuery, _result: &QueryResult) ->
 
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
     let plan = plan_from_semantic(query);
-    let result = execute_plan(&plan);
+    let result = execute_plan(&plan, &default_model());
+    dispatch(query, &result)
+}
+
+pub fn execute_semantic_query_with_backend(
+    query: &SemanticQuery,
+    backend: &Backend,
+    model: &SemanticModel,
+) -> String {
+    let plan = plan_from_semantic(query);
+    let result = execute_plan_with_backend(&plan, model, backend);
+    dispatch(query, &result)
+}
+
+fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, &result),
         SemanticQueryKind::ChildrenCountLeafProduct => {
@@ -356,6 +371,15 @@ pub fn execute_semantic_query(query: &SemanticQuery) -> String {
 pub fn get_execute_cellset_response(mdx: &str) -> String {
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     execute_semantic_query(&query)
+}
+
+pub fn get_execute_cellset_response_with_backend(
+    mdx: &str,
+    backend: &Backend,
+    model: &SemanticModel,
+) -> String {
+    let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+    execute_semantic_query_with_backend(&query, backend, model)
 }
 
 pub fn get_execute_mdx_response(mdx: &str) -> String {

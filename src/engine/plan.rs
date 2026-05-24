@@ -8,6 +8,53 @@
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::Backend;
+use crate::engine::model::SemanticModel;
+use crate::engine::sql::sql_for_query_plan;
+
+// ---------------------------------------------------------------------------
+// Semantic types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Dimension {
+    Produktkategori,
+    Region,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Measure {
+    TotalSales,
+}
+
+impl Dimension {
+    pub fn dimension_name(&self) -> &str {
+        match self {
+            Dimension::Produktkategori => "Produktkategori",
+            Dimension::Region => "Region",
+        }
+    }
+
+    pub fn malloy_name(&self) -> &str {
+        match self {
+            Dimension::Produktkategori => "produktkategori",
+            Dimension::Region => "region",
+        }
+    }
+}
+
+impl Measure {
+    pub fn malloy_name(&self) -> &str {
+        match self {
+            Measure::TotalSales => "total_forsaljning",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedDimensionFilter {
+    pub dimension: Dimension,
+    pub members: Vec<String>,
+}
 
 // ---------------------------------------------------------------------------
 // Query plan
@@ -23,24 +70,25 @@ use crate::backend::Backend;
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryPlan {
     Total {
-        filters: Vec<DimensionFilter>,
+        measure: Measure,
+        filters: Vec<TypedDimensionFilter>,
     },
 
     GroupBy {
-        /// Dimensions to group by, in order (1 for single-dim, 2 for cross-join).
-        dims: Vec<String>,
-        filters: Vec<DimensionFilter>,
+        measure: Measure,
+        group_by: Vec<Dimension>,
+        filters: Vec<TypedDimensionFilter>,
     },
 
     Count {
-        dim: String,
+        dimension: Dimension,
     },
 
     Empty,
 }
 
 // ---------------------------------------------------------------------------
-// Query result
+// Query result (unchanged)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -53,23 +101,33 @@ pub enum QueryResult {
 }
 
 // ---------------------------------------------------------------------------
-// Plan construction
+// Filter helpers
 // ---------------------------------------------------------------------------
 
-fn filters_for_dim(filters: &[DimensionFilter], dim: &str) -> Vec<String> {
-    filters.iter()
-        .find(|f| f.dimension == dim)
-        .map(|f| f.members.clone())
-        .unwrap_or_default()
+fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
+    source.iter().map(|f| {
+        let dim = match f.dimension.as_str() {
+            "Region" => Dimension::Region,
+            "Produktkategori" => Dimension::Produktkategori,
+            _ => Dimension::Produktkategori,
+        };
+        TypedDimensionFilter {
+            dimension: dim,
+            members: f.members.clone(),
+        }
+    }).collect()
 }
 
-fn kat_filter(filters: &[DimensionFilter]) -> Vec<String> {
-    filters_for_dim(filters, "Produktkategori")
+fn axis_dimension(s: &str) -> Dimension {
+    match s {
+        "Region" => Dimension::Region,
+        _ => Dimension::Produktkategori,
+    }
 }
 
-fn region_filter(filters: &[DimensionFilter]) -> Vec<String> {
-    filters_for_dim(filters, "Region")
-}
+// ---------------------------------------------------------------------------
+// Plan construction
+// ---------------------------------------------------------------------------
 
 pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
     let dim = query.axis_dimensions.first()
@@ -79,7 +137,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll
         | SemanticQueryKind::ChildrenCountLeafProduct => {
-            QueryPlan::Count { dim: dim.to_string() }
+            QueryPlan::Count { dimension: axis_dimension(dim) }
         }
 
         SemanticQueryKind::ChildrenCountMeasures
@@ -91,7 +149,8 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         SemanticQueryKind::SlicerAllAndMeasure
         | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
-                filters: query.filters.clone(),
+                measure: Measure::TotalSales,
+                filters: typed_filters(&query.filters),
             }
         }
 
@@ -99,60 +158,63 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         | SemanticQueryKind::LeafLevelMembers
         | SemanticQueryKind::MeasureByCategory
         | SemanticQueryKind::DrilldownMemberProbe => {
-            let dims = if query.axis_dimensions.len() >= 2 {
-                query.axis_dimensions.clone()
+            let group_by = if query.axis_dimensions.len() >= 2 {
+                query.axis_dimensions.iter().map(|a| axis_dimension(a)).collect()
             } else {
-                vec![dim.to_string()]
+                vec![axis_dimension(dim)]
             };
             QueryPlan::GroupBy {
-                dims,
-                filters: query.filters.clone(),
+                measure: Measure::TotalSales,
+                group_by,
+                filters: typed_filters(&query.filters),
             }
         }
 
         SemanticQueryKind::AllLevelMembers => {
-            QueryPlan::Total { filters: vec![] }
+            QueryPlan::Total {
+                measure: Measure::TotalSales,
+                filters: vec![],
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Plan execution — calls Backend
+// Plan execution — generates SQL from plan + model, executes via Backend
 // ---------------------------------------------------------------------------
 
-pub fn execute_plan(plan: &QueryPlan) -> QueryResult {
+pub fn execute_plan(plan: &QueryPlan, model: &SemanticModel) -> QueryResult {
+    execute_plan_with_backend(plan, model, Backend::get())
+}
+
+pub fn execute_plan_with_backend(
+    plan: &QueryPlan,
+    model: &SemanticModel,
+    backend: &Backend,
+) -> QueryResult {
+    let sql = sql_for_query_plan(model, plan);
+    if sql.is_empty() {
+        return QueryResult::Empty;
+    }
+
     match plan {
-        QueryPlan::Total { filters } => {
-            let total = Backend::get().total_with_filters(
-                &region_filter(filters),
-                &kat_filter(filters),
-            );
+        QueryPlan::Total { .. } => {
+            let total = backend.query_scalar(&sql);
             QueryResult::Scalar(total)
         }
 
-        QueryPlan::GroupBy { dims, filters } => {
-            let backend = Backend::get();
-            let kf = kat_filter(filters);
-            let rf = region_filter(filters);
-
-            if dims.len() >= 2 {
-                let pairs = backend.grouped_pairs();
+        QueryPlan::GroupBy { group_by, .. } => {
+            if group_by.len() >= 2 {
+                let pairs = backend.query_pairs(&sql);
                 QueryResult::Pairs(pairs)
             } else {
-                let dim = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
-                let rows: Vec<(String, f64)> = match dim {
-                    "Region" => backend.grouped_by_region(&rf, &kf),
-                    _ => backend.grouped_by_produktkategori(&rf, &kf),
-                };
+                let rows = backend.query_grouped_1d(&sql);
                 QueryResult::Grouped(rows)
             }
         }
 
-        QueryPlan::Count { dim } => {
-            let count = match dim.as_str() {
-                "Region" => Backend::get().region_count(),
-                _ => Backend::get().category_count(),
-            };
+        QueryPlan::Count { .. } => {
+            let count = backend.query_count(&sql);
             QueryResult::Count(count)
         }
 

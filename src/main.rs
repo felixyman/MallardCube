@@ -8,36 +8,8 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::io::Write;
 
-mod parser;
-mod response;
-mod properties;
-mod schema_rowsets;
-mod catalogs;
-mod cubes;
-mod tables;
-mod dimensions;
-mod measures;
-mod hierarchies;
-mod levels;
-mod mdschema_properties;
-mod members;
-mod literals;
-mod sets;
-mod kpis;
-mod measure_groups;
-mod measuregroup_dimensions;
-mod execute;
-mod execute_builders;
-mod axis_members;
-mod mdx_semantic;
-mod mdx_parser;
-mod tmschema;
-mod cellset;
-mod rowset;
-mod backend;
-mod engine;
-
-use parser::{parse_xmla, XmlaRequest};
+use xmla_proxy::parser::{parse_xmla, XmlaRequest};
+use xmla_proxy::*;
 
 // --- debug file logging ---
 
