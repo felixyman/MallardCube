@@ -1,4 +1,12 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+/// MDSCHEMA_MEMBERS rowset — responds to Excel's member discovery.
+///
+/// Member rows are generated from actual DuckDB data (distinct dimension
+/// values) plus synthetic `All` members from the semantic model.
+/// No hardcoded business values remain.
+
+use crate::backend::Backend;
+use crate::proxy_project;
+use uuid::Uuid;
 
 const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -24,321 +32,318 @@ const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
                 <xsd:element sql:field="IS_DATAMEMBER" name="IS_DATAMEMBER" type="xsd:boolean" minOccurs="0"/>
                 <xsd:element sql:field="SCOPE" name="SCOPE" type="xsd:int" minOccurs="0"/>"#;
 
-const MEMBER_ROWS: &str = r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[(All)]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>0</MEMBER_ORDINAL>
-            <MEMBER_NAME>All</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>2</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000100</MEMBER_GUID>
-            <MEMBER_CAPTION>All</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>4</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_COUNT>0</PARENT_COUNT>
-            <MEMBER_KEY>All</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>1</MEMBER_ORDINAL>
-            <MEMBER_NAME>Kategori A</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori A]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000101</MEMBER_GUID>
-            <MEMBER_CAPTION>Kategori A</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>Kategori A</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>2</MEMBER_ORDINAL>
-            <MEMBER_NAME>Kategori B</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori B]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000102</MEMBER_GUID>
-            <MEMBER_CAPTION>Kategori B</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>Kategori B</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>3</MEMBER_ORDINAL>
-            <MEMBER_NAME>Kategori C</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori C]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000103</MEMBER_GUID>
-            <MEMBER_CAPTION>Kategori C</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>Kategori C</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>4</MEMBER_ORDINAL>
-            <MEMBER_NAME>Kategori D</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Produktkategori].[Produktkategori].&amp;[Kategori D]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000104</MEMBER_GUID>
-            <MEMBER_CAPTION>Kategori D</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Produktkategori].[Produktkategori].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>Kategori D</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Region].[Region].[(All)]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>0</MEMBER_ORDINAL>
-            <MEMBER_NAME>All</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Region].[Region].[All]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>2</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000200</MEMBER_GUID>
-            <MEMBER_CAPTION>All</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>2</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_COUNT>0</PARENT_COUNT>
-            <MEMBER_KEY>All</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Region].[Region].[Region]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>1</MEMBER_ORDINAL>
-            <MEMBER_NAME>North</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Region].[Region].&amp;[North]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000201</MEMBER_GUID>
-            <MEMBER_CAPTION>North</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Region].[Region].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>North</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>[Region].[Region].[Region]</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>2</MEMBER_ORDINAL>
-            <MEMBER_NAME>South</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>[Region].[Region].&amp;[South]</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>00000000-0000-0000-0000-000000000202</MEMBER_GUID>
-            <MEMBER_CAPTION>South</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>0</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>0</PARENT_LEVEL>
-            <PARENT_UNIQUE_NAME>[Region].[Region].[All]</PARENT_UNIQUE_NAME>
-            <PARENT_COUNT>1</PARENT_COUNT>
-            <MEMBER_KEY>South</MEMBER_KEY>
-            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
-            <IS_DATAMEMBER>false</IS_DATAMEMBER>
-          </row>"#;
+// ---- member row building ----
 
-// ---- filter helpers ----
-
-/// Extract the text content of a named XML tag from a string.
-/// Handles both `<tag>value</tag>` and `<tag/>` (self-closing → empty).
-fn tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open_bare = format!("<{}", tag);
-    let pos = xml.find(&open_bare)?;
-    let after = &xml[pos..];
-    if after.starts_with(&format!("<{}/>", tag)) || after.starts_with(&format!("<{} />", tag)) {
-        return Some("");
-    }
-    let open_start = xml.find(&format!("<{}>", tag))? + tag.len() + 2;
-    let end = xml[open_start..].find(&format!("</{}>", tag))? + open_start;
-    Some(&xml[open_start..end])
+struct MemberRow {
+    xml: String,
+    dimension_id: String,
+    member_unique_name: String,
+    parent_unique_name: Option<String>,
+    children_cardinality: u32,
 }
 
-/// Compare a filter value against the MEMBER_UNIQUE_NAME in a row,
-/// handling XML entity encoding differences.  The filter arrives
-/// unescaped (parser::unescape() decoded `&amp;` → `&`), while the
-/// raw row string may still contain `&amp;`.
-fn member_name_in_row(row: &str, filter: &str) -> bool {
-    if let Some(name) = tag_content(row, "MEMBER_UNIQUE_NAME") {
-        let decoded = name.replace("&amp;", "&").replace("&lt;", "<")
-                         .replace("&gt;", ">").replace("&quot;", "\"")
-                         .replace("&apos;", "'");
-        decoded == filter || name == filter
-    } else {
-        false
+fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    let mut rows = Vec::new();
+    for dim in &model.dimensions {
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        let all_level_u = dim.all_level_unique_name();
+        let all_member_u = dim.all_member_unique_name();
+
+        let cardinality = Backend::get().distinct_count(&dim.physical_field);
+        let guid = all_member_guid(&dim.id);
+        rows.push(MemberRow {
+            xml: xml_member_row(
+                project,
+                &dim_u, &hier_u, &all_level_u,
+                0, 0,
+                "All", &all_member_u,
+                2, &guid,
+                "All", cardinality, 0, None, 0,
+                "All",
+            ),
+            dimension_id: dim.id.clone(),
+            member_unique_name: all_member_u,
+            parent_unique_name: None,
+            children_cardinality: cardinality,
+        });
     }
+    rows
 }
 
-/// Search MEMBER_ROWS for a row whose `<MEMBER_UNIQUE_NAME>` matches `filter`.
-fn find_member_row(filter: &str) -> Option<&'static str> {
-    let rest = MEMBER_ROWS;
-    let mut pos = 0;
-    while pos < rest.len() {
-        let row_start = match rest[pos..].find("<row>") {
-            Some(i) => pos + i,
-            None => break,
-        };
-        let row_end = match rest[row_start..].find("</row>") {
-            Some(i) => row_start + i + 6,
-            None => break,
-        };
-        let row = &rest[row_start..row_end];
-        if member_name_in_row(row, filter) {
-            return Some(row);
+fn build_leaf_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    let mut rows = Vec::new();
+    for dim in &model.dimensions {
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        let leaf_level_u = dim.leaf_level_unique_name();
+        let all_member_u = dim.all_member_unique_name();
+
+        let values = Backend::get().distinct_values(&dim.physical_field);
+        for (ordinal, val) in values.iter().enumerate() {
+            let ordinal = ordinal as u32 + 1;
+            let leaf_member_u = format!("{}.&[{}]", hier_u, xml_escape(val));
+            let member_guid = leaf_member_guid(&dim.id, val);
+            rows.push(MemberRow {
+                xml: xml_member_row(
+                    project,
+                    &dim_u, &hier_u, &leaf_level_u,
+                    1, ordinal,
+                    val, &leaf_member_u,
+                    1, &member_guid,
+                    val, 0, 0,
+                    Some(&all_member_u), 1,
+                    val,
+                ),
+                dimension_id: dim.id.clone(),
+                member_unique_name: leaf_member_u,
+                parent_unique_name: Some(all_member_u.clone()),
+                children_cardinality: 0,
+            });
         }
-        pos = row_end;
     }
-    None
+    rows
 }
 
-/// Search MEMBER_ROWS for rows that are children of `parent`.
-/// Uses PARENT_UNIQUE_NAME for accurate parent-child matching.
-fn find_children_of(parent: &str) -> Vec<&'static str> {
-    if let Some(parent_row) = find_member_row(parent) {
-        if let Some(cc) = tag_content(parent_row, "CHILDREN_CARDINALITY") {
-            if cc.trim() == "0" {
-                return vec![];
-            }
-        }
-    } else {
-        return vec![];
-    }
+/// Stable namespace for v5 UUIDs.  Derived from "ssas-proxy" so every
+/// member GUID is deterministic across runs but unique to this proxy.
+const NAMESPACE: Uuid = Uuid::from_bytes([
+    0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1,
+    0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+]);
 
-    let rest = MEMBER_ROWS;
-    let mut result = vec![];
-    let mut pos = 0;
-    while pos < rest.len() {
-        let row_start = match rest[pos..].find("<row>") {
-            Some(i) => pos + i,
-            None => break,
-        };
-        let row_end = match rest[row_start..].find("</row>") {
-            Some(i) => row_start + i + 6,
-            None => break,
-        };
-        let row = &rest[row_start..row_end];
-        if let Some(pun) = tag_content(row, "PARENT_UNIQUE_NAME") {
-            let decoded = pun.replace("&amp;", "&");
-            if decoded == parent || pun == parent {
-                result.push(row);
-            }
-        }
-        pos = row_end;
-    }
-    result
+fn all_member_guid(dim_id: &str) -> String {
+    Uuid::new_v5(&NAMESPACE, format!("all.{dim_id}").as_bytes()).to_string()
+}
+
+fn leaf_member_guid(dim_id: &str, member_value: &str) -> String {
+    Uuid::new_v5(&NAMESPACE, format!("leaf.{dim_id}.{member_value}").as_bytes()).to_string()
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        .replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+fn xml_member_row(
+    project: &crate::proxy_project::ProxyProject,
+    dim_u: &str, hier_u: &str, level_u: &str,
+    level_num: u32, member_ordinal: u32,
+    member_name: &str, member_unique_name: &str,
+    member_type: u32, member_guid: &str,
+    member_caption: &str,
+    children_cardinality: u32,
+    parent_level: u32,
+    parent_unique_name: Option<&str>,
+    parent_count: u32,
+    member_key: &str,
+) -> String {
+    let pun = parent_unique_name
+        .map(|p| format!("            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n", p))
+        .unwrap_or_default();
+    format!(
+        r#"          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>{level_u}</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>{level_num}</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>{member_ordinal}</MEMBER_ORDINAL>
+            <MEMBER_NAME>{member_name}</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>{member_unique_name}</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>{member_type}</MEMBER_TYPE>
+            <MEMBER_GUID>{member_guid}</MEMBER_GUID>
+            <MEMBER_CAPTION>{member_caption}</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>{children_cardinality}</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>{parent_level}</PARENT_LEVEL>
+{pun}            <PARENT_COUNT>{parent_count}</PARENT_COUNT>
+            <MEMBER_KEY>{member_key}</MEMBER_KEY>
+            <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
+            <IS_DATAMEMBER>false</IS_DATAMEMBER>
+          </row>"#,
+        catalog = project.config.catalog,
+        cube = project.config.cube,
+    )
+}
+
+fn all_member_rows() -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    build_all_member_rows(&project.model)
+}
+
+fn leaf_member_rows() -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    build_leaf_member_rows(&project.model)
+}
+
+fn all_rows() -> Vec<MemberRow> {
+    let mut rows = all_member_rows();
+    rows.append(&mut leaf_member_rows());
+    rows
+}
+
+// ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
+
+fn find_member<'a>(rows: &'a [MemberRow], filter: &str) -> Option<&'a MemberRow> {
+    let decoded = filter.replace("&amp;", "&");
+    rows.iter().find(|r| {
+        r.member_unique_name == filter || r.member_unique_name == decoded
+    })
+}
+
+fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> {
+    let decoded = parent.replace("&amp;", "&");
+    rows.iter().filter(|r| {
+        r.parent_unique_name.as_deref()
+            .map_or(false, |pun| pun == parent || pun == decoded)
+    }).collect()
 }
 
 // ---- public API ----
 
 pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -> String {
-    let rows = match (member_filter, tree_op) {
+    let rows = all_rows();
+
+    let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
         (Some(filter), Some(1)) => {
-            // 0x01 = CHILDREN
-            find_children_of(filter).join("\n")
-        }
-        (Some(filter), Some(4)) => {
-            // 0x04 = PARENT — for a leaf member, return its parent
-            if let Some(leaf) = find_member_row(filter) {
-                if let Some(pun) = tag_content(leaf, "PARENT_UNIQUE_NAME") {
-                    if !pun.is_empty() {
-                        find_member_row(pun)
-                            .map(|r| r.to_string())
-                            .unwrap_or_default()
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                }
+            // 0x01 = CHILDREN — return children of the filtered member
+            let mut children = find_children(&rows, filter);
+            // Also include the parent member itself before its children
+            if let Some(parent) = find_member(&rows, filter) {
+                let mut result = vec![parent];
+                result.append(&mut children);
+                result
             } else {
-                String::new()
+                children
             }
         }
-        (Some(filter), Some(8)) => {
-            // 0x08 = SELF — return the matching member
-            find_member_row(filter)
-                .map(|r| r.to_string())
-                .unwrap_or_default()
-        }
-        (Some(filter), Some(32)) => {
-            // 0x20 = ANCESTORS — return parent chain up to All.
-            if let Some(row) = find_member_row(filter) {
-                if row.contains("<PARENT_COUNT>0</PARENT_COUNT>") {
-                    String::new()
-                } else if let Some(pun) = tag_content(row, "PARENT_UNIQUE_NAME") {
-                    find_member_row(pun)
-                        .map(|r| r.to_string())
-                        .unwrap_or_default()
+        (Some(filter), Some(2)) => {
+            // 0x02 = SIBLINGS — children of the parent of the filtered member
+            if let Some(m) = find_member(&rows, filter) {
+                if let Some(ref pun) = m.parent_unique_name {
+                    find_children(&rows, pun)
                 } else {
-                    String::new()
+                    vec![]
                 }
             } else {
-                String::new()
+                vec![]
+            }
+        }
+        (Some(filter), Some(4)) => {
+            // 0x04 = PARENT — parent of the filtered member
+            if let Some(m) = find_member(&rows, filter) {
+                if let Some(ref pun) = m.parent_unique_name {
+                    if let Some(p) = find_member(&rows, pun) {
+                        vec![p]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
             }
         }
         (Some(filter), _) => {
-            // Unknown TREE_OP — return the matching member
-            find_member_row(filter)
-                .map(|r| r.to_string())
-                .unwrap_or_default()
+            // No tree_op: return just the matching member(s)
+            if let Some(m) = find_member(&rows, filter) {
+                vec![m]
+            } else {
+                vec![]
+            }
         }
         (None, _) => {
-            MEMBER_ROWS.to_string()
+            // No filter: return all members
+            rows.iter().collect()
         }
     };
 
-    discover_rowset_envelope(UUID_TYPE, MEMBER_ROW_FIELDS, &rows)
+    let xml_rows: String = selected.iter()
+        .map(|r| r.xml.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    crate::response::discover_rowset_envelope("", MEMBER_ROW_FIELDS, &xml_rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_rows_for_both_dims() {
+        let rows = all_rows();
+        let dims: std::collections::HashSet<&str> = rows.iter()
+            .map(|r| r.dimension_id.as_str())
+            .collect();
+        assert!(dims.contains("Produktkategori"));
+        assert!(dims.contains("Region"));
+    }
+
+    #[test]
+    fn all_members_have_correct_type_and_no_parent() {
+        let rows = all_rows();
+        for r in &rows {
+            if r.member_unique_name.ends_with("[All]") {
+                assert!(r.xml.contains("<MEMBER_TYPE>2</MEMBER_TYPE>"));
+                assert!(r.parent_unique_name.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn leaf_members_have_parent() {
+        let rows = all_rows();
+        let leaf: Vec<_> = rows.iter()
+            .filter(|r| r.member_unique_name.contains("&["))
+            .collect();
+        assert!(!leaf.is_empty(), "should have leaf members from DuckDB");
+        for r in leaf {
+            assert!(r.parent_unique_name.is_some());
+        }
+    }
+
+    #[test]
+    fn full_response_contains_both_dimensions() {
+        let xml = get_members_response(None, None);
+        assert!(xml.contains("[Produktkategori]"));
+        assert!(xml.contains("[Region]"));
+    }
+
+    #[test]
+    fn all_guids_are_valid_uuids() {
+        let rows = all_rows();
+        assert!(!rows.is_empty());
+        for r in &rows {
+            let Some(guid) = extract_tag(&r.xml, "MEMBER_GUID") else {
+                panic!("no MEMBER_GUID in row for {}", r.member_unique_name);
+            };
+            assert!(
+                is_valid_uuid(&guid),
+                "invalid MEMBER_GUID '{guid}' in row for {}: must be 8-4-4-4-12 hex chars",
+                r.member_unique_name,
+            );
+        }
+    }
+}
+
+fn extract_tag<'a>(xml: &'a str, tag: &str) -> Option<String> {
+    let open = xml.find(&format!("<{tag}>"))? + tag.len() + 2;
+    let close = xml[open..].find(&format!("</{tag}>"))?;
+    Some(xml[open..open + close].to_string())
+}
+
+fn is_valid_uuid(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 5 { return false; }
+    let lens = [8usize, 4, 4, 4, 12];
+    for (i, p) in parts.iter().enumerate() {
+        if p.len() != lens[i] { return false; }
+        if !p.chars().all(|c| c.is_ascii_hexdigit()) { return false; }
+    }
+    true
 }

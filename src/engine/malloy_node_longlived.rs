@@ -133,7 +133,7 @@ impl MalloyCompiler for LongLivedNodeMalloyCompiler {
 mod tests {
     use super::*;
     use crate::engine::model::{default_model, SemanticModel};
-    use crate::engine::plan::{Dimension, Measure, QueryPlan, TypedDimensionFilter};
+    use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
     use crate::engine::malloy::malloy_source_for_query_plan;
     use std::sync::OnceLock;
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn compile_total() {
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let r = compiler().compile_query(&model(), &plan).expect("compile total");
         assert!(!r.sql.is_empty());
         assert!(r.sql.to_uppercase().contains("SUM"));
@@ -157,8 +157,8 @@ mod tests {
     #[test]
     fn compile_group_by_one() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![],
         };
         let r = compiler().compile_query(&model(), &plan).expect("compile groupby 1");
@@ -168,8 +168,8 @@ mod tests {
     #[test]
     fn compile_group_by_two() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori, Dimension::Region],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string(), "Region".to_string()],
             filters: vec![],
         };
         let r = compiler().compile_query(&model(), &plan).expect("compile groupby 2");
@@ -179,10 +179,10 @@ mod tests {
     #[test]
     fn compile_filtered() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![TypedDimensionFilter {
-                dimension: Dimension::Region,
+                dimension: "Region".to_string(),
                 members: vec!["North".into()],
             }],
         };
@@ -192,13 +192,13 @@ mod tests {
 
     #[test]
     fn compile_rejects_count() {
-        let plan = QueryPlan::Count { dimension: Dimension::Produktkategori };
+        let plan = QueryPlan::Count { dimension: "Produktkategori".to_string() };
         assert!(compiler().compile_query(&model(), &plan).is_err());
     }
 
     #[test]
     fn js_compile_ms_is_populated() {
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let src = malloy_source_for_query_plan(&model(), &plan);
         // Use a unique source so Malloy cannot reuse an internal cache.
         let unique = format!("{src}\n-- u1");
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn cold_compile_reports_js_time() {
         let m = model();
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let base = malloy_source_for_query_plan(&m, &plan);
         let compiler = compiler();
 
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn warm_compile_is_fast() {
         let m = model();
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let compiler = compiler();
         let _first = compiler.compile_query(&m, &plan).unwrap();
         let start = std::time::Instant::now();

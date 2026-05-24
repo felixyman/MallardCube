@@ -37,6 +37,21 @@ async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
 
+    // Load proxy project (config + Malloy model) if config is supplied.
+    // Without config, falls back to the hardcoded default model.
+    let config_path = std::env::var("PROXY_CONFIG").ok();
+    let using_config = config_path.is_some();
+    proxy_project::init_project(config_path.as_deref())
+        .expect("init project");
+    if using_config {
+        let p = proxy_project::project();
+        println!("📁 Project loaded: {}", p.config.catalog);
+        debug_write(&format!("Project loaded: {} | cube={} | {} dims, {} measures",
+            p.config.catalog, p.config.cube,
+            p.model.dimensions.len(), p.model.measures.len(),
+        ));
+    }
+
     if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
         execute_builders::enable_malloy_runtime();
         println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");

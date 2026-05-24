@@ -10,49 +10,23 @@ use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::{Backend, QueryBackend};
 use crate::engine::model::SemanticModel;
 use crate::engine::sql::sql_for_query_plan;
+use crate::proxy_project;
 
 // ---------------------------------------------------------------------------
 // Semantic types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Dimension {
-    Produktkategori,
-    Region,
-}
+/// Internal dimension identifier — matches the `id` field from proxy config,
+/// or for the default model, the XMLA dimension name (e.g. "Produktkategori").
+pub type DimId = String;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Measure {
-    TotalSales,
-}
-
-impl Dimension {
-    pub fn dimension_name(&self) -> &str {
-        match self {
-            Dimension::Produktkategori => "Produktkategori",
-            Dimension::Region => "Region",
-        }
-    }
-
-    pub fn malloy_name(&self) -> &str {
-        match self {
-            Dimension::Produktkategori => "produktkategori",
-            Dimension::Region => "region",
-        }
-    }
-}
-
-impl Measure {
-    pub fn malloy_name(&self) -> &str {
-        match self {
-            Measure::TotalSales => "total_forsaljning",
-        }
-    }
-}
+/// Internal measure identifier — matches the `id` field from proxy config,
+/// or for the default model, the measure config id (e.g. "TotalSales").
+pub type MeasId = String;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedDimensionFilter {
-    pub dimension: Dimension,
+    pub dimension: DimId,
     pub members: Vec<String>,
 }
 
@@ -70,18 +44,18 @@ pub struct TypedDimensionFilter {
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryPlan {
     Total {
-        measure: Measure,
+        measure: MeasId,
         filters: Vec<TypedDimensionFilter>,
     },
 
     GroupBy {
-        measure: Measure,
-        group_by: Vec<Dimension>,
+        measure: MeasId,
+        group_by: Vec<DimId>,
         filters: Vec<TypedDimensionFilter>,
     },
 
     Count {
-        dimension: Dimension,
+        dimension: DimId,
     },
 
     Empty,
@@ -106,23 +80,19 @@ pub enum QueryResult {
 
 fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
     source.iter().map(|f| {
-        let dim = match f.dimension.as_str() {
-            "Region" => Dimension::Region,
-            "Produktkategori" => Dimension::Produktkategori,
-            _ => Dimension::Produktkategori,
-        };
         TypedDimensionFilter {
-            dimension: dim,
+            dimension: f.dimension.clone(),
             members: f.members.clone(),
         }
     }).collect()
 }
 
-fn axis_dimension(s: &str) -> Dimension {
-    match s {
-        "Region" => Dimension::Region,
-        _ => Dimension::Produktkategori,
-    }
+/// Resolve an MDX-axis string to a model dimension ID, falling back
+/// to `default_dim` when the string doesn't match any configured dimension.
+fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
+    model.lookup_dimension(s)
+        .map(|d| d.id.clone())
+        .unwrap_or(default)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,14 +100,23 @@ fn axis_dimension(s: &str) -> Dimension {
 // ---------------------------------------------------------------------------
 
 pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
+    let project = proxy_project::project();
+    let model = &project.model;
+
+    let default_meas = model.default_measure_id()
+        .unwrap_or_else(|| "TotalSales".into());
+    let default_dim = model.default_dimension_id()
+        .unwrap_or_else(|| "Produktkategori".into());
+
     let dim = query.axis_dimensions.first()
         .map(|s| s.as_str())
-        .unwrap_or("Produktkategori");
+        .unwrap_or("");
 
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll
         | SemanticQueryKind::ChildrenCountLeafProduct => {
-            QueryPlan::Count { dimension: axis_dimension(dim) }
+            let d = if dim.is_empty() { default_dim } else { resolve_dim(dim, model, default_dim.clone()) };
+            QueryPlan::Count { dimension: d }
         }
 
         SemanticQueryKind::ChildrenCountMeasures
@@ -149,7 +128,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         SemanticQueryKind::SlicerAllAndMeasure
         | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
-                measure: Measure::TotalSales,
+                measure: default_meas,
                 filters: typed_filters(&query.filters),
             }
         }
@@ -158,13 +137,16 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         | SemanticQueryKind::LeafLevelMembers
         | SemanticQueryKind::MeasureByCategory
         | SemanticQueryKind::DrilldownMemberProbe => {
-            let group_by = if query.axis_dimensions.len() >= 2 {
-                query.axis_dimensions.iter().map(|a| axis_dimension(a)).collect()
+            let group_by: Vec<DimId> = if query.axis_dimensions.len() >= 2 {
+                query.axis_dimensions.iter()
+                    .map(|a| resolve_dim(a, model, default_dim.clone()))
+                    .collect()
             } else {
-                vec![axis_dimension(dim)]
+                let d = if dim.is_empty() { default_dim } else { resolve_dim(dim, model, default_dim) };
+                vec![d]
             };
             QueryPlan::GroupBy {
-                measure: Measure::TotalSales,
+                measure: default_meas,
                 group_by,
                 filters: typed_filters(&query.filters),
             }
@@ -172,7 +154,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
 
         SemanticQueryKind::AllLevelMembers => {
             QueryPlan::Total {
-                measure: Measure::TotalSales,
+                measure: default_meas,
                 filters: vec![],
             }
         }

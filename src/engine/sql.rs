@@ -22,7 +22,7 @@ pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
         QueryPlan::GroupBy { measure, group_by, filters } => {
             let meas = model.meas_def(measure);
             let dim_cols: Vec<&str> = group_by.iter()
-                .map(|d| model.dim_def(d).physical_field)
+                .map(|d| model.dim_def(d).physical_field.as_str())
                 .collect();
             let wc = sql_where(model, filters);
             let group_nums: Vec<String> = (1..=dim_cols.len())
@@ -54,7 +54,7 @@ fn sql_where(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> String 
     let parts: Vec<String> = filters.iter()
         .filter(|f| !f.members.is_empty())
         .map(|f| {
-            let col = model.dim_def(&f.dimension).physical_field;
+            let col = &model.dim_def(&f.dimension).physical_field;
             let vals: Vec<String> = f.members.iter()
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
@@ -76,12 +76,12 @@ fn sql_where(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::plan::{Dimension, Measure, TypedDimensionFilter};
+    use crate::engine::plan::TypedDimensionFilter;
     use crate::engine::model::default_model;
 
     #[test]
     fn sql_total_no_filters() {
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".into(), filters: vec![] };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert_eq!(sql, "SELECT SUM(sales) FROM faktatabell");
     }
@@ -89,9 +89,9 @@ mod tests {
     #[test]
     fn sql_total_with_filter() {
         let plan = QueryPlan::Total {
-            measure: Measure::TotalSales,
+            measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
-                dimension: Dimension::Region,
+                dimension: "Region".into(),
                 members: vec!["North".into()],
             }],
         };
@@ -103,8 +103,8 @@ mod tests {
     #[test]
     fn sql_group_by_one_dim() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".into(),
+            group_by: vec!["Produktkategori".into()],
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -117,8 +117,8 @@ mod tests {
     #[test]
     fn sql_group_by_two_dims() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori, Dimension::Region],
+            measure: "TotalSales".into(),
+            group_by: vec!["Produktkategori".into(), "Region".into()],
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -131,10 +131,10 @@ mod tests {
     #[test]
     fn sql_group_by_with_filter() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".into(),
+            group_by: vec!["Produktkategori".into()],
             filters: vec![TypedDimensionFilter {
-                dimension: Dimension::Region,
+                dimension: "Region".into(),
                 members: vec!["North".into()],
             }],
         };
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn sql_count() {
-        let plan = QueryPlan::Count { dimension: Dimension::Produktkategori };
+        let plan = QueryPlan::Count { dimension: "Produktkategori".into() };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert_eq!(sql, "SELECT COUNT(DISTINCT produktkategori) FROM faktatabell");
     }
@@ -153,14 +153,14 @@ mod tests {
     #[test]
     fn sql_total_multi_filter_both_dims() {
         let plan = QueryPlan::Total {
-            measure: Measure::TotalSales,
+            measure: "TotalSales".into(),
             filters: vec![
                 TypedDimensionFilter {
-                    dimension: Dimension::Region,
+                    dimension: "Region".into(),
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
-                    dimension: Dimension::Produktkategori,
+                    dimension: "Produktkategori".into(),
                     members: vec!["Kategori A".into(), "Kategori B".into()],
                 },
             ],

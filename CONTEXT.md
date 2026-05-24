@@ -2,20 +2,44 @@
 
 ## Goal
 - Keep `xmla_proxy/` fully Excel-compatible while advancing `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
-- Long-term target: Malloy as semantic authority.
-- Current safe runtime path: `QueryPlan -> SQL -> DuckDB`.
+- Long-term target: Malloy as semantic authority; proxy owns only the Excel/XMLA compatibility layer.
+- Current safe runtime path: `QueryPlan -> SQL -> DuckDB`, with Malloy runtime path behind `MALLOY_RUNTIME=1`.
 
 ## Current status
-- Excel metadata/discover handshake works across the required rowsets for PivotTable use.
-- Excel PivotTable query execution works end-to-end for `Produktkategori`, `Region`, and `Total Forsaljning`.
+- Excel metadata/discover handshake works across required rowsets for PivotTable use.
+- Excel PivotTable query execution works end-to-end for current cube shape.
 - DuckDB is the default analytic backend.
-- Full typed pipeline exists: `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
-- `SemanticModel` is the shared authority for metadata rowsets, SQL emission, and Malloy emission.
-- Malloy runtime feasibility is now proven through a long-lived Node worker path.
-- Compile result now captures `compile_ms` from the JS worker and the runtime path actually executes the compiled SQL (not direct Rust SQL).
+- Full typed pipeline: `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
+- **Core abstraction is now model-driven, not demo-cube-specific:**
+  - `DimId` / `MeasId` are `String` type aliases — no hardcoded enums.
+  - Planning uses `default_measure_id()` / `default_dimension_id()` from the loaded model.
+  - MDX dimension detection scans configured dimensions, not hardcoded candidates.
+  - `members.rs` queries DuckDB for distinct values — no hardcoded business members.
+  - Collapse/2D rendering is generic — uses `axis_dimensions` order, not fixed dimension names.
+- **Two independent sample projects prove the abstraction:**
+  - `project/` — original demo (Produktkategori, Region, TotalSales).
+  - `project2/` — renamed (Category, Territory, Revenue) against same physical data.
+  - Both load and work without code changes.
+- **Proxy config + Malloy model file loading works at startup** (`PROXY_CONFIG=...`).
+  - Developer-supplied `.malloy` file is loaded as the Malloy model source.
+  - `proxy-config.json` maps Malloy names to Excel/XMLA captions, formatting, ordering.
+  - Without config, `default_model()` fallback (backward-compatible).
+- Malloy runtime path (long-lived Node worker) compiles and executes developer-owned Malloy.
+- Compile result carries `compile_ms` from the JS worker; runtime path executes compiled SQL.
 - Result-parity tests verify direct SQL and Malloy-compiled SQL produce identical results.
-- Query-plan normalization and caches exist for Malloy source, SQL text, and compiled SQL.
-- Test suite: 125 passing tests (worker-dependent tests run serially).
+- Worker spawn + warm-up happens eagerly at server startup.
+- Query-plan normalization and caches exist for Malloy source, SQL text, compiled SQL.
+- Naming contract documented in `docs/naming-contract.md`.
+- File reorg deferred — do after architecture boundaries fully settle.
+- Test suite: **136 passing tests** (worker-dependent tests run serially).
+
+## Supported simple-model scope (explicit boundary)
+- One DuckDB fact source.
+- Flat dimensions from columns.
+- One hierarchy per dimension with `(All)` + one leaf level.
+- Aggregate measures from Malloy.
+- Up to 2 visible row dimensions for current Excel Pivot interactions.
+- Not yet: arbitrary N-way hierarchies, multi-source joins, Postgres/MSSQL ingestion.
 
 ## Constraints and preferences
 - Excel/MSOLAP compatibility is strict; rowset and cellset layout correctness matters.
@@ -28,146 +52,68 @@
 
 ### Excel metadata and XMLA compatibility
 - Discover/metadata handshake works across:
-  - `DISCOVER_PROPERTIES`
-  - `DISCOVER_SCHEMA_ROWSETS`
-  - `DBSCHEMA_CATALOGS`
-  - `MDSCHEMA_CUBES`
-  - `MDSCHEMA_DIMENSIONS`
-  - `MDSCHEMA_HIERARCHIES`
-  - `MDSCHEMA_LEVELS`
-  - `MDSCHEMA_MEASURES`
-  - `MDSCHEMA_PROPERTIES`
-  - `MDSCHEMA_MEMBERS`
-- `MDSCHEMA_MEMBERS` was aligned to the spec:
-  - corrected `TREE_OP`
-  - corrected `MEMBER_TYPE`
-  - corrected column ordering
-  - added missing fields such as `PARENT_UNIQUE_NAME`, `MEMBER_KEY`, `MEMBER_GUID`
-  - parent/ancestor handling now uses real parent names
+  `DISCOVER_PROPERTIES`, `DISCOVER_SCHEMA_ROWSETS`, `DBSCHEMA_CATALOGS`,
+  `MDSCHEMA_CUBES`, `MDSCHEMA_DIMENSIONS`, `MDSCHEMA_HIERARCHIES`, `MDSCHEMA_LEVELS`,
+  `MDSCHEMA_MEASURES`, `MDSCHEMA_PROPERTIES`, `MDSCHEMA_MEMBERS`.
+- `MDSCHEMA_MEMBERS` aligned to spec and now queries DuckDB for actual member values.
 
 ### Cellset and axis behavior
-- `src/cellset.rs` now supports:
-  - multi-member tuples
-  - multiple hierarchies per axis
-  - conditional `CellInfo` and `CellData` property emission
-- `SlicerAxis` behavior fixed:
-  - includes every off-axis dimension
-  - stable ordering by metadata ordinal
-  - default `All` members emitted
-  - off-axis members use the standard 5-property shape
+- Multi-member tuples, multiple hierarchies per axis, conditional `CellInfo`/`CellData`.
+- `SlicerAxis`: every off-axis dimension, stable ordering, default `All`, standard 5-property shape.
 
 ### Semantic and parser layers
-- `ParsedMdx`-driven classification replaced brittle string matching.
-- Added shape/classification flags including:
-  - `CChildrenTarget`
-  - `CalculatedMembersPat`
-  - `has_drilldown_member`
-  - `has_measures`
-- Typed semantic IR implemented:
-  - `Dimension`
-  - `Measure`
-  - `TypedDimensionFilter`
-  - `QueryPlan`
-  - `QueryResult`
+- `ParsedMdx`-driven classification with shape flags.
+- Typed semantic IR: `DimensionFilter`, `ExcludedMember`, `SemanticQuery`, `SemanticQueryKind`.
 
-### Model-driven architecture
-- `SemanticModel` implemented with:
-  - `DimensionDef`
-  - `MeasureDef`
-  - typed metadata for captions, descriptions, ordinals, levels, formatting, GUIDs, and unique-name helpers
-- These rowsets now generate from `default_model()`:
-  - `measure_groups.rs`
-  - `measuregroup_dimensions.rs`
-  - `mdschema_properties.rs`
-  - `dimensions.rs`
-  - `hierarchies.rs`
-  - `levels.rs`
-  - `measures.rs`
-- `Measures` and `MeasuresLevel` still keep necessary special-casing.
+### Dynamic semantic model
+- **`DimId = String`, `MeasId = String`** — no compile-time enums.
+- `SemanticModel`, `DimensionDef`, `MeasureDef` use owned types, loadable from config.
+- Metadata rowsets (`dimensions`, `hierarchies`, `levels`, `measures`, etc.) generate from model.
+- Runtime helpers: `default_measure_id()`, `default_dimension_id()`, `lookup_dimension()`.
+
+### Proxy config and project loading
+- `src/proxy_config.rs`: JSON config schema (`ProxyConfig`, `DimensionConfig`, `MeasureConfig`).
+- `src/proxy_project.rs`: Loads `.malloy` file + config, builds `SemanticModel`, provides `malloy_source()`.
+- `project/` and `project2/`: two independent sample projects. Startup via `PROXY_CONFIG=...` env var.
+
+### Generic execution layer
+- `plan_from_semantic()` uses model-derived defaults — no hardcoded measure/dimension names.
+- MDX dimension detection scans configured dimensions via `lookup_dimension()`.
+- `members.rs` queries DuckDB `DISTINCT` values, uses project config for catalog/cube names.
+- 1D/2D tuple rendering in `execute_builders.rs` uses `axis_dimensions` order.
+- Collapse logic is dimension-independent — handles exclusions on either dimension.
 
 ### Query shapes and filtering
-- Added `Region` as a second visible dimension across metadata and execution.
-- Filter extraction works for:
-  - `WHERE ([Produktkategori]...&[Kategori X], [Measures]...)`
-  - `WHERE ([Region]...&[North], [Measures]...)`
-  - subquery `SELECT ({...})`
-  - nested subqueries merged by dimension
-- Cross-dimension row/filter flows work in both directions.
+- `Region`/`Territory` as second dimension. Cross-dimension row/filter flows.
+- Filter extraction: WHERE, subquery SELECT, nested subqueries merged by dimension.
 
-### CrossJoin and collapse support
-- Added CrossJoin support via:
-  - `SemanticQuery.axis_dimensions: Vec<String>`
-  - `build_drilldown_multi()`
-  - 2D grouped execution
-- `DrilldownMember(...)` collapse support implemented and fixed:
-  - `SemanticQueryKind::DrilldownMemberProbe`
-  - `drilldown_member_hierarchy`
-  - `ExcludedMember { dimension, key }`
-  - symmetric collapse regardless of row order
-  - axis-order-aware tuple rendering
-  - dimension-tagged excluded-member parsing
-  - 2D SQL row interpretation fixed using actual axis order
+### CrossJoin and collapse
+- Multi-hierarchy Rows via `CrossJoin`, 2D grouped execution.
+- `DrilldownMember(...)` collapse: symmetric collapse regardless of row order.
+- Generic collapsed-total computation from result data (no Backend-specific aggregate calls).
 
 ### Backend and emitters
-- DuckDB replaced SQLite as the default backend in `src/backend.rs`.
-- Generic SQL query methods and `QueryBackend` trait were preserved.
-- Synthetic benchmark/test data generation was preserved.
-- SQL emitter implemented in `engine/sql.rs`.
-- Malloy emitter implemented in `engine/malloy.rs`.
-- Malloy model emission no longer redundantly redefines dimensions when `semantic_name == physical_field`.
-- Runtime execution currently uses generated SQL by default.
+- DuckDB backend with `distinct_count()` and `distinct_values()` helpers.
+- SQL emitter and Malloy emitter with loaded-model-text support (`malloy_source_with_model_text()`).
+- `execute_plan_with_sql()` for Malloy-compiled SQL execution.
 
 ### Caching and normalization
-- `engine/normalize.rs` provides `plan_key(plan)`.
-- `engine/cache.rs` contains:
-  - SQL cache
-  - Malloy source cache
-  - compiled SQL cache
-  - hit/miss counters
+- `plan_key(plan)` normalization. SQL, Malloy, and compiled-SQL caches with hit/miss counters.
 
 ### Malloy compiler/runtime work
-- `engine/malloy_compiler.rs` defines:
-  - `CompileResult { sql, compile_ms }` — carries JS-side compile timing
-  - `MalloyCompiler` trait returning `Result<CompileResult, MalloyCompileError>`
-  - `NullCompiler`
-- `engine/malloy_node.rs` provides a one-shot Node compiler spike.
-- `engine/malloy_node_longlived.rs` provides a long-lived Node worker client that captures `compile_ms` from the JS response.
-- `execute_plan_with_sql()` in `plan.rs` executes generic SQL against the backend (used by the Malloy runtime path).
-- JS tooling added:
-  - `package.json`
-  - `js/malloy-cli.js`
-  - `js/malloy-worker.js` — returns `compile_ms` in responses
-  - `js/malloy_rquickjs_entry.js`
-  - `build/malloy-compiler.bundle.js`
-- Critical runtime finding: Malloy compilation requires a real DuckDB schema/connection at compile time.
-- Proven runtime behavior:
-  - one-shot compile works but is too slow at about 550 ms/request
-  - long-lived warm compile works
-  - compiled-query cache hits are effectively free
-  - currently supported subset includes `Total`, `GroupBy(1)`, `GroupBy(2)`, and filtered analytic queries
-  - `Count` and `Empty` are still rejected on the Malloy path
-  - result parity confirmed: Malloy-compiled SQL produces same results as direct Rust SQL (4 parity tests)
+- `CompileResult { sql, compile_ms }` — JS-side compile timing from worker.
+- `MalloyCompiler` trait, `NullCompiler`, one-shot Node spike, long-lived worker.
+- Result parity confirmed (4 tests). Worker warm-up at startup.
+- `malloy_compile_warm`, `malloy_compile_cold`, `malloy_compile_cached` benchmarks.
 
 ### Runtime instrumentation
-- `MALLOY_RUNTIME=1` enables the Malloy runtime path in `src/main.rs`.
-- Timed execution/logging path exists and emits `TIMINGS ...` lines.
-- Runtime path labels include:
-  - `DirectSql`
-  - `MalloyCompiled`
-  - `MalloyCached`
-- Real logs already show repeated `plan_key`s and cache hits.
+- `MALLOY_RUNTIME=1` toggle. Timed execution path with runtime path labels.
+- `js_compile_ms` field in `Timings` and log output.
 
 ### Benchmarks and docs
-- Criterion benchmark infrastructure added:
-  - `benches/pipeline.rs`
-  - `src/lib.rs`
-  - `src/test_fixtures.rs`
-- Architecture docs added under `docs/`:
-  - `current-architecture.mmd`
-  - `target-architecture.mmd`
-  - `migration-plan.mmd`
-  - `collapse-sequence.mmd`
-  - `README.md`
+- Criterion benchmarks for pipeline overhead, DuckDB scaling, Malloy runtime.
+- `docs/naming-contract.md` — id/caption/malloy_name naming rules.
+- Architecture diagrams in `docs/`.
 
 ## Benchmark results
 
@@ -195,77 +141,67 @@
 ## Key findings
 - DuckDB is 5-10x faster than SQLite for grouped analytic queries.
 - `QueryPlan -> SQL` emission is extremely cheap; execution dominates real latency.
-- One-shot Malloy compile is not interactive-use viable, but long-lived compile is sub-ms warm.
-- Cache hit rate is likely the deciding factor for whether runtime Malloy is practical.
-- Real Excel logs already show repeated `plan_key`s, which keeps Malloy runtime promising.
-- XMLA rendering overhead is not the main scaling problem.
-- Direct Rust SQL and Malloy-compiled SQL produce identical results for the supported analytic subset.
-- Malloy internal caching makes "cold" vs "warm" distinction subtle; unique-query comments don't fully defeat it.
+- One-shot Malloy compile not interactive-use viable, but long-lived compile is sub-ms warm.
+- Direct Rust SQL and Malloy-compiled SQL produce identical results (parity tests).
+- Malloy internal caching makes "cold" vs "warm" distinction subtle.
+- Two independent projects with different naming prove the model-driven abstraction is real.
 
 ## Current gaps and risks
-- `src/members.rs` is still the most manual and sensitive metadata path.
-- Timing instrumentation still has known correctness bugs:
-  - `semantic_us` is often `0`
-  - `sql_emit_us` is often `0`
-  - `malloy_emit_us` is often `0`
-  - `total_us` can be smaller than component timings
-- Long-lived worker usage is not yet hardened for robust concurrent use.
-- Worker-related tests currently require serialization: `cargo test --lib -- --test-threads=1`.
-- Embedded `rquickjs` path has not yet been meaningfully proven.
-- Malloy's internal caching means "cold" unique-source benchmarks may not reflect true fresh compile cost.
+- `execute_builders.rs` is the main complexity hotspot — collapse/tuple logic needs extraction.
+- Some fallback defaults in planning (`default_measure_id()` etc.) can mask misconfiguration.
+- Only "simple model" shape is supported: one fact source, flat dimensions, one hierarchy each.
+- Timing instrumentation still has known correctness bugs in some fields.
+- Long-lived worker not hardened for concurrent use; tests require serialization.
+- File structure is still flat — reorg deferred until architecture boundaries settle.
+- `mdx_semantic.rs` still has some string-heuristic fragility for more complex MDX.
 
 ## What works today
 - Full discover handshake for Excel/MSOLAP.
 - End-to-end PivotTable execution for current cube shape.
-- Multi-hierarchy Rows axis via CrossJoin.
-- Cross-dimension filtering and nested filter merge.
-- Symmetric collapse/expand behavior regardless of row order.
-- Typed `ParsedMdx -> SemanticQuery -> QueryPlan` flow.
-- SQL generation and DuckDB execution.
-- Malloy emission and long-lived compilation spike.
-- Malloy-compiled SQL execution via `execute_plan_with_sql`.
-- Result parity between direct Rust SQL and Malloy-compiled SQL (4 tests).
-- JS-side `compile_ms` captured from worker into `CompileResult`.
-- Cache normalization and cache hit logging.
-- 125 passing tests in the current suite.
+- Multi-hierarchy Rows axis via CrossJoin. Cross-dimension filtering. Symmetric collapse.
+- Typed `ParsedMdx -> SemanticQuery -> QueryPlan` flow with model-driven IDs.
+- SQL generation and DuckDB execution. Malloy emission + compilation via long-lived worker.
+- `execute_plan_with_sql()` for Malloy-compiled SQL execution.
+- Result parity between direct SQL and Malloy-compiled SQL (4 tests).
+- JS-side `compile_ms` captured. Eager worker warm-up at startup.
+- Cache normalization and logging.
+- Two independent sample projects load and work against same physical data.
+- 136 passing tests.
 
 ## Current priorities
-1. Continue moving remaining manual metadata logic onto stronger model abstractions, especially `src/members.rs`.
-2. Fix remaining timing instrumentation correctness (`semantic_us`, `sql_emit_us`, `malloy_emit_us`, `total_us` boundaries).
-3. Measure real Excel cache-hit behavior from `debug-last-run.log`.
-4. Compare direct SQL vs Malloy runtime on actual Excel interactions (using the now-correct Malloy execute path).
-5. Harden the long-lived worker if Malloy runtime continues to look viable.
-6. Evaluate Malloy cold-compile cost by measuring full `compile_ms` from the worker (already captured in `CompileResult`).
+1. File reorg after architecture boundaries fully settle (deferred from this pass).
+2. Harden the long-lived worker for concurrent use.
+3. Fix remaining timing instrumentation correctness.
+4. Add proof case where `caption != id` (stretch the abstraction without breaking it).
+5. Extract collapse/tuple helpers from `execute_builders.rs`.
+6. Generalize beyond simple-model scope if needed (not yet urgent).
 
 ## Relevant files
-- `src/backend.rs`: DuckDB default backend, `QueryBackend`, synthetic data generation.
-- `src/execute.rs`: thin dispatch and regression tests.
-- `src/execute_builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, collapse/axis handling.
-- `src/mdx_semantic.rs`: semantic parsing, typed filters, excluded members, axis-order behavior.
+- `src/backend.rs`: DuckDB default backend, `QueryBackend`, `distinct_count`, `distinct_values`.
+- `src/execute.rs`: thin dispatch and regression tests (136 tests).
+- `src/execute_builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, generic 1D/2D/collapse rendering.
+- `src/mdx_semantic.rs`: model-driven dimension detection, semantic classification, excluded-member parsing.
 - `src/mdx_parser.rs`: `nom` parser and `ParsedMdx`.
 - `src/axis_members.rs`: member/cell/axis/slicer helpers.
 - `src/cellset.rs`: XMLA cellset builder.
-- `src/engine/plan.rs`: `QueryPlan`, `QueryResult`, `execute_plan_with_sql` (for Malloy-compiled SQL), direct SQL execution path.
-- `src/engine/model.rs`: authoritative `SemanticModel` and metadata definitions.
-- `src/engine/malloy.rs`: Malloy emission.
-- `src/engine/sql.rs`: SQL emission.
+- `src/members.rs`: queries DuckDB for member values, uses project config for catalog/cube.
+- `src/engine/plan.rs`: `DimId`, `MeasId`, `QueryPlan`, `QueryResult`, `plan_from_semantic` (model-driven), `execute_plan_with_sql`.
+- `src/engine/model.rs`: `SemanticModel`, `DimensionDef`, `MeasureDef` with helpers (`default_measure_id`, `lookup_dimension`, etc.).
+- `src/engine/malloy.rs`: Malloy emitter with `malloy_source_with_model_text()`.
+- `src/engine/sql.rs`: SQL emitter.
 - `src/engine/normalize.rs`: `plan_key(plan)`.
 - `src/engine/cache.rs`: source/SQL/compiled cache layers.
-- `src/engine/malloy_compiler.rs`: `CompileResult`, `MalloyCompiler` trait, compile errors.
+- `src/engine/malloy_compiler.rs`: `CompileResult`, `MalloyCompiler` trait.
 - `src/engine/malloy_node.rs`: one-shot Node compile spike.
-- `src/engine/malloy_node_longlived.rs`: long-lived worker client captures `compile_ms` from JS worker.
-- `src/engine/parity.rs`: direct-SQL vs Malloy-path parity coverage.
-- `src/engine/timing.rs`: `Timings` and runtime path data.
-- `src/members.rs`: remaining manual/high-risk metadata implementation.
-- `src/main.rs`: runtime toggle and request timing/logging.
-- `benches/pipeline.rs`: pipeline and scaling benchmarks.
-- `debug-last-run.log`: latest Excel request/response/timing trace.
+- `src/engine/malloy_node_longlived.rs`: long-lived worker client captures `compile_ms`.
+- `src/engine/parity.rs`: direct-SQL vs Malloy-path result parity.
+- `src/engine/timing.rs`: `Timings` with `js_compile_ms`.
+- `src/proxy_config.rs`: JSON config schema.
+- `src/proxy_project.rs`: Project loader — builds `SemanticModel` from config, provides `malloy_source()`.
+- `src/main.rs`: runtime toggle, project init (`PROXY_CONFIG` env var), request timing/logging.
+- `project/model.malloy`, `project/proxy-config.json`: sample project 1.
+- `project2/model.malloy`, `project2/proxy-config.json`: sample project 2 (different names).
+- `docs/naming-contract.md`: id/caption/malloy_name naming rules.
 - `docs/`: architecture and migration diagrams.
-
-## Constants and current cube shape
-- Catalog name: `KTH_KEX_MALLOY_CUBE`
-- Cube name: `Model`
-- Measure: `Total Forsaljning` with caption `Total Forsaljning (SEK)`
-- Measure group: `Faktatabell`
-- Dimensions: `Produktkategori`, `Region`
-- Session ID: `RUST-SESSION-456`
+- `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
+- `debug-last-run.log`: latest Excel request/response/timing trace.

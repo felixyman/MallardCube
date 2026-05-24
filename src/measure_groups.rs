@@ -17,7 +17,7 @@ pub fn get_measure_groups_response() -> String {
     let mut rows = String::new();
     let mut seen = BTreeSet::new();
     for m in model.measures {
-        if seen.insert(m.measure_group_name) {
+        if seen.insert(m.measure_group_name.clone()) {
             rows.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>

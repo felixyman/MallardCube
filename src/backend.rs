@@ -267,4 +267,23 @@ impl Backend {
         conn.query_row(sql, [], |row| row.get::<_, u32>(0))
             .unwrap_or(0)
     }
+
+    // ---- metadata helpers (used by members.rs) ----
+
+    pub fn distinct_count(&self, column: &str) -> u32 {
+        let sql = format!("SELECT COUNT(DISTINCT {column}) FROM faktatabell");
+        self.query_count(&sql)
+    }
+
+    pub fn distinct_values(&self, column: &str) -> Vec<String> {
+        let sql = format!("SELECT DISTINCT {column} FROM faktatabell ORDER BY {column}");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql).expect("prepare distinct_values");
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query_map distinct_values")
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
+    }
 }

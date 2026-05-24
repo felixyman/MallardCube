@@ -18,7 +18,7 @@ pub fn get_measuregroup_dimensions_response() -> String {
 
     // Pick the first measure group name (all measures share the same group for now)
     let group_name = model.measures.first()
-        .map(|m| m.measure_group_name)
+        .map(|m| m.measure_group_name.as_str())
         .unwrap_or("Faktatabell");
 
     // [Measures] system dimension (special case)

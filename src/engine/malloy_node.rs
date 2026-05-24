@@ -59,13 +59,13 @@ impl MalloyCompiler for NodeMalloyCompiler {
 mod tests {
     use super::*;
     use crate::engine::model::default_model;
-    use crate::engine::plan::{Dimension, Measure, QueryPlan};
+    use crate::engine::plan::QueryPlan;
 
     #[test]
     fn compile_total_query() {
         let model = default_model();
         let plan = QueryPlan::Total {
-            measure: Measure::TotalSales,
+            measure: "TotalSales".to_string(),
             filters: vec![],
         };
         let compiler = NodeMalloyCompiler;
@@ -78,8 +78,8 @@ mod tests {
     fn compile_group_by_one_dim() {
         let model = default_model();
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![],
         };
         let compiler = NodeMalloyCompiler;
@@ -94,8 +94,8 @@ mod tests {
     fn compile_group_by_two_dims() {
         let model = default_model();
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori, Dimension::Region],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string(), "Region".to_string()],
             filters: vec![],
         };
         let compiler = NodeMalloyCompiler;
@@ -110,11 +110,11 @@ mod tests {
     fn compile_filtered_query() {
         let model = default_model();
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![
                 crate::engine::plan::TypedDimensionFilter {
-                    dimension: Dimension::Region,
+                    dimension: "Region".to_string(),
                     members: vec!["North".into()],
                 },
             ],
@@ -131,7 +131,7 @@ mod tests {
     fn compile_rejects_count() {
         let model = default_model();
         let plan = QueryPlan::Count {
-            dimension: Dimension::Produktkategori,
+            dimension: "Produktkategori".to_string(),
         };
         let compiler = NodeMalloyCompiler;
         assert!(compiler.compile_query(&model, &plan).is_err());

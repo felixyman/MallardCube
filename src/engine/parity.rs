@@ -9,7 +9,7 @@ mod tests {
     use crate::backend::{Backend, BenchmarkDataConfig};
     use crate::engine::model::default_model;
     use crate::engine::plan::{
-        QueryPlan, Dimension, Measure, TypedDimensionFilter,
+        QueryPlan, TypedDimensionFilter,
         execute_plan_sql_with_backend,
         plan_from_semantic,
     };
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn total_compiler_accepts_supported_plan() {
         let model = default_model();
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let compiler = NullCompiler;
         let result = compiler.compile_query(&model, &plan);
         assert!(result.is_ok());
@@ -74,8 +74,8 @@ mod tests {
     fn group_by_compiler_accepts_1d() {
         let model = default_model();
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![],
         };
         let compiler = NullCompiler;
@@ -86,8 +86,8 @@ mod tests {
     fn group_by_compiler_accepts_2d() {
         let model = default_model();
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori, Dimension::Region],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string(), "Region".to_string()],
             filters: vec![],
         };
         let compiler = NullCompiler;
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn compiler_rejects_count_plan() {
         let model = default_model();
-        let plan = QueryPlan::Count { dimension: Dimension::Produktkategori };
+        let plan = QueryPlan::Count { dimension: "Produktkategori".to_string() };
         let compiler = NullCompiler;
         assert!(compiler.compile_query(&model, &plan).is_err());
     }
@@ -114,9 +114,9 @@ mod tests {
     fn sql_and_malloy_both_produce_text_for_same_plan() {
         let model = default_model();
         let plan = QueryPlan::Total {
-            measure: Measure::TotalSales,
+            measure: "TotalSales".to_string(),
             filters: vec![TypedDimensionFilter {
-                dimension: Dimension::Region,
+                dimension: "Region".to_string(),
                 members: vec!["North".into()],
             }],
         };
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn parity_total_matches() {
-        let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
         let (direct, malloy) = parity_results(&plan);
         let dv = match direct { crate::engine::plan::QueryResult::Scalar(v) => v, _ => panic!() };
         let mv = match malloy { crate::engine::plan::QueryResult::Scalar(v) => v, _ => panic!() };
@@ -142,8 +142,8 @@ mod tests {
     #[test]
     fn parity_group_by_1d_matches() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![],
         };
         let (direct, malloy) = parity_results(&plan);
@@ -161,8 +161,8 @@ mod tests {
     #[test]
     fn parity_group_by_2d_matches() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori, Dimension::Region],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string(), "Region".to_string()],
             filters: vec![],
         };
         let (direct, malloy) = parity_results(&plan);
@@ -181,10 +181,10 @@ mod tests {
     #[test]
     fn parity_filtered_matches() {
         let plan = QueryPlan::GroupBy {
-            measure: Measure::TotalSales,
-            group_by: vec![Dimension::Produktkategori],
+            measure: "TotalSales".to_string(),
+            group_by: vec!["Produktkategori".to_string()],
             filters: vec![TypedDimensionFilter {
-                dimension: Dimension::Region,
+                dimension: "Region".to_string(),
                 members: vec!["Region 01".into()],
             }],
         };
