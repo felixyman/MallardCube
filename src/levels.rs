@@ -1,4 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::engine::model::default_model;
 
 const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -27,7 +28,13 @@ const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALO
                 <xsd:element sql:field="LEVEL_ORIGIN" name="LEVEL_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-const LEVEL_ROWS: &str = r#"          <row>
+pub fn get_levels_response() -> String {
+    let model = default_model();
+    let mut rows = String::new();
+
+    // MeasuresLevel (special case, not in model)
+    rows.push_str(
+        r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
@@ -47,87 +54,76 @@ const LEVEL_ROWS: &str = r#"          <row>
             <LEVEL_ORIGIN>6</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>(All)</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[(All)]</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-000000000030</LEVEL_GUID>
-            <LEVEL_CAPTION>(All)</LEVEL_CAPTION>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>1</LEVEL_TYPE>
-            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>Produktkategori</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Produktkategori].[Produktkategori].[Produktkategori]</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-000000000031</LEVEL_GUID>
-            <LEVEL_CAPTION>Produktkategori</LEVEL_CAPTION>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>50</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>0</LEVEL_TYPE>
-            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>50</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>(All)</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Region].[Region].[(All)]</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-000000000032</LEVEL_GUID>
-            <LEVEL_CAPTION>(All)</LEVEL_CAPTION>
-            <LEVEL_NUMBER>0</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>1</LEVEL_TYPE>
-            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>Region</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>[Region].[Region].[Region]</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-000000000033</LEVEL_GUID>
-            <LEVEL_CAPTION>Region</LEVEL_CAPTION>
-            <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>10</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>0</LEVEL_TYPE>
-            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>10</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>"#;
+"#,
+    );
 
-pub fn get_levels_response() -> String {
-    discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, LEVEL_ROWS)
+    for (i, d) in model.dimensions.iter().enumerate() {
+        let base_guid = 30 + i as u32 * 2;
+
+        // (All) level
+        rows.push_str(&format!(
+            r#"          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{}</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{}</LEVEL_CAPTION>
+            <LEVEL_NUMBER>0</LEVEL_NUMBER>
+            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
+            <LEVEL_TYPE>1</LEVEL_TYPE>
+            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
+            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+          </row>
+"#,
+            d.dimension_unique_name(),
+            d.hierarchy_unique_name(),
+            d.all_level_name,
+            d.all_level_unique_name(),
+            base_guid,
+            d.all_level_name,
+        ));
+
+        // Leaf level
+        rows.push_str(&format!(
+            r#"          <row>
+            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
+            <CUBE_NAME>Model</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{}</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{}</LEVEL_CAPTION>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <LEVEL_CARDINALITY>{}</LEVEL_CARDINALITY>
+            <LEVEL_TYPE>0</LEVEL_TYPE>
+            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
+            <LEVEL_KEY_CARDINALITY>{}</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+          </row>
+"#,
+            d.dimension_unique_name(),
+            d.hierarchy_unique_name(),
+            d.leaf_level_name,
+            d.leaf_level_unique_name(),
+            base_guid + 1,
+            d.leaf_level_name,
+            d.cardinality_hint,
+            d.cardinality_hint,
+        ));
+    }
+
+    discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, &rows)
 }

@@ -1,4 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::engine::model::default_model;
 
 const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -28,7 +29,13 @@ const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="STRUCTURE_TYPE" name="STRUCTURE_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-const HIER_ROWS: &str = r#"          <row>
+pub fn get_hierarchies_response() -> String {
+    let model = default_model();
+    let mut rows = String::new();
+
+    // Measures hierarchy (special case, not in model)
+    rows.push_str(
+        r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
@@ -51,23 +58,28 @@ const HIER_ROWS: &str = r#"          <row>
             <STRUCTURE_TYPE>Natural</STRUCTURE_TYPE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
+"#,
+    );
+
+    for (i, d) in model.dimensions.iter().enumerate() {
+        rows.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_NAME>Produktkategori</HIERARCHY_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Produktkategori].[Produktkategori]</HIERARCHY_UNIQUE_NAME>
-            <HIERARCHY_GUID>00000000-0000-0000-0000-000000000020</HIERARCHY_GUID>
-            <HIERARCHY_CAPTION>Produktkategori</HIERARCHY_CAPTION>
+            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_NAME>{}</HIERARCHY_NAME>
+            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
+            <HIERARCHY_GUID>00000000-0000-0000-0000-{:012}</HIERARCHY_GUID>
+            <HIERARCHY_CAPTION>{}</HIERARCHY_CAPTION>
             <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <HIERARCHY_CARDINALITY>50</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>[Produktkategori].[Produktkategori].[All]</DEFAULT_MEMBER>
-            <ALL_MEMBER>[Produktkategori].[Produktkategori].[All]</ALL_MEMBER>
+            <HIERARCHY_CARDINALITY>{}</HIERARCHY_CARDINALITY>
+            <DEFAULT_MEMBER>{}</DEFAULT_MEMBER>
+            <ALL_MEMBER>{}</ALL_MEMBER>
             <STRUCTURE>0</STRUCTURE>
-            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
+            <DIMENSION_IS_VISIBLE>{}</DIMENSION_IS_VISIBLE>
             <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
-            <HIERARCHY_IS_VISIBLE>true</HIERARCHY_IS_VISIBLE>
+            <HIERARCHY_IS_VISIBLE>{}</HIERARCHY_IS_VISIBLE>
             <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
             <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
             <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
@@ -75,31 +87,19 @@ const HIER_ROWS: &str = r#"          <row>
             <STRUCTURE_TYPE>Natural</STRUCTURE_TYPE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_NAME>Region</HIERARCHY_NAME>
-            <HIERARCHY_UNIQUE_NAME>[Region].[Region]</HIERARCHY_UNIQUE_NAME>
-            <HIERARCHY_GUID>00000000-0000-0000-0000-000000000021</HIERARCHY_GUID>
-            <HIERARCHY_CAPTION>Region</HIERARCHY_CAPTION>
-            <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <HIERARCHY_CARDINALITY>10</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>[Region].[Region].[All]</DEFAULT_MEMBER>
-            <ALL_MEMBER>[Region].[Region].[All]</ALL_MEMBER>
-            <STRUCTURE>0</STRUCTURE>
-            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
-            <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
-            <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
-            <HIERARCHY_IS_VISIBLE>true</HIERARCHY_IS_VISIBLE>
-            <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
-            <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
-            <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
-            <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
-            <STRUCTURE_TYPE>Natural</STRUCTURE_TYPE>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>"#;
+"#,
+            d.dimension_unique_name(),
+            d.caption,
+            d.hierarchy_unique_name(),
+            20 + i as u32,
+            d.hierarchy_name,
+            d.cardinality_hint,
+            d.all_member_unique_name(),
+            d.all_member_unique_name(),
+            d.visible,
+            d.visible,
+        ));
+    }
 
-pub fn get_hierarchies_response() -> String {
-    discover_rowset_envelope(UUID_TYPE, HIER_ROW_FIELDS, HIER_ROWS)
+    discover_rowset_envelope(UUID_TYPE, HIER_ROW_FIELDS, &rows)
 }

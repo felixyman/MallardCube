@@ -11,7 +11,7 @@ use crate::response::wrap_in_soap_envelope;
 use crate::backend::{Backend, QueryBackend};
 use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
 use crate::engine::model::{default_model, SemanticModel};
-use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, ExcludedMember};
+use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
 use crate::axis_members::{
     render_response, full_slicer_axis, measures_axis,
     single_member_axis, member_list_axis, empty_member_list_axis,

@@ -1,4 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::engine::model::default_model;
 
 const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -19,7 +20,13 @@ const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_
                 <xsd:element sql:field="DIMENSION_IS_VISIBLE" name="DIMENSION_IS_VISIBLE" type="xsd:boolean" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-const DIM_ROWS: &str = r#"          <row>
+pub fn get_dimensions_response() -> String {
+    let model = default_model();
+    let mut rows = String::new();
+
+    // Measures system dimension (special case, not in model)
+    rows.push_str(
+        r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
             <DIMENSION_NAME>Measures</DIMENSION_NAME>
@@ -38,45 +45,43 @@ const DIM_ROWS: &str = r#"          <row>
             <DIMENSION_IS_VISIBLE>false</DIMENSION_IS_VISIBLE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
+"#,
+    );
+
+    for (i, d) in model.dimensions.iter().enumerate() {
+        rows.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
             <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_NAME>Produktkategori</DIMENSION_NAME>
-            <DIMENSION_UNIQUE_NAME>[Produktkategori]</DIMENSION_UNIQUE_NAME>
-            <DIMENSION_GUID>00000000-0000-0000-0000-000000000002</DIMENSION_GUID>
-            <DIMENSION_CAPTION>Produktkategori</DIMENSION_CAPTION>
-            <DIMENSION_ORDINAL>1</DIMENSION_ORDINAL>
+            <DIMENSION_NAME>{}</DIMENSION_NAME>
+            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
+            <DIMENSION_GUID>00000000-0000-0000-0000-{:012}</DIMENSION_GUID>
+            <DIMENSION_CAPTION>{}</DIMENSION_CAPTION>
+            <DIMENSION_ORDINAL>{}</DIMENSION_ORDINAL>
             <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <DIMENSION_CARDINALITY>50</DIMENSION_CARDINALITY>
-            <DEFAULT_HIERARCHY>[Produktkategori].[Produktkategori]</DEFAULT_HIERARCHY>
-            <DESCRIPTION>Våra olika produkter</DESCRIPTION>
+            <DIMENSION_CARDINALITY>{}</DIMENSION_CARDINALITY>
+            <DEFAULT_HIERARCHY>{}</DEFAULT_HIERARCHY>
+            <DESCRIPTION>{}</DESCRIPTION>
             <IS_VIRTUAL>false</IS_VIRTUAL>
             <IS_READWRITE>false</IS_READWRITE>
             <DIMENSION_UNIQUE_SETTINGS>0</DIMENSION_UNIQUE_SETTINGS>
-            <DIMENSION_MASTER_UNIQUE_NAME>[Produktkategori]</DIMENSION_MASTER_UNIQUE_NAME>
-            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
+            <DIMENSION_MASTER_UNIQUE_NAME>{}</DIMENSION_MASTER_UNIQUE_NAME>
+            <DIMENSION_IS_VISIBLE>{}</DIMENSION_IS_VISIBLE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_NAME>Region</DIMENSION_NAME>
-            <DIMENSION_UNIQUE_NAME>[Region]</DIMENSION_UNIQUE_NAME>
-            <DIMENSION_GUID>00000000-0000-0000-0000-000000000003</DIMENSION_GUID>
-            <DIMENSION_CAPTION>Region</DIMENSION_CAPTION>
-            <DIMENSION_ORDINAL>2</DIMENSION_ORDINAL>
-            <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <DIMENSION_CARDINALITY>10</DIMENSION_CARDINALITY>
-            <DEFAULT_HIERARCHY>[Region].[Region]</DEFAULT_HIERARCHY>
-            <DESCRIPTION>Geografisk region</DESCRIPTION>
-            <IS_VIRTUAL>false</IS_VIRTUAL>
-            <IS_READWRITE>false</IS_READWRITE>
-            <DIMENSION_UNIQUE_SETTINGS>0</DIMENSION_UNIQUE_SETTINGS>
-            <DIMENSION_MASTER_UNIQUE_NAME>[Region]</DIMENSION_MASTER_UNIQUE_NAME>
-            <DIMENSION_IS_VISIBLE>true</DIMENSION_IS_VISIBLE>
-            <CUBE_SOURCE>1</CUBE_SOURCE>
-          </row>"#;
+"#,
+            d.caption,
+            d.dimension_unique_name(),
+            i + 2, // GUIDs start at ...0002 for Produktkategori
+            d.caption,
+            d.ordinal,
+            d.cardinality_hint,
+            d.hierarchy_unique_name(),
+            d.description,
+            d.dimension_unique_name(),
+            d.visible,
+        ));
+    }
 
-pub fn get_dimensions_response() -> String {
-    discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, DIM_ROWS)
+    discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, &rows)
 }
