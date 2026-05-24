@@ -185,6 +185,12 @@ pub enum SemanticQueryKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ExcludedMember {
+    pub dimension: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SemanticQuery {
     pub kind: SemanticQueryKind,
     pub dim_props: Vec<String>,
@@ -194,7 +200,7 @@ pub struct SemanticQuery {
     pub row_dimension: Option<String>,
     pub axis_dimensions: Vec<String>,
     pub slicers: Vec<SlicerSelection>,
-    pub excluded_members: Vec<String>,
+    pub excluded_members: Vec<ExcludedMember>,
     pub drilldown_member_hierarchy: Option<String>,
 }
 
@@ -216,10 +222,19 @@ fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
     let axis_expr_end = select_part.find("DIMENSION PROPERTIES").unwrap_or(select_part.len());
     let axis_expr = &select_part[..axis_expr_end];
 
-    for dim in &["Produktkategori", "Region"] {
-        if axis_expr.contains(dim) || axis_expr.contains(&format!("[{dim}]")) {
-            result.push(dim.to_string());
-        }
+    // Preserve the order dimensions appear in the axis expression.
+    // Find first occurrence position of each dimension, collect present ones
+    // in positional order.
+    let candidates: &[&str] = &["Produktkategori", "Region"];
+    let mut positions: Vec<(usize, &str)> = candidates.iter()
+        .filter_map(|&d| {
+            axis_expr.find(&format!("[{d}]")).map(|p| (p, d))
+        })
+        .collect();
+    positions.sort_by_key(|(p, _)| *p);
+
+    for (_, dim) in positions {
+        result.push(dim.to_string());
     }
     result
 }
@@ -280,7 +295,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     }
 }
 
-fn parse_excluded_members(mdx: &str) -> Vec<String> {
+fn parse_excluded_members(mdx: &str) -> Vec<ExcludedMember> {
     let mut result = Vec::new();
     let Some(excl_start) = mdx.find("{-{") else { return result; };
     let excl = &mdx[excl_start..];
@@ -288,7 +303,17 @@ fn parse_excluded_members(mdx: &str) -> Vec<String> {
     while let Some(amp) = excl[search_from..].find("&[") {
         let begin = search_from + amp + 2;
         if let Some(end) = excl[begin..].find(']') {
-            result.push(excl[begin..begin + end].to_string());
+            let key = excl[begin..begin + end].to_string();
+            // Look backwards from the &[ to find the preceding [Dimension]
+            let before = &excl[..search_from + amp];
+            let dim = if let Some(last_dot) = before.rfind("].") {
+                if let Some(open) = before[..last_dot].rfind('[') {
+                    let raw = &before[open + 1..last_dot];
+                    if raw == "Region" { "Region" }
+                    else { "Produktkategori" }
+                } else { "Produktkategori" }
+            } else { "Produktkategori" };
+            result.push(ExcludedMember { dimension: dim.to_string(), key });
             search_from = begin + end;
         } else {
             break;

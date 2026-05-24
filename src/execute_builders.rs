@@ -11,7 +11,7 @@ use crate::response::wrap_in_soap_envelope;
 use crate::backend::{Backend, QueryBackend};
 use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
 use crate::engine::model::{default_model, SemanticModel};
-use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, ExcludedMember};
 use crate::axis_members::{
     render_response, full_slicer_axis, measures_axis,
     single_member_axis, member_list_axis, empty_member_list_axis,
@@ -21,6 +21,32 @@ use crate::axis_members::{
 };
 
 // ---- cellset response builders ----
+
+fn ordered_pair(
+    dims: &[String],
+    d0: &str,
+    m0: crate::cellset::MemberConfig,
+    d1: &str,
+    m1: crate::cellset::MemberConfig,
+) -> crate::cellset::TupleConfig {
+    let first = dims.first().map(|s| s.as_str()).unwrap_or(d0);
+    if first == d1 {
+        crate::cellset::TupleConfig { members: vec![m1, m0] }
+    } else {
+        crate::cellset::TupleConfig { members: vec![m0, m1] }
+    }
+}
+
+/// Map a 2D SQL row (first, second, value) to (kat_value, region_value)
+/// based on the visible axis dimension order.
+fn map_pair_values<'a>(dims: &[String], first: &'a str, second: &'a str) -> (&'a str, &'a str) {
+    let dim0 = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
+    if dim0 == "Region" {
+        (second, first)
+    } else {
+        (first, second)
+    }
+}
 
 fn build_slicer_only(query: &SemanticQuery, result: &QueryResult) -> String {
     let total = match result {
@@ -80,13 +106,18 @@ fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult) -> String 
     let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
-    for (kat, region, value) in all_data {
-        if has_exclusions && query.excluded_members.contains(kat) {
+    for (first, second, value) in all_data {
+        let (kat, region) = map_pair_values(dims, first, second);
+        if has_exclusions && query.excluded_members.iter().any(|e| e.key == kat) {
             continue;
         }
         let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
         let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(crate::cellset::TupleConfig { members: vec![kat_member, region_member] });
+        tuples.push(ordered_pair(
+            dims,
+            "Produktkategori", kat_member,
+            "Region", region_member,
+        ));
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
@@ -121,23 +152,33 @@ fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult) -> String
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
 
-    let excluded_kats: std::collections::HashSet<&str> =
-        query.excluded_members.iter().map(|s| s.as_str()).collect();
+    let excluded_kats: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == "Produktkategori")
+        .map(|e| e.key.as_str())
+        .collect();
+    let excluded_regions: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == "Region")
+        .map(|e| e.key.as_str())
+        .collect();
     let mut seen_kats: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut seen_regions: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-    for (kat, region, value) in all_data {
-        let is_excluded = excluded_kats.contains(kat.as_str());
+    for (first, second, value) in all_data {
+        let (kat, region) = map_pair_values(dims, first, second);
+        let is_kat_excluded = excluded_kats.contains(kat);
+        let is_region_excluded = excluded_regions.contains(region);
 
-        if collapse_hier == "Region" && is_excluded {
-            if !seen_kats.contains(kat.as_str()) {
+        // Region collapse: excluded by Produktkategori member
+        if collapse_hier == "Region" && is_kat_excluded {
+            if !seen_kats.contains(kat) {
                 let total = Backend::get().total_sales_for(kat);
-                tuples.push(crate::cellset::TupleConfig {
-                    members: vec![
-                        leaf_member_for("Produktkategori", kat, &query.dim_props),
-                        all_member_for("Region", &query.dim_props),
-                    ],
-                });
+                let kat_leaf = leaf_member_for("Produktkategori", kat, &query.dim_props);
+                let region_all = all_member_for("Region", &query.dim_props);
+                tuples.push(ordered_pair(
+                    dims,
+                    "Produktkategori", kat_leaf,
+                    "Region", region_all,
+                ));
                 cells.push(measurement_cell(ordinal, total));
                 ordinal += 1;
                 seen_kats.insert(kat);
@@ -145,15 +186,35 @@ fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult) -> String
             continue;
         }
 
-        if collapse_hier == "Produktkategori" && is_excluded {
-            if !seen_regions.contains(region.as_str()) {
-                tuples.push(crate::cellset::TupleConfig {
-                    members: vec![
-                        all_member_for("Produktkategori", &query.dim_props),
-                        leaf_member_for("Region", region, &query.dim_props),
-                    ],
-                });
+        // Produktkategori collapse: excluded by Produktkategori member
+        if collapse_hier == "Produktkategori" && is_kat_excluded {
+            if !seen_regions.contains(region) {
+                let kat_all = all_member_for("Produktkategori", &query.dim_props);
+                let region_leaf = leaf_member_for("Region", region, &query.dim_props);
+                tuples.push(ordered_pair(
+                    dims,
+                    "Produktkategori", kat_all,
+                    "Region", region_leaf,
+                ));
                 cells.push(measurement_cell(ordinal, *value));
+                ordinal += 1;
+                seen_regions.insert(region);
+            }
+            continue;
+        }
+
+        // Produktkategori collapse: excluded by Region member
+        if collapse_hier == "Produktkategori" && is_region_excluded {
+            if !seen_regions.contains(region) {
+                let total = Backend::get().total_sales_for_region(region);
+                let region_leaf = leaf_member_for("Region", region, &query.dim_props);
+                let kat_all = all_member_for("Produktkategori", &query.dim_props);
+                tuples.push(ordered_pair(
+                    dims,
+                    "Region", region_leaf,
+                    "Produktkategori", kat_all,
+                ));
+                cells.push(measurement_cell(ordinal, total));
                 ordinal += 1;
                 seen_regions.insert(region);
             }
@@ -162,7 +223,11 @@ fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult) -> String
 
         let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
         let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(crate::cellset::TupleConfig { members: vec![kat_member, region_member] });
+        tuples.push(ordered_pair(
+            dims,
+            "Produktkategori", kat_member,
+            "Region", region_member,
+        ));
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
