@@ -2915,6 +2915,7 @@ dependencies = [
  "nom",
  "quick-xml",
  "rusqlite",
+ "serde_json",
  "tokio",
  "tower-http 0.5.2",
 ]

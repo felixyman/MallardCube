@@ -37,6 +37,16 @@ async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
 
+    if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
+        execute_builders::enable_malloy_runtime();
+        println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");
+        debug_write("Malloy runtime: ENABLED");
+        execute_builders::warm_malloy_worker();
+    } else {
+        println!("📊 Malloy runtime disabled (set MALLOY_RUNTIME=1 to enable)");
+        debug_write("Malloy runtime: disabled");
+    }
+
     let app = Router::new().route("/xmla", post(handle_xmla));
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     println!("🚀 Rust-XMLA Proxy (v3 - ModuleRefactor) snurrar på http://{}", addr);
@@ -150,9 +160,11 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
             debug_write(&body);
-            let resp = execute::get_execute_statement_response(&mdx);
+            // Use instrumented path for timing collection
+            let (resp, timings) = execute_builders::get_execute_cellset_response_timed_malloy(&mdx);
             debug_write("RESPONSE XML:");
             debug_write(&resp);
+            debug_write(&timings.to_log_line());
             resp
         }
         XmlaRequest::MdschemaProperties { property_type } => {

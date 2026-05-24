@@ -15,6 +15,11 @@ pub fn malloy_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String 
     format!("{}\n\n{}", malloy_model(model), malloy_query(model, plan))
 }
 
+/// Alias for use by the compiler abstraction.
+pub fn malloy_source_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
+    malloy_for_query_plan(model, plan)
+}
+
 /// Emit only the static model definition.
 pub fn malloy_model(model: &SemanticModel) -> String {
     let mut lines = vec![
@@ -27,11 +32,16 @@ pub fn malloy_model(model: &SemanticModel) -> String {
     ];
 
     for dim in model.dimensions {
-        lines.push(format!(
-            "  dimension: {} is {}",
-            dim.semantic_name,
-            dim.physical_field,
-        ));
+        // Only emit dimension definitions when they rename the column.
+        // If semantic_name == physical_field, the column is already a
+        // dimension and redefining it causes a Malloy compile error.
+        if dim.semantic_name != dim.physical_field {
+            lines.push(format!(
+                "  dimension: {} is {}",
+                dim.semantic_name,
+                dim.physical_field,
+            ));
+        }
     }
 
     for meas in model.measures {
@@ -139,13 +149,20 @@ mod tests {
     use crate::engine::model::default_model;
 
     #[test]
-    fn model_emits_dimensions_and_measures() {
+    fn model_emits_measures_and_source() {
         let model = default_model();
         let out = malloy_model(&model);
-        assert!(out.contains("dimension: produktkategori is produktkategori"));
-        assert!(out.contains("dimension: region is region"));
+        // Dimensions that match column names are not redefined (they're auto-available)
         assert!(out.contains("measure: total_forsaljning is sales.sum()"));
         assert!(out.contains("source: faktatabell is duckdb.table('faktatabell')"));
+        // Group-by query confirms dimensions are accessible without redefinition
+        let plan = QueryPlan::GroupBy {
+            measure: Measure::TotalSales,
+            group_by: vec![Dimension::Produktkategori],
+            filters: vec![],
+        };
+        let query = malloy_query(&model, &plan);
+        assert!(query.contains("group_by: produktkategori"));
     }
 
     #[test]

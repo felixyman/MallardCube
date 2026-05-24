@@ -9,8 +9,10 @@
 
 use crate::response::wrap_in_soap_envelope;
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
+use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_sql, execute_plan_with_backend, plan_from_semantic};
 use crate::engine::model::{default_model, SemanticModel};
+use crate::engine::normalize::plan_key;
+use crate::engine::timing::{Timings, RuntimePath};
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
 use crate::axis_members::{
     render_response, full_slicer_axis, measures_axis,
@@ -436,6 +438,166 @@ fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
 pub fn get_execute_cellset_response(mdx: &str) -> String {
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     execute_semantic_query(&query)
+}
+
+use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
+use crate::engine::cache::PlanCache;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Toggle between direct SQL and Malloy runtime path.
+/// Set via env var MALLOY_RUNTIME=1 or programmatically.
+pub static USE_MALLOY_RUNTIME: AtomicBool = AtomicBool::new(false);
+
+/// Enable Malloy runtime for analytic queries (Total, GroupBy).
+pub fn enable_malloy_runtime() {
+    USE_MALLOY_RUNTIME.store(true, Ordering::Relaxed);
+}
+
+pub fn disable_malloy_runtime() {
+    USE_MALLOY_RUNTIME.store(false, Ordering::Relaxed);
+}
+
+/// Module-level long-lived Malloy compiler (lazy, spawned on first use).
+static COMPILER: OnceLock<LongLivedNodeMalloyCompiler> = OnceLock::new();
+
+/// Module-level compiled-SQL cache shared across all requests.
+static CACHE: OnceLock<PlanCache> = OnceLock::new();
+
+fn malloy_compiler() -> &'static LongLivedNodeMalloyCompiler {
+    COMPILER.get_or_init(|| {
+        LongLivedNodeMalloyCompiler::new().expect("start Malloy compiler")
+    })
+}
+
+fn malloy_cache() -> &'static PlanCache {
+    CACHE.get_or_init(PlanCache::new)
+}
+
+/// Eagerly spawn the long-lived Malloy compiler and warm its internal
+/// caches so the first Excel request doesn't pay the startup cost.
+/// Call once at server startup when MALLOY_RUNTIME=1.
+pub fn warm_malloy_worker() {
+    use std::time::Instant;
+    use crate::engine::malloy_compiler::MalloyCompiler;
+    use crate::engine::plan::{Measure, QueryPlan};
+
+    let t0 = Instant::now();
+    let compiler = malloy_compiler();
+    let _cache = malloy_cache(); // ensure cache container exists
+
+    let startup_ms = t0.elapsed().as_millis();
+    eprintln!("[malloy] worker spawned in {startup_ms}ms");
+
+    // Send one warm-up compile so Malloy's internal model/connection
+    // caches are hot. Choose the simplest plan (Total) to minimise
+    // JS work while touching the full model-compile path.
+    let model = default_model();
+    let plan = QueryPlan::Total { measure: Measure::TotalSales, filters: vec![] };
+    let t1 = Instant::now();
+    match compiler.compile_query(&model, &plan) {
+        Ok(r) => {
+            let warm_ms = t1.elapsed().as_millis();
+            eprintln!(
+                "[malloy] warm-up compile OK in {warm_ms}ms (JS compile {:.2}ms)",
+                r.compile_ms,
+            );
+        }
+        Err(e) => {
+            eprintln!("[malloy] warm-up compile FAILED: {e}");
+        }
+    }
+}
+
+/// Instrumented variant — collects timing spans and logs them to stderr.
+/// Use for Excel workload measurement. Always uses the direct SQL path.
+pub fn get_execute_cellset_response_timed(mdx: &str) -> (String, Timings) {
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+    let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+    let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
+
+    let t0 = Instant::now();
+    let plan = plan_from_semantic(&query);
+    let plan_us = (Instant::now() - t0).as_micros() as u64;
+    let key = plan_key(&plan);
+
+    let t0 = Instant::now();
+    let result = execute_plan(&plan, &default_model());
+    let sql_execute_us = (Instant::now() - t0).as_micros() as u64;
+
+    let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us, 0);
+    timings.plan_us = plan_us;
+    timings.sql_execute_us = sql_execute_us;
+
+    let t0 = Instant::now();
+    let xml = dispatch(&query, &result);
+    timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
+    timings.finish();
+    (xml, timings)
+}
+
+/// Instrumented variant with optional Malloy runtime path.
+/// When USE_MALLOY_RUNTIME is true and the query is a supported analytic shape,
+/// the SQL is obtained via the long-lived Malloy compiler instead of the Rust
+/// SQL emitter. Compiled SQL is cached by PlanKey.
+pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings) {
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+    let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+    let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
+
+    let t0 = Instant::now();
+    let plan = plan_from_semantic(&query);
+    let plan_us = (Instant::now() - t0).as_micros() as u64;
+    let key = plan_key(&plan);
+
+    let model = default_model();
+    let use_malloy = USE_MALLOY_RUNTIME.load(Ordering::Relaxed)
+        && matches!(query.kind, SemanticQueryKind::SlicerAllAndMeasure
+            | SemanticQueryKind::SlicerOnly
+            | SemanticQueryKind::DrilldownCategories
+            | SemanticQueryKind::LeafLevelMembers
+            | SemanticQueryKind::MeasureByCategory
+            | SemanticQueryKind::DrilldownMemberProbe);
+
+    let (result, runtime_path, malloy_compile_us, compiled_cache_hit, js_compile_ms, sql_execute_us) = if use_malloy {
+        let compiler = malloy_compiler();
+        let cache = malloy_cache();
+
+        let t0 = Instant::now();
+        let (sql, was_hit, worker_compile_ms) = cache.get_or_compile(&plan, &model, compiler)
+            .unwrap_or_else(|_| (String::new(), false, 0.0));
+        let compile_us = (Instant::now() - t0).as_micros() as u64;
+        let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
+
+        // Execute compiled SQL instead of direct Rust-generated SQL
+        let t0 = Instant::now();
+        let r = execute_plan_with_sql(&plan, &sql);
+        let exec_us = (Instant::now() - t0).as_micros() as u64;
+
+        (r, path, compile_us, was_hit, worker_compile_ms, exec_us)
+    } else {
+        let t0 = Instant::now();
+        let r = execute_plan(&plan, &model);
+        let exec_us = (Instant::now() - t0).as_micros() as u64;
+        (r, RuntimePath::DirectSql, 0, false, 0.0, exec_us)
+    };
+
+    let mut timings = Timings::new(runtime_path, key, mdx_parse_us, 0);
+    timings.plan_us = plan_us;
+    timings.malloy_compile_us = malloy_compile_us;
+    timings.compiled_sql_cache_hit = compiled_cache_hit;
+    timings.js_compile_ms = js_compile_ms;
+    timings.sql_execute_us = sql_execute_us;
+
+    let t0 = Instant::now();
+    let xml = dispatch(&query, &result);
+    timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
+    timings.finish();
+    (xml, timings)
 }
 
 pub fn get_execute_cellset_response_with_backend<B: QueryBackend>(

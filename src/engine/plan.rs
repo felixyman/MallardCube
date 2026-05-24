@@ -187,6 +187,39 @@ pub fn execute_plan(plan: &QueryPlan, model: &SemanticModel) -> QueryResult {
     execute_plan_with_backend(plan, model, Backend::get())
 }
 
+/// Execute a plan using the given pre-compiled SQL string instead of
+/// generating SQL from `sql_for_query_plan`. Used when the SQL comes
+/// from the Malloy runtime path.
+pub fn execute_plan_with_sql(plan: &QueryPlan, sql: &str) -> QueryResult {
+    execute_plan_sql_with_backend(plan, sql, Backend::get())
+}
+
+pub fn execute_plan_sql_with_backend<B: QueryBackend>(
+    plan: &QueryPlan,
+    sql: &str,
+    backend: &B,
+) -> QueryResult {
+    if sql.is_empty() {
+        return QueryResult::Empty;
+    }
+    match plan {
+        QueryPlan::Total { .. } => {
+            QueryResult::Scalar(backend.query_scalar(sql))
+        }
+        QueryPlan::GroupBy { group_by, .. } => {
+            if group_by.len() >= 2 {
+                QueryResult::Pairs(backend.query_pairs(sql))
+            } else {
+                QueryResult::Grouped(backend.query_grouped_1d(sql))
+            }
+        }
+        QueryPlan::Count { .. } => {
+            QueryResult::Count(backend.query_count(sql))
+        }
+        QueryPlan::Empty => QueryResult::Empty,
+    }
+}
+
 pub fn execute_plan_with_backend<B: QueryBackend>(
     plan: &QueryPlan,
     model: &SemanticModel,
