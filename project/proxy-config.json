@@ -1,0 +1,54 @@
+{
+  "catalog": "KTH_KEX_MALLOY_CUBE",
+  "cube": "Model",
+  "source_name": "faktatabell",
+  "table_name": "faktatabell",
+  "dialect": "duckdb",
+  "malloy_model_file": "model.malloy",
+  "dimensions": [
+    {
+      "id": "Produktkategori",
+      "malloy_name": "produktkategori",
+      "physical_field": "produktkategori",
+      "caption": "Produktkategori",
+      "description": "Våra olika produkter",
+      "hierarchy_name": "Produktkategori",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Produktkategori",
+      "ordinal": 1,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50
+    },
+    {
+      "id": "Region",
+      "malloy_name": "region",
+      "physical_field": "region",
+      "caption": "Region",
+      "description": "Geografisk region",
+      "hierarchy_name": "Region",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Region",
+      "ordinal": 2,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 10
+    }
+  ],
+  "measures": [
+    {
+      "id": "TotalSales",
+      "malloy_name": "total_forsaljning",
+      "physical_expr": "sales.sum()",
+      "sql_expr": "SUM(sales)",
+      "caption": "Total Försäljning",
+      "display_name": "Total Försäljning (SEK)",
+      "description": "Vår totala försäljning",
+      "format_string": "#,##0.00 SEK",
+      "units": "SEK",
+      "ordinal": 1,
+      "visible": true,
+      "measure_group_name": "Faktatabell"
+    }
+  ]
+}

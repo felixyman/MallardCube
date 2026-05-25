@@ -102,6 +102,59 @@ pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
     rows
 }
 
+// ---- wider demo data (project3) ----
+
+pub struct SalesFactRow {
+    pub category: String,
+    pub territory: String,
+    pub channel: String,
+    pub segment: String,
+    pub revenue: f64,
+    pub units: f64,
+}
+
+pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
+    let categories: Vec<&str> = (1..=20).map(|i| {
+        match i {
+            1 => "Electronics", 2 => "Clothing", 3 => "Food",
+            4 => "Furniture", 5 => "Sports", 6 => "Books",
+            7 => "Toys", 8 => "Automotive", 9 => "Health",
+            10 => "Music", 11 => "Garden", 12 => "Office",
+            13 => "Pet Supplies", 14 => "Jewelry", 15 => "Home",
+            16 => "Baby", 17 => "Tools", 18 => "Beauty",
+            19 => "Shoes", 20 => "Outdoors",
+            _ => "Other",
+        }
+    }).collect();
+    let territories: &[&str] = &[
+        "North", "South", "East", "West", "Central",
+        "Northeast", "Southeast", "Northwest",
+    ];
+    let channels: &[&str] = &["Online", "Retail", "Wholesale", "Direct"];
+    let segments: &[&str] = &["Consumer", "Business", "Government", "Education", "Non-Profit"];
+
+    let mut rng = SeededRng::new(99);
+    let row_count = 20_000;
+    let mut rows = Vec::with_capacity(row_count);
+    for _ in 0..row_count {
+        let cat = categories[rng.next() as usize % categories.len()];
+        let ter = territories[rng.next() as usize % territories.len()];
+        let ch = channels[rng.next() as usize % channels.len()];
+        let seg = segments[rng.next() as usize % segments.len()];
+        let revenue = 1_000.0 + (rng.next() as f64 % 50_000.0);
+        let units = (rng.next() as f64 % 500.0).round();
+        rows.push(SalesFactRow {
+            category: cat.to_string(),
+            territory: ter.to_string(),
+            channel: ch.to_string(),
+            segment: seg.to_string(),
+            revenue,
+            units,
+        });
+    }
+    rows
+}
+
 fn instance() -> &'static Backend {
     static BACKEND: OnceLock<Backend> = OnceLock::new();
     BACKEND.get_or_init(|| Backend::new().expect("failed to initialise DuckDB"))
@@ -151,6 +204,31 @@ impl Backend {
                  ('Kategori D', 'South', 100500.5);
              ",
         )?;
+        conn.execute_batch(
+            "CREATE TABLE sales_fact (
+                 category   VARCHAR NOT NULL,
+                 territory  VARCHAR NOT NULL,
+                 channel    VARCHAR NOT NULL,
+                 segment    VARCHAR NOT NULL,
+                 revenue    DOUBLE NOT NULL,
+                 units      DOUBLE NOT NULL
+             );",
+        )?;
+        let wider_rows = generate_sales_fact_rows();
+        {
+            let mut app = conn.appender("sales_fact")?;
+            for r in &wider_rows {
+                app.append_row(params![
+                    r.category.as_str(),
+                    r.territory.as_str(),
+                    r.channel.as_str(),
+                    r.segment.as_str(),
+                    r.revenue,
+                    r.units,
+                ]);
+            }
+            let _ = app.flush();
+        }
         Ok(Backend {
             conn: Mutex::new(conn),
         })
@@ -163,7 +241,7 @@ impl Backend {
                  produktkategori VARCHAR NOT NULL,
                  region VARCHAR NOT NULL,
                  sales DOUBLE NOT NULL
-             );",
+              );",
         )?;
 
         let rows = generate_rows(config);
@@ -266,5 +344,32 @@ impl Backend {
         let conn = self.conn.lock().unwrap();
         conn.query_row(sql, [], |row| row.get::<_, u32>(0))
             .unwrap_or(0)
+    }
+
+    // ---- metadata helpers (used by members.rs) ----
+
+    pub fn distinct_count(&self, column: &str) -> u32 {
+        self.distinct_count_in("faktatabell", column)
+    }
+
+    pub fn distinct_values(&self, column: &str) -> Vec<String> {
+        self.distinct_values_in("faktatabell", column)
+    }
+
+    pub fn distinct_count_in(&self, table: &str, column: &str) -> u32 {
+        let sql = format!("SELECT COUNT(DISTINCT {column}) FROM {table}");
+        self.query_count(&sql)
+    }
+
+    pub fn distinct_values_in(&self, table: &str, column: &str) -> Vec<String> {
+        let sql = format!("SELECT DISTINCT {column} FROM {table} ORDER BY {column}");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql).expect("prepare distinct_values");
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query_map distinct_values")
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
     }
 }

@@ -1,5 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
-use crate::engine::model::default_model;
+use crate::proxy_project;
 
 const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -30,14 +30,15 @@ const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
 pub fn get_hierarchies_response() -> String {
-    let model = default_model();
+    let project = proxy_project::project();
+    let model = &project.model;
     let mut rows = String::new();
 
     // Measures hierarchy (special case, not in model)
-    rows.push_str(
+    rows.push_str(&format!(
         r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_NAME>Measures</HIERARCHY_NAME>
             <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
@@ -59,13 +60,15 @@ pub fn get_hierarchies_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-    );
+        catalog = project.config.catalog,
+        cube = project.config.cube,
+    ));
 
     for (i, d) in model.dimensions.iter().enumerate() {
         rows.push_str(&format!(
             r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_NAME>{}</HIERARCHY_NAME>
             <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
@@ -98,6 +101,8 @@ pub fn get_hierarchies_response() -> String {
             d.all_member_unique_name(),
             d.visible,
             d.visible,
+            catalog = project.config.catalog,
+            cube = project.config.cube,
         ));
     }
 
