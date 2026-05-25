@@ -118,8 +118,16 @@ impl SemanticModel {
         self.dimensions.iter().find(|d| d.id == id).unwrap()
     }
 
+    pub fn dim_def_opt(&self, id: &str) -> Option<&DimensionDef> {
+        self.dimensions.iter().find(|d| d.id == id)
+    }
+
     pub fn meas_def(&self, id: &str) -> &MeasureDef {
         self.measures.iter().find(|m| m.id == id).unwrap()
+    }
+
+    pub fn meas_def_opt(&self, id: &str) -> Option<&MeasureDef> {
+        self.measures.iter().find(|m| m.id == id)
     }
 
     /// Find a dimension definition by its XMLA caption.

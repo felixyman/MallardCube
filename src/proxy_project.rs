@@ -272,4 +272,46 @@ mod tests {
         assert_eq!(p.model.default_dimension_id().as_deref(), Some("Category"));
         assert_eq!(p.model.default_measure_id().as_deref(), Some("Revenue"));
     }
+
+    // ---- project3: wider model (4 dims, 2 measures) ----
+
+    #[test]
+    fn third_project_loads() {
+        let p = ProxyProject::load("project3/proxy-config.json")
+            .expect("load project3");
+        assert_eq!(p.config.catalog, "SALES_ANALYTICS");
+        assert_eq!(p.config.cube, "Sales");
+        assert_eq!(p.model.dimensions.len(), 4);
+        assert_eq!(p.model.measures.len(), 2);
+        assert_eq!(p.model.dim_def("Category").caption, "Category");
+        assert_eq!(p.model.dim_def("Territory").caption, "Territory");
+        assert_eq!(p.model.dim_def("Channel").caption, "Channel");
+        assert_eq!(p.model.dim_def("Segment").caption, "Segment");
+        assert_eq!(p.model.meas_def("Revenue").caption, "Revenue");
+        assert_eq!(p.model.meas_def("Units").caption, "Units");
+    }
+
+    #[test]
+    fn third_project_malloy_source() {
+        let p = ProxyProject::load("project3/proxy-config.json")
+            .expect("load project3");
+        let plan = QueryPlan::Total { measure: "Revenue".into(), filters: vec![] };
+        let src = p.malloy_source(&plan);
+        assert!(src.contains("measure: total_revenue is revenue.sum()"));
+        assert!(src.contains("measure: total_units is units.sum()"));
+        assert!(src.contains("aggregate: total_revenue"));
+    }
+
+    #[test]
+    fn third_project_group_by_2d() {
+        let p = ProxyProject::load("project3/proxy-config.json")
+            .expect("load project3");
+        let plan = QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Category".into(), "Territory".into()],
+            filters: vec![],
+        };
+        let src = p.malloy_source(&plan);
+        assert!(src.contains("group_by: category, territory"));
+    }
 }

@@ -53,9 +53,11 @@ pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
 fn sql_where(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> String {
     let parts: Vec<String> = filters.iter()
         .filter(|f| !f.members.is_empty())
-        .map(|f| {
-            let col = &model.dim_def(&f.dimension).physical_field;
-            let vals: Vec<String> = f.members.iter()
+        .filter_map(|f| {
+            model.dim_def_opt(&f.dimension).map(|d| (d.physical_field.as_str(), &f.members))
+        })
+        .map(|(col, members)| {
+            let vals: Vec<String> = members.iter()
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
             format!("{} IN ({})", col, vals.join(", "))

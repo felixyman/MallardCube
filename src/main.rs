@@ -37,13 +37,14 @@ async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
 
-    // Load proxy project (config + Malloy model) if config is supplied.
-    // Without config, falls back to the hardcoded default model.
-    let config_path = std::env::var("PROXY_CONFIG").ok();
-    let using_config = config_path.is_some();
-    proxy_project::init_project(config_path.as_deref())
+    // Load proxy project (config + Malloy model). When PROXY_CONFIG is
+    // set, use the specified config. Otherwise default to project3.
+    let config_path = std::env::var("PROXY_CONFIG")
+        .ok()
+        .unwrap_or_else(|| "project/proxy-config.json".into());
+    proxy_project::init_project(Some(&config_path))
         .expect("init project");
-    if using_config {
+    {
         let p = proxy_project::project();
         println!("📁 Project loaded: {}", p.config.catalog);
         debug_write(&format!("Project loaded: {} | cube={} | {} dims, {} measures",
@@ -142,7 +143,8 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         XmlaRequest::DiscoverProperties { property_names } => {
             if property_names.len() == 1 && property_names[0] == "Catalog" {
                 println!("Excel frågar efter Catalog");
-                properties::get_single_property_response("Catalog", "KTH_KEX_MALLOY_CUBE")
+                properties::get_single_property_response("Catalog",
+                    &proxy_project::project().config.catalog)
             } else {
                 println!("Excel frågar efter egenskaper: {:?}", property_names);
                 properties::get_properties_response(&property_names)

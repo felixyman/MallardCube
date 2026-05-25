@@ -31,7 +31,7 @@
 - Query-plan normalization and caches exist for Malloy source, SQL text, compiled SQL.
 - Naming contract documented in `docs/naming-contract.md`.
 - File reorg deferred — do after architecture boundaries fully settle.
-- Test suite: **136 passing tests** (worker-dependent tests run serially).
+- Test suite: **152 passing tests** (worker-dependent tests run serially).
 
 ## Supported simple-model scope (explicit boundary)
 - One DuckDB fact source.
@@ -105,6 +105,9 @@
 - `MalloyCompiler` trait, `NullCompiler`, one-shot Node spike, long-lived worker.
 - Result parity confirmed (4 tests). Worker warm-up at startup.
 - `malloy_compile_warm`, `malloy_compile_cold`, `malloy_compile_cached` benchmarks.
+- Malloy compile errors no longer silently swallowed — logged to stderr with plan key, kind, measure, and full generated source; automatic fallback to direct SQL so Excel stays functional.
+- `js/proxy-schema.js` derives compile-time DuckDB schema from Malloy source text; WHERE clause column extraction uses word-boundary regex (not broken pipe-split) to capture all filter columns.
+- Default startup points at `project3/` (4 dims, 2 measures) when `PROXY_CONFIG` is unset.
 
 ### Runtime instrumentation
 - `MALLOY_RUNTIME=1` toggle. Timed execution path with runtime path labels.
@@ -154,6 +157,7 @@
 - Long-lived worker not hardened for concurrent use; tests require serialization.
 - File structure is still flat — reorg deferred until architecture boundaries settle.
 - `mdx_semantic.rs` still has some string-heuristic fragility for more complex MDX.
+- Malloy JS worker still compiles against isolated in-memory DuckDB (not shared with Rust backend).
 
 ## What works today
 - Full discover handshake for Excel/MSOLAP.
@@ -166,7 +170,7 @@
 - JS-side `compile_ms` captured. Eager worker warm-up at startup.
 - Cache normalization and logging.
 - Two independent sample projects load and work against same physical data.
-- 136 passing tests.
+- 152 passing tests.
 
 ## Current priorities
 1. File reorg after architecture boundaries fully settle (deferred from this pass).
@@ -205,3 +209,4 @@
 - `docs/`: architecture and migration diagrams.
 - `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
 - `debug-last-run.log`: latest Excel request/response/timing trace.
+- `js/proxy-schema.js`: derives compile-time DuckDB schema from Malloy source text for JS worker.

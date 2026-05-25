@@ -132,20 +132,29 @@ fn query_block(
 }
 
 fn where_clause(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> Option<String> {
-    let parts: Vec<String> = filters.iter()
+    let dim_parts: Vec<String> = filters.iter()
         .filter(|f| !f.members.is_empty())
-        .flat_map(|f| {
-            let dim_name = &model.dim_def(&f.dimension).semantic_name;
-            f.members.iter().map(|m| {
-                format!("{} = '{}'", dim_name, m)
-            }).collect::<Vec<_>>()
+        .filter_map(|f| {
+            model.dim_def_opt(&f.dimension).map(|d| (d.semantic_name.as_str(), &f.members))
+        })
+        .map(|(dim_name, members)| {
+            let member_conds: Vec<String> = members.iter()
+                .map(|m| format!("{} = '{}'", dim_name, m))
+                .collect();
+            if member_conds.len() == 1 {
+                member_conds.into_iter().next().unwrap()
+            } else {
+                // OR within the same dimension
+                format!("({})", member_conds.join(" or "))
+            }
         })
         .collect();
 
-    if parts.is_empty() {
+    if dim_parts.is_empty() {
         None
     } else {
-        Some(format!("where: {}", parts.join(" | ")))
+        // AND across dimensions: comma-separated in Malloy
+        Some(format!("where: {}", dim_parts.join(", ")))
     }
 }
 
@@ -244,5 +253,64 @@ mod tests {
         let out = malloy_for_query_plan(&default_model(), &plan);
         assert!(out.contains("source: faktatabell is duckdb.table('faktatabell')"));
         assert!(out.contains("group_by: produktkategori, region"));
+    }
+
+    #[test]
+    fn query_two_dim_filters_use_and() {
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![
+                TypedDimensionFilter {
+                    dimension: "Region".into(),
+                    members: vec!["North".into()],
+                },
+                TypedDimensionFilter {
+                    dimension: "Produktkategori".into(),
+                    members: vec!["Kategori A".into()],
+                },
+            ],
+        };
+        let out = malloy_query(&default_model(), &plan);
+        // Different dimensions = AND: comma-separated, no `|` between dims
+        assert!(out.contains("region = 'North'"));
+        assert!(out.contains("produktkategori = 'Kategori A'"));
+        assert!(!out.contains(" | "), "different dims must not use OR: {out}");
+    }
+
+    #[test]
+    fn query_same_dim_multi_member_uses_or() {
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![TypedDimensionFilter {
+                dimension: "Produktkategori".into(),
+                members: vec!["Kategori A".into(), "Kategori B".into()],
+            }],
+        };
+        let out = malloy_query(&default_model(), &plan);
+        // Same dimensions = OR grouped
+        assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B')"));
+    }
+
+    #[test]
+    fn query_mixed_filters_handles_both() {
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![
+                TypedDimensionFilter {
+                    dimension: "Region".into(),
+                    members: vec!["North".into()],
+                },
+                TypedDimensionFilter {
+                    dimension: "Produktkategori".into(),
+                    members: vec!["Kategori A".into(), "Kategori B".into()],
+                },
+            ],
+        };
+        let out = malloy_query(&default_model(), &plan);
+        // Region = single member, Produktkategori = multi-member
+        assert!(out.contains("region = 'North'"));
+        assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B')"));
+        // AND across dims = comma-separated, no bare `|`
+        assert!(!out.contains(" | "), "different dims must not use OR: {out}");
     }
 }

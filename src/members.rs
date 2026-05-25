@@ -51,7 +51,7 @@ fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Mem
         let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let cardinality = Backend::get().distinct_count(&dim.physical_field);
+        let cardinality = Backend::get().distinct_count_in(&project.model.table_name, &dim.physical_field);
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
             xml: xml_member_row(
@@ -81,7 +81,7 @@ fn build_leaf_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Me
         let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let values = Backend::get().distinct_values(&dim.physical_field);
+        let values = Backend::get().distinct_values_in(&project.model.table_name, &dim.physical_field);
         for (ordinal, val) in values.iter().enumerate() {
             let ordinal = ordinal as u32 + 1;
             let leaf_member_u = format!("{}.&[{}]", hier_u, xml_escape(val));

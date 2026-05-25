@@ -2,6 +2,8 @@
 ///
 /// Parses member references, WHERE clauses, property clauses,
 /// and axis expressions from Excel MDX probe/query strings.
+///
+/// Dimension names are dynamic — no hardcoded dimension vocabulary.
 
 use nom::{
     IResult,
@@ -25,19 +27,21 @@ fn sp(input: &str) -> IResult<&str, &str> {
 
 // ---- identifiers ----
 
+/// A dimension reference — either the special `Measures` system dimension
+/// or any user-configured cube dimension.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DimKey {
-    Produktkategori,
-    Region,
+pub enum DimRef {
     Measures,
+    Cube(String),
 }
 
-fn dim_name(input: &str) -> IResult<&str, DimKey> {
-    alt((
-        value(DimKey::Produktkategori, tag("Produktkategori")),
-        value(DimKey::Region, tag("Region")),
-        value(DimKey::Measures, tag("Measures")),
-    ))(input)
+fn dim_name(input: &str) -> IResult<&str, DimRef> {
+    let (input, name) = take_while(|c: char| c != ']' && c != '.')(input)?;
+    Ok((input, if name == "Measures" {
+        DimRef::Measures
+    } else {
+        DimRef::Cube(name.to_string())
+    }))
 }
 
 fn bracket<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
@@ -53,19 +57,19 @@ fn bracket_str(input: &str) -> IResult<&str, &str> {
     Ok((input, inner))
 }
 
-fn dim_hierarchy(input: &str) -> IResult<&str, (DimKey, &str)> {
+fn dim_hierarchy(input: &str) -> IResult<&str, (DimRef, String)> {
     let (input, dim) = bracket(dim_name)(input)?;
     let (input, _) = char('.')(input)?;
     let (input, hname) = bracket_str(input)?;
-    Ok((input, (dim, hname)))
+    Ok((input, (dim, hname.to_string())))
 }
 
 // ---- member references ----
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemberRef {
-    All(DimKey),
-    Leaf { dim: DimKey, key: String },
+    All(DimRef),
+    Leaf { dim: DimRef, key: String },
     Measure(String),
 }
 
@@ -180,14 +184,22 @@ fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
 
 // ---- axis detection ----
 
-fn detect_axis_dimension(input: &str) -> DimKey {
-    if input.contains("[Region]") {
-        DimKey::Region
-    } else if input.contains("[Produktkategori]") {
-        DimKey::Produktkategori
-    } else {
-        DimKey::Measures
+/// Find the first non-Measures bracketed identifier in the MDX text.
+fn detect_axis_dimension(input: &str) -> DimRef {
+    let mut pos = 0;
+    while let Some(open) = input[pos..].find('[') {
+        let start = pos + open + 1;
+        if let Some(close) = input[start..].find(']') {
+            let name = &input[start..start + close];
+            if name != "Measures" {
+                return DimRef::Cube(name.to_string());
+            }
+            pos = start + close + 1;
+        } else {
+            break;
+        }
     }
+    DimRef::Measures
 }
 
 fn has_crossjoin(input: &str) -> bool {
@@ -287,13 +299,24 @@ fn detect_cchildren_target(input: &str) -> CChildrenTarget {
     };
     let set = &after_open[..end];
 
-    if set.contains("[Measures]") && !set.contains("[Produktkategori]") && !set.contains("[Region]") {
-        return CChildrenTarget::Measures;
+    // Only measures mentioned, no cube dimension brackets at all
+    if set.contains("[Measures]") && !set.contains("&[") && !set.contains("&amp;[") {
+        // Check if the set references a specific leaf dimension member
+        let has_leaf_dim = set.find('[').map_or(false, |i| {
+            let rest = &set[i..];
+            if let Some(close) = rest.find(']') {
+                let name = &rest[1..close];
+                name != "Measures"
+            } else {
+                false
+            }
+        });
+        if !has_leaf_dim {
+            return CChildrenTarget::Measures;
+        }
     }
 
-    if (set.contains("[Produktkategori]") || set.contains("[Region]"))
-        && (set.contains("&[") || set.contains("&amp;["))
-    {
+    if set.contains("&[") || set.contains("&amp;[") {
         if let Some(amp) = set.find("&[") {
             let begin = amp + 2;
             if let Some(closing) = set[begin..].find(']') {
@@ -348,9 +371,20 @@ fn has_measures_in_where_or_cols(input: &str) -> bool {
     input.to_uppercase().contains("[MEASURES]")
 }
 
+/// True when the WHERE clause contains exactly one cube-dimension
+/// member (All or Leaf) and one measure member.
 fn is_slicer_all_measure(input: &str) -> bool {
-    input.contains("WHERE ([Produktkategori].[Produktkategori].[All],[Measures].[Total Försäljning])")
-        || input.contains("WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])")
+    let members = match find_where_clause(input) {
+        Some(m) => m,
+        None => return false,
+    };
+    let cube_count = members.iter()
+        .filter(|m| matches!(m, MemberRef::All(_) | MemberRef::Leaf { .. }))
+        .count();
+    let meas_count = members.iter()
+        .filter(|m| matches!(m, MemberRef::Measure(_)))
+        .count();
+    cube_count == 1 && meas_count == 1 && members.len() == 2
 }
 
 // ---- complete mdx parse ----
@@ -371,21 +405,45 @@ pub struct ParsedMdx {
     pub has_measures: bool,
     pub where_members: Vec<MemberRef>,
     pub subquery_members: Vec<MemberRef>,
-    pub main_dim: DimKey,
+    pub main_dim: DimRef,
     pub cchildren_target: CChildrenTarget,
     pub calculated_members_pat: CalculatedMembersPat,
+    /// The explicitly requested measure name, extracted from
+    /// WHERE/columns (e.g. "Units" from [Measures].[Units]).
+    pub selected_measure: Option<String>,
 }
 
 pub fn parse_mdx(input: &str) -> ParsedMdx {
     let up = input.to_uppercase();
     let before_from = input.find("FROM [Model]")
         .or_else(|| input.find("FROM [model]"))
+        .or_else(|| input.find("FROM [Sales]"))
+        .or_else(|| input.find("FROM [sales]"))
         .map(|i| &input[..i]).unwrap_or(input);
 
     let where_members = find_where_clause(input).unwrap_or_default();
 
     let all_subquery = find_all_subquery_members(input);
     let subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
+
+    let selected_measure = where_members.iter()
+        .find_map(|m| match m {
+            MemberRef::Measure(name) => Some(name.clone()),
+            _ => None,
+        });
+    // Also check columns for explicit measure selection like
+    // `{[Measures].[Revenue],[Measures].[Units]} ON COLUMNS`.
+    let selected_measure = selected_measure.or_else(|| {
+        let col_start = input.find("ON COLUMNS")
+            .or_else(|| input.find("on columns"))
+            .unwrap_or(input.len());
+        let before_cols = &input[..col_start];
+        let meas_start = before_cols.find("[Measures].");
+        meas_start.map(|s| {
+            let rest = &before_cols[s + "[Measures].".len()..];
+            rest.split(|c: char| c == ']').next().unwrap_or("").to_string()
+        })
+    });
 
     ParsedMdx {
         dim_props: parse_dimension_properties(input),
@@ -405,6 +463,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         main_dim: detect_axis_dimension(before_from),
         cchildren_target: detect_cchildren_target(input),
         calculated_members_pat: detect_calculated_members_pat(input),
+        selected_measure,
     }
 }
 
@@ -415,21 +474,21 @@ mod tests {
     #[test]
     fn parse_member_all() {
         let (rest, m) = member_ref("[Produktkategori].[Produktkategori].[All]").unwrap();
-        assert_eq!(m, MemberRef::All(DimKey::Produktkategori));
+        assert_eq!(m, MemberRef::All(DimRef::Cube("Produktkategori".into())));
         assert!(rest.is_empty());
     }
 
     #[test]
     fn parse_member_leaf() {
         let (rest, m) = member_ref("[Produktkategori].[Produktkategori].&[Kategori A]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimKey::Produktkategori, key: "Kategori A".into() });
+        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Produktkategori".into()), key: "Kategori A".into() });
         assert!(rest.is_empty());
     }
 
     #[test]
     fn parse_member_region() {
         let (rest, m) = member_ref("[Region].[Region].&[North]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimKey::Region, key: "North".into() });
+        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Region".into()), key: "North".into() });
         assert!(rest.is_empty());
     }
 
@@ -438,7 +497,7 @@ mod tests {
         let input = "WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])";
         let (rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
-        assert_eq!(members[0], MemberRef::All(DimKey::Region));
+        assert_eq!(members[0], MemberRef::All(DimRef::Cube("Region".into())));
         assert_eq!(members[1], MemberRef::Measure("Total Försäljning".into()));
     }
 
@@ -447,7 +506,10 @@ mod tests {
         let input = "WHERE ([Produktkategori].[Produktkategori].&[Kategori B],[Measures].[Total Försäljning])";
         let (rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
-        assert_eq!(members[0], MemberRef::Leaf { dim: DimKey::Produktkategori, key: "Kategori B".into() });
+        assert_eq!(members[0], MemberRef::Leaf {
+            dim: DimRef::Cube("Produktkategori".into()),
+            key: "Kategori B".into(),
+        });
     }
 
     #[test]
@@ -455,6 +517,57 @@ mod tests {
         let input = "SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]}) ON COLUMNS FROM [Model]";
         let (rest, m) = subquery_body("SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]})").unwrap();
         assert_eq!(m.len(), 2);
+    }
+
+    // ---- project3 tests (dynamic dimension names) ----
+
+    #[test]
+    fn parse_category_all() {
+        let (rest, m) = member_ref("[Category].[Category].[All]").unwrap();
+        assert_eq!(m, MemberRef::All(DimRef::Cube("Category".into())));
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn parse_territory_leaf() {
+        let (rest, m) = member_ref("[Territory].[Territory].&[North]").unwrap();
+        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Territory".into()), key: "North".into() });
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn parse_channel_leaf() {
+        let (rest, m) = member_ref("[Channel].[Channel].&[Online]").unwrap();
+        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Channel".into()), key: "Online".into() });
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn parse_measure_revenue() {
+        let (rest, m) = member_ref("[Measures].[Revenue]").unwrap();
+        assert_eq!(m, MemberRef::Measure("Revenue".into()));
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn parse_where_category_all_revenue() {
+        let input = "WHERE ([Category].[Category].[All],[Measures].[Revenue])";
+        let (rest, members) = where_clause(input).unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0], MemberRef::All(DimRef::Cube("Category".into())));
+        assert_eq!(members[1], MemberRef::Measure("Revenue".into()));
+    }
+
+    #[test]
+    fn parse_where_territory_leaf_revenue() {
+        let input = "WHERE ([Territory].[Territory].&[North],[Measures].[Revenue])";
+        let (rest, members) = where_clause(input).unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0], MemberRef::Leaf {
+            dim: DimRef::Cube("Territory".into()),
+            key: "North".into(),
+        });
+        assert_eq!(members[1], MemberRef::Measure("Revenue".into()));
     }
 
     #[test]

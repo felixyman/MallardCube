@@ -1,5 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
-use crate::engine::model::default_model;
+use crate::proxy_project;
 
 const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -21,14 +21,17 @@ const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
 pub fn get_dimensions_response() -> String {
-    let model = default_model();
+    let project = proxy_project::project();
+    let model = &project.model;
+    let catalog = &project.config.catalog;
+    let cube = &project.config.cube;
     let mut rows = String::new();
 
-    // Measures system dimension (special case, not in model)
-    rows.push_str(
+    // Measures system dimension (special case)
+    rows.push_str(&format!(
         r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_NAME>Measures</DIMENSION_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
             <DIMENSION_GUID>00000000-0000-0000-0000-000000000001</DIMENSION_GUID>
@@ -46,40 +49,38 @@ pub fn get_dimensions_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-    );
+    ));
 
     for (i, d) in model.dimensions.iter().enumerate() {
         rows.push_str(&format!(
             r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <DIMENSION_NAME>{}</DIMENSION_NAME>
-            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_NAME>{caption}</DIMENSION_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
             <DIMENSION_GUID>00000000-0000-0000-0000-{:012}</DIMENSION_GUID>
-            <DIMENSION_CAPTION>{}</DIMENSION_CAPTION>
-            <DIMENSION_ORDINAL>{}</DIMENSION_ORDINAL>
+            <DIMENSION_CAPTION>{caption}</DIMENSION_CAPTION>
+            <DIMENSION_ORDINAL>{ordinal}</DIMENSION_ORDINAL>
             <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <DIMENSION_CARDINALITY>{}</DIMENSION_CARDINALITY>
-            <DEFAULT_HIERARCHY>{}</DEFAULT_HIERARCHY>
-            <DESCRIPTION>{}</DESCRIPTION>
+            <DIMENSION_CARDINALITY>{cardinality}</DIMENSION_CARDINALITY>
+            <DEFAULT_HIERARCHY>{hier_u}</DEFAULT_HIERARCHY>
+            <DESCRIPTION>{description}</DESCRIPTION>
             <IS_VIRTUAL>false</IS_VIRTUAL>
             <IS_READWRITE>false</IS_READWRITE>
             <DIMENSION_UNIQUE_SETTINGS>0</DIMENSION_UNIQUE_SETTINGS>
-            <DIMENSION_MASTER_UNIQUE_NAME>{}</DIMENSION_MASTER_UNIQUE_NAME>
-            <DIMENSION_IS_VISIBLE>{}</DIMENSION_IS_VISIBLE>
+            <DIMENSION_MASTER_UNIQUE_NAME>{dim_u}</DIMENSION_MASTER_UNIQUE_NAME>
+            <DIMENSION_IS_VISIBLE>{visible}</DIMENSION_IS_VISIBLE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-            d.caption,
-            d.dimension_unique_name(),
-            i + 2, // GUIDs start at ...0002 for Produktkategori
-            d.caption,
-            d.ordinal,
-            d.cardinality_hint,
-            d.hierarchy_unique_name(),
-            d.description,
-            d.dimension_unique_name(),
-            d.visible,
+            i + 2,
+            caption = d.caption,
+            dim_u = d.dimension_unique_name(),
+            ordinal = d.ordinal,
+            cardinality = d.cardinality_hint,
+            hier_u = d.hierarchy_unique_name(),
+            description = d.description,
+            visible = d.visible,
         ));
     }
 

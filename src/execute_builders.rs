@@ -461,7 +461,11 @@ pub fn warm_malloy_worker() {
     use crate::engine::malloy_compiler::MalloyCompiler;
     use crate::engine::plan::QueryPlan;
     let model = &crate::proxy_project::project().model;
-    let plan = QueryPlan::Total { measure: "TotalSales".into(), filters: vec![] };
+    let plan = QueryPlan::Total {
+        measure: model.default_measure_id()
+            .unwrap_or_else(|| "Revenue".into()),
+        filters: vec![],
+    };
     let t1 = Instant::now();
     match malloy_compiler().compile_query(&model, &plan) {
         Ok(r) => {
@@ -536,29 +540,44 @@ pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings)
         let compiler = malloy_compiler();
 
         let t0 = Instant::now();
-        // When a developer-supplied Malloy model is loaded, use it
-        // directly instead of generating model text from SemanticModel.
         let project = crate::proxy_project::project();
         let source = project.malloy_source(&plan);
-        let (sql, was_hit, worker_compile_ms) = if project.malloy_model_text.is_empty() {
+        let (sql, was_hit, worker_compile_ms, compile_err) = if project.malloy_model_text.is_empty() {
             let cache = malloy_cache();
-            cache.get_or_compile(&plan, &model, compiler)
-                .unwrap_or_else(|_| (String::new(), false, 0.0))
+            match cache.get_or_compile(&plan, &model, compiler) {
+                Ok((s, h, ms)) => (s, h, ms, None),
+                Err(e) => (String::new(), false, 0.0, Some(e)),
+            }
         } else {
             match compiler.compile_malloy(&source) {
-                Ok(cr) => (cr.sql, false, cr.compile_ms),
-                Err(_) => (String::new(), false, 0.0),
+                Ok(cr) => (cr.sql, false, cr.compile_ms, None),
+                Err(e) => (String::new(), false, 0.0, Some(e)),
             }
         };
         let compile_us = (Instant::now() - t0).as_micros() as u64;
-        let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
 
-        // Execute compiled SQL instead of direct Rust-generated SQL
-        let t0 = Instant::now();
-        let r = execute_plan_with_sql(&plan, &sql);
-        let exec_us = (Instant::now() - t0).as_micros() as u64;
+        if let Some(ref err) = compile_err {
+            // Malloy compile failed — fall back to direct SQL.
+            // Log the failure so we know which shapes need fixing.
+            eprintln!(
+                "Malloy compile FAILED plan_key={} kind={:?} measure={:?}: {err}",
+                plan_key(&plan), query.kind, query.measure,
+            );
+            eprintln!("  Malloy source:\n{source}");
 
-        (r, path, compile_us, was_hit, worker_compile_ms, exec_us)
+            let t1 = Instant::now();
+            let fallback = execute_plan(&plan, &model);
+            let exec_us = (Instant::now() - t1).as_micros() as u64;
+            (fallback, RuntimePath::DirectSql, compile_us, false, 0.0, exec_us)
+        } else {
+            let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
+
+            let t0 = Instant::now();
+            let r = execute_plan_with_sql(&plan, &sql);
+            let exec_us = (Instant::now() - t0).as_micros() as u64;
+
+            (r, path, compile_us, was_hit, worker_compile_ms, exec_us)
+        }
     } else {
         let t0 = Instant::now();
         let r = execute_plan(&plan, &model);

@@ -4,19 +4,11 @@
 
 const { Runtime } = require("@malloydata/malloy");
 const { DuckDBConnection } = require("@malloydata/db-duckdb");
+const { createTableSqlFromMalloySource } = require("./proxy-schema");
 
 async function main() {
   const conn = new DuckDBConnection("duckdb", ":memory:");
   const runtime = new Runtime({ connection: conn });
-
-  // Create faktatabell schema matching the Rust backend
-  await conn.runSQL(
-    `CREATE TABLE faktatabell (
-       produktkategori VARCHAR,
-       region VARCHAR,
-       sales DOUBLE
-     )`
-  );
 
   // Read source from stdin
   let source = "";
@@ -26,6 +18,7 @@ async function main() {
   }
 
   try {
+    await conn.runSQL(createTableSqlFromMalloySource(source));
     const q = runtime.loadQuery(source);
     const sql = await q.getSQL();
     process.stdout.write(sql);

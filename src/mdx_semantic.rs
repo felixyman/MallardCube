@@ -7,7 +7,7 @@
 /// set by the nom parser — instead of bare `contains(...)` chains.
 
 use crate::mdx_parser::{
-    ParsedMdx, MemberRef, DimKey,
+    ParsedMdx, MemberRef, DimRef,
     CChildrenTarget, CalculatedMembersPat,
 };
 
@@ -74,11 +74,10 @@ pub struct SlicerSelection {
     pub is_all: bool,
 }
 
-fn dim_key_str(dim: &DimKey) -> String {
+fn dim_ref_str(dim: &DimRef) -> String {
     match dim {
-        DimKey::Region => "Region".into(),
-        DimKey::Produktkategori => "Produktkategori".into(),
-        DimKey::Measures => "Measures".into(),
+        DimRef::Measures => "Measures".into(),
+        DimRef::Cube(name) => name.clone(),
     }
 }
 
@@ -95,13 +94,13 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
 
     for m in &parsed.where_members {
         if let MemberRef::Leaf { dim, key } = m {
-            add_leaf(&mut result, dim_key_str(dim), key);
+            add_leaf(&mut result, dim_ref_str(dim), key);
         }
     }
 
     for m in &parsed.subquery_members {
         if let MemberRef::Leaf { dim, key } = m {
-            add_leaf(&mut result, dim_key_str(dim), key);
+            add_leaf(&mut result, dim_ref_str(dim), key);
         }
     }
 
@@ -113,10 +112,10 @@ fn slicers_from_parsed(parsed: &ParsedMdx) -> Vec<SlicerSelection> {
     for mref in &parsed.where_members {
         match mref {
             MemberRef::All(dim) => {
-                result.push(SlicerSelection { dimension: dim_key_str(dim), is_all: true });
+                result.push(SlicerSelection { dimension: dim_ref_str(dim), is_all: true });
             }
             MemberRef::Leaf { dim, .. } => {
-                let dim_str = dim_key_str(dim);
+                let dim_str = dim_ref_str(dim);
                 if !result.iter().any(|s: &SlicerSelection| s.dimension == dim_str) {
                     result.push(SlicerSelection { dimension: dim_str, is_all: false });
                 }
@@ -202,11 +201,15 @@ pub struct SemanticQuery {
     pub slicers: Vec<SlicerSelection>,
     pub excluded_members: Vec<ExcludedMember>,
     pub drilldown_member_hierarchy: Option<String>,
+    /// Explicitly requested measure from MDX (WHERE or columns).
+    pub measure: Option<String>,
 }
 
 fn row_dimension_from_mdx(mdx: &str) -> Option<String> {
     let project = crate::proxy_project::project();
-    let select_end = mdx.find("FROM [Model]").unwrap_or(mdx.len());
+    let select_end = mdx.find(&format!("FROM [{}]", project.config.cube))
+        .or_else(|| mdx.find("FROM [Model]"))
+        .unwrap_or(mdx.len());
     let select_part = &mdx[..select_end];
     for dim in &project.model.dimensions {
         if select_part.contains(&format!("[{}]", dim.id)) {
@@ -218,7 +221,10 @@ fn row_dimension_from_mdx(mdx: &str) -> Option<String> {
 
 fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let from_pos = mdx.find("FROM [Model]").unwrap_or(mdx.len());
+    let project = crate::proxy_project::project();
+    let from_pos = mdx.find(&format!("FROM [{}]", project.config.cube))
+        .or_else(|| mdx.find("FROM [Model]"))
+        .unwrap_or(mdx.len());
     let select_part = &mdx[..from_pos];
     let axis_expr_end = select_part.find("DIMENSION PROPERTIES").unwrap_or(select_part.len());
     let axis_expr = &select_part[..axis_expr_end];
@@ -259,7 +265,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                     SemanticQueryKind::DrilldownMemberProbe
                 } else if parsed.has_drilldown || parsed.has_dot_members {
                     SemanticQueryKind::DrilldownCategories
-                } else if parsed.has_rows && parsed.has_cols && parsed.main_dim != DimKey::Measures && parsed.has_measures {
+                } else if parsed.has_rows && parsed.has_cols && parsed.main_dim != DimRef::Measures && parsed.has_measures {
                     SemanticQueryKind::MeasureByCategory
                 } else if !parsed.has_rows && !parsed.has_cols {
                     if parsed.has_where_all_measure {
@@ -290,6 +296,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parse_excluded_members(mdx),
         drilldown_member_hierarchy: parse_drilldown_member_hierarchy(mdx),
+        measure: parsed.selected_measure.clone(),
     }
 }
 

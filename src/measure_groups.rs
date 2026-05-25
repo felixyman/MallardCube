@@ -1,5 +1,5 @@
 use crate::response::discover_rowset_envelope;
-use crate::engine::model::default_model;
+use crate::proxy_project;
 use std::collections::BTreeSet;
 
 const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -13,21 +13,24 @@ const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field=
                 <xsd:element sql:field="MEASUREGROUP_SIZE" name="MEASUREGROUP_SIZE" type="xsd:long" minOccurs="0"/>"#;
 
 pub fn get_measure_groups_response() -> String {
-    let model = default_model();
+    let project = proxy_project::project();
+    let model = &project.model;
     let mut rows = String::new();
     let mut seen = BTreeSet::new();
-    for m in model.measures {
+    for m in &model.measures {
         if seen.insert(m.measure_group_name.clone()) {
             rows.push_str(&format!(
                 r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
             <MEASUREGROUP_CAPTION>{}</MEASUREGROUP_CAPTION>
           </row>
 "#,
                 m.measure_group_name,
                 m.measure_group_name,
+                catalog = project.config.catalog,
+                cube = project.config.cube,
             ));
         }
     }

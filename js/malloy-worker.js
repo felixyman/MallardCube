@@ -11,20 +11,9 @@
 const { Runtime } = require("@malloydata/malloy");
 const { DuckDBConnection } = require("@malloydata/db-duckdb");
 const readline = require("readline");
+const { createTableSqlFromMalloySource } = require("./proxy-schema");
 
 async function main() {
-  const conn = new DuckDBConnection("duckdb", ":memory:");
-  const runtime = new Runtime({ connection: conn });
-
-  // Schema-only table — no data needed for compilation.
-  await conn.runSQL(
-    `CREATE TABLE faktatabell (
-       produktkategori VARCHAR,
-       region VARCHAR,
-       sales DOUBLE
-     )`
-  );
-
   // Signal ready
   process.stdout.write(
     JSON.stringify({ type: "ready", version: "0.1", compiler: "malloy-node" }) + "\n"
@@ -57,6 +46,9 @@ async function main() {
     (async () => {
       let resp;
       try {
+        const conn = new DuckDBConnection("duckdb", ":memory:");
+        await conn.runSQL(createTableSqlFromMalloySource(req.source));
+        const runtime = new Runtime({ connection: conn });
         const q = runtime.loadQuery(req.source);
         const sql = await q.getSQL();
         resp = { id: req.id, ok: true, sql };

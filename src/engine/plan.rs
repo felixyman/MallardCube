@@ -103,8 +103,10 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
     let project = proxy_project::project();
     let model = &project.model;
 
-    let default_meas = model.default_measure_id()
-        .unwrap_or_else(|| "TotalSales".into());
+    let meas: MeasId = query.measure.as_deref()
+        .and_then(|name| model.measures.iter().find(|m| m.caption == name).map(|m| m.id.clone()))
+        .unwrap_or_else(|| model.default_measure_id()
+            .unwrap_or_else(|| "TotalSales".into()));
     let default_dim = model.default_dimension_id()
         .unwrap_or_else(|| "Produktkategori".into());
 
@@ -128,7 +130,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         SemanticQueryKind::SlicerAllAndMeasure
         | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
-                measure: default_meas,
+                measure: meas,
                 filters: typed_filters(&query.filters),
             }
         }
@@ -146,7 +148,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
                 vec![d]
             };
             QueryPlan::GroupBy {
-                measure: default_meas,
+                measure: meas,
                 group_by,
                 filters: typed_filters(&query.filters),
             }
@@ -154,7 +156,7 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
 
         SemanticQueryKind::AllLevelMembers => {
             QueryPlan::Total {
-                measure: default_meas,
+                measure: meas,
                 filters: vec![],
             }
         }

@@ -1,5 +1,5 @@
 use crate::response::discover_rowset_envelope;
-use crate::engine::model::default_model;
+use crate::proxy_project;
 
 const MG_DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -13,7 +13,8 @@ const MG_DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
                 <xsd:element sql:field="DIMENSION_GRANULARITY" name="DIMENSION_GRANULARITY" type="xsd:string" minOccurs="0"/>"#;
 
 pub fn get_measuregroup_dimensions_response() -> String {
-    let model = default_model();
+    let project = proxy_project::project();
+    let model = &project.model;
     let mut rows = String::new();
 
     // Pick the first measure group name (all measures share the same group for now)
@@ -24,8 +25,8 @@ pub fn get_measuregroup_dimensions_response() -> String {
     // [Measures] system dimension (special case)
     rows.push_str(&format!(
         r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
             <DIMENSION_IS_VISIBLE>false</DIMENSION_IS_VISIBLE>
@@ -33,13 +34,15 @@ pub fn get_measuregroup_dimensions_response() -> String {
           </row>
 "#,
         group_name,
+        catalog = project.config.catalog,
+        cube = project.config.cube,
     ));
 
-    for d in model.dimensions {
+    for d in &model.dimensions {
         rows.push_str(&format!(
             r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
             <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
             <DIMENSION_IS_VISIBLE>{}</DIMENSION_IS_VISIBLE>
@@ -49,6 +52,8 @@ pub fn get_measuregroup_dimensions_response() -> String {
             group_name,
             d.dimension_unique_name(),
             d.visible,
+            catalog = project.config.catalog,
+            cube = project.config.cube,
         ));
     }
 

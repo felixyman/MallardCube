@@ -38,8 +38,11 @@ impl Drop for LongLivedNodeMalloyCompiler {
 
 impl LongLivedNodeMalloyCompiler {
     pub fn new() -> Result<Self, MalloyCompileError> {
+        let config_path = std::env::var("PROXY_CONFIG")
+            .unwrap_or_else(|_| "project3/proxy-config.json".into());
         let mut child = Command::new("node")
             .arg("js/malloy-worker.js")
+            .env("PROXY_CONFIG", &config_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
