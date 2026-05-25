@@ -37,6 +37,32 @@ async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
 
+    // Load proxy project (config + Malloy model). When PROXY_CONFIG is
+    // set, use the specified config. Otherwise default to project3.
+    let config_path = std::env::var("PROXY_CONFIG")
+        .ok()
+        .unwrap_or_else(|| "project/proxy-config.json".into());
+    proxy_project::init_project(Some(&config_path))
+        .expect("init project");
+    {
+        let p = proxy_project::project();
+        println!("📁 Project loaded: {}", p.config.catalog);
+        debug_write(&format!("Project loaded: {} | cube={} | {} dims, {} measures",
+            p.config.catalog, p.config.cube,
+            p.model.dimensions.len(), p.model.measures.len(),
+        ));
+    }
+
+    if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
+        execute_builders::enable_malloy_runtime();
+        println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");
+        debug_write("Malloy runtime: ENABLED");
+        execute_builders::warm_malloy_worker();
+    } else {
+        println!("📊 Malloy runtime disabled (set MALLOY_RUNTIME=1 to enable)");
+        debug_write("Malloy runtime: disabled");
+    }
+
     let app = Router::new().route("/xmla", post(handle_xmla));
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     println!("🚀 Rust-XMLA Proxy (v3 - ModuleRefactor) snurrar på http://{}", addr);
@@ -117,7 +143,8 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         XmlaRequest::DiscoverProperties { property_names } => {
             if property_names.len() == 1 && property_names[0] == "Catalog" {
                 println!("Excel frågar efter Catalog");
-                properties::get_single_property_response("Catalog", "KTH_KEX_MALLOY_CUBE")
+                properties::get_single_property_response("Catalog",
+                    &proxy_project::project().config.catalog)
             } else {
                 println!("Excel frågar efter egenskaper: {:?}", property_names);
                 properties::get_properties_response(&property_names)
@@ -150,9 +177,11 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
             debug_write(&body);
-            let resp = execute::get_execute_statement_response(&mdx);
+            // Use instrumented path for timing collection
+            let (resp, timings) = execute_builders::get_execute_cellset_response_timed_malloy(&mdx);
             debug_write("RESPONSE XML:");
             debug_write(&resp);
+            debug_write(&timings.to_log_line());
             resp
         }
         XmlaRequest::MdschemaProperties { property_type } => {

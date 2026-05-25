@@ -1,0 +1,27 @@
+{
+  "name": "xmla_proxy",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felixyman/MallardCube.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/felixyman/MallardCube/issues"
+  },
+  "homepage": "https://github.com/felixyman/MallardCube#readme",
+  "dependencies": {
+    "@malloydata/db-duckdb": "^0.0.398",
+    "@malloydata/malloy": "^0.0.398"
+  }
+}

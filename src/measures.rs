@@ -1,5 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
-use crate::engine::model::default_model;
+use crate::proxy_project;
 
 const MEASURE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -24,45 +24,47 @@ const MEASURE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATA
                 <xsd:element sql:field="DEFAULT_FORMAT_STRING" name="DEFAULT_FORMAT_STRING" type="xsd:string" minOccurs="0"/>"#;
 
 pub fn get_measures_response() -> String {
-    let model = default_model();
+    let project = proxy_project::project();
+    let model = &project.model;
+    let catalog = &project.config.catalog;
+    let cube = &project.config.cube;
     let mut rows = String::new();
     for (i, m) in model.measures.iter().enumerate() {
         rows.push_str(&format!(
             r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
-            <MEASURE_NAME>{}</MEASURE_NAME>
-            <MEASURE_UNIQUE_NAME>{}</MEASURE_UNIQUE_NAME>
-            <MEASURE_CAPTION>{}</MEASURE_CAPTION>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <MEASURE_NAME>{caption}</MEASURE_NAME>
+            <MEASURE_UNIQUE_NAME>{mu_name}</MEASURE_UNIQUE_NAME>
+            <MEASURE_CAPTION>{display_name}</MEASURE_CAPTION>
             <MEASURE_GUID>00000000-0000-0000-0000-{:012}</MEASURE_GUID>
-            <MEASURE_AGGREGATOR>{}</MEASURE_AGGREGATOR>
+            <MEASURE_AGGREGATOR>{aggregator}</MEASURE_AGGREGATOR>
             <DATA_TYPE>5</DATA_TYPE>
-            <NUMERIC_PRECISION>{}</NUMERIC_PRECISION>
-            <NUMERIC_SCALE>{}</NUMERIC_SCALE>
-            <MEASURE_UNITS>{}</MEASURE_UNITS>
-            <DESCRIPTION>{}</DESCRIPTION>
-            <EXPRESSION>{}</EXPRESSION>
-            <MEASURE_IS_VISIBLE>{}</MEASURE_IS_VISIBLE>
-            <MEASURE_UNQUALIFIED_CAPTION>{}</MEASURE_UNQUALIFIED_CAPTION>
-            <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
+            <NUMERIC_PRECISION>{precision}</NUMERIC_PRECISION>
+            <NUMERIC_SCALE>{scale}</NUMERIC_SCALE>
+            <MEASURE_UNITS>{units}</MEASURE_UNITS>
+            <DESCRIPTION>{description}</DESCRIPTION>
+            <EXPRESSION>{expression}</EXPRESSION>
+            <MEASURE_IS_VISIBLE>{visible}</MEASURE_IS_VISIBLE>
+            <MEASURE_UNQUALIFIED_CAPTION>{display_name}</MEASURE_UNQUALIFIED_CAPTION>
+            <MEASUREGROUP_NAME>{group_name}</MEASUREGROUP_NAME>
             <MEASURE_DISPLAY_FOLDER></MEASURE_DISPLAY_FOLDER>
-            <DEFAULT_FORMAT_STRING>{}</DEFAULT_FORMAT_STRING>
+            <DEFAULT_FORMAT_STRING>{format}</DEFAULT_FORMAT_STRING>
           </row>
 "#,
-            m.caption,
-            m.measure_unique_name(),
-            m.display_name,
             40 + i,
-            m.aggregator,
-            m.numeric_precision,
-            m.numeric_scale,
-            m.units,
-            m.description,
-            m.expression,
-            m.visible,
-            m.display_name,
-            m.measure_group_name,
-            m.format_string,
+            caption = m.caption,
+            mu_name = m.measure_unique_name(),
+            display_name = m.display_name,
+            aggregator = m.aggregator,
+            precision = m.numeric_precision,
+            scale = m.numeric_scale,
+            units = m.units,
+            description = m.description,
+            expression = m.expression,
+            visible = m.visible,
+            group_name = m.measure_group_name,
+            format = m.format_string,
         ));
     }
 
