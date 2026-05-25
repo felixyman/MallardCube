@@ -27,4 +27,6 @@ pub mod cellset;
 pub mod rowset;
 pub mod backend;
 pub mod engine;
+pub mod proxy_config;
+pub mod proxy_project;
 pub mod test_fixtures;

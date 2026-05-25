@@ -1,4 +1,5 @@
 use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::proxy_project;
 
 const CUBE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -20,10 +21,13 @@ const CUBE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="PREFERRED_QUERY_PATTERNS" name="PREFERRED_QUERY_PATTERNS" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-const CUBE_ROWS: &str = r#"          <row>
-            <CATALOG_NAME>KTH_KEX_MALLOY_CUBE</CATALOG_NAME>
-            <SCHEMA_NAME>Model</SCHEMA_NAME>
-            <CUBE_NAME>Model</CUBE_NAME>
+pub fn get_cubes_response() -> String {
+    let project = proxy_project::project();
+    let rows = format!(
+        r#"          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <SCHEMA_NAME>{cube}</SCHEMA_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
             <CUBE_TYPE>CUBE</CUBE_TYPE>
             <CUBE_GUID>00000000-0000-0000-0000-000000000010</CUBE_GUID>
             <CREATED_ON>2026-05-20T12:00:00.000000</CREATED_ON>
@@ -36,12 +40,13 @@ const CUBE_ROWS: &str = r#"          <row>
             <IS_LINKABLE>false</IS_LINKABLE>
             <IS_WRITE_ENABLED>false</IS_WRITE_ENABLED>
             <IS_SQL_ENABLED>false</IS_SQL_ENABLED>
-            <CUBE_CAPTION>Model</CUBE_CAPTION>
-            <BASE_CUBE_NAME>Model</BASE_CUBE_NAME>
+            <CUBE_CAPTION>{cube}</CUBE_CAPTION>
+            <BASE_CUBE_NAME>{cube}</BASE_CUBE_NAME>
             <CUBE_SOURCE>1</CUBE_SOURCE>
             <PREFERRED_QUERY_PATTERNS>0</PREFERRED_QUERY_PATTERNS>
-          </row>"#;
-
-pub fn get_cubes_response() -> String {
-    discover_rowset_envelope(UUID_TYPE, CUBE_ROW_FIELDS, CUBE_ROWS)
+          </row>"#,
+        catalog = project.config.catalog,
+        cube = project.config.cube,
+    );
+    discover_rowset_envelope(UUID_TYPE, CUBE_ROW_FIELDS, &rows)
 }

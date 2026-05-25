@@ -1,3 +1,4 @@
 /target
 CONTEXT.md
 debug-last-run.log
+/js/node_modules

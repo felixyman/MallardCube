@@ -1,9 +1,13 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use xmla_proxy::backend::{Backend, BenchmarkDataConfig, QueryBackend};
 use xmla_proxy::engine::model::default_model;
-use xmla_proxy::engine::plan::{plan_from_semantic, execute_plan_with_backend};
-use xmla_proxy::engine::malloy::malloy_query;
+use xmla_proxy::engine::plan::{plan_from_semantic, execute_plan_with_backend, execute_plan_sql_with_backend};
+use xmla_proxy::engine::malloy::{malloy_query, malloy_for_query_plan, malloy_source_for_query_plan};
+use xmla_proxy::engine::malloy_compiler::{CompileResult, NullCompiler, MalloyCompiler};
+use xmla_proxy::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
 use xmla_proxy::engine::sql::sql_for_query_plan;
+use xmla_proxy::engine::normalize::plan_key;
+use xmla_proxy::engine::cache::PlanCache;
 use xmla_proxy::execute_builders::get_execute_cellset_response_with_backend;
 use xmla_proxy::mdx_parser::parse_mdx;
 use xmla_proxy::mdx_semantic::semantic_query_from_mdx;
@@ -190,4 +194,188 @@ criterion_group!(
     bench_e2e_scale,
 );
 
-criterion_main!(pipeline, scale);
+fn bench_comparison(c: &mut Criterion) {
+    let model = default_model();
+    let compiler = NullCompiler;
+    let cache = PlanCache::new();
+
+    let cases: &[(&str, &str)] = &[
+        ("total", MDX_SLICER),
+        ("group1d", MDX_DRILLDOWN),
+        ("group2d", MDX_CROSSJOIN_PROBE),
+        ("filtered", MDX_KAT_ROWS_REGION_FILTER),
+    ];
+
+    // Benchmark: direct SQL emission (uncached)
+    let mut group = c.benchmark_group("emit_direct");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        group.bench_function(*name, |b| {
+            b.iter(|| sql_for_query_plan(black_box(&model), black_box(&plan)))
+        });
+    }
+    group.finish();
+
+    // Benchmark: Malloy emission (uncached)
+    let mut group = c.benchmark_group("emit_malloy_full");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        group.bench_function(*name, |b| {
+            b.iter(|| malloy_for_query_plan(black_box(&model), black_box(&plan)))
+        });
+    }
+    group.finish();
+
+    // Benchmark: Malloy compile (via NullCompiler — measures emit+compile overhead)
+    let mut group = c.benchmark_group("compile_null");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                let _ = compiler.compile_query(black_box(&model), black_box(&plan));
+            })
+        });
+    }
+    group.finish();
+
+    // Benchmark: PlanKey normalization
+    let mut group = c.benchmark_group("normalize_key");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        group.bench_function(*name, |b| {
+            b.iter(|| plan_key(black_box(&plan)))
+        });
+    }
+    group.finish();
+
+    // Benchmark: Cached SQL lookup
+    let mut group = c.benchmark_group("cache_sql_hit");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        // Warm the cache
+        cache.get_or_generate_sql(&plan, &model);
+        group.bench_function(*name, |b| {
+            b.iter(|| cache.get_or_generate_sql(black_box(&plan), black_box(&model)))
+        });
+    }
+    group.finish();
+
+    // Benchmark: Cached Malloy lookup
+    let mut group = c.benchmark_group("cache_malloy_hit");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        cache.get_or_generate_malloy(&plan, &model);
+        group.bench_function(*name, |b| {
+            b.iter(|| cache.get_or_generate_malloy(black_box(&plan), black_box(&model)))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    comparison,
+    bench_comparison,
+);
+
+fn bench_malloy_runtime(c: &mut Criterion) {
+    let model = default_model();
+    let compiler = LongLivedNodeMalloyCompiler::new()
+        .expect("failed to start long-lived Malloy compiler");
+    let cache = PlanCache::new();
+
+    let cases: &[(&str, &str)] = &[
+        ("total", MDX_SLICER),
+        ("group1d", MDX_DRILLDOWN),
+        ("group2d", MDX_CROSSJOIN_PROBE),
+        ("filtered", MDX_KAT_ROWS_REGION_FILTER),
+    ];
+
+    // Benchmark: warm compile (same source, Malloy internal cache hot)
+    let mut group = c.benchmark_group("malloy_compile_warm");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        // One warm-up outside measurement
+        let _ = compiler.compile_query(&model, &plan);
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                let _ = compiler.compile_query(black_box(&model), black_box(&plan));
+            })
+        });
+    }
+    group.finish();
+
+    // Benchmark: cold compile (unique source each iteration defeats Malloy cache)
+    let mut group = c.benchmark_group("malloy_compile_cold");
+    let mut counter: u64 = 0;
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        let base = malloy_source_for_query_plan(&model, &plan);
+        // One warm-up to ensure worker/connection is ready
+        let _ = compiler.compile_malloy(&base);
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                counter = counter.wrapping_add(1);
+                let unique = format!("{base}\n-- c{counter}");
+                let _ = compiler.compile_malloy(black_box(&unique));
+            })
+        });
+    }
+    group.finish();
+
+    // Benchmark: cached compiled SQL hit (Rust-level PlanCache)
+    let mut group = c.benchmark_group("malloy_compile_cached");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+        // Warm the cache
+        let _ = cache.get_or_compile(&plan, &model, &compiler).unwrap();
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                let _ = cache.get_or_compile(black_box(&plan), black_box(&model), black_box(&compiler));
+            })
+        });
+    }
+    group.finish();
+
+    // Benchmark: direct SQL vs Malloy compile + execute
+    let backend = Backend::new_with_config(&BenchmarkDataConfig::small())
+        .expect("benchmark backend");
+    for (name, mdx) in cases {
+        let query = semantic_query_from_mdx(mdx);
+        let plan = plan_from_semantic(&query);
+
+        // Direct SQL path
+        let mut group = c.benchmark_group(format!("execute_direct_{}", name));
+        group.bench_function("direct", |b| {
+            b.iter(|| execute_plan_with_backend(black_box(&plan), black_box(&model), black_box(&backend)))
+        });
+        group.finish();
+
+        // Malloy compile + execute path (execute the compiled SQL)
+        let mut group = c.benchmark_group(format!("execute_malloy_{}", name));
+        let cr: CompileResult = compiler.compile_query(&model, &plan)
+            .expect("compile for benchmark");
+        let compiled_sql = cr.sql;
+        group.bench_function("malloy", |b| {
+            b.iter(|| {
+                execute_plan_sql_with_backend(black_box(&plan), black_box(&compiled_sql), black_box(&backend))
+            })
+        });
+        group.finish();
+    }
+}
+
+criterion_group!(
+    malloy_runtime,
+    bench_malloy_runtime,
+);
+
+criterion_main!(pipeline, scale, comparison, malloy_runtime);

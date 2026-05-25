@@ -41,6 +41,7 @@ pub fn get_execute_statement_response(statement: &str) -> String {
 mod tests {
     use super::*;
     use crate::mdx_semantic::*;
+    use crate::test_fixtures::MDX_TWO_LEAF_FILTERS_UNITS;
 
     const MDX_CCHILDREN_LEAF: &str = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Produktkategori].[Produktkategori].currentmember.children).count' Set FilteredMembers As '{[Produktkategori].[Produktkategori].&[Kategori B]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Produktkategori].[Produktkategori].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Model]";
 
@@ -651,6 +652,38 @@ mod tests {
         assert!(xml.contains("650000"), "North collapsed row should show region total 650000");
     }
 
+    // --- two-leaf-filter regression (project3 crash reproducer) ---
+
+    #[test]
+    fn two_leaf_filters_semantic() {
+        let q = semantic_query_from_mdx(MDX_TWO_LEAF_FILTERS_UNITS);
+        assert_eq!(q.kind, SemanticQueryKind::DrilldownCategories);
+        // Axis dimensions are model-driven; at minimum verify the query
+        // shape is recognized (not classified as SlicerOnly or similar).
+        assert!(!q.filters.is_empty(), "should have at least one extracted filter");
+    }
+
+    #[test]
+    fn two_leaf_filters_plan() {
+        let q = semantic_query_from_mdx(MDX_TWO_LEAF_FILTERS_UNITS);
+        let plan = crate::engine::plan::plan_from_semantic(&q);
+        // Verify we get a GroupBy (not a crash / wrong variant).
+        match &plan {
+            crate::engine::plan::QueryPlan::GroupBy { .. } => {},
+            _ => panic!("expected GroupBy plan, got {:?}", plan),
+        }
+    }
+
+    #[test]
+    fn two_leaf_filters_response() {
+        let xml = get_execute_statement_response(MDX_TWO_LEAF_FILTERS_UNITS);
+        // The pipeline must not panic. The XML must contain some
+        // recognizable cellset structure.
+        assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"));
+        assert!(xml.contains("<Axes>"));
+        assert!(xml.contains("<CellData>"));
+    }
+
     // --- MDX -> Malloy integration ---
 
     fn malloy_for_mdx(mdx: &str) -> String {
@@ -695,6 +728,8 @@ mod tests {
             &plan,
         );
         assert!(out.contains("group_by: region"));
-        assert!(out.contains("where: region = 'North' | produktkategori = 'Kategori A' | produktkategori = 'Kategori B' | produktkategori = 'Kategori D'"));
+        assert!(out.contains("region = 'North'"));
+        assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B' or produktkategori = 'Kategori D')"));
+        assert!(!out.contains(" | "), "cross-dimension filters should use AND (,) not OR (|)");
     }
 }

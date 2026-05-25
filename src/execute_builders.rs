@@ -9,8 +9,10 @@
 
 use crate::response::wrap_in_soap_envelope;
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_backend, plan_from_semantic};
-use crate::engine::model::{default_model, SemanticModel};
+use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_sql, execute_plan_with_backend, plan_from_semantic};
+use crate::engine::model::SemanticModel;
+use crate::engine::normalize::plan_key;
+use crate::engine::timing::{Timings, RuntimePath};
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
 use crate::axis_members::{
     render_response, full_slicer_axis, measures_axis,
@@ -37,17 +39,6 @@ fn ordered_pair(
     }
 }
 
-/// Map a 2D SQL row (first, second, value) to (kat_value, region_value)
-/// based on the visible axis dimension order.
-fn map_pair_values<'a>(dims: &[String], first: &'a str, second: &'a str) -> (&'a str, &'a str) {
-    let dim0 = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
-    if dim0 == "Region" {
-        (second, first)
-    } else {
-        (first, second)
-    }
-}
-
 fn build_slicer_only(query: &SemanticQuery, result: &QueryResult) -> String {
     let total = match result {
         QueryResult::Scalar(v) => *v,
@@ -65,11 +56,19 @@ fn build_drilldown(query: &SemanticQuery, result: &QueryResult) -> String {
     if dims.len() >= 2 {
         return build_drilldown_multi(query, result);
     }
-    let dim = dims.first().map(|s| s.as_str()).unwrap_or("Produktkategori");
-    let data = match result {
-        QueryResult::Grouped(data) => data,
+    let mut fallback_dim = String::new();
+    let dim = dims.first().map(|s| s.as_str())
+        .unwrap_or_else(|| {
+            fallback_dim = crate::proxy_project::project()
+                .model.default_dimension_id()
+                .unwrap_or_else(|| "Produktkategori".into());
+            &fallback_dim
+        });
+    let mut data = match result {
+        QueryResult::Grouped(data) => data.clone(),
         _ => unreachable!(),
     };
+    data.sort_by(|a, b| a.0.cmp(&b.0));
     let members = leaf_members_from(dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
@@ -92,10 +91,12 @@ fn build_drilldown(query: &SemanticQuery, result: &QueryResult) -> String {
 
 fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult) -> String {
     let dims = &query.axis_dimensions;
-    let all_data = match result {
-        QueryResult::Pairs(pairs) => pairs,
+    let mut all_data = match result {
+        QueryResult::Pairs(pairs) => pairs.clone(),
         _ => unreachable!(),
     };
+    // Stable sort by axis dimension order so Excel groups correctly.
+    all_data.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let has_exclusions = !query.excluded_members.is_empty();
 
     let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
@@ -103,21 +104,19 @@ fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult) -> String 
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
     }
 
+    let d0 = &dims[0];
+    let d1 = &dims[1];
+
     let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
-    for (first, second, value) in all_data {
-        let (kat, region) = map_pair_values(dims, first, second);
-        if has_exclusions && query.excluded_members.iter().any(|e| e.key == kat) {
+    for (first, second, value) in &all_data {
+        if has_exclusions && query.excluded_members.iter().any(|e| e.key == *first || e.key == *second) {
             continue;
         }
-        let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
-        let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(ordered_pair(
-            dims,
-            "Produktkategori", kat_member,
-            "Region", region_member,
-        ));
+        let m0 = leaf_member_for(d0, first, &query.dim_props);
+        let m1 = leaf_member_for(d1, second, &query.dim_props);
+        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
@@ -137,97 +136,77 @@ fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult) -> String 
 
 fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult) -> String {
     let dims = &query.axis_dimensions;
-    let all_data = match result {
-        QueryResult::Pairs(pairs) => pairs,
+    let mut all_data = match result {
+        QueryResult::Pairs(pairs) => pairs.clone(),
         _ => unreachable!(),
     };
-    let collapse_hier = query.drilldown_member_hierarchy.as_deref().unwrap_or("Region");
+    // Stable sort so collapsed + visible rows group correctly.
+    all_data.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let d0 = &dims[0];
+    let d1 = &dims[1];
 
     let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
     for dim in dims {
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
     }
 
+    let excluded_d0: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == *d0)
+        .map(|e| e.key.as_str())
+        .collect();
+    let excluded_d1: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == *d1)
+        .map(|e| e.key.as_str())
+        .collect();
+
+    let mut col_d0_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut col_d1_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for (first, second, value) in &all_data {
+        if excluded_d0.contains(first.as_str()) {
+            *col_d0_totals.entry(first.clone()).or_insert(0.0) += value;
+        }
+        if excluded_d1.contains(second.as_str()) {
+            *col_d1_totals.entry(second.clone()).or_insert(0.0) += value;
+        }
+    }
+
     let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
+    let mut seen_d0_col: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_d1_col: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let excluded_kats: std::collections::HashSet<&str> = query.excluded_members.iter()
-        .filter(|e| e.dimension == "Produktkategori")
-        .map(|e| e.key.as_str())
-        .collect();
-    let excluded_regions: std::collections::HashSet<&str> = query.excluded_members.iter()
-        .filter(|e| e.dimension == "Region")
-        .map(|e| e.key.as_str())
-        .collect();
-    let mut seen_kats: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut seen_regions: std::collections::HashSet<&str> = std::collections::HashSet::new();
-
-    for (first, second, value) in all_data {
-        let (kat, region) = map_pair_values(dims, first, second);
-        let is_kat_excluded = excluded_kats.contains(kat);
-        let is_region_excluded = excluded_regions.contains(region);
-
-        // Region collapse: excluded by Produktkategori member
-        if collapse_hier == "Region" && is_kat_excluded {
-            if !seen_kats.contains(kat) {
-                let total = Backend::get().total_sales_for(kat);
-                let kat_leaf = leaf_member_for("Produktkategori", kat, &query.dim_props);
-                let region_all = all_member_for("Region", &query.dim_props);
-                tuples.push(ordered_pair(
-                    dims,
-                    "Produktkategori", kat_leaf,
-                    "Region", region_all,
-                ));
+    for (first, second, value) in &all_data {
+        if excluded_d0.contains(first.as_str()) {
+            if !seen_d0_col.contains(first) {
+                seen_d0_col.insert(first.clone());
+                let total = col_d0_totals.get(first).copied().unwrap_or(0.0);
+                let m0 = leaf_member_for(d0, first, &query.dim_props);
+                let m1 = all_member_for(d1, &query.dim_props);
+                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
                 cells.push(measurement_cell(ordinal, total));
                 ordinal += 1;
-                seen_kats.insert(kat);
             }
             continue;
         }
 
-        // Produktkategori collapse: excluded by Produktkategori member
-        if collapse_hier == "Produktkategori" && is_kat_excluded {
-            if !seen_regions.contains(region) {
-                let kat_all = all_member_for("Produktkategori", &query.dim_props);
-                let region_leaf = leaf_member_for("Region", region, &query.dim_props);
-                tuples.push(ordered_pair(
-                    dims,
-                    "Produktkategori", kat_all,
-                    "Region", region_leaf,
-                ));
-                cells.push(measurement_cell(ordinal, *value));
-                ordinal += 1;
-                seen_regions.insert(region);
-            }
-            continue;
-        }
-
-        // Produktkategori collapse: excluded by Region member
-        if collapse_hier == "Produktkategori" && is_region_excluded {
-            if !seen_regions.contains(region) {
-                let total = Backend::get().total_sales_for_region(region);
-                let region_leaf = leaf_member_for("Region", region, &query.dim_props);
-                let kat_all = all_member_for("Produktkategori", &query.dim_props);
-                tuples.push(ordered_pair(
-                    dims,
-                    "Region", region_leaf,
-                    "Produktkategori", kat_all,
-                ));
+        if excluded_d1.contains(second.as_str()) {
+            if !seen_d1_col.contains(second) {
+                seen_d1_col.insert(second.clone());
+                let total = col_d1_totals.get(second).copied().unwrap_or(0.0);
+                let m0 = all_member_for(d0, &query.dim_props);
+                let m1 = leaf_member_for(d1, second, &query.dim_props);
+                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
                 cells.push(measurement_cell(ordinal, total));
                 ordinal += 1;
-                seen_regions.insert(region);
             }
             continue;
         }
 
-        let kat_member = leaf_member_for("Produktkategori", kat, &query.dim_props);
-        let region_member = leaf_member_for("Region", region, &query.dim_props);
-        tuples.push(ordered_pair(
-            dims,
-            "Produktkategori", kat_member,
-            "Region", region_member,
-        ));
+        let m0 = leaf_member_for(d0, first, &query.dim_props);
+        let m1 = leaf_member_for(d1, second, &query.dim_props);
+        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
         cells.push(measurement_cell(ordinal, *value));
         ordinal += 1;
     }
@@ -399,7 +378,8 @@ fn build_cchildren_for_measures(query: &SemanticQuery, _result: &QueryResult) ->
 
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
     let plan = plan_from_semantic(query);
-    let result = execute_plan(&plan, &default_model());
+    let model = &crate::proxy_project::project().model;
+    let result = execute_plan(&plan, model);
     dispatch(query, &result)
 }
 
@@ -436,6 +416,187 @@ fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
 pub fn get_execute_cellset_response(mdx: &str) -> String {
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     execute_semantic_query(&query)
+}
+
+use crate::engine::malloy_compiler::MalloyCompiler;
+use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
+use crate::engine::cache::PlanCache;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Toggle between direct SQL and Malloy runtime path.
+/// Set via env var MALLOY_RUNTIME=1 or programmatically.
+pub static USE_MALLOY_RUNTIME: AtomicBool = AtomicBool::new(false);
+
+/// Enable Malloy runtime for analytic queries (Total, GroupBy).
+pub fn enable_malloy_runtime() {
+    USE_MALLOY_RUNTIME.store(true, Ordering::Relaxed);
+}
+
+pub fn disable_malloy_runtime() {
+    USE_MALLOY_RUNTIME.store(false, Ordering::Relaxed);
+}
+
+/// Module-level long-lived Malloy compiler (lazy, spawned on first use).
+static COMPILER: OnceLock<LongLivedNodeMalloyCompiler> = OnceLock::new();
+
+/// Module-level compiled-SQL cache shared across all requests.
+static CACHE: OnceLock<PlanCache> = OnceLock::new();
+
+fn malloy_compiler() -> &'static LongLivedNodeMalloyCompiler {
+    COMPILER.get_or_init(|| {
+        LongLivedNodeMalloyCompiler::new().expect("start Malloy compiler")
+    })
+}
+
+fn malloy_cache() -> &'static PlanCache {
+    CACHE.get_or_init(PlanCache::new)
+}
+
+/// Eagerly spawn the long-lived Malloy compiler and warm its internal
+/// caches so the first Excel request doesn't pay the startup cost.
+/// Call once at server startup when MALLOY_RUNTIME=1.
+pub fn warm_malloy_worker() {
+    use std::time::Instant;
+    use crate::engine::malloy_compiler::MalloyCompiler;
+    use crate::engine::plan::QueryPlan;
+    let model = &crate::proxy_project::project().model;
+    let plan = QueryPlan::Total {
+        measure: model.default_measure_id()
+            .unwrap_or_else(|| "Revenue".into()),
+        filters: vec![],
+    };
+    let t1 = Instant::now();
+    match malloy_compiler().compile_query(&model, &plan) {
+        Ok(r) => {
+            let warm_ms = t1.elapsed().as_millis();
+            eprintln!(
+                "[malloy] warm-up compile OK in {warm_ms}ms (JS compile {:.2}ms)",
+                r.compile_ms,
+            );
+        }
+        Err(e) => {
+            eprintln!("[malloy] warm-up compile FAILED: {e}");
+        }
+    }
+}
+
+/// Instrumented variant — collects timing spans and logs them to stderr.
+/// Use for Excel workload measurement. Always uses the direct SQL path.
+pub fn get_execute_cellset_response_timed(mdx: &str) -> (String, Timings) {
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+    let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+    let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
+
+    let t0 = Instant::now();
+    let plan = plan_from_semantic(&query);
+    let plan_us = (Instant::now() - t0).as_micros() as u64;
+    let key = plan_key(&plan);
+
+    let t0 = Instant::now();
+    let model = &crate::proxy_project::project().model;
+    let result = execute_plan(&plan, model);
+    let sql_execute_us = (Instant::now() - t0).as_micros() as u64;
+
+    let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us, 0);
+    timings.plan_us = plan_us;
+    timings.sql_execute_us = sql_execute_us;
+
+    let t0 = Instant::now();
+    let xml = dispatch(&query, &result);
+    timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
+    timings.finish();
+    (xml, timings)
+}
+
+/// Instrumented variant with optional Malloy runtime path.
+/// When USE_MALLOY_RUNTIME is true and the query is a supported analytic shape,
+/// the SQL is obtained via the long-lived Malloy compiler instead of the Rust
+/// SQL emitter. Compiled SQL is cached by PlanKey.
+pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings) {
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+    let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+    let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
+
+    let t0 = Instant::now();
+    let plan = plan_from_semantic(&query);
+    let plan_us = (Instant::now() - t0).as_micros() as u64;
+    let key = plan_key(&plan);
+
+    let model = &crate::proxy_project::project().model;
+    let use_malloy = USE_MALLOY_RUNTIME.load(Ordering::Relaxed)
+        && matches!(query.kind, SemanticQueryKind::SlicerAllAndMeasure
+            | SemanticQueryKind::SlicerOnly
+            | SemanticQueryKind::DrilldownCategories
+            | SemanticQueryKind::LeafLevelMembers
+            | SemanticQueryKind::MeasureByCategory
+            | SemanticQueryKind::DrilldownMemberProbe);
+
+    let (result, runtime_path, malloy_compile_us, compiled_cache_hit, js_compile_ms, sql_execute_us) = if use_malloy {
+        let compiler = malloy_compiler();
+
+        let t0 = Instant::now();
+        let project = crate::proxy_project::project();
+        let source = project.malloy_source(&plan);
+        let (sql, was_hit, worker_compile_ms, compile_err) = if project.malloy_model_text.is_empty() {
+            let cache = malloy_cache();
+            match cache.get_or_compile(&plan, &model, compiler) {
+                Ok((s, h, ms)) => (s, h, ms, None),
+                Err(e) => (String::new(), false, 0.0, Some(e)),
+            }
+        } else {
+            match compiler.compile_malloy(&source) {
+                Ok(cr) => (cr.sql, false, cr.compile_ms, None),
+                Err(e) => (String::new(), false, 0.0, Some(e)),
+            }
+        };
+        let compile_us = (Instant::now() - t0).as_micros() as u64;
+
+        if let Some(ref err) = compile_err {
+            // Malloy compile failed — fall back to direct SQL.
+            // Log the failure so we know which shapes need fixing.
+            eprintln!(
+                "Malloy compile FAILED plan_key={} kind={:?} measure={:?}: {err}",
+                plan_key(&plan), query.kind, query.measure,
+            );
+            eprintln!("  Malloy source:\n{source}");
+
+            let t1 = Instant::now();
+            let fallback = execute_plan(&plan, &model);
+            let exec_us = (Instant::now() - t1).as_micros() as u64;
+            (fallback, RuntimePath::DirectSql, compile_us, false, 0.0, exec_us)
+        } else {
+            let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
+
+            let t0 = Instant::now();
+            let r = execute_plan_with_sql(&plan, &sql);
+            let exec_us = (Instant::now() - t0).as_micros() as u64;
+
+            (r, path, compile_us, was_hit, worker_compile_ms, exec_us)
+        }
+    } else {
+        let t0 = Instant::now();
+        let r = execute_plan(&plan, &model);
+        let exec_us = (Instant::now() - t0).as_micros() as u64;
+        (r, RuntimePath::DirectSql, 0, false, 0.0, exec_us)
+    };
+
+    let mut timings = Timings::new(runtime_path, key, mdx_parse_us, 0);
+    timings.plan_us = plan_us;
+    timings.malloy_compile_us = malloy_compile_us;
+    timings.compiled_sql_cache_hit = compiled_cache_hit;
+    timings.js_compile_ms = js_compile_ms;
+    timings.sql_execute_us = sql_execute_us;
+
+    let t0 = Instant::now();
+    let xml = dispatch(&query, &result);
+    timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
+    timings.finish();
+    (xml, timings)
 }
 
 pub fn get_execute_cellset_response_with_backend<B: QueryBackend>(
