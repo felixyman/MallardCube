@@ -10,28 +10,31 @@
 - Excel PivotTable query execution works end-to-end for current cube shape.
 - DuckDB is the default analytic backend.
 - Full typed pipeline: `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
-- **Core abstraction is now model-driven, not demo-cube-specific:**
+- **Core abstraction is model-driven, not demo-cube-specific:**
   - `DimId` / `MeasId` are `String` type aliases — no hardcoded enums.
   - Planning uses `default_measure_id()` / `default_dimension_id()` from the loaded model.
   - MDX dimension detection scans configured dimensions, not hardcoded candidates.
   - `members.rs` queries DuckDB for distinct values — no hardcoded business members.
   - Collapse/2D rendering is generic — uses `axis_dimensions` order, not fixed dimension names.
-- **Two independent sample projects prove the abstraction:**
+- **Three independent sample projects prove the abstraction:**
   - `project/` — original demo (Produktkategori, Region, TotalSales).
   - `project2/` — renamed (Category, Territory, Revenue) against same physical data.
-  - Both load and work without code changes.
+  - `project3/` — wider model (Category, Territory, Channel, Segment, Revenue, Units) against `sales_fact`.
 - **Proxy config + Malloy model file loading works at startup** (`PROXY_CONFIG=...`).
   - Developer-supplied `.malloy` file is loaded as the Malloy model source.
   - `proxy-config.json` maps Malloy names to Excel/XMLA captions, formatting, ordering.
-  - Without config, `default_model()` fallback (backward-compatible).
+  - Without config, defaults to `project3/proxy-config.json`.
 - Malloy runtime path (long-lived Node worker) compiles and executes developer-owned Malloy.
 - Compile result carries `compile_ms` from the JS worker; runtime path executes compiled SQL.
 - Result-parity tests verify direct SQL and Malloy-compiled SQL produce identical results.
 - Worker spawn + warm-up happens eagerly at server startup.
 - Query-plan normalization and caches exist for Malloy source, SQL text, compiled SQL.
 - Naming contract documented in `docs/naming-contract.md`.
-- File reorg deferred — do after architecture boundaries fully settle.
+- File reorg deferred — do after multi-fact-table architecture settles.
 - Test suite: **152 passing tests** (worker-dependent tests run serially).
+- **Shared DuckDB runtime**: `db_path` in config controls file-based (real) vs in-memory (demo). Rust backend and JS worker share same DB file.
+- Seed data tooling: `cargo run --bin seed_sql > seed.sql`, `data/` with `.db`, `.parquet`, `.sql`.
+- SSAS Tabular conversion reference: `docs/ssas-to-malloy-conversion.md` — system prompt for `.bim` → Malloy + DuckDB.
 
 ## Supported simple-model scope (explicit boundary)
 - One DuckDB fact source.
@@ -39,7 +42,7 @@
 - One hierarchy per dimension with `(All)` + one leaf level.
 - Aggregate measures from Malloy.
 - Up to 2 visible row dimensions for current Excel Pivot interactions.
-- Not yet: arbitrary N-way hierarchies, multi-source joins, Postgres/MSSQL ingestion.
+- Not yet: multi-fact-table, arbitrary N-way hierarchies, multi-source joins, Postgres/MSSQL ingestion.
 
 ## Constraints and preferences
 - Excel/MSOLAP compatibility is strict; rowset and cellset layout correctness matters.
@@ -55,7 +58,7 @@
   `DISCOVER_PROPERTIES`, `DISCOVER_SCHEMA_ROWSETS`, `DBSCHEMA_CATALOGS`,
   `MDSCHEMA_CUBES`, `MDSCHEMA_DIMENSIONS`, `MDSCHEMA_HIERARCHIES`, `MDSCHEMA_LEVELS`,
   `MDSCHEMA_MEASURES`, `MDSCHEMA_PROPERTIES`, `MDSCHEMA_MEMBERS`.
-- `MDSCHEMA_MEMBERS` aligned to spec and now queries DuckDB for actual member values.
+- `MDSCHEMA_MEMBERS` aligned to spec and queries DuckDB for actual member values.
 
 ### Cellset and axis behavior
 - Multi-member tuples, multiple hierarchies per axis, conditional `CellInfo`/`CellData`.
@@ -74,7 +77,8 @@
 ### Proxy config and project loading
 - `src/proxy_config.rs`: JSON config schema (`ProxyConfig`, `DimensionConfig`, `MeasureConfig`).
 - `src/proxy_project.rs`: Loads `.malloy` file + config, builds `SemanticModel`, provides `malloy_source()`.
-- `project/` and `project2/`: two independent sample projects. Startup via `PROXY_CONFIG=...` env var.
+- `project/`, `project2/`, `project3/`: three independent sample projects proofing the abstraction.
+- `db_path` field in config enables real DuckDB file mode (demo mode when null).
 
 ### Generic execution layer
 - `plan_from_semantic()` uses model-derived defaults — no hardcoded measure/dimension names.
@@ -96,6 +100,7 @@
 - DuckDB backend with `distinct_count()` and `distinct_values()` helpers.
 - SQL emitter and Malloy emitter with loaded-model-text support (`malloy_source_with_model_text()`).
 - `execute_plan_with_sql()` for Malloy-compiled SQL execution.
+- `Backend::open(path)` for file-based DuckDB. `init_backend(Option<&str>)` for config-driven init.
 
 ### Caching and normalization
 - `plan_key(plan)` normalization. SQL, Malloy, and compiled-SQL caches with hit/miss counters.
@@ -105,18 +110,25 @@
 - `MalloyCompiler` trait, `NullCompiler`, one-shot Node spike, long-lived worker.
 - Result parity confirmed (4 tests). Worker warm-up at startup.
 - `malloy_compile_warm`, `malloy_compile_cold`, `malloy_compile_cached` benchmarks.
-- Malloy compile errors no longer silently swallowed — logged to stderr with plan key, kind, measure, and full generated source; automatic fallback to direct SQL so Excel stays functional.
-- `js/proxy-schema.js` derives compile-time DuckDB schema from Malloy source text; WHERE clause column extraction uses word-boundary regex (not broken pipe-split) to capture all filter columns.
-- Default startup points at `project3/` (4 dims, 2 measures) when `PROXY_CONFIG` is unset.
+- Malloy compile errors no longer silently swallowed — logged to stderr with plan key, kind, measure, and full generated source; automatic fallback to direct SQL.
+- `js/proxy-schema.js` derives compile-time DuckDB schema from Malloy source; WHERE clause extraction uses word-boundary regex to capture all filter columns.
+- Shared DuckDB runtime: `db_path` in config controls file-based (real) vs in-memory (demo). Both Rust and JS worker open the same DB file. Malloy compiles against real schema.
+- Worker passes `DUCKDB_PATH` env var from config's resolved `db_path`. Conditional connection in `malloy-worker.js`.
 
 ### Runtime instrumentation
 - `MALLOY_RUNTIME=1` toggle. Timed execution path with runtime path labels.
 - `js_compile_ms` field in `Timings` and log output.
 
-### Benchmarks and docs
-- Criterion benchmarks for pipeline overhead, DuckDB scaling, Malloy runtime.
+### Data tooling
+- `src/bin/seed_sql.rs`: generates `sales_fact` seed SQL from `generate_sales_fact_rows()`.
+- `data/seed.sql`, `data/sales.db`, `data/sales_fact.parquet`: ready-to-use synthetic data.
+
+### Documentation
 - `docs/naming-contract.md` — id/caption/malloy_name naming rules.
-- Architecture diagrams in `docs/`.
+- `docs/DIAGRAMS.md` — architecture diagrams (moved from old `docs/README.md`).
+- `docs/cellset-reference.md` — XMLA cellset layout reference.
+- `docs/ssas-to-malloy-conversion.md` — comprehensive `.bim` → Malloy + DuckDB conversion reference (10 sections, 3 appendices, designed as LLM system prompt).
+- `README.md` at repo root — quick start, project structure, connecting Excel, demo vs real data, tests.
 
 ## Benchmark results
 
@@ -147,17 +159,17 @@
 - One-shot Malloy compile not interactive-use viable, but long-lived compile is sub-ms warm.
 - Direct Rust SQL and Malloy-compiled SQL produce identical results (parity tests).
 - Malloy internal caching makes "cold" vs "warm" distinction subtle.
-- Two independent projects with different naming prove the model-driven abstraction is real.
+- Three independent projects with different naming prove the model-driven abstraction is real.
 
 ## Current gaps and risks
+- **Multi-fact-table support**: `SemanticModel` has one `source_name`/`table_name` — measures and dimensions are all scoped to a single flat table. Phased plan designed (A: `FactTable` struct, B: emitters, C: config, D: metadata, E: star schema, F: multi-query merge).
 - `execute_builders.rs` is the main complexity hotspot — collapse/tuple logic needs extraction.
 - Some fallback defaults in planning (`default_measure_id()` etc.) can mask misconfiguration.
 - Only "simple model" shape is supported: one fact source, flat dimensions, one hierarchy each.
 - Timing instrumentation still has known correctness bugs in some fields.
 - Long-lived worker not hardened for concurrent use; tests require serialization.
-- File structure is still flat — reorg deferred until architecture boundaries settle.
+- File structure is still flat — reorg deferred until multi-fact-table architecture settles.
 - `mdx_semantic.rs` still has some string-heuristic fragility for more complex MDX.
-- Malloy JS worker still compiles against isolated in-memory DuckDB (not shared with Rust backend).
 
 ## What works today
 - Full discover handshake for Excel/MSOLAP.
@@ -169,21 +181,24 @@
 - Result parity between direct SQL and Malloy-compiled SQL (4 tests).
 - JS-side `compile_ms` captured. Eager worker warm-up at startup.
 - Cache normalization and logging.
-- Two independent sample projects load and work against same physical data.
+- Three independent sample projects load and work against different physical data.
+- Shared DuckDB runtime with file and demo modes.
+- Malloy compile fallback to direct SQL on failure.
+- Seed data generation tooling (SQL, DB, Parquet).
 - 152 passing tests.
 
 ## Current priorities
-1. File reorg after architecture boundaries fully settle (deferred from this pass).
-2. Harden the long-lived worker for concurrent use.
-3. Fix remaining timing instrumentation correctness.
-4. Add proof case where `caption != id` (stretch the abstraction without breaking it).
-5. Extract collapse/tuple helpers from `execute_builders.rs`.
-6. Generalize beyond simple-model scope if needed (not yet urgent).
+1. **Multi-fact-table support** — Phase A (model layer, zero behavior change, backward compat).
+2. Extract collapse/tuple helpers from `execute_builders.rs`.
+3. Harden the long-lived worker for concurrent use.
+4. Fix remaining timing instrumentation correctness.
+5. Time intelligence long-term plan (date_dim auto-generation, proxy config `time_intelligence` blocks, Excel MDX time functions).
+6. File reorg after multi-fact-table boundaries settle.
 
 ## Relevant files
-- `src/backend.rs`: DuckDB default backend, `QueryBackend`, `distinct_count`, `distinct_values`.
-- `src/execute.rs`: thin dispatch and regression tests (136 tests).
-- `src/execute_builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, generic 1D/2D/collapse rendering.
+- `src/backend.rs`: DuckDB default backend, `QueryBackend`, `distinct_count`, `distinct_values`, `Backend::open()`, `init_backend()`.
+- `src/execute.rs`: thin dispatch and regression tests (152 tests).
+- `src/execute_builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, generic 1D/2D/collapse rendering, Malloy compile fallback.
 - `src/mdx_semantic.rs`: model-driven dimension detection, semantic classification, excluded-member parsing.
 - `src/mdx_parser.rs`: `nom` parser and `ParsedMdx`.
 - `src/axis_members.rs`: member/cell/axis/slicer helpers.
@@ -197,16 +212,24 @@
 - `src/engine/cache.rs`: source/SQL/compiled cache layers.
 - `src/engine/malloy_compiler.rs`: `CompileResult`, `MalloyCompiler` trait.
 - `src/engine/malloy_node.rs`: one-shot Node compile spike.
-- `src/engine/malloy_node_longlived.rs`: long-lived worker client captures `compile_ms`.
+- `src/engine/malloy_node_longlived.rs`: long-lived worker client captures `compile_ms`, passes `DUCKDB_PATH` env var.
 - `src/engine/parity.rs`: direct-SQL vs Malloy-path result parity.
 - `src/engine/timing.rs`: `Timings` with `js_compile_ms`.
-- `src/proxy_config.rs`: JSON config schema.
+- `src/proxy_config.rs`: JSON config schema, `db_path` field.
 - `src/proxy_project.rs`: Project loader — builds `SemanticModel` from config, provides `malloy_source()`.
-- `src/main.rs`: runtime toggle, project init (`PROXY_CONFIG` env var), request timing/logging.
-- `project/model.malloy`, `project/proxy-config.json`: sample project 1.
-- `project2/model.malloy`, `project2/proxy-config.json`: sample project 2 (different names).
+- `src/main.rs`: runtime toggle, project init, `Backend::init()` startup, `--seed-db` CLI.
+- `src/bin/seed_sql.rs`: generates `sales_fact` seed SQL from existing generation code.
+- `project3/model.malloy`, `project3/proxy-config.json`: wider sample project (4 dims, 2 measures). Default startup.
+- `project2/model.malloy`, `project2/proxy-config.json`: renamed sample project.
+- `project/model.malloy`, `project/proxy-config.json`: original demo project.
+- `data/seed.sql`, `data/sales.db`, `data/sales_fact.parquet`: synthetic test data.
+- `js/malloy-worker.js`: long-lived JS worker, conditional DuckDB connection (file vs :memory:).
+- `js/proxy-schema.js`: compile-time DuckDB schema extraction from Malloy source.
+- `js/malloy-cli.js`: one-shot Malloy compiler.
+- `docs/DIAGRAMS.md`: architecture diagrams index (current, target, migration, collapse).
 - `docs/naming-contract.md`: id/caption/malloy_name naming rules.
-- `docs/`: architecture and migration diagrams.
-- `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
+- `docs/cellset-reference.md`: XMLA cellset layout reference.
+- `docs/ssas-to-malloy-conversion.md`: `.bim` → Malloy + DuckDB conversion reference (LLM system prompt).
+- `README.md`: project README with quick start, config walkthrough, Excel connection, architecture links.
 - `debug-last-run.log`: latest Excel request/response/timing trace.
-- `js/proxy-schema.js`: derives compile-time DuckDB schema from Malloy source text for JS worker.
+- `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
