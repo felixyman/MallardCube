@@ -156,7 +156,7 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
 
     let response_body = match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
-            execute::get_empty_execute_response()
+            execute::dispatch::get_empty_execute_response()
         }
 
         XmlaRequest::DiscoverProperties { property_names } => {
