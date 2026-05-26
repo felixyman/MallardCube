@@ -15,6 +15,8 @@ pub struct ProxyConfig {
     pub table_name: String,
     pub dialect: String,
     pub malloy_model_file: String,
+    #[serde(default)]
+    pub db_path: Option<String>,
     pub dimensions: Vec<DimensionConfig>,
     pub measures: Vec<MeasureConfig>,
 }

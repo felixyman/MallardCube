@@ -56,6 +56,7 @@ Each project is a directory containing two files:
   "table_name": "sales_fact",      // DuckDB table name
   "dialect": "duckdb",             // Backend dialect
   "malloy_model_file": "model.malloy",
+  "db_path": null,                 // Optional: path to DuckDB file. null = demo mode.
   "dimensions": [
     {
       "id": "Category",            // Internal identifier for QueryPlan / plan_key
@@ -158,6 +159,32 @@ strategic direction; direct SQL serves as the debugging oracle and safety net.
 Caches exist for Malloy source text, SQL text, and compiled SQL — normalized
 via `plan_key(plan)`.
 
+## Demo vs Real Data
+
+By default, the proxy runs in **demo mode**: it creates an in-memory DuckDB
+database with synthetic data (20k `sales_fact` rows). This lets you explore
+the proxy without setting up any data.
+
+To use your own DuckDB database:
+
+1. Create or point to a DuckDB file with your fact table.
+2. Set `"db_path"` in `proxy-config.json` to the file path (relative to the
+   config file):
+
+```jsonc
+{
+  "db_path": "../data/my-sales.db",
+  // ...
+}
+```
+
+3. Start the proxy normally. If `MALLOY_RUNTIME=1`, both the Rust backend and
+   the Malloy JS worker open the **same** DuckDB file. Malloy compiles against
+   the real schema — no fake schema derivation needed.
+
+When `db_path` is `null` (or omitted), the proxy uses demo mode
+(in-memory database with synthetic data).
+
 ## Running tests
 
 ```bash
@@ -180,6 +207,7 @@ For architecture diagrams, naming convention details, and cellset reference:
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
 | `docs/naming-contract.md` | `id` vs `malloy_name` vs `caption` naming rules |
 | `docs/cellset-reference.md` | XMLA cellset layout reference |
+| `docs/ssas-to-malloy-conversion.md` | SSAS Tabular `.bim` → Malloy + DuckDB conversion reference |
 
 ## Supported scope
 

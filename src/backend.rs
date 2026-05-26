@@ -1,4 +1,5 @@
 use duckdb::{Connection, params};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 pub struct Backend {
@@ -155,9 +156,24 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
     rows
 }
 
+static BACKEND: OnceLock<Backend> = OnceLock::new();
+
 fn instance() -> &'static Backend {
-    static BACKEND: OnceLock<Backend> = OnceLock::new();
     BACKEND.get_or_init(|| Backend::new().expect("failed to initialise DuckDB"))
+}
+
+/// Called once at startup, before any queries. When `db_path` is `Some`,
+/// opens the file-based DuckDB database (user-owned schema — no seeding).
+/// When `None`, uses the demo in-memory database with synthetic data.
+pub fn init_backend(db_path: Option<&str>) -> Result<(), duckdb::Error> {
+    let backend = match db_path {
+        Some(path) => Backend::open(Path::new(path))?,
+        None => Backend::new()?,
+    };
+    BACKEND.set(backend).map_err(|_| {
+        duckdb::Error::InvalidParameterName("Backend already initialised".into())
+    })?;
+    Ok(())
 }
 
 // ---- DuckDB Backend impl of QueryBackend ----
@@ -183,6 +199,28 @@ impl QueryBackend for Backend {
 impl Backend {
     pub fn get() -> &'static Self {
         instance()
+    }
+
+    /// Called once at startup. When `db_path` is `Some`, opens the file-based
+    /// DuckDB database. When `None`, uses the demo in-memory database.
+    pub fn init(db_path: Option<&str>) -> Result<(), duckdb::Error> {
+        let backend = match db_path {
+            Some(path) => Backend::open(Path::new(path))?,
+            None => Backend::new()?,
+        };
+        static BACKEND: OnceLock<Backend> = OnceLock::new();
+        BACKEND.set(backend).map_err(|_| {
+            duckdb::Error::InvalidParameterName("Backend already initialised".into())
+        }).ok();
+        Ok(())
+    }
+
+    /// Open a file-based DuckDB database. No seeding — the user owns the schema.
+    pub fn open(path: &Path) -> Result<Self, duckdb::Error> {
+        let conn = Connection::open(path)?;
+        Ok(Backend {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn new() -> Result<Self, duckdb::Error> {

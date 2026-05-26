@@ -41,7 +41,7 @@ async fn main() {
     // set, use the specified config. Otherwise default to project3.
     let config_path = std::env::var("PROXY_CONFIG")
         .ok()
-        .unwrap_or_else(|| "project/proxy-config.json".into());
+        .unwrap_or_else(|| "project3/proxy-config.json".into());
     proxy_project::init_project(Some(&config_path))
         .expect("init project");
     {
@@ -51,6 +51,25 @@ async fn main() {
             p.config.catalog, p.config.cube,
             p.model.dimensions.len(), p.model.measures.len(),
         ));
+
+        // Initialise DuckDB backend. When db_path is set, opens the user's
+        // file-based database (no seeding). Otherwise creates demo in-memory
+        // database with synthetic data.
+        let db_path = p.config.db_path.as_deref();
+        match db_path {
+            Some(path) => {
+                backend::init_backend(Some(path))
+                    .expect(&format!("failed to open DuckDB: {path}"));
+                println!("🗄️  DuckDB: {path}");
+                debug_write(&format!("DuckDB: {path}"));
+            }
+            None => {
+                backend::init_backend(None)
+                    .expect("failed to init demo DuckDB");
+                println!("🧪 DuckDB: demo (in-memory)");
+                debug_write("DuckDB: demo (in-memory)");
+            }
+        }
     }
 
     if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {

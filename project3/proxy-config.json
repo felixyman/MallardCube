@@ -5,6 +5,7 @@
   "table_name": "sales_fact",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
+  "db_path": "./../data/sales.db",
   "dimensions": [
     {
       "id": "Category",
