@@ -46,8 +46,13 @@ async function main() {
     (async () => {
       let resp;
       try {
-        const conn = new DuckDBConnection("duckdb", ":memory:");
-        await conn.runSQL(createTableSqlFromMalloySource(req.source));
+        let conn;
+        if (process.env.DUCKDB_PATH) {
+          conn = new DuckDBConnection("duckdb", process.env.DUCKDB_PATH);
+        } else {
+          conn = new DuckDBConnection("duckdb", ":memory:");
+          await conn.runSQL(createTableSqlFromMalloySource(req.source));
+        }
         const runtime = new Runtime({ connection: conn });
         const q = runtime.loadQuery(req.source);
         const sql = await q.getSQL();

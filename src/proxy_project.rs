@@ -79,6 +79,7 @@ impl ProxyProject {
                 table_name: "faktatabell".into(),
                 dialect: "duckdb".into(),
                 malloy_model_file: String::new(),
+                db_path: None,
                 dimensions: vec![
                     crate::proxy_config::DimensionConfig {
                         id: "Produktkategori".into(),
