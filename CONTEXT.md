@@ -30,7 +30,7 @@
 - Worker spawn + warm-up happens eagerly at server startup.
 - Query-plan normalization and caches exist for Malloy source, SQL text, compiled SQL.
 - Naming contract documented in `docs/naming-contract.md`.
-- File reorg deferred — do after multi-fact-table architecture settles.
+- File reorg complete — architecture boundaries now reflected in directory layout.
 - Test suite: **152 passing tests** (worker-dependent tests run serially).
 - **Shared DuckDB runtime**: `db_path` in config controls file-based (real) vs in-memory (demo). Rust backend and JS worker share same DB file.
 - Seed data tooling: `cargo run --bin seed_sql > seed.sql`, `data/` with `.db`, `.parquet`, `.sql`.
@@ -168,7 +168,7 @@
 - Only "simple model" shape is supported: one fact source, flat dimensions, one hierarchy each.
 - Timing instrumentation still has known correctness bugs in some fields.
 - Long-lived worker not hardened for concurrent use; tests require serialization.
-- File structure is still flat — reorg deferred until multi-fact-table architecture settles.
+- File structure organised by architectural layer (`backend/`, `project/`, `mdx/`, `execute/`, `xmla/`, `engine/`, `test_support/`).
 - `mdx_semantic.rs` still has some string-heuristic fragility for more complex MDX.
 
 ## What works today
@@ -196,14 +196,17 @@
 6. File reorg after multi-fact-table boundaries settle.
 
 ## Relevant files
-- `src/backend.rs`: DuckDB default backend, `QueryBackend`, `distinct_count`, `distinct_values`, `Backend::open()`, `init_backend()`.
-- `src/execute.rs`: thin dispatch and regression tests (152 tests).
-- `src/execute_builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, generic 1D/2D/collapse rendering, Malloy compile fallback.
-- `src/mdx_semantic.rs`: model-driven dimension detection, semantic classification, excluded-member parsing.
-- `src/mdx_parser.rs`: `nom` parser and `ParsedMdx`.
-- `src/axis_members.rs`: member/cell/axis/slicer helpers.
-- `src/cellset.rs`: XMLA cellset builder.
-- `src/members.rs`: queries DuckDB for member values, uses project config for catalog/cube.
+- `src/backend/mod.rs`: DuckDB default backend, `QueryBackend`, `distinct_count`, `distinct_values`, `Backend::open()`, `init_backend()`.
+- `src/execute/dispatch.rs`: thin dispatch and regression tests (152 tests).
+- `src/execute/builders.rs`: execution dispatch, Malloy runtime toggle, timed paths, generic 1D/2D/collapse rendering, Malloy compile fallback.
+- `src/execute/axis_members.rs`: member/cell/axis/slicer helpers.
+- `src/mdx/semantic.rs`: model-driven dimension detection, semantic classification, excluded-member parsing.
+- `src/mdx/parser.rs`: `nom` parser and `ParsedMdx`.
+- `src/xmla/cellset.rs`: XMLA cellset builder.
+- `src/xmla/parser.rs`: XMLA envelope parser.
+- `src/xmla/response.rs`: XMLA response helpers.
+- `src/xmla/rowset.rs`: rowset builder.
+- `src/xmla/discover/`: discover rowset implementations (catalogs, cubes, dimensions, measures, hierarchies, levels, members, sets, kpis, tmschema, etc.).
 - `src/engine/plan.rs`: `DimId`, `MeasId`, `QueryPlan`, `QueryResult`, `plan_from_semantic` (model-driven), `execute_plan_with_sql`.
 - `src/engine/model.rs`: `SemanticModel`, `DimensionDef`, `MeasureDef` with helpers (`default_measure_id`, `lookup_dimension`, etc.).
 - `src/engine/malloy.rs`: Malloy emitter with `malloy_source_with_model_text()`.
@@ -215,10 +218,11 @@
 - `src/engine/malloy_node_longlived.rs`: long-lived worker client captures `compile_ms`, passes `DUCKDB_PATH` env var.
 - `src/engine/parity.rs`: direct-SQL vs Malloy-path result parity.
 - `src/engine/timing.rs`: `Timings` with `js_compile_ms`.
-- `src/proxy_config.rs`: JSON config schema, `db_path` field.
-- `src/proxy_project.rs`: Project loader — builds `SemanticModel` from config, provides `malloy_source()`.
-- `src/main.rs`: runtime toggle, project init, `Backend::init()` startup, `--seed-db` CLI.
+- `src/project/config.rs`: JSON config schema, `db_path` field.
+- `src/project/project.rs`: Project loader — builds `SemanticModel` from config, provides `malloy_source()`.
+- `src/main.rs`: runtime toggle, project init, `Backend::init()` startup.
 - `src/bin/seed_sql.rs`: generates `sales_fact` seed SQL from existing generation code.
+- `src/test_support/fixtures.rs`: shared MDX test fixtures.
 - `project3/model.malloy`, `project3/proxy-config.json`: wider sample project (4 dims, 2 measures). Default startup.
 - `project2/model.malloy`, `project2/proxy-config.json`: renamed sample project.
 - `project/model.malloy`, `project/proxy-config.json`: original demo project.
@@ -226,10 +230,11 @@
 - `js/malloy-worker.js`: long-lived JS worker, conditional DuckDB connection (file vs :memory:).
 - `js/proxy-schema.js`: compile-time DuckDB schema extraction from Malloy source.
 - `js/malloy-cli.js`: one-shot Malloy compiler.
-- `docs/DIAGRAMS.md`: architecture diagrams index (current, target, migration, collapse).
+- `docs/DIAGRAMS.md`: architecture diagrams index.
 - `docs/naming-contract.md`: id/caption/malloy_name naming rules.
 - `docs/cellset-reference.md`: XMLA cellset layout reference.
-- `docs/ssas-to-malloy-conversion.md`: `.bim` → Malloy + DuckDB conversion reference (LLM system prompt).
+- `docs/ssas-to-malloy-conversion.md`: `.bim` → Malloy + DuckDB conversion reference.
 - `README.md`: project README with quick start, config walkthrough, Excel connection, architecture links.
+- `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
 - `debug-last-run.log`: latest Excel request/response/timing trace.
 - `benches/pipeline.rs`: pipeline, scale, and Malloy runtime benchmarks.
