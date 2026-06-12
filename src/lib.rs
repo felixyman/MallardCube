@@ -1,4 +1,10 @@
-// Public modules — grouped by architectural layer
+/// Public modules — grouped by architectural layer.
+///
+/// New code should import from these grouped paths:
+///   use crate::project::config as proxy_config;
+///   use crate::project::project as proxy_project;
+///   use crate::mdx::semantic as mdx_semantic;
+///   etc.
 pub mod backend;
 pub mod project;
 pub mod mdx;
@@ -7,8 +13,11 @@ pub mod xmla;
 pub mod engine;
 pub mod test_support;
 
-// Backward-compatible re-exports — external code still uses the old flat names.
-// These can be removed once all internal callers are migrated.
+/// Backward-compatible flat re-exports.
+///
+/// These exist so existing internal callers don't break.  New code
+/// should prefer the grouped paths listed above.
+/// When all internal callers migrate, remove this block.
 pub use project::config as proxy_config;
 pub use project::project as proxy_project;
 pub use mdx::parser as mdx_parser;

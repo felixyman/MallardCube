@@ -1,5 +1,8 @@
 # SSAS Proxy - Session Context
 
+> Canonical docs: `README.md` and `docs/DEVELOPER-GUIDE.md`.
+> This file is a session checkpoint, not an authoritative reference.
+
 ## Goal
 - Keep `xmla_proxy/` fully Excel-compatible while advancing `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
 - Long-term target: Malloy as semantic authority; proxy owns only the Excel/XMLA compatibility layer.
@@ -8,6 +11,13 @@
 ## Current status
 - Excel metadata/discover handshake works across required rowsets for PivotTable use.
 - Excel PivotTable query execution works end-to-end for current cube shape.
+- DuckDB is the default analytic backend.
+- Full typed pipeline: `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
+- Test suite: **176 passing tests**.
+- File reorg complete — architecture boundaries reflected in directory layout.
+- Readability/doc cleanup complete — `README.md`, `docs/DEVELOPER-GUIDE.md`.
+- Module refactor complete — `src/execute/` split into `render.rs`, `runtime.rs`, `builders.rs`.
+- `src/main.rs` handler dispatch extracted into `route_request()`.
 - DuckDB is the default analytic backend.
 - Full typed pipeline: `MDX -> ParsedMdx -> SemanticQuery -> QueryPlan -> {Malloy, SQL}`.
 - **Core abstraction is model-driven, not demo-cube-specific:**
@@ -20,10 +30,12 @@
   - `project/` — original demo (Produktkategori, Region, TotalSales).
   - `project2/` — renamed (Category, Territory, Revenue) against same physical data.
   - `project3/` — wider model (Category, Territory, Channel, Segment, Revenue, Units) against `sales_fact`.
+  - `project4/` — multi-fact model (Sales, Inventory, shared+scoped dimensions).
+- **Sample projects live at repo root**, sibling to `xmla_proxy/`.
 - **Proxy config + Malloy model file loading works at startup** (`PROXY_CONFIG=...`).
   - Developer-supplied `.malloy` file is loaded as the Malloy model source.
   - `proxy-config.json` maps Malloy names to Excel/XMLA captions, formatting, ordering.
-  - Without config, defaults to `project3/proxy-config.json`.
+  - Without config, defaults to `../project3/proxy-config.json`.
 - Malloy runtime path (long-lived Node worker) compiles and executes developer-owned Malloy.
 - Compile result carries `compile_ms` from the JS worker; runtime path executes compiled SQL.
 - Result-parity tests verify direct SQL and Malloy-compiled SQL produce identical results.
@@ -31,7 +43,7 @@
 - Query-plan normalization and caches exist for Malloy source, SQL text, compiled SQL.
 - Naming contract documented in `docs/naming-contract.md`.
 - File reorg complete — architecture boundaries now reflected in directory layout.
-- Test suite: **152 passing tests** (worker-dependent tests run serially).
+- Test suite: **176 passing tests** (worker-dependent tests run serially).
 - **Shared DuckDB runtime**: `db_path` in config controls file-based (real) vs in-memory (demo). Rust backend and JS worker share same DB file.
 - Seed data tooling: `cargo run --bin seed_sql > seed.sql`, `data/` with `.db`, `.parquet`, `.sql`.
 - SSAS Tabular conversion reference: `docs/ssas-to-malloy-conversion.md` — system prompt for `.bim` → Malloy + DuckDB.
@@ -165,7 +177,7 @@
 - **Multi-fact-table support**: `SemanticModel` has one `source_name`/`table_name` — measures and dimensions are all scoped to a single flat table. Phased plan designed (A: `FactTable` struct, B: emitters, C: config, D: metadata, E: star schema, F: multi-query merge).
 - `execute_builders.rs` is the main complexity hotspot — collapse/tuple logic needs extraction.
 - Some fallback defaults in planning (`default_measure_id()` etc.) can mask misconfiguration.
-- Only "simple model" shape is supported: one fact source, flat dimensions, one hierarchy each.
+- Single-fact or multi-fact support with shared/scoped dimensions.
 - Timing instrumentation still has known correctness bugs in some fields.
 - Long-lived worker not hardened for concurrent use; tests require serialization.
 - File structure organised by architectural layer (`backend/`, `project/`, `mdx/`, `execute/`, `xmla/`, `engine/`, `test_support/`).
@@ -185,7 +197,7 @@
 - Shared DuckDB runtime with file and demo modes.
 - Malloy compile fallback to direct SQL on failure.
 - Seed data generation tooling (SQL, DB, Parquet).
-- 152 passing tests.
+- 176 passing tests.
 
 ## Current priorities
 1. **Multi-fact-table support** — Phase A (model layer, zero behavior change, backward compat).

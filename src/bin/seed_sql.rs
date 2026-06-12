@@ -1,4 +1,4 @@
-use xmla_proxy::backend::generate_sales_fact_rows;
+use xmla_proxy::backend::{generate_sales_fact_rows, generate_inventory_fact_rows};
 
 fn main() {
     println!("CREATE TABLE sales_fact (");
@@ -10,12 +10,8 @@ fn main() {
     println!("    units      DOUBLE NOT NULL");
     println!(");");
     println!();
-
     let rows = generate_sales_fact_rows();
-    println!("-- {} rows", rows.len());
-    println!();
-
-    // Batch INSERT with multiple VALUES rows for speed
+    eprintln!("sales_fact: {} rows", rows.len());
     for chunk in rows.chunks(500) {
         let values: Vec<String> = chunk.iter().map(|r| {
             format!(
@@ -29,5 +25,26 @@ fn main() {
         println!();
     }
 
-    eprintln!("Generated {} INSERT statements (chunks of 500 rows)", rows.len());
+    println!("CREATE TABLE inventory_fact (");
+    println!("    category   VARCHAR NOT NULL,");
+    println!("    territory  VARCHAR NOT NULL,");
+    println!("    warehouse  VARCHAR NOT NULL,");
+    println!("    stock_qty  DOUBLE NOT NULL,");
+    println!("    stock_cost DOUBLE NOT NULL");
+    println!(");");
+    println!();
+    let rows = generate_inventory_fact_rows();
+    eprintln!("inventory_fact: {} rows", rows.len());
+    for chunk in rows.chunks(500) {
+        let values: Vec<String> = chunk.iter().map(|r| {
+            format!(
+                "('{}', '{}', '{}', {}, {})",
+                r.category, r.territory, r.warehouse,
+                r.stock_qty, r.stock_cost
+            )
+        }).collect();
+        println!("INSERT INTO inventory_fact VALUES");
+        println!("{};", values.join(",\n"));
+        println!();
+    }
 }

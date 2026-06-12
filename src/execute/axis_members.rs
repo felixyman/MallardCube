@@ -39,7 +39,7 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
 
 fn dim_children_count(dim: &crate::engine::model::DimensionDef) -> u32 {
     crate::backend::Backend::get()
-        .distinct_count_in(&proxy_project::project().model.table_name, &dim.physical_field)
+        .distinct_count_in(proxy_project::project().model.dim_table(&dim.id), &dim.physical_field)
 }
 
 fn dim_props_leaf(
@@ -195,10 +195,21 @@ fn default_measure() -> &'static crate::engine::model::MeasureDef {
     project.model.meas_def(&id)
 }
 
+fn measure_by_id(measure_id: &str) -> &crate::engine::model::MeasureDef {
+    proxy_project::project().model.meas_def(measure_id)
+}
+
 // ---- cell constructors ----
 
 pub(crate) fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
-    let m = default_measure();
+    measurement_cell_for_measure(ordinal, value, default_measure())
+}
+
+pub(crate) fn measurement_cell_for(ordinal: u32, value: f64, measure_id: &str) -> cellset::CellConfig {
+    measurement_cell_for_measure(ordinal, value, measure_by_id(measure_id))
+}
+
+fn measurement_cell_for_measure(ordinal: u32, value: f64, m: &crate::engine::model::MeasureDef) -> cellset::CellConfig {
     let fmt = if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {

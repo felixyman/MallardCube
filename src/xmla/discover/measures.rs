@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{discover_rowset_envelope, UUID_TYPE, xml_escape};
 use crate::proxy_project;
 
 const MEASURE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -53,18 +53,18 @@ pub fn get_measures_response() -> String {
           </row>
 "#,
             40 + i,
-            caption = m.caption,
-            mu_name = m.measure_unique_name(),
-            display_name = m.display_name,
+            caption = xml_escape(&m.caption),
+            mu_name = xml_escape(&m.measure_unique_name()),
+            display_name = xml_escape(&m.display_name),
             aggregator = m.aggregator,
             precision = m.numeric_precision,
             scale = m.numeric_scale,
-            units = m.units,
-            description = m.description,
-            expression = m.expression,
+            units = xml_escape(&m.units),
+            description = xml_escape(&m.description),
+            expression = xml_escape(&m.expression),
             visible = m.visible,
-            group_name = m.measure_group_name,
-            format = m.format_string,
+            group_name = xml_escape(&m.measure_group_name),
+            format = xml_escape(&m.format_string),
         ));
     }
 

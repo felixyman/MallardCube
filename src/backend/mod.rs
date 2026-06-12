@@ -156,6 +156,55 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
     rows
 }
 
+// ---- inventory demo data (project4) ----
+
+pub struct InventoryFactRow {
+    pub category: String,
+    pub territory: String,
+    pub warehouse: String,
+    pub stock_qty: f64,
+    pub stock_cost: f64,
+}
+
+pub fn generate_inventory_fact_rows() -> Vec<InventoryFactRow> {
+    let categories: Vec<&str> = (1..=20).map(|i| {
+        match i {
+            1 => "Electronics", 2 => "Clothing", 3 => "Food",
+            4 => "Furniture", 5 => "Sports", 6 => "Books",
+            7 => "Toys", 8 => "Automotive", 9 => "Health",
+            10 => "Music", 11 => "Garden", 12 => "Office",
+            13 => "Pet Supplies", 14 => "Jewelry", 15 => "Home",
+            16 => "Baby", 17 => "Tools", 18 => "Beauty",
+            19 => "Shoes", 20 => "Outdoors",
+            _ => "Other",
+        }
+    }).collect();
+    let territories: &[&str] = &[
+        "North", "South", "East", "West", "Central",
+        "Northeast", "Southeast", "Northwest",
+    ];
+    let warehouses: &[&str] = &["WH-1", "WH-2", "WH-3", "WH-4", "WH-5", "WH-6"];
+
+    let mut rng = SeededRng::new(77);
+    let row_count = 10_000;
+    let mut rows = Vec::with_capacity(row_count);
+    for _ in 0..row_count {
+        let cat = categories[rng.next() as usize % categories.len()];
+        let ter = territories[rng.next() as usize % territories.len()];
+        let wh = warehouses[rng.next() as usize % warehouses.len()];
+        let qty = 100.0 + (rng.next() as f64 % 10_000.0);
+        let cost = qty * (5.0 + (rng.next() as f64 % 45.0));
+        rows.push(InventoryFactRow {
+            category: cat.to_string(),
+            territory: ter.to_string(),
+            warehouse: wh.to_string(),
+            stock_qty: qty.round(),
+            stock_cost: cost.round(),
+        });
+    }
+    rows
+}
+
 static BACKEND: OnceLock<Backend> = OnceLock::new();
 
 fn instance() -> &'static Backend {

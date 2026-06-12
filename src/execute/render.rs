@@ -1,0 +1,384 @@
+/// Cellset render functions.
+///
+/// Converts a `SemanticQuery` + `QueryResult` into an XMLA cellset
+/// XML string.  Each `build_*` function handles one query shape.
+/// `dispatch()` routes by `SemanticQueryKind`.
+
+use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::engine::plan::QueryResult;
+use crate::axis_members::{
+    render_response, full_slicer_axis, measures_axis,
+    single_member_axis, member_list_axis, empty_member_list_axis,
+    row_dim, leaf_member_for, all_member_for, hierarchy_for, leaf_members_from,
+    measurement_cell, count_cell, measures_hierarchy, measures_total_member,
+    cchildren_member,
+};
+
+pub(crate) fn ordered_pair(
+    dims: &[String],
+    d0: &str,
+    m0: crate::cellset::MemberConfig,
+    d1: &str,
+    m1: crate::cellset::MemberConfig,
+) -> crate::cellset::TupleConfig {
+    let first = dims.first().map(|s| s.as_str()).unwrap_or(d0);
+    if first == d1 {
+        crate::cellset::TupleConfig { members: vec![m1, m0] }
+    } else {
+        crate::cellset::TupleConfig { members: vec![m0, m1] }
+    }
+}
+
+pub(crate) fn build_slicer_only(query: &SemanticQuery, result: &QueryResult) -> String {
+    let total = match result {
+        QueryResult::Scalar(v) => *v,
+        _ => unreachable!(),
+    };
+    render_response(
+        vec![full_slicer_axis(query)],
+        vec![measurement_cell(0, total)],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_drilldown(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dims = &query.axis_dimensions;
+    if dims.len() >= 2 {
+        return build_drilldown_multi(query, result);
+    }
+    let mut fallback_dim = String::new();
+    let dim = dims.first().map(|s| s.as_str())
+        .unwrap_or_else(|| {
+            fallback_dim = crate::proxy_project::project()
+                .model.default_dimension_id()
+                .unwrap_or_else(|| "Produktkategori".into());
+            &fallback_dim
+        });
+    let mut data = match result {
+        QueryResult::Grouped(data) => data.clone(),
+        _ => unreachable!(),
+    };
+    data.sort_by(|a, b| a.0.cmp(&b.0));
+    let members = leaf_members_from(dim,
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &query.dim_props,
+    );
+
+    let mut cells = Vec::new();
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
+    }
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
+            full_slicer_axis(query),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dims = &query.axis_dimensions;
+    let mut all_data = match result {
+        QueryResult::Pairs(pairs) => pairs.clone(),
+        _ => unreachable!(),
+    };
+    all_data.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let has_exclusions = !query.excluded_members.is_empty();
+
+    let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
+    for dim in dims {
+        hierarchies.push(hierarchy_for(dim, &query.dim_props));
+    }
+
+    let d0 = &dims[0];
+    let d1 = &dims[1];
+
+    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+    for (first, second, value) in &all_data {
+        if has_exclusions && query.excluded_members.iter().any(|e| e.key == *first || e.key == *second) {
+            continue;
+        }
+        let m0 = leaf_member_for(d0, first, &query.dim_props);
+        let m1 = leaf_member_for(d1, second, &query.dim_props);
+        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+        cells.push(measurement_cell(ordinal, *value));
+        ordinal += 1;
+    }
+
+    let axis = crate::cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![axis, full_slicer_axis(query)],
+        cells,
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dims = &query.axis_dimensions;
+    let mut all_data = match result {
+        QueryResult::Pairs(pairs) => pairs.clone(),
+        _ => unreachable!(),
+    };
+    all_data.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let d0 = &dims[0];
+    let d1 = &dims[1];
+
+    let mut hierarchies: Vec<crate::cellset::HierarchyConfig> = Vec::new();
+    for dim in dims {
+        hierarchies.push(hierarchy_for(dim, &query.dim_props));
+    }
+
+    let excluded_d0: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == *d0)
+        .map(|e| e.key.as_str())
+        .collect();
+    let excluded_d1: std::collections::HashSet<&str> = query.excluded_members.iter()
+        .filter(|e| e.dimension == *d1)
+        .map(|e| e.key.as_str())
+        .collect();
+
+    let mut col_d0_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut col_d1_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for (first, second, value) in &all_data {
+        if excluded_d0.contains(first.as_str()) {
+            *col_d0_totals.entry(first.clone()).or_insert(0.0) += value;
+        }
+        if excluded_d1.contains(second.as_str()) {
+            *col_d1_totals.entry(second.clone()).or_insert(0.0) += value;
+        }
+    }
+
+    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+    let mut seen_d0_col: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_d1_col: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (first, second, value) in &all_data {
+        if excluded_d0.contains(first.as_str()) {
+            if !seen_d0_col.contains(first) {
+                seen_d0_col.insert(first.clone());
+                let total = col_d0_totals.get(first).copied().unwrap_or(0.0);
+                let m0 = leaf_member_for(d0, first, &query.dim_props);
+                let m1 = all_member_for(d1, &query.dim_props);
+                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+                cells.push(measurement_cell(ordinal, total));
+                ordinal += 1;
+            }
+            continue;
+        }
+
+        if excluded_d1.contains(second.as_str()) {
+            if !seen_d1_col.contains(second) {
+                seen_d1_col.insert(second.clone());
+                let total = col_d1_totals.get(second).copied().unwrap_or(0.0);
+                let m0 = all_member_for(d0, &query.dim_props);
+                let m1 = leaf_member_for(d1, second, &query.dim_props);
+                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+                cells.push(measurement_cell(ordinal, total));
+                ordinal += 1;
+            }
+            continue;
+        }
+
+        let m0 = leaf_member_for(d0, first, &query.dim_props);
+        let m1 = leaf_member_for(d1, second, &query.dim_props);
+        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+        cells.push(measurement_cell(ordinal, *value));
+        ordinal += 1;
+    }
+
+    let axis = crate::cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![axis, full_slicer_axis(query)],
+        cells,
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_measure_by_category(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    let data = match result {
+        QueryResult::Grouped(data) => data,
+        _ => unreachable!(),
+    };
+    let axis1_members = leaf_members_from(dim,
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &query.dim_props,
+    );
+    let mut cells = Vec::new();
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
+    }
+
+    render_response(
+        vec![
+            measures_axis(),
+            member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
+            full_slicer_axis(query),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_slicer_all_and_measure(query: &SemanticQuery, result: &QueryResult) -> String {
+    let total = match result {
+        QueryResult::Scalar(v) => *v,
+        _ => unreachable!(),
+    };
+    render_response(
+        vec![full_slicer_axis(query)],
+        vec![measurement_cell(0, total)],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_all_level_members(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    let total = match result {
+        QueryResult::Scalar(v) => *v,
+        _ => unreachable!(),
+    };
+    render_response(
+        vec![
+            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for(dim, &query.dim_props)),
+            full_slicer_axis(query),
+        ],
+        vec![measurement_cell(0, total)],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_leaf_level_members(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    let data = match result {
+        QueryResult::Grouped(data) => data,
+        _ => unreachable!(),
+    };
+    let members = leaf_members_from(dim,
+        &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &query.dim_props,
+    );
+    let mut cells = Vec::new();
+    for (i, (_name, value)) in data.iter().enumerate() {
+        cells.push(measurement_cell(i as u32, *value));
+    }
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
+            full_slicer_axis(query),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_leaf_children_empty(query: &SemanticQuery, _result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    render_response(
+        vec![
+            empty_member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props)),
+            full_slicer_axis(query),
+        ],
+        vec![],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_measure_children_empty(query: &SemanticQuery, _result: &QueryResult) -> String {
+    render_response(
+        vec![
+            empty_member_list_axis("Axis0", measures_hierarchy()),
+            full_slicer_axis(query),
+        ],
+        vec![],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_cchildren_for_all(query: &SemanticQuery, result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    let count = match result {
+        QueryResult::Count(c) => *c,
+        _ => unreachable!(),
+    };
+    render_response(
+        vec![
+            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for(dim, &query.dim_props)),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            full_slicer_axis(query),
+        ],
+        vec![count_cell(0, count)],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_cchildren_for_leaf_product(query: &SemanticQuery, name: &str, result: &QueryResult) -> String {
+    let dim = row_dim(query);
+    let leaf = leaf_member_for(dim, name, &query.dim_props);
+    let all = all_member_for(dim, &query.dim_props);
+    let real_count = match result {
+        QueryResult::Count(c) => *c,
+        _ => unreachable!(),
+    };
+    render_response(
+        vec![
+            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), vec![all, leaf]),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            full_slicer_axis(query),
+        ],
+        vec![count_cell(0, real_count), count_cell(1, 0)],
+        &query.cell_props,
+    )
+}
+
+pub(crate) fn build_cchildren_for_measures(query: &SemanticQuery, _result: &QueryResult) -> String {
+    render_response(
+        vec![
+            single_member_axis("Axis0", measures_hierarchy(), measures_total_member()),
+            single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
+            full_slicer_axis(query),
+        ],
+        vec![count_cell(0, 0)],
+        &query.cell_props,
+    )
+}
+
+/// Route a classified query+result to the correct cellset builder.
+pub(crate) fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
+    match query.kind {
+        SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, &result),
+        SemanticQueryKind::ChildrenCountLeafProduct => {
+            let name = query.cchildren_leaf_name.as_deref().unwrap_or("");
+            build_cchildren_for_leaf_product(query, name, &result)
+        }
+        SemanticQueryKind::ChildrenCountMeasures => build_cchildren_for_measures(query, &result),
+        SemanticQueryKind::SlicerAllAndMeasure => build_slicer_all_and_measure(query, &result),
+        SemanticQueryKind::MeasureChildrenEmpty => build_measure_children_empty(query, &result),
+        SemanticQueryKind::LeafChildrenEmpty => build_leaf_children_empty(query, &result),
+        SemanticQueryKind::AllLevelMembers => build_all_level_members(query, &result),
+        SemanticQueryKind::LeafLevelMembers => build_leaf_level_members(query, &result),
+        SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, &result),
+        SemanticQueryKind::DrilldownCategories => build_drilldown(query, &result),
+        SemanticQueryKind::SlicerOnly => build_slicer_only(query, &result),
+        SemanticQueryKind::DrilldownMemberProbe => build_drilldown_member(query, &result),
+    }
+}

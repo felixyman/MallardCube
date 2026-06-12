@@ -95,18 +95,46 @@ fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
         .unwrap_or(default)
 }
 
+/// Return only the filters that are compatible with the selected measure.
+/// Unrelated dimension filters are silently ignored (matching SSAS behavior
+/// for unrelated dimensions).
+fn compatible_filters(model: &SemanticModel, meas_id: &str, filters: &[TypedDimensionFilter]) -> Vec<TypedDimensionFilter> {
+    filters.iter()
+        .filter(|f| model.dim_is_compatible_with_measure(&f.dimension, meas_id))
+        .cloned()
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Plan construction
 // ---------------------------------------------------------------------------
 
 pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
     let project = proxy_project::project();
-    let model = &project.model;
+    plan_from_semantic_with_model(query, &project.model)
+}
 
+/// Testable variant that accepts a model directly instead of reading
+/// the global project singleton.
+pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
+    // Resolve measure: use the explicitly requested one, or pick a
+    // default that is compatible with the axis dimensions' fact tables.
     let meas: MeasId = query.measure.as_deref()
         .and_then(|name| model.measures.iter().find(|m| m.caption == name).map(|m| m.id.clone()))
-        .unwrap_or_else(|| model.default_measure_id()
-            .unwrap_or_else(|| "TotalSales".into()));
+        .or_else(|| {
+            for dim_id in &query.axis_dimensions {
+                if let Some(dim) = model.dim_def_opt(dim_id) {
+                    if let Some(ref dim_table) = dim.table_name {
+                        if let Some(id) = model.default_measure_for_table(dim_table) {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .or_else(|| model.default_measure_id())
+        .unwrap_or_else(|| "TotalSales".into());
     let default_dim = model.default_dimension_id()
         .unwrap_or_else(|| "Produktkategori".into());
 
@@ -130,8 +158,8 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
         SemanticQueryKind::SlicerAllAndMeasure
         | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
-                measure: meas,
-                filters: typed_filters(&query.filters),
+                measure: meas.clone(),
+                filters: compatible_filters(model, &meas, &typed_filters(&query.filters)),
             }
         }
 
@@ -148,9 +176,9 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
                 vec![d]
             };
             QueryPlan::GroupBy {
-                measure: meas,
+                measure: meas.clone(),
                 group_by,
-                filters: typed_filters(&query.filters),
+                filters: compatible_filters(model, &meas, &typed_filters(&query.filters)),
             }
         }
 
@@ -209,7 +237,19 @@ pub fn execute_plan_with_backend<B: QueryBackend>(
     model: &SemanticModel,
     backend: &B,
 ) -> QueryResult {
-    let sql = sql_for_query_plan(model, plan);
+    // If the plan's measure has pre-loaded fallback SQL, use it instead of
+    // generating SQL from the plan. Fallback files are pre-written SQL that
+    // handle complex measures (MEDIAN, cumulative, etc.).
+    let fallback_sql = match plan {
+        QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
+            model.meas_def(measure).sql_fallback_sql.as_deref()
+        }
+        _ => None,
+    };
+    let sql = fallback_sql
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| sql_for_query_plan(model, plan));
+
     if sql.is_empty() {
         return QueryResult::Empty;
     }

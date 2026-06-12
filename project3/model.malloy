@@ -1,4 +1,0 @@
-source: sales_data is duckdb.table('sales_fact') extend {
-  measure: total_revenue is revenue.sum()
-  measure: total_units is units.sum()
-}

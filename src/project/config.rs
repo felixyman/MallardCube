@@ -17,8 +17,29 @@ pub struct ProxyConfig {
     pub malloy_model_file: String,
     #[serde(default)]
     pub db_path: Option<String>,
+    #[serde(default)]
+    pub fact_tables: Vec<FactTableConfig>,
+    #[serde(default)]
+    pub relationships: Vec<RelationshipConfig>,
     pub dimensions: Vec<DimensionConfig>,
     pub measures: Vec<MeasureConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FactTableConfig {
+    pub id: String,
+    pub source_name: String,
+    pub table_name: String,
+    pub measure_group_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelationshipConfig {
+    pub fact_table: String,
+    pub fact_column: String,
+    pub dimension_id: String,
+    pub dim_table: String,
+    pub dim_column: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +57,10 @@ pub struct DimensionConfig {
     pub visible: bool,
     pub has_all: bool,
     pub cardinality_hint: u32,
+    #[serde(default)]
+    pub fact_table: Option<String>,
+    #[serde(default)]
+    pub shared: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,6 +77,8 @@ pub struct MeasureConfig {
     pub units: String,
     pub ordinal: u32,
     pub visible: bool,
+    #[serde(default)]
+    pub fact_table: Option<String>,
     #[serde(default = "default_aggregator")]
     pub aggregator: u32,
     pub measure_group_name: String,
@@ -61,6 +88,8 @@ pub struct MeasureConfig {
     pub numeric_scale: i16,
     #[serde(default)]
     pub expression: String,
+    #[serde(default)]
+    pub sql_fallback_file: Option<String>,
 }
 
 fn default_aggregator() -> u32 { 1 }

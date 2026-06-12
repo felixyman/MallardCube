@@ -11,7 +11,7 @@ use std::io::Write;
 use xmla_proxy::parser::{parse_xmla, XmlaRequest};
 use xmla_proxy::*;
 
-// --- debug file logging ---
+// ---- debug file logging ----
 
 static DEBUG_LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
@@ -30,20 +30,19 @@ fn debug_write(text: &str) {
     }
 }
 
-// --- main ---
+// ---- main ----
 
 #[tokio::main]
 async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
 
-    // Load proxy project (config + Malloy model). When PROXY_CONFIG is
-    // set, use the specified config. Otherwise default to project3.
     let config_path = std::env::var("PROXY_CONFIG")
         .ok()
-        .unwrap_or_else(|| "project3/proxy-config.json".into());
+        .unwrap_or_else(|| "../project3/proxy-config.json".into());
     proxy_project::init_project(Some(&config_path))
         .expect("init project");
+
     {
         let p = proxy_project::project();
         println!("📁 Project loaded: {}", p.config.catalog);
@@ -52,9 +51,6 @@ async fn main() {
             p.model.dimensions.len(), p.model.measures.len(),
         ));
 
-        // Initialise DuckDB backend. When db_path is set, opens the user's
-        // file-based database (no seeding). Otherwise creates demo in-memory
-        // database with synthetic data.
         let db_path = p.config.db_path.as_deref();
         match db_path {
             Some(path) => {
@@ -84,16 +80,18 @@ async fn main() {
 
     let app = Router::new().route("/xmla", post(handle_xmla));
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    println!("🚀 Rust-XMLA Proxy (v3 - ModuleRefactor) snurrar på http://{}", addr);
+    println!("🚀 SSAS Proxy running on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
+// ---- HTTP helpers ----
+
 fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "text/xml; charset=utf-8".parse().unwrap());
-    headers.insert(header::SERVER, "Rust-Malloy-Proxy/2.0".parse().unwrap());
+    headers.insert(header::SERVER, "SSAS-Proxy/2.0".parse().unwrap());
     headers.insert(header::CONNECTION, "close".parse().unwrap());
     headers.insert(
         HeaderName::from_static("x-transport-caps-negotiation-flags"),
@@ -102,20 +100,14 @@ fn default_headers() -> HeaderMap {
     headers
 }
 
-/// Extracts `<open>...</close>` (first occurrence) verbatim from `body`.
-/// Returns the trimmed inner contents, or None if either tag is missing.
 fn extract_block<'a>(body: &'a str, open: &str, close: &str) -> Option<&'a str> {
     let start = body.find(open)? + open.len();
     let end = body[start..].find(close)? + start;
     Some(body[start..end].trim())
 }
 
-/// Print the `<RestrictionList>` and `<PropertyList>` blocks from a Discover
-/// request body, when present. Helps us see what Excel is actually asking for.
 fn log_discover_context(body: &str) {
     if let Some(restrictions) = extract_block(body, "<RestrictionList", "</RestrictionList>") {
-        // <RestrictionList ...> — strip leading attrs up to the first '>' so we
-        // print just the inner XML.
         let inner = match restrictions.find('>') {
             Some(idx) => restrictions[idx + 1..].trim(),
             None => restrictions,
@@ -137,36 +129,49 @@ fn log_discover_context(body: &str) {
     }
 }
 
+// ---- XMLA request handler ----
+
 async fn handle_xmla(body: String) -> impl IntoResponse {
     if body.contains("<RequestType>") {
         let req_start = body.find("<RequestType>").unwrap() + 13;
         let req_end = body.find("</RequestType>").unwrap();
-        println!("🔍 Rå RequestType från Excel: {}", &body[req_start..req_end]);
+        println!("🔍 RequestType: {}", &body[req_start..req_end]);
     }
 
     let headers = default_headers();
     let request = parse_xmla(&body);
-    println!("📥 Fick anrop, tolkade som: {:?}", request);
+    println!("📥 Request: {:?}", request);
 
     log_discover_context(&body);
 
     if body.contains("<Execute") {
-        println!("🔍 Rå Execute från Excel:\n{}", body);
+        println!("🔍 Execute body:\n{}", body);
     }
 
-    let response_body = match request {
+    let response_body = route_request(&request, &body);
+
+    if body.contains("MDSCHEMA_MEMBERS") {
+        println!("📤 RESPONSE (MdschemaMembers):\n{}", &response_body[..response_body.len().min(2000)]);
+    }
+
+    (StatusCode::OK, headers, response_body)
+}
+
+/// Route a parsed XMLA request to the appropriate handler.
+fn route_request(request: &XmlaRequest, body: &str) -> String {
+    match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
             execute::dispatch::get_empty_execute_response()
         }
 
         XmlaRequest::DiscoverProperties { property_names } => {
             if property_names.len() == 1 && property_names[0] == "Catalog" {
-                println!("Excel frågar efter Catalog");
+                println!("Excel asking for Catalog");
                 properties::get_single_property_response("Catalog",
                     &proxy_project::project().config.catalog)
             } else {
-                println!("Excel frågar efter egenskaper: {:?}", property_names);
-                properties::get_properties_response(&property_names)
+                println!("Excel asking for properties: {:?}", property_names);
+                properties::get_properties_response(property_names)
             }
         }
 
@@ -174,12 +179,13 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         XmlaRequest::DbSchemaCatalogs => catalogs::get_catalogs_response(),
         XmlaRequest::MdschemaCubes => cubes::get_cubes_response(),
         XmlaRequest::DbschemaTables => tables::get_tables_response(),
+
         XmlaRequest::MdschemaDimensions => {
-            println!("📥 Skickar Dimensioner till Excel!");
+            println!("📥 Sending Dimensions to Excel");
             dimensions::get_dimensions_response()
         }
         XmlaRequest::MdschemaMeasures => {
-            println!("📥 Skickar Measures till Excel!");
+            println!("📥 Sending Measures to Excel");
             measures::get_measures_response()
         }
         XmlaRequest::MdschemaHierarchies => {
@@ -190,32 +196,34 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
             println!("📥 Levels");
             levels::get_levels_response()
         }
+
         XmlaRequest::ExecuteStatement(mdx) => {
-            println!("📥 MDX Statement: {}", mdx);
-            debug_write(&format!("===== EXECUTE REQUEST ====="));
+            println!("📥 MDX: {}", mdx);
+            debug_write("===== EXECUTE REQUEST =====");
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
-            debug_write(&body);
-            // Use instrumented path for timing collection
-            let (resp, timings) = execute_builders::get_execute_cellset_response_timed_malloy(&mdx);
+            debug_write(body);
+            let (resp, timings) = execute_builders::get_execute_cellset_response_timed_malloy(mdx);
             debug_write("RESPONSE XML:");
             debug_write(&resp);
             debug_write(&timings.to_log_line());
             resp
         }
+
         XmlaRequest::MdschemaProperties { property_type } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
-            mdschema_properties::get_mdschema_properties_response(property_type)
+            mdschema_properties::get_mdschema_properties_response(*property_type)
         }
         XmlaRequest::MdschemaMembers { member_unique_name, tree_op } => {
             println!("📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})", member_unique_name, tree_op);
-            debug_write(&format!("===== MDSCHEMA_MEMBERS REQUEST ====="));
+            debug_write("===== MDSCHEMA_MEMBERS REQUEST =====");
             debug_write(&format!("filter_member: {:?}, tree_op: {:?}", member_unique_name, tree_op));
-            let resp = members::get_members_response(member_unique_name.as_deref(), tree_op);
+            let resp = members::get_members_response(member_unique_name.as_deref(), *tree_op);
             debug_write("RESPONSE XML:");
             debug_write(&resp);
             resp
         }
+
         XmlaRequest::DiscoverLiterals => {
             println!("📥 DISCOVER_LITERALS");
             literals::get_literals_response()
@@ -279,14 +287,8 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         }
 
         XmlaRequest::Unknown => {
-            println!("❌ Okänt anrop.");
-            return (StatusCode::BAD_REQUEST, headers, "Okänt anrop".to_string());
+            eprintln!("Unknown request: {}", body);
+            return String::new();
         }
-    };
-
-    if body.contains("MDSCHEMA_MEMBERS") {
-        println!("📤 RESPONSE (MdschemaMembers):\n{}", &response_body[..response_body.len().min(2000)]);
     }
-
-    (StatusCode::OK, headers, response_body)
 }

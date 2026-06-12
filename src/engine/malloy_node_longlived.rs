@@ -39,23 +39,14 @@ impl Drop for LongLivedNodeMalloyCompiler {
 impl LongLivedNodeMalloyCompiler {
     pub fn new() -> Result<Self, MalloyCompileError> {
         let config_path = std::env::var("PROXY_CONFIG")
-            .unwrap_or_else(|_| "project3/proxy-config.json".into());
+            .unwrap_or_else(|_| "../project3/proxy-config.json".into());
         let mut cmd = &mut Command::new("node");
         cmd = cmd.arg("js/malloy-worker.js")
             .env("PROXY_CONFIG", &config_path);
 
-        // When the project config specifies a DuckDB file path, pass it to
-        // the JS worker so it opens the same database for Malloy compile
-        // validation.
-        let project = crate::proxy_project::project();
-        if let Some(ref db_path) = project.config.db_path {
-            let resolved = std::path::Path::new(&config_path).parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join(db_path);
-            let abs = resolved.canonicalize()
-                .unwrap_or_else(|_| resolved.clone());
-            cmd = cmd.env("DUCKDB_PATH", abs);
-        }
+        // Worker compiles against an in-memory derived schema — it does not
+        // open the real DuckDB file.  The Rust backend is the only process
+        // that opens the real database, avoiding DuckDB file-lock conflicts.
 
         let mut child = cmd
             .stdin(Stdio::piped())

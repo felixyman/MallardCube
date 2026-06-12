@@ -26,10 +26,31 @@ impl Dialect {
     }
 }
 
+/// A fact table that hosts measures and dimensions.
+pub struct FactTable {
+    pub id: String,
+    pub source_name: String,
+    pub table_name: String,
+    pub measure_group_name: String,
+}
+
+/// A relationship between a fact table and a dimension table.
+pub struct RelationshipDef {
+    pub fact_table_id: String,
+    pub fact_column: String,
+    pub dimension_id: String,
+    pub dim_table: String,
+    pub dim_column: String,
+}
+
 pub struct DimensionDef {
     pub id: DimId,
     pub semantic_name: String,
     pub physical_field: String,
+    /// Physical table for distinct queries (None = use primary fact table)
+    pub table_name: Option<String>,
+    /// True if this dimension is shared across all fact tables.
+    pub shared: bool,
     /// XMLA DIMENSION_NAME / HIERARCHY_NAME
     pub caption: String,
     /// XMLA DESCRIPTION
@@ -72,6 +93,7 @@ impl DimensionDef {
 
 pub struct MeasureDef {
     pub id: MeasId,
+    pub fact_table_idx: usize,
     pub semantic_name: String,
     pub physical_expr: String,
     pub sql_expr: String,
@@ -97,6 +119,9 @@ pub struct MeasureDef {
     pub numeric_scale: i16,
     /// XMLA EXPRESSION
     pub expression: String,
+    /// Pre-loaded fallback SQL text (from sql_fallback/*.sql).
+    /// When set, execution uses this SQL directly instead of generating.
+    pub sql_fallback_sql: Option<String>,
 }
 
 impl MeasureDef {
@@ -106,14 +131,59 @@ impl MeasureDef {
 }
 
 pub struct SemanticModel {
-    pub source_name: String,
-    pub table_name: String,
+    pub fact_tables: Vec<FactTable>,
     pub dialect: Dialect,
     pub dimensions: Vec<DimensionDef>,
     pub measures: Vec<MeasureDef>,
+    pub relationships: Vec<RelationshipDef>,
 }
 
 impl SemanticModel {
+    pub fn fact_table(&self, idx: usize) -> &FactTable {
+        &self.fact_tables[idx]
+    }
+
+    pub fn fact_table_for_measure(&self, measure_id: &str) -> &FactTable {
+        let m = self.meas_def(measure_id);
+        &self.fact_tables[m.fact_table_idx]
+    }
+
+    /// Backward-compatible: the primary (first) fact table's source name.
+    pub fn primary_source_name(&self) -> &str {
+        &self.fact_tables[0].source_name
+    }
+
+    /// Backward-compatible: the primary (first) fact table's table name.
+    pub fn primary_table_name(&self) -> &str {
+        &self.fact_tables[0].table_name
+    }
+
+    /// Check whether a dimension and a measure belong to compatible
+    /// fact tables.  Shared dimensions are always compatible.
+    /// Fact-scoped dimensions are only compatible with measures from
+    /// the same fact table.
+    pub fn dim_is_compatible_with_measure(&self, dim_id: &str, meas_id: &str) -> bool {
+        let dim = match self.dim_def_opt(dim_id) {
+            Some(d) => d,
+            None => return true, // unknown dims are treated as compatible
+        };
+        if dim.shared {
+            return true;
+        }
+        let meas = self.meas_def(meas_id);
+        if let Some(ref dim_table) = dim.table_name {
+            return self.fact_tables[meas.fact_table_idx].table_name == *dim_table;
+        }
+        true
+    }
+
+    /// The effective physical table for a dimension.
+    /// Falls back to the primary fact table if no explicit binding.
+    pub fn dim_table(&self, dim_id: &str) -> &str {
+        let dim = self.dim_def(dim_id);
+        dim.table_name.as_deref().unwrap_or(self.primary_table_name())
+    }
+
     pub fn dim_def(&self, id: &str) -> &DimensionDef {
         self.dimensions.iter().find(|d| d.id == id).unwrap()
     }
@@ -130,6 +200,10 @@ impl SemanticModel {
         self.measures.iter().find(|m| m.id == id)
     }
 
+    /// Find a relationship that connects this dimension to the fact table.
+    pub fn rel_for_dimension(&self, dim_id: &str) -> Option<&RelationshipDef> {
+        self.relationships.iter().find(|r| r.dimension_id == dim_id)
+    }
     /// Find a dimension definition by its XMLA caption.
     pub fn dim_by_caption(&self, caption: &str) -> Option<&DimensionDef> {
         self.dimensions.iter().find(|d| d.caption == caption)
@@ -139,6 +213,16 @@ impl SemanticModel {
     pub fn default_measure_id(&self) -> Option<MeasId> {
         self.measures.iter()
             .find(|m| m.visible)
+            .map(|m| m.id.clone())
+    }
+
+    /// Return the ID of the first visible measure belonging to a
+    /// specific fact table (by physical table name). Falls back to
+    /// the global default if no matching measure exists.
+    pub fn default_measure_for_table(&self, table_name: &str) -> Option<MeasId> {
+        self.measures.iter()
+            .find(|m| m.visible && self.fact_tables[m.fact_table_idx].table_name == table_name)
+            .or_else(|| self.measures.iter().find(|m| m.visible))
             .map(|m| m.id.clone())
     }
 
@@ -170,14 +254,22 @@ impl SemanticModel {
 
 pub fn default_model() -> SemanticModel {
     SemanticModel {
-        source_name: "faktatabell".into(),
-        table_name: "faktatabell".into(),
+        fact_tables: vec![
+            FactTable {
+                id: "default".into(),
+                source_name: "faktatabell".into(),
+                table_name: "faktatabell".into(),
+                measure_group_name: "Faktatabell".into(),
+            },
+        ],
         dialect: Dialect::DuckDB,
         dimensions: vec![
             DimensionDef {
                 id: "Produktkategori".into(),
                 semantic_name: "produktkategori".into(),
                 physical_field: "produktkategori".into(),
+                table_name: None,
+                shared: false,
                 caption: "Produktkategori".into(),
                 description: "Våra olika produkter".into(),
                 visible: true,
@@ -191,6 +283,8 @@ pub fn default_model() -> SemanticModel {
                 id: "Region".into(),
                 semantic_name: "region".into(),
                 physical_field: "region".into(),
+                table_name: None,
+                shared: false,
                 caption: "Region".into(),
                 description: "Geografisk region".into(),
                 visible: true,
@@ -204,6 +298,7 @@ pub fn default_model() -> SemanticModel {
         measures: vec![
             MeasureDef {
                 id: "TotalSales".into(),
+                fact_table_idx: 0,
                 semantic_name: "total_forsaljning".into(),
                 physical_expr: "sales.sum()".into(),
                 sql_expr: "SUM(sales)".into(),
@@ -218,7 +313,9 @@ pub fn default_model() -> SemanticModel {
                 numeric_precision: 18,
                 numeric_scale: 2,
                 expression: "SUM('Faktatabell'[Sales])".into(),
+                sql_fallback_sql: None,
             },
         ],
+        relationships: vec![],
     }
 }

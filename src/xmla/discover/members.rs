@@ -6,6 +6,7 @@
 
 use crate::backend::Backend;
 use crate::proxy_project;
+use crate::response::xml_escape;
 use uuid::Uuid;
 
 const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -51,7 +52,7 @@ fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Mem
         let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let cardinality = Backend::get().distinct_count_in(&project.model.table_name, &dim.physical_field);
+        let cardinality = Backend::get().distinct_count_in(model.dim_table(&dim.id), &dim.physical_field);
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
             xml: xml_member_row(
@@ -81,10 +82,10 @@ fn build_leaf_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Me
         let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let values = Backend::get().distinct_values_in(&project.model.table_name, &dim.physical_field);
+        let values = Backend::get().distinct_values_in(model.dim_table(&dim.id), &dim.physical_field);
         for (ordinal, val) in values.iter().enumerate() {
             let ordinal = ordinal as u32 + 1;
-            let leaf_member_u = format!("{}.&[{}]", hier_u, xml_escape(val));
+            let leaf_member_u = format!("{}.&[{}]", hier_u, val);
             let member_guid = leaf_member_guid(&dim.id, val);
             rows.push(MemberRow {
                 xml: xml_member_row(
@@ -122,11 +123,6 @@ fn leaf_member_guid(dim_id: &str, member_value: &str) -> String {
     Uuid::new_v5(&NAMESPACE, format!("leaf.{dim_id}.{member_value}").as_bytes()).to_string()
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-        .replace('"', "&quot;").replace('\'', "&apos;")
-}
-
 fn xml_member_row(
     project: &crate::proxy_project::ProxyProject,
     dim_u: &str, hier_u: &str, level_u: &str,
@@ -141,31 +137,38 @@ fn xml_member_row(
     member_key: &str,
 ) -> String {
     let pun = parent_unique_name
-        .map(|p| format!("            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n", p))
+        .map(|p| format!("            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n", xml_escape(p)))
         .unwrap_or_default();
     format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>{level_u}</LEVEL_UNIQUE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_e}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_e}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>{level_e}</LEVEL_UNIQUE_NAME>
             <LEVEL_NUMBER>{level_num}</LEVEL_NUMBER>
             <MEMBER_ORDINAL>{member_ordinal}</MEMBER_ORDINAL>
-            <MEMBER_NAME>{member_name}</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>{member_unique_name}</MEMBER_UNIQUE_NAME>
+            <MEMBER_NAME>{member_name_e}</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>{mname_e}</MEMBER_UNIQUE_NAME>
             <MEMBER_TYPE>{member_type}</MEMBER_TYPE>
             <MEMBER_GUID>{member_guid}</MEMBER_GUID>
-            <MEMBER_CAPTION>{member_caption}</MEMBER_CAPTION>
+            <MEMBER_CAPTION>{mcaption_e}</MEMBER_CAPTION>
             <CHILDREN_CARDINALITY>{children_cardinality}</CHILDREN_CARDINALITY>
             <PARENT_LEVEL>{parent_level}</PARENT_LEVEL>
 {pun}            <PARENT_COUNT>{parent_count}</PARENT_COUNT>
-            <MEMBER_KEY>{member_key}</MEMBER_KEY>
+            <MEMBER_KEY>{mkey_e}</MEMBER_KEY>
             <IS_PLACEHOLDERMEMBER>false</IS_PLACEHOLDERMEMBER>
             <IS_DATAMEMBER>false</IS_DATAMEMBER>
           </row>"#,
         catalog = project.config.catalog,
         cube = project.config.cube,
+        dim_e = xml_escape(dim_u),
+        hier_e = xml_escape(hier_u),
+        level_e = xml_escape(level_u),
+        member_name_e = xml_escape(member_name),
+        mname_e = xml_escape(member_unique_name),
+        mcaption_e = xml_escape(member_caption),
+        mkey_e = xml_escape(member_key),
     )
 }
 

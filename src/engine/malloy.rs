@@ -33,38 +33,43 @@ pub fn malloy_source_with_model_text(
 
 /// Emit only the static model definition.
 pub fn malloy_model(model: &SemanticModel) -> String {
-    let mut lines = vec![
-        format!(
-            "source: {} is {}('{}') extend {{",
-            model.source_name,
-            model.dialect.as_malloy_source_prefix(),
-            model.table_name,
-        ),
-    ];
+    let mut blocks: Vec<String> = Vec::new();
 
-    for dim in &model.dimensions {
-        // Only emit dimension definitions when they rename the column.
-        // If semantic_name == physical_field, the column is already a
-        // dimension and redefining it causes a Malloy compile error.
-        if dim.semantic_name != dim.physical_field {
-            lines.push(format!(
-                "  dimension: {} is {}",
-                dim.semantic_name,
-                dim.physical_field,
-            ));
+    for fact in &model.fact_tables {
+        let mut lines = vec![
+            format!(
+                "source: {} is {}('{}') extend {{",
+                fact.source_name,
+                model.dialect.as_malloy_source_prefix(),
+                fact.table_name,
+            ),
+        ];
+
+        for dim in &model.dimensions {
+            if dim.semantic_name != dim.physical_field {
+                lines.push(format!(
+                    "  dimension: {} is {}",
+                    dim.semantic_name,
+                    dim.physical_field,
+                ));
+            }
         }
+
+        for meas in &model.measures {
+            if meas.fact_table_idx == blocks.len() {
+                lines.push(format!(
+                    "  measure: {} is {}",
+                    meas.semantic_name,
+                    meas.physical_expr,
+                ));
+            }
+        }
+
+        lines.push("}".to_string());
+        blocks.push(lines.join("\n"));
     }
 
-    for meas in &model.measures {
-        lines.push(format!(
-            "  measure: {} is {}",
-            meas.semantic_name,
-            meas.physical_expr,
-        ));
-    }
-
-    lines.push("}".to_string());
-    lines.join("\n")
+    blocks.join("\n\n")
 }
 
 /// Emit only the dynamic query fragment.
@@ -72,7 +77,8 @@ pub fn malloy_query(model: &SemanticModel, plan: &QueryPlan) -> String {
     match plan {
         QueryPlan::Total { measure, filters } => {
             let meas = model.meas_def(measure);
-            query_block(model, "aggregate", &[&meas.semantic_name], None, filters)
+            let source = &model.fact_table(meas.fact_table_idx).source_name;
+            query_block(model, source, "aggregate", &[&meas.semantic_name], None, filters)
         }
 
         QueryPlan::GroupBy { measure, group_by, filters } => {
@@ -80,6 +86,7 @@ pub fn malloy_query(model: &SemanticModel, plan: &QueryPlan) -> String {
                 .map(|d| model.dim_def(d).semantic_name.as_str())
                 .collect();
             let meas = model.meas_def(measure);
+            let source = &model.fact_table(meas.fact_table_idx).source_name;
 
             let body = if dim_names.is_empty() {
                 format!("aggregate: {}", meas.semantic_name)
@@ -92,7 +99,7 @@ pub fn malloy_query(model: &SemanticModel, plan: &QueryPlan) -> String {
             } else {
                 body
             };
-            format!("run: {} -> {{\n  {}\n}}", model.source_name, inner)
+            format!("run: {} -> {{\n  {}\n}}", source, inner)
         }
 
         QueryPlan::Count { .. } => {
@@ -109,6 +116,7 @@ pub fn malloy_query(model: &SemanticModel, plan: &QueryPlan) -> String {
 
 fn query_block(
     model: &SemanticModel,
+    source_name: &str,
     aggregate: &str,
     aggs: &[&str],
     group_by: Option<&[&str]>,
@@ -128,7 +136,7 @@ fn query_block(
     } else {
         body
     };
-    format!("run: {} -> {{\n  {}\n}}", model.source_name, inner)
+    format!("run: {} -> {{\n  {}\n}}", source_name, inner)
 }
 
 fn where_clause(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> Option<String> {
@@ -312,5 +320,127 @@ mod tests {
         assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B')"));
         // AND across dims = comma-separated, no bare `|`
         assert!(!out.contains(" | "), "different dims must not use OR: {out}");
+    }
+
+    // ---- multi-fact-table ----
+
+    use crate::engine::model::{FactTable, MeasureDef, DimensionDef, SemanticModel, Dialect as ModelDialect};
+
+    fn two_fact_model() -> SemanticModel {
+        SemanticModel {
+            fact_tables: vec![
+                FactTable {
+                    id: "sales".into(),
+                    source_name: "sales_data".into(),
+                    table_name: "sales_fact".into(),
+                    measure_group_name: "Sales".into(),
+                },
+                FactTable {
+                    id: "inventory".into(),
+                    source_name: "inv_data".into(),
+                    table_name: "inv_fact".into(),
+                    measure_group_name: "Inventory".into(),
+                },
+            ],
+            dialect: ModelDialect::DuckDB,
+            dimensions: vec![],
+            measures: vec![
+                MeasureDef {
+                    id: "Revenue".into(),
+                    fact_table_idx: 0,
+                    semantic_name: "revenue".into(),
+                    physical_expr: "revenue.sum()".into(),
+                    sql_expr: "SUM(revenue)".into(),
+                    caption: "Revenue".into(),
+                    display_name: "Revenue".into(),
+                    description: String::new(),
+                    visible: true,
+                    aggregator: 1,
+                    units: String::new(),
+                    format_string: String::new(),
+                    measure_group_name: "Sales".into(),
+                    numeric_precision: 18,
+                    numeric_scale: 2,
+                    expression: String::new(),
+                    sql_fallback_sql: None,
+                },
+                MeasureDef {
+                    id: "Stock".into(),
+                    fact_table_idx: 1,
+                    semantic_name: "stock".into(),
+                    physical_expr: "stock.sum()".into(),
+                    sql_expr: "SUM(stock)".into(),
+                    caption: "Stock".into(),
+                    display_name: "Stock".into(),
+                    description: String::new(),
+                    visible: true,
+                    aggregator: 1,
+                    units: String::new(),
+                    format_string: String::new(),
+                    measure_group_name: "Inventory".into(),
+                    numeric_precision: 18,
+                    numeric_scale: 2,
+                    expression: String::new(),
+                    sql_fallback_sql: None,
+                },
+            ],
+            relationships: vec![],
+        }
+    }
+
+    #[test]
+    fn malloy_model_emits_multiple_sources() {
+        let model = two_fact_model();
+        let out = malloy_model(&model);
+        assert!(out.contains("source: sales_data"), "should have sales source: {out}");
+        assert!(out.contains("source: inv_data"), "should have inventory source: {out}");
+    }
+
+    #[test]
+    fn malloy_model_puts_measures_in_correct_source() {
+        let model = two_fact_model();
+        let out = malloy_model(&model);
+        // Revenue (idx 0) should be under sales_data
+        let sales_pos = out.find("source: sales_data").unwrap();
+        let inv_pos = out.find("source: inv_data").unwrap();
+        let rev_pos = out.find("measure: revenue").unwrap();
+        let stock_pos = out.find("measure: stock").unwrap();
+        assert!(rev_pos > sales_pos && rev_pos < inv_pos,
+            "Revenue should be under sales_data block");
+        assert!(stock_pos > inv_pos,
+            "Stock should be under inv_data block");
+    }
+
+    #[test]
+    fn query_uses_measure_source_for_total() {
+        let model = two_fact_model();
+        let out = malloy_query(&model, &QueryPlan::Total { measure: "Revenue".into(), filters: vec![] });
+        assert!(out.contains("run: sales_data ->"), "Revenue Total should use sales_data: {out}");
+        let out = malloy_query(&model, &QueryPlan::Total { measure: "Stock".into(), filters: vec![] });
+        assert!(out.contains("run: inv_data ->"), "Stock Total should use inv_data: {out}");
+    }
+
+    #[test]
+    fn query_uses_measure_source_for_group_by() {
+        let m2 = SemanticModel {
+            dimensions: vec![
+                DimensionDef {
+                    id: "Category".into(),
+                    semantic_name: "cat".into(),
+                    physical_field: "cat".into(),
+                    caption: "C".into(), description: String::new(),
+                    visible: true, ordinal: 1,
+                    hierarchy_name: "C".into(),
+                    all_level_name: "(All)".into(),
+                    leaf_level_name: "C".into(),
+                    cardinality_hint: 20,
+                    table_name: None,
+                    shared: false,
+                },
+            ],
+            ..two_fact_model()
+        };
+        let out = malloy_query(&m2, &QueryPlan::GroupBy { measure: "Stock".into(), group_by: vec!["Category".into()], filters: vec![] });
+        assert!(out.contains("run: inv_data ->"), "Stock GroupBy should use inv_data: {out}");
     }
 }
