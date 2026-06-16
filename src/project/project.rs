@@ -8,6 +8,8 @@
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
+#[cfg(test)]
+use std::cell::RefCell;
 use crate::engine::model::{SemanticModel, DimensionDef, MeasureDef, Dialect, FactTable, RelationshipDef};
 use crate::engine::plan::QueryPlan;
 use crate::proxy_config::ProxyConfig;
@@ -15,8 +17,36 @@ use crate::proxy_config::ProxyConfig;
 /// Module-level project singleton. `None` until `init_project()` is called.
 static PROJECT: OnceLock<ProxyProject> = OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    static TEST_PROJECT: RefCell<Option<&'static ProxyProject>> = const { RefCell::new(None) };
+}
+
 pub fn project() -> &'static ProxyProject {
+    #[cfg(test)]
+    if let Some(project) = TEST_PROJECT.with(|slot| *slot.borrow()) {
+        return project;
+    }
     PROJECT.get_or_init(|| ProxyProject::default_())
+}
+
+#[cfg(test)]
+pub fn with_test_project<T>(project: ProxyProject, f: impl FnOnce() -> T) -> T {
+    struct ResetGuard(Option<&'static ProxyProject>);
+
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            let previous = self.0;
+            TEST_PROJECT.with(|slot| {
+                slot.replace(previous);
+            });
+        }
+    }
+
+    let leaked = Box::leak(Box::new(project));
+    let previous = TEST_PROJECT.with(|slot| slot.replace(Some(leaked)));
+    let _guard = ResetGuard(previous);
+    f()
 }
 
 pub fn init_project(config_path: Option<&str>) -> Result<(), String> {
@@ -299,7 +329,7 @@ mod tests {
 
     #[test]
     fn second_project_loads() {
-        let p = ProxyProject::load("../project2/proxy-config.json")
+        let p = ProxyProject::load("project2/proxy-config.json")
             .expect("load project2");
         assert_eq!(p.config.catalog, "MY_CATALOG");
         assert_eq!(p.config.cube, "SalesCube");
@@ -321,7 +351,7 @@ mod tests {
 
     #[test]
     fn second_project_malloy_source() {
-        let p = ProxyProject::load("../project2/proxy-config.json")
+        let p = ProxyProject::load("project2/proxy-config.json")
             .expect("load project2");
         let plan = QueryPlan::Total { measure: "Revenue".into(), filters: vec![] };
         let src = p.malloy_source(&plan);
@@ -333,7 +363,7 @@ mod tests {
 
     #[test]
     fn second_project_group_by() {
-        let p = ProxyProject::load("../project2/proxy-config.json")
+        let p = ProxyProject::load("project2/proxy-config.json")
             .expect("load project2");
         let plan = QueryPlan::GroupBy {
             measure: "Revenue".into(),
@@ -347,7 +377,7 @@ mod tests {
 
     #[test]
     fn second_project_defaults_differ() {
-        let p = ProxyProject::load("../project2/proxy-config.json")
+        let p = ProxyProject::load("project2/proxy-config.json")
             .expect("load project2");
         assert_eq!(p.model.default_dimension_id().as_deref(), Some("Category"));
         assert_eq!(p.model.default_measure_id().as_deref(), Some("Revenue"));
@@ -357,7 +387,7 @@ mod tests {
 
     #[test]
     fn third_project_loads() {
-        let p = ProxyProject::load("../project3/proxy-config.json")
+        let p = ProxyProject::load("project3/proxy-config.json")
             .expect("load project3");
         assert_eq!(p.config.catalog, "SALES_ANALYTICS");
         assert_eq!(p.config.cube, "Sales");
@@ -373,7 +403,7 @@ mod tests {
 
     #[test]
     fn third_project_malloy_source() {
-        let p = ProxyProject::load("../project3/proxy-config.json")
+        let p = ProxyProject::load("project3/proxy-config.json")
             .expect("load project3");
         let plan = QueryPlan::Total { measure: "Revenue".into(), filters: vec![] };
         let src = p.malloy_source(&plan);
@@ -384,7 +414,7 @@ mod tests {
 
     #[test]
     fn third_project_group_by_2d() {
-        let p = ProxyProject::load("../project3/proxy-config.json")
+        let p = ProxyProject::load("project3/proxy-config.json")
             .expect("load project3");
         let plan = QueryPlan::GroupBy {
             measure: "Revenue".into(),
@@ -589,7 +619,7 @@ mod tests {
 
     #[test]
     fn fourth_project_loads() {
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         assert_eq!(p.config.catalog, "OPERATIONS_ANALYTICS");
         assert_eq!(p.config.cube, "Operations");
@@ -600,7 +630,7 @@ mod tests {
 
     #[test]
     fn fourth_project_fact_table_assignments() {
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let m = &p.model;
         // Measures scoped correctly
@@ -615,7 +645,7 @@ mod tests {
 
     #[test]
     fn fourth_project_dimension_tables() {
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let m = &p.model;
         // Shared dimensions fall back to primary
@@ -631,7 +661,7 @@ mod tests {
 
     #[test]
     fn fourth_project_measure_groups() {
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let m = &p.model;
         assert_eq!(m.fact_tables[0].measure_group_name, "Sales");
@@ -644,7 +674,7 @@ mod tests {
     #[test]
     fn fourth_project_sql_uses_correct_table() {
         use crate::engine::sql::sql_for_query_plan;
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let m = &p.model;
         let sql = sql_for_query_plan(m, &QueryPlan::Total { measure: "Revenue".into(), filters: vec![] });
@@ -656,7 +686,7 @@ mod tests {
     #[test]
     fn fourth_project_malloy_multi_source() {
         use crate::engine::malloy::malloy_model;
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let m = &p.model;
         let out = malloy_model(m);
@@ -670,7 +700,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
@@ -702,7 +732,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure_sales_dim() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
@@ -733,7 +763,7 @@ mod tests {
     fn unrelated_filter_ignored() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, DimensionFilter};
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         // Cost (inventory) with Channel filter (sales-only dimension).
         // Channel should be ignored because it's unrelated.
@@ -767,7 +797,7 @@ mod tests {
     fn shared_filter_passes_through() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, DimensionFilter};
-        let p = ProxyProject::load("../project4/proxy-config.json")
+        let p = ProxyProject::load("project4/proxy-config.json")
             .expect("load project4");
         // Category is shared — it should pass through for any measure.
         let query = SemanticQuery {
@@ -795,5 +825,43 @@ mod tests {
             }
             other => panic!("expected Total plan, got {other:?}"),
         }
+    }
+
+    // ---- generated_project smoke ----
+
+    #[test]
+    fn generated_project_loads() {
+        let p = ProxyProject::load("generated_project/proxy-config.json")
+            .expect("load generated_project");
+        assert_eq!(p.config.catalog, "SEMANTICMODEL");
+        assert_eq!(p.config.cube, "DW_FYS_F_UNDERSÖKNING");
+        assert!(!p.model.fact_tables.is_empty());
+        assert!(p.model.dimensions.len() >= 10, "should have many dimensions");
+        assert!(p.model.measures.len() >= 20, "should have many measures");
+        assert!(!p.model.relationships.is_empty(), "should have relationships");
+    }
+
+    #[test]
+    fn generated_project_picks_one_non_fallback_measure() {
+        let p = ProxyProject::load("generated_project/proxy-config.json")
+            .expect("load generated_project");
+        let simple = p.model.measures.iter()
+            .find(|m| m.sql_fallback_sql.is_none())
+            .expect("at least one non-fallback measure exists");
+        assert!(!simple.semantic_name.is_empty());
+        assert!(!simple.physical_expr.is_empty());
+    }
+
+    #[test]
+    fn generated_project_relationship_backed_dimension_has_correct_table() {
+        let p = ProxyProject::load("generated_project/proxy-config.json")
+            .expect("load generated_project");
+        let rel_dim = p.model.dimensions.iter().find(|d| {
+            d.table_name.is_none() && p.model.rel_for_dimension(&d.id).is_some()
+        }).expect("at least one relationship-backed dimension exists");
+        let resolved = p.model.dim_table_for_discovery(&rel_dim.id);
+        let rel = p.model.rel_for_dimension(&rel_dim.id).unwrap();
+        assert_eq!(resolved, rel.dim_table,
+            "dim_table_for_discovery should return the relationship's dim_table");
     }
 }

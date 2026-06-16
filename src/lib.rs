@@ -12,6 +12,7 @@ pub mod execute;
 pub mod xmla;
 pub mod engine;
 pub mod test_support;
+pub mod xmla_trace;
 
 /// Backward-compatible flat re-exports.
 ///

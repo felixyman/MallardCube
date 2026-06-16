@@ -7,6 +7,7 @@ use axum::{
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::io::Write;
+use tower_http::limit::RequestBodyLimitLayer;
 
 use xmla_proxy::parser::{parse_xmla, XmlaRequest};
 use xmla_proxy::*;
@@ -36,10 +37,11 @@ fn debug_write(text: &str) {
 async fn main() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
+    xmla_proxy::xmla_trace::init_trace();
 
     let config_path = std::env::var("PROXY_CONFIG")
         .ok()
-        .unwrap_or_else(|| "../project3/proxy-config.json".into());
+        .unwrap_or_else(|| "project3/proxy-config.json".into());
     proxy_project::init_project(Some(&config_path))
         .expect("init project");
 
@@ -78,8 +80,13 @@ async fn main() {
         debug_write("Malloy runtime: disabled");
     }
 
-    let app = Router::new().route("/xmla", post(handle_xmla));
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let bind_addr = std::env::var("BIND_ADDRESS")
+        .unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let app = Router::new()
+        .route("/xmla", post(handle_xmla))
+        .layer(RequestBodyLimitLayer::new(1_048_576)); // 1 MB
+    let addr: SocketAddr = bind_addr.parse()
+        .expect("invalid BIND_ADDRESS (e.g. 127.0.0.1:8080 or 0.0.0.0:8080)");
     println!("🚀 SSAS Proxy running on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -132,10 +139,14 @@ fn log_discover_context(body: &str) {
 // ---- XMLA request handler ----
 
 async fn handle_xmla(body: String) -> impl IntoResponse {
-    if body.contains("<RequestType>") {
-        let req_start = body.find("<RequestType>").unwrap() + 13;
-        let req_end = body.find("</RequestType>").unwrap();
-        println!("🔍 RequestType: {}", &body[req_start..req_end]);
+    let request_type = body
+        .find("<RequestType>")
+        .and_then(|start| {
+            let after = start + 13;
+            body[after..].find("</RequestType>").map(|end| &body[after..after + end])
+        });
+    if let Some(rt) = request_type {
+        println!("🔍 RequestType: {}", rt);
     }
 
     let headers = default_headers();
@@ -161,40 +172,72 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
 fn route_request(request: &XmlaRequest, body: &str) -> String {
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
-            execute::dispatch::get_empty_execute_response()
+            let resp = execute::dispatch::get_empty_execute_response();
+            xmla_proxy::xmla_trace::trace_request(
+                &format!("{:?}", request), body, &resp, None, None,
+            );
+            resp
         }
 
         XmlaRequest::DiscoverProperties { property_names } => {
-            if property_names.len() == 1 && property_names[0] == "Catalog" {
+            let resp = if property_names.len() == 1 && property_names[0] == "Catalog" {
                 println!("Excel asking for Catalog");
                 properties::get_single_property_response("Catalog",
                     &proxy_project::project().config.catalog)
             } else {
                 println!("Excel asking for properties: {:?}", property_names);
                 properties::get_properties_response(property_names)
-            }
+            };
+            xmla_proxy::xmla_trace::trace_request(
+                &format!("{:?}", request), body, &resp, None, None,
+            );
+            resp
         }
 
-        XmlaRequest::DiscoverSchemaRowsets => schema_rowsets::get_schemas_response(),
-        XmlaRequest::DbSchemaCatalogs => catalogs::get_catalogs_response(),
-        XmlaRequest::MdschemaCubes => cubes::get_cubes_response(),
-        XmlaRequest::DbschemaTables => tables::get_tables_response(),
+        XmlaRequest::DiscoverSchemaRowsets => {
+            let resp = schema_rowsets::get_schemas_response();
+            xmla_proxy::xmla_trace::trace_request("DiscoverSchemaRowsets", body, &resp, None, None);
+            resp
+        }
+        XmlaRequest::DbSchemaCatalogs => {
+            let resp = catalogs::get_catalogs_response();
+            xmla_proxy::xmla_trace::trace_request("DbSchemaCatalogs", body, &resp, None, None);
+            resp
+        }
+        XmlaRequest::MdschemaCubes => {
+            let resp = cubes::get_cubes_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaCubes", body, &resp, None, None);
+            resp
+        }
+        XmlaRequest::DbschemaTables => {
+            let resp = tables::get_tables_response();
+            xmla_proxy::xmla_trace::trace_request("DbschemaTables", body, &resp, None, None);
+            resp
+        }
 
         XmlaRequest::MdschemaDimensions => {
             println!("📥 Sending Dimensions to Excel");
-            dimensions::get_dimensions_response()
+            let resp = dimensions::get_dimensions_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaDimensions", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaMeasures => {
             println!("📥 Sending Measures to Excel");
-            measures::get_measures_response()
+            let resp = measures::get_measures_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaHierarchies => {
             println!("📥 Hierarchies");
-            hierarchies::get_hierarchies_response()
+            let resp = hierarchies::get_hierarchies_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaHierarchies", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaLevels => {
             println!("📥 Levels");
-            levels::get_levels_response()
+            let resp = levels::get_levels_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaLevels", body, &resp, None, None);
+            resp
         }
 
         XmlaRequest::ExecuteStatement(mdx) => {
@@ -207,12 +250,17 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
             debug_write("RESPONSE XML:");
             debug_write(&resp);
             debug_write(&timings.to_log_line());
+            xmla_proxy::xmla_trace::trace_request(
+                "ExecuteStatement", body, &resp, Some(mdx), Some(&timings),
+            );
             resp
         }
 
         XmlaRequest::MdschemaProperties { property_type } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
-            mdschema_properties::get_mdschema_properties_response(*property_type)
+            let resp = mdschema_properties::get_mdschema_properties_response(*property_type);
+            xmla_proxy::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaMembers { member_unique_name, tree_op } => {
             println!("📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})", member_unique_name, tree_op);
@@ -221,73 +269,105 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
             let resp = members::get_members_response(member_unique_name.as_deref(), *tree_op);
             debug_write("RESPONSE XML:");
             debug_write(&resp);
+            xmla_proxy::xmla_trace::trace_request("MdschemaMembers", body, &resp, None, None);
             resp
         }
 
         XmlaRequest::DiscoverLiterals => {
             println!("📥 DISCOVER_LITERALS");
-            literals::get_literals_response()
+            let resp = literals::get_literals_response();
+            xmla_proxy::xmla_trace::trace_request("DiscoverLiterals", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaSets => {
             println!("📥 MDSCHEMA_SETS");
-            sets::get_sets_response()
+            let resp = sets::get_sets_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaSets", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaKpis => {
             println!("📥 MDSCHEMA_KPIS");
-            kpis::get_kpis_response()
+            let resp = kpis::get_kpis_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaKpis", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaMeasureGroups => {
             println!("📥 MDSCHEMA_MEASUREGROUPS");
-            measure_groups::get_measure_groups_response()
+            let resp = measure_groups::get_measure_groups_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaMeasureGroups", body, &resp, None, None);
+            resp
         }
         XmlaRequest::MdschemaMeasureGroupDimensions => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
-            measuregroup_dimensions::get_measuregroup_dimensions_response()
+            let resp = measuregroup_dimensions::get_measuregroup_dimensions_response();
+            xmla_proxy::xmla_trace::trace_request("MdschemaMeasureGroupDimensions", body, &resp, None, None);
+            resp
         }
 
         XmlaRequest::TmschemaModel => {
             println!("📥 TMSCHEMA_MODEL");
-            tmschema::get_tmschema_model_response()
+            let resp = tmschema::get_tmschema_model_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaModel", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaTables => {
             println!("📥 TMSCHEMA_TABLES");
-            tmschema::get_tmschema_tables_response()
+            let resp = tmschema::get_tmschema_tables_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaColumns => {
             println!("📥 TMSCHEMA_COLUMNS");
-            tmschema::get_tmschema_columns_response()
+            let resp = tmschema::get_tmschema_columns_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaColumns", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaMeasures => {
             println!("📥 TMSCHEMA_MEASURES");
-            tmschema::get_tmschema_measures_response()
+            let resp = tmschema::get_tmschema_measures_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaMeasures", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaHierarchies => {
             println!("📥 TMSCHEMA_HIERARCHIES");
-            tmschema::get_tmschema_hierarchies_response()
+            let resp = tmschema::get_tmschema_hierarchies_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaHierarchies", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaLevels => {
             println!("📥 TMSCHEMA_LEVELS");
-            tmschema::get_tmschema_levels_response()
+            let resp = tmschema::get_tmschema_levels_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaLevels", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaRelationships => {
             println!("📥 TMSCHEMA_RELATIONSHIPS");
-            tmschema::get_tmschema_relationships_response()
+            let resp = tmschema::get_tmschema_relationships_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaRelationships", body, &resp, None, None);
+            resp
         }
         XmlaRequest::TmschemaPartitions => {
             println!("📥 TMSCHEMA_PARTITIONS");
-            tmschema::get_tmschema_partitions_response()
+            let resp = tmschema::get_tmschema_partitions_response();
+            xmla_proxy::xmla_trace::trace_request("TmschemaPartitions", body, &resp, None, None);
+            resp
         }
         XmlaRequest::DiscoverXmlMetadata => {
             println!("📥 DISCOVER_XML_METADATA");
-            tmschema::get_discover_xml_metadata_response()
+            let resp = tmschema::get_discover_xml_metadata_response();
+            xmla_proxy::xmla_trace::trace_request("DiscoverXmlMetadata", body, &resp, None, None);
+            resp
         }
         XmlaRequest::DiscoverCalcDependency => {
             println!("📥 DISCOVER_CALC_DEPENDENCY");
-            tmschema::get_discover_calc_dependency_response()
+            let resp = tmschema::get_discover_calc_dependency_response();
+            xmla_proxy::xmla_trace::trace_request("DiscoverCalcDependency", body, &resp, None, None);
+            resp
         }
 
         XmlaRequest::Unknown => {
             eprintln!("Unknown request: {}", body);
+            xmla_proxy::xmla_trace::trace_request("Unknown", body, "", None, None);
             return String::new();
         }
     }

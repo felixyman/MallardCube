@@ -17,6 +17,10 @@ cargo run
 Without configuration, the default `project3/` sample project (at repo root) loads with
 synthetic in-memory data and starts on `http://localhost:8080/xmla`.
 
+The server binds to `127.0.0.1:8080` by default. To expose it on all interfaces
+(e.g. for a Windows VM), set `BIND_ADDRESS=0.0.0.0:8080`. A 1 MB request body
+limit is always enforced.
+
 ### With a custom project
 
 ```bash
@@ -180,11 +184,10 @@ When `db_path` is `null` or omitted, demo mode is used.
 
 ## Sample projects
 
-Sample projects live at the repo root, sibling to `xmla_proxy/`.
+Sample projects live at the repo root.
 
 | Project | Description |
 |---------|-------------|
-| `project/` | Minimal: 2 dims, 1 measure. Original demo. |
 | `project2/` | Renamed variant proving name independence. |
 | `project3/` | Wider: 4 dims, 2 measures. Default startup project. |
 | `project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
@@ -219,14 +222,12 @@ Both produce identical results (verified by parity tests).
 ## Running tests
 
 ```bash
-cargo test --lib -- --test-threads=1
+cargo test --lib
 ```
 
-176 tests covering MDX parsing, semantic classification, plan generation, SQL
+205 tests covering MDX parsing, semantic classification, plan generation, SQL
 and Malloy emission, compile path, result parity, metadata rowsets, multi-fact
-routing, and end-to-end cellset rendering.
-
-Some tests spawn Node.js workers and require `--test-threads=1`.
+routing, end-to-end cellset rendering, and Excel replay/oracle verification.
 
 ## Architecture
 

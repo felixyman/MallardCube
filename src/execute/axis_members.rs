@@ -199,6 +199,23 @@ fn measure_by_id(measure_id: &str) -> &crate::engine::model::MeasureDef {
     proxy_project::project().model.meas_def(measure_id)
 }
 
+pub(crate) fn measure_id_for_query(query: &SemanticQuery) -> String {
+    let project = proxy_project::project();
+    query.measure.as_deref()
+        .and_then(|name| {
+            project.model.measures.iter().find(|m| {
+                m.id == name || m.caption == name || m.display_name == name
+            })
+        })
+        .map(|m| m.id.clone())
+        .or_else(|| project.model.default_measure_id())
+        .unwrap_or_else(|| {
+            project.model.measures.first()
+                .map(|m| m.id.clone())
+                .unwrap_or_default()
+        })
+}
+
 // ---- cell constructors ----
 
 pub(crate) fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
@@ -207,6 +224,11 @@ pub(crate) fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig 
 
 pub(crate) fn measurement_cell_for(ordinal: u32, value: f64, measure_id: &str) -> cellset::CellConfig {
     measurement_cell_for_measure(ordinal, value, measure_by_id(measure_id))
+}
+
+pub(crate) fn measurement_cell_for_query(query: &SemanticQuery, ordinal: u32, value: f64) -> cellset::CellConfig {
+    let measure_id = measure_id_for_query(query);
+    measurement_cell_for(ordinal, value, &measure_id)
 }
 
 fn measurement_cell_for_measure(ordinal: u32, value: f64, m: &crate::engine::model::MeasureDef) -> cellset::CellConfig {
@@ -255,6 +277,12 @@ pub(crate) fn measures_member(unique_name: &str, caption: &str) -> cellset::Memb
 
 pub(crate) fn measures_total_member() -> cellset::MemberConfig {
     let m = default_measure();
+    measures_member(&m.measure_unique_name(), &m.display_name)
+}
+
+pub(crate) fn measures_total_member_for_query(query: &SemanticQuery) -> cellset::MemberConfig {
+    let measure_id = measure_id_for_query(query);
+    let m = measure_by_id(&measure_id);
     measures_member(&m.measure_unique_name(), &m.display_name)
 }
 
@@ -316,6 +344,16 @@ pub(crate) fn measures_axis() -> cellset::AxisConfig {
         hierarchies: vec![measures_hierarchy()],
         tuples: vec![cellset::TupleConfig {
             members: vec![measures_total_member()],
+        }],
+    }
+}
+
+pub(crate) fn measures_axis_for_query(query: &SemanticQuery) -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies: vec![measures_hierarchy()],
+        tuples: vec![cellset::TupleConfig {
+            members: vec![measures_total_member_for_query(query)],
         }],
     }
 }
@@ -431,7 +469,7 @@ pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
 
     // Measures always appear first on the slicer axis.
     hierarchies.push(measures_hierarchy());
-    members.push(measures_total_member());
+    members.push(measures_total_member_for_query(query));
 
     let mut dims: Vec<&crate::engine::model::DimensionDef> = project
         .model

@@ -18,6 +18,16 @@ pub enum Dialect {
     DuckDB,
 }
 
+/// The shape a fallback SQL query is compatible with.
+pub enum FallbackShape {
+    /// Scalar only — works for Total plans, not GroupBy.
+    ScalarOnly,
+    /// Full — the SQL text is expected to work for all plan shapes.
+    Full,
+    /// Placeholder — the SQL is a TODO stub; do not execute.
+    Stub,
+}
+
 impl Dialect {
     pub fn as_malloy_source_prefix(&self) -> &str {
         match self {
@@ -184,6 +194,20 @@ impl SemanticModel {
         dim.table_name.as_deref().unwrap_or(self.primary_table_name())
     }
 
+    /// The physical table for member/distinct-value discovery.
+    /// Uses the relationship-backed dimension table when configured,
+    /// falling back to the primary fact table only when no relationship exists.
+    pub fn dim_table_for_discovery(&self, dim_id: &str) -> &str {
+        let dim = self.dim_def(dim_id);
+        if let Some(ref table_name) = dim.table_name {
+            return table_name;
+        }
+        if let Some(rel) = self.rel_for_dimension(dim_id) {
+            return &rel.dim_table;
+        }
+        self.primary_table_name()
+    }
+
     pub fn dim_def(&self, id: &str) -> &DimensionDef {
         self.dimensions.iter().find(|d| d.id == id).unwrap()
     }
@@ -245,6 +269,21 @@ impl SemanticModel {
                 || d.caption == text
                 || d.dimension_unique_name().contains(clean)
         })
+    }
+
+    /// Classify a measure's fallback SQL by supported shape.
+    /// Returns `None` when there is no fallback SQL.
+    pub fn classify_fallback(&self, meas_id: &str) -> Option<FallbackShape> {
+        let meas = self.meas_def(meas_id);
+        let sql = meas.sql_fallback_sql.as_deref()?;
+        let upper = sql.to_uppercase();
+        if upper.trim() == "SELECT 1 AS DUMMY;" || upper.contains("TODO") {
+            return Some(FallbackShape::Stub);
+        }
+        if !upper.contains("GROUP BY") {
+            return Some(FallbackShape::ScalarOnly);
+        }
+        Some(FallbackShape::Full)
     }
 }
 

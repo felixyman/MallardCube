@@ -12,13 +12,14 @@ use std::sync::{Mutex, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 use crate::engine::malloy_compiler::{CompileResult, MalloyCompiler, MalloyCompileError};
 
-const COMPILE_TIMEOUT: Duration = Duration::from_secs(10);
+const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct LongLivedNodeMalloyCompiler {
     stdin: Mutex<ChildStdin>,
     reader: Mutex<BufReader<std::process::ChildStdout>>,
     child: Mutex<Option<Child>>,
     next_id: AtomicU64,
+    request_lock: Mutex<()>,
 }
 
 impl Drop for LongLivedNodeMalloyCompiler {
@@ -39,7 +40,7 @@ impl Drop for LongLivedNodeMalloyCompiler {
 impl LongLivedNodeMalloyCompiler {
     pub fn new() -> Result<Self, MalloyCompileError> {
         let config_path = std::env::var("PROXY_CONFIG")
-            .unwrap_or_else(|_| "../project3/proxy-config.json".into());
+            .unwrap_or_else(|_| "project3/proxy-config.json".into());
         let mut cmd = &mut Command::new("node");
         cmd = cmd.arg("js/malloy-worker.js")
             .env("PROXY_CONFIG", &config_path);
@@ -79,10 +80,13 @@ impl LongLivedNodeMalloyCompiler {
             reader: Mutex::new(reader),
             child: Mutex::new(Some(child)),
             next_id: AtomicU64::new(1),
+            request_lock: Mutex::new(()),
         })
     }
 
     fn send_request(&self, source: &str) -> Result<(String, f64), MalloyCompileError> {
+        let _lock = self.request_lock.lock().unwrap();
+
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = serde_json::json!({"id": id, "type": "compile", "source": source});
         let req_line = serde_json::to_string(&req).unwrap();

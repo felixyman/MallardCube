@@ -1,0 +1,54 @@
+{
+  "catalog": "MY_CATALOG",
+  "cube": "SalesCube",
+  "source_name": "sales_data",
+  "table_name": "faktatabell",
+  "dialect": "duckdb",
+  "malloy_model_file": "model.malloy",
+  "dimensions": [
+    {
+      "id": "Category",
+      "malloy_name": "produktkategori",
+      "physical_field": "produktkategori",
+      "caption": "Category",
+      "description": "Product category",
+      "hierarchy_name": "Category",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Category",
+      "ordinal": 1,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50
+    },
+    {
+      "id": "Territory",
+      "malloy_name": "region",
+      "physical_field": "region",
+      "caption": "Territory",
+      "description": "Sales territory",
+      "hierarchy_name": "Territory",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Territory",
+      "ordinal": 2,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50
+    }
+  ],
+  "measures": [
+    {
+      "id": "Revenue",
+      "malloy_name": "revenue",
+      "physical_expr": "sales.sum()",
+      "sql_expr": "SUM(sales)",
+      "caption": "Revenue",
+      "display_name": "Revenue",
+      "description": "Total sales revenue",
+      "format_string": "0.00",
+      "units": "SEK",
+      "ordinal": 1,
+      "visible": true,
+      "measure_group_name": "SalesCube"
+    }
+  ]
+}

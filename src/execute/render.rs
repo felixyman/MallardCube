@@ -7,10 +7,10 @@
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
 use crate::engine::plan::QueryResult;
 use crate::axis_members::{
-    render_response, full_slicer_axis, measures_axis,
+    render_response, full_slicer_axis, measures_axis_for_query,
     single_member_axis, member_list_axis, empty_member_list_axis,
     row_dim, leaf_member_for, all_member_for, hierarchy_for, leaf_members_from,
-    measurement_cell, count_cell, measures_hierarchy, measures_total_member,
+    measurement_cell_for_query, count_cell, measures_hierarchy, measures_total_member,
     cchildren_member,
 };
 
@@ -36,7 +36,7 @@ pub(crate) fn build_slicer_only(query: &SemanticQuery, result: &QueryResult) -> 
     };
     render_response(
         vec![full_slicer_axis(query)],
-        vec![measurement_cell(0, total)],
+        vec![measurement_cell_for_query(query, 0, total)],
         &query.cell_props,
     )
 }
@@ -66,7 +66,7 @@ pub(crate) fn build_drilldown(query: &SemanticQuery, result: &QueryResult) -> St
 
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
-        cells.push(measurement_cell(i as u32, *value));
+        cells.push(measurement_cell_for_query(query, i as u32, *value));
     }
 
     render_response(
@@ -106,7 +106,7 @@ pub(crate) fn build_drilldown_multi(query: &SemanticQuery, result: &QueryResult)
         let m0 = leaf_member_for(d0, first, &query.dim_props);
         let m1 = leaf_member_for(d1, second, &query.dim_props);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-        cells.push(measurement_cell(ordinal, *value));
+        cells.push(measurement_cell_for_query(query, ordinal, *value));
         ordinal += 1;
     }
 
@@ -173,7 +173,7 @@ pub(crate) fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult
                 let m0 = leaf_member_for(d0, first, &query.dim_props);
                 let m1 = all_member_for(d1, &query.dim_props);
                 tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-                cells.push(measurement_cell(ordinal, total));
+                cells.push(measurement_cell_for_query(query, ordinal, total));
                 ordinal += 1;
             }
             continue;
@@ -186,7 +186,7 @@ pub(crate) fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult
                 let m0 = all_member_for(d0, &query.dim_props);
                 let m1 = leaf_member_for(d1, second, &query.dim_props);
                 tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-                cells.push(measurement_cell(ordinal, total));
+                cells.push(measurement_cell_for_query(query, ordinal, total));
                 ordinal += 1;
             }
             continue;
@@ -195,7 +195,7 @@ pub(crate) fn build_drilldown_member(query: &SemanticQuery, result: &QueryResult
         let m0 = leaf_member_for(d0, first, &query.dim_props);
         let m1 = leaf_member_for(d1, second, &query.dim_props);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-        cells.push(measurement_cell(ordinal, *value));
+        cells.push(measurement_cell_for_query(query, ordinal, *value));
         ordinal += 1;
     }
 
@@ -224,12 +224,12 @@ pub(crate) fn build_measure_by_category(query: &SemanticQuery, result: &QueryRes
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
-        cells.push(measurement_cell(i as u32, *value));
+        cells.push(measurement_cell_for_query(query, i as u32, *value));
     }
 
     render_response(
         vec![
-            measures_axis(),
+            measures_axis_for_query(query),
             member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
             full_slicer_axis(query),
         ],
@@ -245,7 +245,7 @@ pub(crate) fn build_slicer_all_and_measure(query: &SemanticQuery, result: &Query
     };
     render_response(
         vec![full_slicer_axis(query)],
-        vec![measurement_cell(0, total)],
+        vec![measurement_cell_for_query(query, 0, total)],
         &query.cell_props,
     )
 }
@@ -261,7 +261,7 @@ pub(crate) fn build_all_level_members(query: &SemanticQuery, result: &QueryResul
             single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for(dim, &query.dim_props)),
             full_slicer_axis(query),
         ],
-        vec![measurement_cell(0, total)],
+        vec![measurement_cell_for_query(query, 0, total)],
         &query.cell_props,
     )
 }
@@ -278,7 +278,7 @@ pub(crate) fn build_leaf_level_members(query: &SemanticQuery, result: &QueryResu
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
-        cells.push(measurement_cell(i as u32, *value));
+        cells.push(measurement_cell_for_query(query, i as u32, *value));
     }
 
     render_response(

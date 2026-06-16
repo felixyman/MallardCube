@@ -8,7 +8,7 @@
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::model::SemanticModel;
+use crate::engine::model::{SemanticModel, FallbackShape};
 use crate::engine::sql::sql_for_query_plan;
 use crate::proxy_project;
 
@@ -240,6 +240,35 @@ pub fn execute_plan_with_backend<B: QueryBackend>(
     // If the plan's measure has pre-loaded fallback SQL, use it instead of
     // generating SQL from the plan. Fallback files are pre-written SQL that
     // handle complex measures (MEDIAN, cumulative, etc.).
+    //
+    // Gate unsupported fallback shapes: stubs and scalar-only fallbacks
+    // that cannot satisfy grouped plans must fail closed — do NOT silently
+    // fall through to generated SQL.
+    let fallback_result = match plan {
+        QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
+            match model.classify_fallback(measure) {
+                Some(FallbackShape::Stub) => {
+                    eprintln!("plan: measure '{}' fallback SQL is a TODO stub — returning empty", measure);
+                    Some(QueryResult::Empty)
+                }
+                Some(FallbackShape::ScalarOnly) => match plan {
+                    QueryPlan::Total { .. } => None,
+                    QueryPlan::GroupBy { .. } => {
+                        eprintln!("plan: measure '{}' fallback SQL is scalar-only, cannot satisfy GroupBy — returning empty", measure);
+                        Some(QueryResult::Empty)
+                    }
+                    _ => Some(QueryResult::Empty),
+                },
+                Some(FallbackShape::Full) => None,
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some(early) = fallback_result {
+        return early;
+    }
+
     let fallback_sql = match plan {
         QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
             model.meas_def(measure).sql_fallback_sql.as_deref()
