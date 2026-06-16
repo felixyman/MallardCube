@@ -6,6 +6,7 @@
 ///   use crate::mdx::semantic as mdx_semantic;
 ///   etc.
 pub mod backend;
+pub mod tools;
 pub mod project;
 pub mod mdx;
 pub mod execute;

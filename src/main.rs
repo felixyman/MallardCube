@@ -4,6 +4,7 @@ use axum::{
     routing::post,
     Router,
 };
+use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::io::Write;
@@ -11,6 +12,52 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use xmla_proxy::parser::{parse_xmla, XmlaRequest};
 use xmla_proxy::*;
+
+// ---- CLI ----
+
+#[derive(Parser)]
+#[command(name = "mallardcube", about = "SSAS Tabular proxy for Excel + DuckDB")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the XMLA proxy server (default)
+    Serve,
+    /// Convert a Tabular Editor export to proxy project
+    ConvertTabular {
+        /// Path to Tabular Editor source directory
+        src_dir: String,
+        /// Output directory (default: generated_project)
+        #[arg(default_value = "generated_project")]
+        out_dir: String,
+    },
+    /// Replay an XMLA trace against the current project
+    TraceReplay {
+        /// Path to xmla-trace.jsonl
+        #[arg(default_value = "xmla-trace.jsonl")]
+        trace_path: String,
+        /// Path to proxy-config.json
+        project: Option<String>,
+    },
+    /// Extract unique MDX from a trace into Rust constants
+    ExtractTrace {
+        /// Path to xmla-trace.jsonl
+        #[arg(default_value = "xmla-trace.jsonl")]
+        path: String,
+    },
+    /// Build inventory report from a Tabular Editor export
+    Inventory {
+        /// Path to Tabular Editor source directory
+        src_dir: String,
+    },
+    /// Seed DuckDB with generated_project test data
+    SeedGeneratedDb,
+    /// Emit SQL to create demo fact tables
+    SeedSql,
+}
 
 // ---- debug file logging ----
 
@@ -35,6 +82,46 @@ fn debug_write(text: &str) {
 
 #[tokio::main]
 async fn main() {
+    let cli = Cli::parse();
+
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => run_server().await,
+        Command::ConvertTabular { src_dir, out_dir } => {
+            std::process::exit(xmla_proxy::tools::convert_tabular::run(
+                vec!["convert-tabular".into(), src_dir, out_dir],
+            ));
+        }
+        Command::TraceReplay { trace_path, project } => {
+            let mut args = vec!["trace-replay".into(), trace_path];
+            if let Some(p) = project {
+                args.push(p);
+            }
+            std::process::exit(xmla_proxy::tools::trace_replay::run(args));
+        }
+        Command::ExtractTrace { path } => {
+            std::process::exit(xmla_proxy::tools::extract_trace_mdx::run(
+                vec!["extract-trace".into(), path],
+            ));
+        }
+        Command::Inventory { src_dir } => {
+            std::process::exit(xmla_proxy::tools::inventory::run(
+                vec!["inventory".into(), src_dir],
+            ));
+        }
+        Command::SeedGeneratedDb => {
+            std::process::exit(xmla_proxy::tools::seed_generated_db::run(
+                vec!["seed-generated-db".into()],
+            ));
+        }
+        Command::SeedSql => {
+            std::process::exit(xmla_proxy::tools::seed_sql::run(
+                vec!["seed-sql".into()],
+            ));
+        }
+    }
+}
+
+async fn run_server() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
     xmla_proxy::xmla_trace::init_trace();
