@@ -112,6 +112,7 @@ pub struct SalesFactRow {
     pub segment: String,
     pub revenue: f64,
     pub units: f64,
+    pub date_key: i32,
 }
 
 pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
@@ -144,6 +145,10 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
         let seg = segments[rng.next() as usize % segments.len()];
         let revenue = 1_000.0 + (rng.next() as f64 % 50_000.0);
         let units = (rng.next() as f64 % 500.0).round();
+        let year = 2020 + (rng.next() % 11) as i32;
+        let month = (rng.next() % 12 + 1) as i32;
+        let day = (rng.next() % 28 + 1) as i32;
+        let date_key = year * 10000 + month * 100 + day;
         rows.push(SalesFactRow {
             category: cat.to_string(),
             territory: ter.to_string(),
@@ -151,6 +156,7 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
             segment: seg.to_string(),
             revenue,
             units,
+            date_key,
         });
     }
     rows
@@ -298,7 +304,8 @@ impl Backend {
                  channel    VARCHAR NOT NULL,
                  segment    VARCHAR NOT NULL,
                  revenue    DOUBLE NOT NULL,
-                 units      DOUBLE NOT NULL
+                 units      DOUBLE NOT NULL,
+                 date_key   INTEGER NOT NULL
              );",
         )?;
         let wider_rows = generate_sales_fact_rows();
@@ -312,10 +319,14 @@ impl Backend {
                     r.segment.as_str(),
                     r.revenue,
                     r.units,
+                    r.date_key,
                 ]);
             }
             let _ = app.flush();
         }
+        // Seed date_dim calendar so YTD measures resolve.
+        let date_dim_sql = include_str!("../../data/seed_date_dim.sql");
+        conn.execute_batch(date_dim_sql)?;
         Ok(Backend {
             conn: Mutex::new(conn),
         })
@@ -433,6 +444,11 @@ impl Backend {
             .unwrap_or(0)
     }
 
+    pub fn execute_ddl(&self, sql: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(sql).expect("execute_ddl");
+    }
+
     // ---- metadata helpers (used by members.rs) ----
 
     pub fn distinct_count(&self, column: &str) -> u32 {
@@ -458,5 +474,33 @@ impl Backend {
             .filter_map(|r| r.ok())
             .collect();
         rows
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::backend::Backend;
+
+    #[test]
+    fn date_dim_seed_has_all_period_flags() {
+        let db = Backend::new().expect("create in-memory backend");
+        let sql = include_str!("../../data/seed_date_dim.sql");
+        db.execute_ddl(sql);
+        let total = db.query_count("SELECT COUNT(*) FROM date_dim");
+        assert!(total >= 4000, "should generate 11 years of dates");
+
+        for (flag, max) in [
+            ("ytd_flag", 366),
+            ("current_year_flag", 365),
+            ("qtd_flag", 92),
+            ("mtd_flag", 31),
+            ("prior_year_ytd_flag", 366),
+        ] {
+            let count = db.query_count(
+                &format!("SELECT COUNT(*) FROM date_dim WHERE {flag} = true"),
+            );
+            assert!(count > 0, "should have at least one {flag} = true row today");
+            assert!(count <= max, "{flag} should not exceed {max} rows");
+        }
     }
 }

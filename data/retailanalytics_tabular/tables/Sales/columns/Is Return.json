@@ -1,0 +1,7 @@
+{
+  "name": "Is Return",
+  "dataType": "int64",
+  "sourceColumn": "isreturn",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "f9dcd798-be49-4001-bbcb-ce209fa05a12"
+}

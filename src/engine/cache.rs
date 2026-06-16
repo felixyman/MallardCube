@@ -146,15 +146,15 @@ mod tests {
         let a = QueryPlan::Total {
             measure: "TotalSales".to_string(),
             filters: vec![
-                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] },
-                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] },
+                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] , time_flag: None },
+                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] , time_flag: None },
             ],
         };
         let b = QueryPlan::Total {
             measure: "TotalSales".to_string(),
             filters: vec![
-                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] },
-                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] },
+                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] , time_flag: None },
+                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] , time_flag: None },
             ],
         };
         let sql_a = cache.get_or_generate_sql(&a, &model);

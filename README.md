@@ -191,6 +191,7 @@ Sample projects live at the repo root.
 | `project2/` | Renamed variant proving name independence. |
 | `project3/` | Wider: 4 dims, 2 measures. Default startup project. |
 | `project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
+| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, real sql_expr for Total Revenue. |
 
 ## Converting SSAS Tabular models
 
@@ -225,9 +226,40 @@ Both produce identical results (verified by parity tests).
 cargo test --lib
 ```
 
-205 tests covering MDX parsing, semantic classification, plan generation, SQL
+221 tests covering MDX parsing, semantic classification, plan generation, SQL
 and Malloy emission, compile path, result parity, metadata rowsets, multi-fact
 routing, end-to-end cellset rendering, and Excel replay/oracle verification.
+
+## Compatibility gate
+
+Every converted project should pass a structural compatibility check before
+it is considered "Excel-safe." The gate verifies three layers:
+
+1. **Discover handshake** — all required metadata rowsets return catalog, cube,
+   dimension, and measure data (structurally valid XML with row elements).
+2. **Execute shape** — at least one non-stub measure executes and renders a
+   valid XMLA cellset (`mddataset` namespace, `<Axes>`, `<CellData>`).
+3. **Replay (optional)** — when an `xmla-trace.jsonl` is available, the replay
+   harness diffs captured Excel responses against live proxy output.
+
+**Quick gate check** (against the default project):
+
+```bash
+# Record a fresh Excel session (project3 by default)
+XMLA_TRACE=1 cargo run
+
+# Replay the capture — validates discover + execute
+cargo run --bin trace_replay
+
+# Run compatibility gate tests for generated projects
+cargo test --lib retail_analytics_
+```
+
+The `trace_replay` binary validates:
+- `ExecuteStatement` entries: replays MDX, diffs cell values and axis captions
+- Discover/DBSCHEMA/MDSCHEMA entries: validates non-empty XML with `<row>` data
+  and checks for expected catalog/cube names in key rowsets
+- Session entries: validates non-empty response with standard XMLA elements
 
 ## Architecture
 
@@ -251,11 +283,12 @@ For detailed documentation:
 - Up to 2 visible row dimensions
 - Malloy runtime with automatic direct-SQL fallback
 - Tabular Editor `.bim` structural conversion
+- Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
+- Explicit date-role dimension in the sample model (flag-based, not dynamic MDX function parsing)
 
 **Partial / in progress:**
 - SQL fallback execution for converted complex measures
 - Star-schema join support at runtime
-- Role-playing date dimensions
 
 **Not yet:**
 - Multi-level hierarchies

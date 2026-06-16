@@ -1,0 +1,10 @@
+{
+  "name": "Gross Margin %",
+  "expression": [
+    "",
+    "= DIVIDE ( [Gross Profit], [Total Revenue], 0 )",
+    "// Gross margin as a percentage (profit / revenue)"
+  ],
+  "formatString": "#,##0.00 %",
+  "lineageTag": "9ff77867-4def-48bb-8b5f-66fc25fce65f"
+}

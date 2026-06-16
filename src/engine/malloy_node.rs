@@ -115,6 +115,7 @@ mod tests {
             filters: vec![
                 crate::engine::plan::TypedDimensionFilter {
                     dimension: "Region".to_string(),
+                    time_flag: None,
                     members: vec!["North".into()],
                 },
             ],

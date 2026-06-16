@@ -196,6 +196,7 @@ mod tests {
             group_by: vec!["Produktkategori".to_string()],
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".to_string(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };

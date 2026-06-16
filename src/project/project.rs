@@ -112,6 +112,7 @@ impl ProxyProject {
                 db_path: None,
                 fact_tables: vec![],
                 relationships: vec![],
+                time_intelligence: None,
                 dimensions: vec![
                     crate::proxy_config::DimensionConfig {
                         id: "Produktkategori".into(),
@@ -128,6 +129,7 @@ impl ProxyProject {
                         cardinality_hint: 50,
                         fact_table: None,
                         shared: false,
+                        is_date_role: false,
                     },
                     crate::proxy_config::DimensionConfig {
                         id: "Region".into(),
@@ -144,6 +146,7 @@ impl ProxyProject {
                         cardinality_hint: 10,
                         fact_table: None,
                         shared: false,
+                        is_date_role: false,
                     },
                 ],
                 measures: vec![
@@ -166,6 +169,7 @@ impl ProxyProject {
                         numeric_scale: 2,
                         expression: "SUM('Faktatabell'[Sales])".into(),
                         sql_fallback_file: None,
+                        time_intelligence: None,
                     },
                 ],
             },
@@ -222,6 +226,7 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             all_level_name: dc.all_level_name.clone(),
             leaf_level_name: dc.leaf_level_name.clone(),
             cardinality_hint: dc.cardinality_hint,
+            is_date_role: dc.is_date_role,
         }
     }).collect();
 
@@ -264,6 +269,8 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             numeric_scale: mc.numeric_scale,
             expression: mc.expression.clone(),
             sql_fallback_sql: fallback_sql,
+            time_flag: mc.time_intelligence.as_ref().map(|ti| ti.flag_column.clone()),
+            date_dimension_id: mc.time_intelligence.as_ref().and_then(|ti| ti.dimension_id.clone()),
         }
     }).collect();
 
@@ -276,6 +283,25 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             dim_column: rc.dim_column.clone(),
         }
     }).collect();
+
+    let date_dim = config.time_intelligence.as_ref().map(|ti| {
+        let dd = &ti.date_dimension;
+        let fc = &dd.flag_columns;
+        crate::engine::model::DateDimDef {
+            dimension_id: dd.dimension_id.clone(),
+            table_name: dd.table_name.clone(),
+            date_key_column: dd.date_key_column.clone(),
+            full_date_column: dd.full_date_column.clone(),
+            year_column: fc.year_column.clone(),
+            quarter_column: fc.quarter_column.clone(),
+            month_column: fc.month_column.clone(),
+            ytd_flag_column: fc.ytd_flag_column.clone(),
+            prior_year_ytd_flag_column: fc.prior_year_ytd_flag_column.clone(),
+            current_year_flag_column: fc.current_year_flag_column.clone(),
+            qtd_flag_column: fc.qtd_flag_column.clone(),
+            mtd_flag_column: fc.mtd_flag_column.clone(),
+        }
+    });
 
     // Validate measure_group_name consistency
     for m in &measures {
@@ -290,12 +316,57 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
         }
     }
 
+    // Build per-dimension date-role entries for is_date_role dimensions.
+    // Each uses the relationship's dim_table for table_name, falling back
+    // to the global date_dim defaults for column/flag names.
+    use std::collections::HashMap;
+    let mut date_dims: HashMap<String, crate::engine::model::DateDimDef> = HashMap::new();
+    for dim in &dimensions {
+        if dim.is_date_role {
+            let rel = relationships.iter().find(|r| r.dimension_id == dim.id);
+            let table_name = rel.map(|r| r.dim_table.clone())
+                .or_else(|| date_dim.as_ref().map(|d| d.table_name.clone()))
+                .unwrap_or_else(|| "date_dim".into());
+            let date_key_column = rel.map(|r| r.dim_column.clone())
+                .or_else(|| date_dim.as_ref().map(|d| d.date_key_column.clone()))
+                .unwrap_or_else(|| "date_key".into());
+            let fc = date_dim.as_ref()
+                .map(|d| (d.year_column.clone(), d.quarter_column.clone(), d.month_column.clone(),
+                           d.ytd_flag_column.clone(), d.prior_year_ytd_flag_column.clone(),
+                           d.current_year_flag_column.clone(), d.qtd_flag_column.clone(),
+                           d.mtd_flag_column.clone()))
+                .unwrap_or_else(|| {
+                    ("year".into(), "quarter".into(), "month".into(),
+                     "ytd_flag".into(), "prior_year_ytd_flag".into(),
+                     "current_year_flag".into(), "qtd_flag".into(), "mtd_flag".into())
+                });
+            date_dims.insert(dim.id.clone(), crate::engine::model::DateDimDef {
+                dimension_id: dim.id.clone(),
+                table_name,
+                date_key_column,
+                full_date_column: date_dim.as_ref()
+                    .map(|d| d.full_date_column.clone())
+                    .unwrap_or_else(|| "full_date".into()),
+                year_column: fc.0,
+                quarter_column: fc.1,
+                month_column: fc.2,
+                ytd_flag_column: fc.3,
+                prior_year_ytd_flag_column: fc.4,
+                current_year_flag_column: fc.5,
+                qtd_flag_column: fc.6,
+                mtd_flag_column: fc.7,
+            });
+        }
+    }
+
     SemanticModel {
         fact_tables,
         dialect,
         dimensions,
         measures,
         relationships,
+        date_dim,
+        date_dims,
     }
 }
 
@@ -391,14 +462,106 @@ mod tests {
             .expect("load project3");
         assert_eq!(p.config.catalog, "SALES_ANALYTICS");
         assert_eq!(p.config.cube, "Sales");
-        assert_eq!(p.model.dimensions.len(), 4);
-        assert_eq!(p.model.measures.len(), 2);
+        assert_eq!(p.model.dimensions.len(), 5);
+        assert_eq!(p.model.measures.len(), 6);
         assert_eq!(p.model.dim_def("Category").caption, "Category");
         assert_eq!(p.model.dim_def("Territory").caption, "Territory");
         assert_eq!(p.model.dim_def("Channel").caption, "Channel");
         assert_eq!(p.model.dim_def("Segment").caption, "Segment");
         assert_eq!(p.model.meas_def("Revenue").caption, "Revenue");
         assert_eq!(p.model.meas_def("Units").caption, "Units");
+        // Explicit date-dimension contract
+        assert!(p.model.date_dim.is_some(), "date_dim should load from explicit config");
+        let dd = p.model.date_dim.as_ref().unwrap();
+        assert_eq!(dd.dimension_id, "Date");
+        assert_eq!(dd.table_name, "date_dim");
+        assert_eq!(dd.date_key_column, "date_key");
+        assert_eq!(dd.ytd_flag_column, "ytd_flag");
+        assert_eq!(dd.prior_year_ytd_flag_column, "prior_year_ytd_flag");
+        // Date dimension exists and has is_date_role
+        let date_dim = p.model.dim_def("Date");
+        assert!(date_dim.is_date_role, "Date dimension should be marked as date role");
+        assert_eq!(date_dim.caption, "Date");
+        // Date has a relationship
+        assert!(p.model.rel_for_dimension("Date").is_some(), "Date should have a relationship");
+        // New period measures exist with correct time flags
+        assert_eq!(p.model.meas_def("RevenueYTD").time_flag.as_deref(), Some("ytd_flag"));
+        assert_eq!(p.model.meas_def("RevenuePriorYearYTD").time_flag.as_deref(), Some("prior_year_ytd_flag"));
+        assert_eq!(p.model.meas_def("RevenueQTD").time_flag.as_deref(), Some("qtd_flag"));
+        assert_eq!(p.model.meas_def("RevenueMTD").time_flag.as_deref(), Some("mtd_flag"));
+    }
+
+    #[test]
+    fn multi_date_role_model_resolves_per_measure() {
+        use std::collections::HashMap;
+        let json = r##"{
+            "catalog": "TEST", "cube": "Ops",
+            "source_name": "sales_data", "table_name": "sales_fact",
+            "dialect": "duckdb", "malloy_model_file": "model.malloy",
+            "db_path": null,
+            "relationships": [
+                { "fact_table": "default", "fact_column": "order_date_key",
+                  "dimension_id": "Order Date", "dim_table": "order_calendar", "dim_column": "date_key" },
+                { "fact_table": "default", "fact_column": "ship_date_key",
+                  "dimension_id": "Ship Date", "dim_table": "ship_calendar", "dim_column": "date_key" }
+            ],
+            "dimensions": [
+                { "id": "Order Date", "malloy_name": "order_date", "physical_field": "order_date",
+                  "caption": "Order Date", "hierarchy_name": "Order Date", "all_level_name": "(All)",
+                  "leaf_level_name": "Order Date", "ordinal": 1, "visible": true, "has_all": true,
+                  "cardinality_hint": 5000, "is_date_role": true, "fact_table": null, "shared": false },
+                { "id": "Ship Date", "malloy_name": "ship_date", "physical_field": "ship_date",
+                  "caption": "Ship Date", "hierarchy_name": "Ship Date", "all_level_name": "(All)",
+                  "leaf_level_name": "Ship Date", "ordinal": 2, "visible": true, "has_all": true,
+                  "cardinality_hint": 5000, "is_date_role": true, "fact_table": null, "shared": false }
+            ],
+            "measures": [
+                { "id": "OrdersYTD", "malloy_name": "orders_ytd", "physical_expr": "count()",
+                  "sql_expr": "COUNT(*)", "caption": "Orders YTD", "display_name": "Orders YTD",
+                  "format_string": "#,##0", "units": "", "ordinal": 1, "visible": true,
+                  "measure_group_name": "Sales",
+                  "time_intelligence": { "dimension_id": "Order Date", "flag_column": "ytd_flag" } },
+                { "id": "SalesPriorYear", "malloy_name": "sales_prior_year", "physical_expr": "sales.sum()",
+                  "sql_expr": "SUM(sales)", "caption": "Sales Prior Year", "display_name": "Sales Prior Year",
+                  "format_string": "#,##0.00", "units": "", "ordinal": 2, "visible": true,
+                  "measure_group_name": "Sales",
+                  "time_intelligence": { "dimension_id": "Ship Date", "flag_column": "prior_year_ytd_flag" } }
+            ],
+            "time_intelligence": {
+                "date_dimension": {
+                    "dimension_id": "Date",
+                    "table_name": "date_dim",
+                    "date_key_column": "date_key",
+                    "full_date_column": "full_date",
+                    "flag_columns": {}
+                }
+            }
+        }"##;
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(json).expect("parse multi-date-role config");
+        let model = build_semantic_model(&cfg, Path::new("."));
+
+        // Two date-role dimensions in date_dims
+        assert_eq!(model.date_dims.len(), 2, "should have two date-role entries");
+        assert!(model.date_dims.contains_key("Order Date"));
+        assert!(model.date_dims.contains_key("Ship Date"));
+        // Order Date picked up order_calendar table from relationship
+        assert_eq!(model.date_dims["Order Date"].table_name, "order_calendar");
+        assert_eq!(model.date_dims["Ship Date"].table_name, "ship_calendar");
+
+        // date_dim_for_measure resolves correctly
+        let order_dd = model.date_dim_for_measure("OrdersYTD")
+            .expect("OrdersYTD should resolve date dim");
+        assert_eq!(order_dd.dimension_id, "Order Date");
+        let ship_dd = model.date_dim_for_measure("SalesPriorYear")
+            .expect("SalesPriorYear should resolve date dim");
+        assert_eq!(ship_dd.dimension_id, "Ship Date");
+
+        // Measure date_dimension_id and time_flag are correct
+        assert_eq!(model.meas_def("OrdersYTD").date_dimension_id.as_deref(), Some("Order Date"));
+        assert_eq!(model.meas_def("OrdersYTD").time_flag.as_deref(), Some("ytd_flag"));
+        assert_eq!(model.meas_def("SalesPriorYear").date_dimension_id.as_deref(), Some("Ship Date"));
+        assert_eq!(model.meas_def("SalesPriorYear").time_flag.as_deref(), Some("prior_year_ytd_flag"));
     }
 
     #[test]
@@ -863,5 +1026,26 @@ mod tests {
         let rel = p.model.rel_for_dimension(&rel_dim.id).unwrap();
         assert_eq!(resolved, rel.dim_table,
             "dim_table_for_discovery should return the relationship's dim_table");
+    }
+
+    // ---- generated_retail_analytics smoke ----
+
+    #[test]
+    fn retail_analytics_project_loads() {
+        let p = ProxyProject::load("generated_retail_analytics/proxy-config.json")
+            .expect("load generated_retail_analytics");
+        assert!(p.model.dimensions.len() >= 4, "should have several dimensions");
+        assert!(!p.model.measures.is_empty(), "should have measures");
+        assert!(!p.model.relationships.is_empty(), "should have relationships");
+        // Has a date-role dimension
+        let date_dims: Vec<_> = p.model.dimensions.iter()
+            .filter(|d| d.is_date_role).collect();
+        assert_eq!(date_dims.len(), 1, "should have exactly one date-role dimension");
+        assert_eq!(date_dims[0].id, "Dates");
+        // time_intelligence.date_dimension is present
+        assert!(p.model.date_dim.is_some(), "global date_dim should be present");
+        assert_eq!(p.model.date_dim.as_ref().unwrap().dimension_id, "Dates");
+        // date_dims contains the Dates entry
+        assert!(p.model.date_dims.contains_key("Dates"));
     }
 }

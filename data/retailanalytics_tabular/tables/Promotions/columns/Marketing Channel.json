@@ -1,0 +1,7 @@
+{
+  "name": "Marketing Channel",
+  "dataType": "string",
+  "sourceColumn": "channel",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "da6a33d2-b53e-4b7c-9537-7c5c47c4874e"
+}

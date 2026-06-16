@@ -1,0 +1,7 @@
+{
+  "name": "Discount Cap",
+  "dataType": "decimal",
+  "sourceColumn": "maxdiscountcap",
+  "sourceProviderType": "decimal",
+  "lineageTag": "00635514-08dc-42cc-b87c-14c1d4c4c442"
+}

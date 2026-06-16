@@ -9,6 +9,7 @@
 /// defaults via `default_model()`.
 
 use crate::engine::plan::{DimId, MeasId};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Model types
@@ -77,6 +78,8 @@ pub struct DimensionDef {
     pub leaf_level_name: String,
     /// Cardinality hint for XMLA DIMENSION_CARDINALITY
     pub cardinality_hint: u32,
+    /// True if this dimension represents a date/calendar role.
+    pub is_date_role: bool,
 }
 
 impl DimensionDef {
@@ -132,6 +135,11 @@ pub struct MeasureDef {
     /// Pre-loaded fallback SQL text (from sql_fallback/*.sql).
     /// When set, execution uses this SQL directly instead of generating.
     pub sql_fallback_sql: Option<String>,
+    /// Time-intelligence flag column (e.g., "ytd_flag") for date_dim join.
+    pub time_flag: Option<String>,
+    /// Which date-role dimension this measure binds to.
+    /// When None, falls back to the global date_dim.
+    pub date_dimension_id: Option<String>,
 }
 
 impl MeasureDef {
@@ -140,12 +148,34 @@ impl MeasureDef {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DateDimDef {
+    pub dimension_id: DimId,
+    pub table_name: String,
+    pub date_key_column: String,
+    pub full_date_column: String,
+    pub year_column: String,
+    pub quarter_column: String,
+    pub month_column: String,
+    pub ytd_flag_column: String,
+    pub prior_year_ytd_flag_column: String,
+    pub current_year_flag_column: String,
+    pub qtd_flag_column: String,
+    pub mtd_flag_column: String,
+}
+
 pub struct SemanticModel {
     pub fact_tables: Vec<FactTable>,
     pub dialect: Dialect,
     pub dimensions: Vec<DimensionDef>,
     pub measures: Vec<MeasureDef>,
     pub relationships: Vec<RelationshipDef>,
+    /// Optional date dimension for time-intelligence flag-based filtering.
+    /// Default / global fallback when a measure does not specify a date role.
+    pub date_dim: Option<DateDimDef>,
+    /// Per-dimension date-role definitions, keyed by dimension_id.
+    /// Populated from is_date_role dimensions with explicit DateDimDef metadata.
+    pub date_dims: HashMap<DimId, DateDimDef>,
 }
 
 impl SemanticModel {
@@ -227,6 +257,19 @@ impl SemanticModel {
     /// Find a relationship that connects this dimension to the fact table.
     pub fn rel_for_dimension(&self, dim_id: &str) -> Option<&RelationshipDef> {
         self.relationships.iter().find(|r| r.dimension_id == dim_id)
+    }
+
+    /// Resolve the DateDimDef for a measure, respecting per-measure
+    /// date-role binding. Falls back to the global date_dim when the
+    /// measure has no explicit date-role dimension.
+    pub fn date_dim_for_measure(&self, meas_id: &str) -> Option<&DateDimDef> {
+        let meas = self.meas_def_opt(meas_id)?;
+        if let Some(role_id) = &meas.date_dimension_id {
+            if let Some(dd) = self.date_dims.get(role_id) {
+                return Some(dd);
+            }
+        }
+        self.date_dim.as_ref()
     }
     /// Find a dimension definition by its XMLA caption.
     pub fn dim_by_caption(&self, caption: &str) -> Option<&DimensionDef> {
@@ -317,6 +360,7 @@ pub fn default_model() -> SemanticModel {
                 all_level_name: "(All)".into(),
                 leaf_level_name: "Produktkategori".into(),
                 cardinality_hint: 50,
+                is_date_role: false,
             },
             DimensionDef {
                 id: "Region".into(),
@@ -332,6 +376,7 @@ pub fn default_model() -> SemanticModel {
                 all_level_name: "(All)".into(),
                 leaf_level_name: "Region".into(),
                 cardinality_hint: 10,
+                is_date_role: false,
             },
         ],
         measures: vec![
@@ -353,8 +398,12 @@ pub fn default_model() -> SemanticModel {
                 numeric_scale: 2,
                 expression: "SUM('Faktatabell'[Sales])".into(),
                 sql_fallback_sql: None,
+                time_flag: None,
+                date_dimension_id: None,
             },
         ],
         relationships: vec![],
+        date_dim: None,
+        date_dims: HashMap::new(),
     }
 }

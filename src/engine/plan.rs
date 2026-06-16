@@ -28,6 +28,9 @@ pub type MeasId = String;
 pub struct TypedDimensionFilter {
     pub dimension: DimId,
     pub members: Vec<String>,
+    /// When set, this is a time-intelligence filter that joins date_dim
+    /// on the given flag column (e.g., "ytd_flag").
+    pub time_flag: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,8 +86,29 @@ fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
         TypedDimensionFilter {
             dimension: f.dimension.clone(),
             members: f.members.clone(),
+            time_flag: None,
         }
     }).collect()
+}
+
+/// Build filters for a plan, adding a time_flag filter if the selected
+/// measure has time_intelligence configured and the model has a date_dim.
+fn filters_with_time_flag(
+    model: &SemanticModel,
+    meas_id: &str,
+    source_filters: &[TypedDimensionFilter],
+) -> Vec<TypedDimensionFilter> {
+    let mut result = compatible_filters(model, meas_id, source_filters);
+    if let Some(date_dim) = model.date_dim_for_measure(meas_id) {
+        if let Some(flag) = model.meas_def(meas_id).time_flag.as_ref() {
+            result.push(TypedDimensionFilter {
+                dimension: date_dim.dimension_id.clone(),
+                members: vec![],
+                time_flag: Some(flag.clone()),
+            });
+        }
+    }
+    result
 }
 
 /// Resolve an MDX-axis string to a model dimension ID, falling back
@@ -159,7 +183,7 @@ pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticMode
         | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
                 measure: meas.clone(),
-                filters: compatible_filters(model, &meas, &typed_filters(&query.filters)),
+                filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
             }
         }
 
@@ -178,7 +202,7 @@ pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticMode
             QueryPlan::GroupBy {
                 measure: meas.clone(),
                 group_by,
-                filters: compatible_filters(model, &meas, &typed_filters(&query.filters)),
+                filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
             }
         }
 

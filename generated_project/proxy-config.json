@@ -5,7 +5,7 @@
   "table_name": "dw_fys_f_undersökning",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
-  "db_path": null,
+  "db_path": "data/generated.db",
   "fact_tables": [
     {
       "id": "default",

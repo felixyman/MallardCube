@@ -1,0 +1,7 @@
+{
+  "name": "Is Stackable",
+  "dataType": "int64",
+  "sourceColumn": "isstackable",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "ed834888-520c-4dcc-b998-29489c43ff4e"
+}

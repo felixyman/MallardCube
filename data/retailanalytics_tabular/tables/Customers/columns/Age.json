@@ -1,0 +1,7 @@
+{
+  "name": "Age",
+  "dataType": "int64",
+  "sourceColumn": "age",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "55663457-2529-4637-bc94-29f58f235ce8"
+}

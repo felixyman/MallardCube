@@ -1,0 +1,7 @@
+{
+  "name": "Loyalty Tier",
+  "dataType": "string",
+  "sourceColumn": "tier",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "43910964-a947-42df-bb52-73ca5ea2f119"
+}

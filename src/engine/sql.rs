@@ -99,23 +99,35 @@ fn sql_where_with_cols(
     filters: &[TypedDimensionFilter],
     col_map: &HashMap<String, String>,
 ) -> String {
-    let parts: Vec<String> = filters.iter()
-        .filter(|f| !f.members.is_empty())
-        .filter_map(|f| {
-            model.dim_def_opt(&f.dimension).map(|d| {
-                let col = col_map.get(f.dimension.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| d.physical_field.clone());
-                (col, &f.members)
-            })
-        })
-        .map(|(col, members)| {
-            let vals: Vec<String> = members.iter()
+    let mut parts: Vec<String> = Vec::new();
+
+    for f in filters {
+        // Time-flag filters: emit date_dim subquery
+        if f.time_flag.is_some() {
+            let date_dim = model.date_dims.get(&f.dimension)
+                .or(model.date_dim.as_ref());
+            if let (Some(dd), Some(flag)) = (date_dim, &f.time_flag) {
+                parts.push(format!(
+                    "f.{} IN (SELECT {} FROM {} WHERE {} = true)",
+                    dd.date_key_column, dd.date_key_column,
+                    dd.table_name, flag
+                ));
+            }
+            continue;
+        }
+        if f.members.is_empty() {
+            continue;
+        }
+        if let Some(d) = model.dim_def_opt(&f.dimension) {
+            let col = col_map.get(f.dimension.as_str())
+                .cloned()
+                .unwrap_or_else(|| d.physical_field.clone());
+            let vals: Vec<String> = f.members.iter()
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
-            format!("{} IN ({})", col, vals.join(", "))
-        })
-        .collect();
+            parts.push(format!("{} IN ({})", col, vals.join(", ")));
+        }
+    }
 
     if parts.is_empty() {
         String::new()
@@ -179,6 +191,7 @@ mod tests {
             measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };
@@ -222,6 +235,7 @@ mod tests {
             group_by: vec!["Produktkategori".into()],
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };
@@ -244,10 +258,12 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "Produktkategori".into(),
+                    time_flag: None,
                     members: vec!["Kategori A".into(), "Kategori B".into()],
                 },
             ],
@@ -276,7 +292,7 @@ mod tests {
                     caption: "Product".into(), description: String::new(),
                     visible: true, ordinal: 1,
                     hierarchy_name: "Product".into(), all_level_name: "(All)".into(),
-                    leaf_level_name: "Product".into(), cardinality_hint: 100,
+                    leaf_level_name: "Product".into(), cardinality_hint: 100, is_date_role: false,
                 },
             ],
             measures: vec![
@@ -289,6 +305,8 @@ mod tests {
                     format_string: String::new(), measure_group_name: "Fact".into(),
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
+                    date_dimension_id: None,
+                    time_flag: None,
                 },
             ],
             relationships: vec![
@@ -298,6 +316,8 @@ mod tests {
                     dim_table: "dim_product".into(), dim_column: "product_id".into(),
                 },
             ],
+            date_dim: None,
+            date_dims: HashMap::new(),
         }
     }
 
@@ -308,6 +328,7 @@ mod tests {
             measure: "Revenue".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Product".into(),
+                time_flag: None,
                 members: vec!["Widget".into()],
             }],
         });
@@ -351,6 +372,8 @@ mod tests {
                     format_string: String::new(), measure_group_name: "Sales".into(),
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
+                    date_dimension_id: None,
+                    time_flag: None,
                 },
                 MeasureDef {
                     id: "Stock".into(), fact_table_idx: 1,
@@ -361,9 +384,13 @@ mod tests {
                     format_string: String::new(), measure_group_name: "Inventory".into(),
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
+                    date_dimension_id: None,
+                    time_flag: None,
                 },
             ],
             relationships: vec![],
+            date_dim: None,
+            date_dims: HashMap::new(),
         }
     }
 
@@ -386,7 +413,7 @@ mod tests {
                     physical_field: "cat".into(), caption: "Category".into(),
                     description: String::new(), visible: true, ordinal: 1,
                     hierarchy_name: "Category".into(), all_level_name: "(All)".into(),
-                    leaf_level_name: "Category".into(), cardinality_hint: 20,
+                    leaf_level_name: "Category".into(), cardinality_hint: 20, is_date_role: false,
                     table_name: None, shared: false,
                 },
             ],
@@ -407,6 +434,7 @@ mod tests {
                     visible: true, ordinal: 1, hierarchy_name: "Category".into(),
                     all_level_name: "(All)".into(), leaf_level_name: "Category".into(),
                     cardinality_hint: 20,
+                    is_date_role: false,
                 },
             ],
             ..two_fact_model()

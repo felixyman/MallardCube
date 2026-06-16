@@ -1,0 +1,7 @@
+{
+  "name": "Payment Method",
+  "dataType": "string",
+  "sourceColumn": "payment",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "40db70a5-30ae-4b2e-9f39-ff499924a973"
+}

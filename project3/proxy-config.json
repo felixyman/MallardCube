@@ -5,6 +5,15 @@
   "table_name": "sales_fact",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
+  "relationships": [
+    {
+      "fact_table": "default",
+      "fact_column": "date_key",
+      "dimension_id": "Date",
+      "dim_table": "date_dim",
+      "dim_column": "date_key"
+    }
+  ],
   "dimensions": [
     {
       "id": "Category",
@@ -61,6 +70,23 @@
       "visible": true,
       "has_all": true,
       "cardinality_hint": 10
+    },
+    {
+      "id": "Date",
+      "malloy_name": "date",
+      "physical_field": "full_date",
+      "caption": "Date",
+      "description": "Calendar date dimension",
+      "hierarchy_name": "Date",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Date",
+      "ordinal": 5,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 5000,
+      "is_date_role": true,
+      "fact_table": null,
+      "shared": false
     }
   ],
   "measures": [
@@ -91,6 +117,84 @@
       "ordinal": 2,
       "visible": true,
       "measure_group_name": "Sales"
+    },
+    {
+      "id": "RevenueYTD",
+      "malloy_name": "total_revenue_ytd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue YTD",
+      "display_name": "Revenue YTD",
+      "description": "Year-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 3,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "ytd_flag" }
+    },
+    {
+      "id": "RevenuePriorYearYTD",
+      "malloy_name": "total_revenue_prior_year_ytd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue Prior Year",
+      "display_name": "Revenue Prior Year",
+      "description": "Prior-year-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 4,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "prior_year_ytd_flag" }
+    },
+    {
+      "id": "RevenueQTD",
+      "malloy_name": "total_revenue_qtd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue QTD",
+      "display_name": "Revenue QTD",
+      "description": "Quarter-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 5,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "qtd_flag" }
+    },
+    {
+      "id": "RevenueMTD",
+      "malloy_name": "total_revenue_mtd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue MTD",
+      "display_name": "Revenue MTD",
+      "description": "Month-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 6,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "mtd_flag" }
     }
-  ]
+  ],
+  "time_intelligence": {
+    "date_dimension": {
+      "dimension_id": "Date",
+      "table_name": "date_dim",
+      "date_key_column": "date_key",
+      "full_date_column": "full_date",
+      "flag_columns": {
+        "year_column": "year",
+        "quarter_column": "quarter",
+        "month_column": "month",
+        "ytd_flag_column": "ytd_flag",
+        "prior_year_ytd_flag_column": "prior_year_ytd_flag",
+        "current_year_flag_column": "current_year_flag",
+        "qtd_flag_column": "qtd_flag",
+        "mtd_flag_column": "mtd_flag"
+      }
+    }
+  }
 }

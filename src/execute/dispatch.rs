@@ -136,6 +136,12 @@ mod tests {
         with_test_project(project, f)
     }
 
+    fn with_retail_analytics<T>(f: impl FnOnce() -> T) -> T {
+        let project = ProxyProject::load("generated_retail_analytics/proxy-config.json")
+            .expect("load generated_retail_analytics");
+        with_test_project(project, f)
+    }
+
     fn axis_captions(xml: &str, axis_name: &str) -> Vec<String> {
         let first = xml.find(&format!(r#"name="{axis_name}""#))
             .unwrap_or_else(|| panic!("missing {axis_name}"));
@@ -1166,6 +1172,214 @@ mod tests {
                 let from_semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx).axis_dimensions;
                 assert_eq!(from_parser, from_semantic,
                     "axis dimension mismatch for: {mdx}");
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_ytd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue YTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue YTD"),
+                "should resolve measure from MDX WHERE clause");
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue YTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE ytd_flag = true)"),
+                "Revenue YTD plan should include date_dim ytd_flag subquery, got: {sql}"
+            );
+            // Verify the plan itself carries the time_flag filter.
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti_filters: Vec<_> = filters.iter()
+                        .filter(|f| f.time_flag.is_some())
+                        .collect();
+                    assert_eq!(ti_filters.len(), 1,
+                        "should have exactly one time_flag filter");
+                    assert_eq!(ti_filters[0].time_flag.as_deref(), Some("ytd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_prior_year_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue Prior Year]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue Prior Year"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue Prior Year SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE prior_year_ytd_flag = true)"),
+                "Revenue Prior Year plan should include date_dim prior_year_ytd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("prior_year_ytd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_qtd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue QTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue QTD"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue QTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE qtd_flag = true)"),
+                "Revenue QTD plan should include date_dim qtd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("qtd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_mtd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue MTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue MTD"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue MTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE mtd_flag = true)"),
+                "Revenue MTD plan should include date_dim mtd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("mtd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_measures_execute_non_empty() {
+        with_project3(|| {
+            use crate::backend::Backend;
+            use crate::engine::plan::plan_from_semantic_with_model;
+            let project = crate::proxy_project::project();
+            let backend = Backend::get();
+            for (mdx, label) in [
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue YTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "YTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue Prior Year]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "PriorYTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue QTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "QTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue MTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "MTD"),
+            ] {
+                let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+                let plan = plan_from_semantic_with_model(&semantic, &project.model);
+                let result = crate::engine::plan::execute_plan_with_backend(
+                    &plan, &project.model, backend,
+                );
+                match result {
+                    crate::engine::plan::QueryResult::Scalar(v) => {
+                        assert!(v > 0.0, "{label} revenue should be non-zero against demo data, got {v}");
+                    }
+                    other => panic!("{label} expected Scalar result, got {other:?}"),
+                }
+            }
+        });
+    }
+
+    // ---- Generated retail analytics compatibility gate ----
+
+    #[test]
+    fn retail_analytics_discover_catalogs_returns_correct_name() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::catalogs::get_catalogs_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("SEMANTICMODEL"), "should contain catalog name");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_cubes_returns_correct_name() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::cubes::get_cubes_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_dimensions_has_date_role() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::dimensions::get_dimensions_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains(">Dates<"), "should contain Dates dimension");
+            assert!(xml.contains(">Stores<"), "should contain Stores dimension");
+            let rows = xml.matches("<row").count();
+            assert!(rows >= 5, "should have at least 5 dimension rows");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_measures_has_total_revenue() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::measures::get_measures_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_execute_total_revenue_renders_cellset() {
+        with_retail_analytics(|| {
+            let mdx = "SELECT  FROM [SALES] WHERE ([Measures].[Total Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml = get_execute_statement_response(mdx);
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "missing mddataset namespace");
+            assert!(xml.contains("<Axes>"), "missing axes");
+            assert!(xml.contains("<CellData>"), "missing cell data");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_stub_measures_return_empty() {
+        with_retail_analytics(|| {
+            for mdx in [
+                "SELECT  FROM [SALES] WHERE ([Measures].[Gross Profit]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR",
+                "SELECT  FROM [SALES] WHERE ([Measures].[Total COGS]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR",
+            ] {
+                let xml = get_execute_statement_response(mdx);
+                assert!(!xml.is_empty(), "should not panic on stub measure");
+                // Stubs return Empty QueryResult — cellset has no cell data
             }
         });
     }

@@ -1,0 +1,7 @@
+{
+  "name": "Has Warranty",
+  "dataType": "int64",
+  "sourceColumn": "haswarranty",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "3f3d8d53-bb91-4d2d-b80c-d49cbb43f45d"
+}

@@ -117,6 +117,7 @@ mod tests {
             measure: "TotalSales".to_string(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".to_string(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };
@@ -185,6 +186,7 @@ mod tests {
             group_by: vec!["Produktkategori".to_string()],
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".to_string(),
+                time_flag: None,
                 members: vec!["Region 01".into()],
             }],
         };

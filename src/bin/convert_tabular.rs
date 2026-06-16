@@ -32,6 +32,7 @@ struct ColumnInfo {
     is_hidden: bool,
 }
 
+#[derive(Debug, Clone)]
 struct MeasureInfo {
     name: String,
     expression: Vec<String>,
@@ -104,7 +105,7 @@ fn parse_model(src_dir: &str) -> ConversionModel {
             let lower = t.name.to_lowercase();
             if lower.contains("f_") || t.measures.len() > 5 {
                 fact.push(t);
-            } else if lower.contains("kalender") {
+            } else if lower.contains("kalender") || lower == "dates" {
                 dates.push(t);
             } else if lower.starts_with("dw_fys d_") {
                 dims.push(t);
@@ -114,7 +115,26 @@ fn parse_model(src_dir: &str) -> ConversionModel {
         }
     }
 
-    let ft = if fact.len() == 1 {
+    // Fallback: if no fact table detected by heuristics, use relationship fromTable
+    // as a signal — the table referenced most as a relationship source is the fact.
+    if fact.is_empty() {
+        let mut from_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for r in &rels {
+            *from_counts.entry(r.from_table.clone()).or_insert(0) += 1;
+        }
+        if let Some((best_name, _)) = from_counts.into_iter()
+            .max_by_key(|(_, c)| *c)
+            .filter(|(_, c)| *c >= 2)
+        {
+            if let Some(pos) = lookups.iter().position(|t| t.name == best_name) {
+                fact.push(lookups.remove(pos));
+            } else if let Some(pos) = dims.iter().position(|t| t.name == best_name) {
+                fact.push(dims.remove(pos));
+            }
+        }
+    }
+
+    let mut ft = if fact.len() == 1 {
         fact.remove(0)
     } else if !fact.is_empty() {
         // Multiple candidates — pick the one with most measures
@@ -131,6 +151,12 @@ fn parse_model(src_dir: &str) -> ConversionModel {
             is_m_partition: false, is_calculated: false,
         }
     };
+
+    // Merge DAX calculated table measures into the fact table
+    let mut calc_measures: Vec<MeasureInfo> = calcs.iter()
+        .flat_map(|c| c.measures.iter().cloned())
+        .collect();
+    ft.measures.append(&mut calc_measures);
 
     ConversionModel {
         catalog: ssas_name_to_id("SemanticModel"),
@@ -290,7 +316,10 @@ fn flatten_json_array(arr: &serde_json::Value) -> String {
 
 fn classify_dax(expr: &str) -> String {
     let upper = expr.to_uppercase();
-    if upper.contains("ALLSELECTED") || upper.contains("ISONORAFTER") || upper.contains("TOTALYTD") || upper.contains("DATESYTD") || (upper.contains("CALCULATE(") && upper.contains("FILTER(")) { return "sql_fallback".into(); }
+    // Time intelligence: emit structured date-flag measures instead of sql_fallback
+    if upper.contains("TOTALYTD") || upper.contains("DATESYTD") { return "time_ytd".into(); }
+    if upper.contains("SAMEPERIODLASTYEAR") { return "time_prior_year".into(); }
+    if upper.contains("ALLSELECTED") || upper.contains("ISONORAFTER") || (upper.contains("CALCULATE(") && upper.contains("FILTER(")) { return "sql_fallback".into(); }
     if upper.contains("ALL(") || upper.contains("ALLEXCEPT") || upper.contains("KEEPFILTERS") { return "sql_fallback".into(); }
     if upper.contains("SUMX(") || upper.contains("AVERAGEX(") || upper.contains("MAXX(") || upper.contains("RANKX(") { return "sql_fallback".into(); }
     if upper.contains("TODAY()") || upper.contains("NOW()") || upper.contains("UTCNOW()") || upper.contains("SAMEPERIODLASTYEAR") { return "sql_fallback".into(); }
@@ -340,6 +369,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
     let meas = render_measure_configs(m);
     let facts = render_fact_table_configs(m);
     let rels = render_relationships(m);
+    let ti_block = render_time_intelligence_block(m);
 
     format!(
         r##"{{{{
@@ -355,7 +385,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
   ],
   "relationships": [
 {rels}
-  ],
+  ],{ti}
   "dimensions": [
 {dims}
   ],
@@ -369,6 +399,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
         table = malloy_name(&ft.name),
         facts = facts,
         rels = rels,
+        ti = ti_block,
         dims = dims,
         meas = meas,
     ).replace("{{", "{").replace("}}", "}")
@@ -420,6 +451,19 @@ fn render_relationships(m: &ConversionModel) -> String {
     out
 }
 
+fn render_time_intelligence_block(m: &ConversionModel) -> String {
+    if m.date_roles.is_empty() {
+        return String::new();
+    }
+    // Use the first date-role dimension as the default calendar dimension.
+    let first = &m.date_roles[0];
+    format!(
+        "\n  \"time_intelligence\": {{{{\n    \"date_dimension\": {{{{\n      \"dimension_id\": \"{did}\",\n      \"table_name\": \"{tn}\",\n      \"date_key_column\": \"date_key\",\n      \"full_date_column\": \"full_date\",\n      \"flag_columns\": {{{{\n        \"year_column\": \"year\",\n        \"quarter_column\": \"quarter\",\n        \"month_column\": \"month\",\n        \"ytd_flag_column\": \"ytd_flag\",\n        \"prior_year_ytd_flag_column\": \"prior_year_ytd_flag\",\n        \"current_year_flag_column\": \"current_year_flag\",\n        \"qtd_flag_column\": \"qtd_flag\",\n        \"mtd_flag_column\": \"mtd_flag\"\n      }}}}\n    }}}}\n  }},\n",
+        did = first.ssas_name,
+        tn = malloy_name(&first.name),
+    ).replace("{{", "{").replace("}}", "}")
+}
+
 fn render_dimension_configs(m: &ConversionModel) -> String {
     let mut out = String::new();
     let all_dims: Vec<&TableInfo> = m.dimensions.iter()
@@ -445,6 +489,8 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
 
         let ft_line = if ft_ref.is_empty() { String::new() } else { format!("\n      \"fact_table\": \"{}\",", ft_ref) };
         let shared = if m.date_roles.iter().any(|d| d.name == t.name) || m.dimensions.iter().any(|d| d.name == t.name) { "" } else { ",\n      \"shared\": true" };
+        let is_date_role = m.date_roles.iter().any(|d| d.name == t.name);
+        let date_role_line = if is_date_role { ",\n      \"is_date_role\": true" } else { "" };
 
         out.push_str(&format!(
             r##"    {{{{
@@ -459,7 +505,7 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
       "ordinal": {ord},{ft_line}
       "visible": true,
       "has_all": true,
-      "cardinality_hint": 100{shared}
+          "cardinality_hint": 100{shared}{date_role_line}
     }}}}"##,
             id = t.ssas_name,
             mn = malloy_name(&t.ssas_name),
@@ -468,6 +514,7 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
             desc = t.description.replace('\"', "\\\""),
             ord = i + 1,
             ft_line = ft_line,
+            date_role_line = date_role_line,
             shared = if m.date_roles.iter().chain(&m.dimensions).any(|d| d.name == t.name) { "" } else { ",\n      \"shared\": true" },
         ).replace("{{", "{").replace("}}", "}"));
         if i < all_dims.len() - 1 { out.push_str(",\n"); }
@@ -483,14 +530,36 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         .collect();
     for (i, meas) in all_measures.iter().enumerate() {
         let dax_expr = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
-        let sql = dax_to_sql_hint(dax_expr, &meas.classification);
-        let pe = if meas.classification == "simple" {
-            dax_to_malloy_expr(dax_expr)
+        // For time measures, extract the inner aggregation for the sql_expr.
+        let (time_class, flag_col, time_dim_id) = match meas.classification.as_str() {
+            "time_ytd" => ("time_ytd", "ytd_flag",
+                m.date_roles.first().map(|d| d.ssas_name.as_str()).unwrap_or("Date")),
+            "time_prior_year" => ("time_prior_year", "prior_year_ytd_flag",
+                m.date_roles.first().map(|d| d.ssas_name.as_str()).unwrap_or("Date")),
+            _ => ("", "", ""),
+        };
+        let sql = if !time_class.is_empty() {
+            // Extract base expression from TOTALYTD(inner, ...) or SAMEPERIODLASTYEAR(inner, ...)
+            let inner = extract_ti_inner(dax_expr);
+            let malloy = dax_to_malloy_expr(&inner);
+            malloy_to_sql(&malloy)
+        } else {
+            dax_to_sql_hint(dax_expr, &meas.classification)
+        };
+        let pe = if meas.classification == "simple" || meas.classification == "time_ytd" || meas.classification == "time_prior_year" {
+            if !time_class.is_empty() {
+                dax_to_malloy_expr(&extract_ti_inner(dax_expr))
+            } else {
+                dax_to_malloy_expr(dax_expr)
+            }
         } else {
             String::new()
         };
         let fb_line = if meas.classification == "sql_fallback" {
             format!(",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"", malloy_name(&meas.name))
+        } else if !time_class.is_empty() {
+            format!(",\n      \"time_intelligence\": {{ \"dimension_id\": \"{did}\", \"flag_column\": \"{fc}\" }}",
+                did = time_dim_id, fc = flag_col)
         } else {
             String::new()
         };
@@ -647,6 +716,35 @@ fn dax_to_malloy_expr(dax: &str) -> String {
 
     // Fallback
     "1.sum()".to_string()
+}
+
+/// Extract the inner expression from a time-intelligence DAX wrapper:
+/// TOTALYTD(inner, dates) → inner
+/// SAMEPERIODLASTYEAR(inner, dates) → inner
+fn extract_ti_inner(dax: &str) -> String {
+    let upper = dax.to_uppercase();
+    let (func, dax) = if upper.starts_with("TOTALYTD(") {
+        ("TOTALYTD(", &dax["TOTALYTD(".len()..])
+    } else if upper.starts_with("SAMEPERIODLASTYEAR(") {
+        ("SAMEPERIODLASTYEAR(", &dax["SAMEPERIODLASTYEAR(".len()..])
+    } else if upper.starts_with("DATESYTD(") {
+        ("DATESYTD(", &dax["DATESYTD(".len()..])
+    } else {
+        return dax.to_string();
+    };
+    // Find the closing paren matching the opening func, then extract inner.
+    let mut depth = 1;
+    let mut comma_pos = None;
+    for (i, c) in dax.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { break; } }
+            ',' if depth == 1 => { comma_pos = Some(i); break; }
+            _ => {}
+        }
+    }
+    comma_pos.map(|pos| dax[..pos].trim().to_string())
+        .unwrap_or_else(|| dax.to_string())
 }
 
 fn extract_dax_unary(dax: &str, func: &str) -> Option<String> {

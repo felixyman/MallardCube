@@ -1,0 +1,7 @@
+{
+  "name": "Customer Name",
+  "dataType": "string",
+  "sourceColumn": "fullname",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "c07ecdb1-7627-4184-882a-c598ecda5d67"
+}

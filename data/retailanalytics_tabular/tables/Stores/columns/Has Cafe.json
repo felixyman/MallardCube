@@ -1,0 +1,7 @@
+{
+  "name": "Has Cafe",
+  "dataType": "int64",
+  "sourceColumn": "hascafe",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "407eb625-656f-4c67-b3b5-6e8a9608a3ac"
+}

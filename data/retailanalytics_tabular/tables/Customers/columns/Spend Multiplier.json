@@ -1,0 +1,7 @@
+{
+  "name": "Spend Multiplier",
+  "dataType": "decimal",
+  "sourceColumn": "spendmultiplier",
+  "sourceProviderType": "decimal",
+  "lineageTag": "9003d1fb-0e84-4a82-95da-524591ddd152"
+}

@@ -173,6 +173,7 @@ fn where_clause(model: &SemanticModel, filters: &[TypedDimensionFilter]) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use crate::engine::plan::TypedDimensionFilter;
     use crate::engine::model::default_model;
 
@@ -205,6 +206,7 @@ mod tests {
             measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };
@@ -243,6 +245,7 @@ mod tests {
             group_by: vec!["Produktkategori".into()],
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };
@@ -270,10 +273,12 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "Produktkategori".into(),
+                    time_flag: None,
                     members: vec!["Kategori A".into()],
                 },
             ],
@@ -291,6 +296,7 @@ mod tests {
             measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Produktkategori".into(),
+                time_flag: None,
                 members: vec!["Kategori A".into(), "Kategori B".into()],
             }],
         };
@@ -306,10 +312,12 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "Produktkategori".into(),
+                    time_flag: None,
                     members: vec!["Kategori A".into(), "Kategori B".into()],
                 },
             ],
@@ -363,6 +371,8 @@ mod tests {
                     numeric_scale: 2,
                     expression: String::new(),
                     sql_fallback_sql: None,
+                    date_dimension_id: None,
+                    time_flag: None,
                 },
                 MeasureDef {
                     id: "Stock".into(),
@@ -382,9 +392,13 @@ mod tests {
                     numeric_scale: 2,
                     expression: String::new(),
                     sql_fallback_sql: None,
+                    date_dimension_id: None,
+                    time_flag: None,
                 },
             ],
             relationships: vec![],
+            date_dim: None,
+            date_dims: HashMap::new(),
         }
     }
 
@@ -434,6 +448,7 @@ mod tests {
                     all_level_name: "(All)".into(),
                     leaf_level_name: "C".into(),
                     cardinality_hint: 20,
+                    is_date_role: false,
                     table_name: None,
                     shared: false,
                 },

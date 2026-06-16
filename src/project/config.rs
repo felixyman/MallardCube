@@ -7,6 +7,99 @@
 
 use serde::Deserialize;
 
+// ---- new time-intelligence config types ----
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TimeIntelligenceConfig {
+    pub date_dimension: DateDimensionConfig,
+}
+
+impl Default for TimeIntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            date_dimension: DateDimensionConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DateDimensionConfig {
+    /// Which dimension serves as the calendar/date dimension.
+    pub dimension_id: String,
+    /// The date-key column that joins to fact table date columns.
+    pub date_key_column: String,
+    /// The full-date column (DATE type) for flag computation.
+    pub full_date_column: String,
+    /// DuckDB table name for the date dimension (defaults to "date_dim").
+    pub table_name: String,
+    /// Flag-column names.
+    #[serde(default)]
+    pub flag_columns: DateFlagColumns,
+}
+
+impl Default for DateDimensionConfig {
+    fn default() -> Self {
+        Self {
+            dimension_id: String::new(),
+            date_key_column: "date_key".into(),
+            full_date_column: "full_date".into(),
+            table_name: "date_dim".into(),
+            flag_columns: DateFlagColumns::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DateFlagColumns {
+    pub year_column: String,
+    pub quarter_column: String,
+    pub month_column: String,
+    pub ytd_flag_column: String,
+    pub prior_year_ytd_flag_column: String,
+    pub current_year_flag_column: String,
+    pub qtd_flag_column: String,
+    pub mtd_flag_column: String,
+}
+
+impl Default for DateFlagColumns {
+    fn default() -> Self {
+        Self {
+            year_column: "year".into(),
+            quarter_column: "quarter".into(),
+            month_column: "month".into(),
+            ytd_flag_column: "ytd_flag".into(),
+            prior_year_ytd_flag_column: "prior_year_ytd_flag".into(),
+            current_year_flag_column: "current_year_flag".into(),
+            qtd_flag_column: "qtd_flag".into(),
+            mtd_flag_column: "mtd_flag".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MeasureTimeIntelligenceConfig {
+    pub flag_column: String,
+    /// Which dimension serves as the date role for this measure.
+    /// When absent, the global time_intelligence.date_dimension is used.
+    #[serde(default)]
+    pub dimension_id: Option<String>,
+}
+
+impl Default for MeasureTimeIntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            flag_column: String::new(),
+            dimension_id: None,
+        }
+    }
+}
+
+// ---- main config types ----
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub catalog: String,
@@ -21,6 +114,8 @@ pub struct ProxyConfig {
     pub fact_tables: Vec<FactTableConfig>,
     #[serde(default)]
     pub relationships: Vec<RelationshipConfig>,
+    #[serde(default)]
+    pub time_intelligence: Option<TimeIntelligenceConfig>,
     pub dimensions: Vec<DimensionConfig>,
     pub measures: Vec<MeasureConfig>,
 }
@@ -61,6 +156,8 @@ pub struct DimensionConfig {
     pub fact_table: Option<String>,
     #[serde(default)]
     pub shared: bool,
+    #[serde(default)]
+    pub is_date_role: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,6 +187,8 @@ pub struct MeasureConfig {
     pub expression: String,
     #[serde(default)]
     pub sql_fallback_file: Option<String>,
+    #[serde(default)]
+    pub time_intelligence: Option<MeasureTimeIntelligenceConfig>,
 }
 
 fn default_aggregator() -> u32 { 1 }
@@ -140,5 +239,52 @@ mod tests {
         assert_eq!(cfg.catalog, "TEST");
         assert_eq!(cfg.dimensions[0].id, "Produktkategori");
         assert_eq!(cfg.measures[0].caption, "Total");
+    }
+
+    #[test]
+    fn time_intelligence_config_deserializes_with_defaults() {
+        let json = r#"{
+            "catalog": "TEST",
+            "cube": "TestCube",
+            "source_name": "test",
+            "table_name": "test_table",
+            "dialect": "duckdb",
+            "malloy_model_file": "model.malloy",
+            "dimensions": [],
+            "measures": [],
+            "time_intelligence": {
+                "date_dimension": {
+                    "dimension_id": "Date",
+                    "date_key_column": "date_key",
+                    "full_date_column": "full_date"
+                }
+            }
+        }"#;
+        let cfg: ProxyConfig = serde_json::from_str(json).expect("parse");
+        let ti = cfg.time_intelligence.expect("time_intelligence present");
+        let dd = &ti.date_dimension;
+        assert_eq!(dd.dimension_id, "Date");
+        assert_eq!(dd.date_key_column, "date_key");
+        assert_eq!(dd.full_date_column, "full_date");
+        assert_eq!(dd.table_name, "date_dim");          // default
+        assert_eq!(dd.flag_columns.year_column, "year"); // default
+        assert_eq!(dd.flag_columns.ytd_flag_column, "ytd_flag"); // default
+    }
+
+    #[test]
+    fn time_intelligence_defaults_backward_compat() {
+        let json = r#"{
+            "catalog": "TEST",
+            "cube": "TestCube",
+            "source_name": "test",
+            "table_name": "test_table",
+            "dialect": "duckdb",
+            "malloy_model_file": "model.malloy",
+            "dimensions": [],
+            "measures": []
+        }"#;
+        let cfg: ProxyConfig = serde_json::from_str(json).expect("parse");
+        assert!(cfg.time_intelligence.is_none(),
+            "omitting time_intelligence should default to None");
     }
 }

@@ -12,6 +12,12 @@ honor its STOP conditions, and update your row when done.
 | 002  | Bound excluded-member parsing to the DrilldownMember exclusion set | P1 | S | — | DONE |
 | 003  | Move MDX semantics from string scans onto ParsedMdx structure | P1 | M | 001, 002 | DONE |
 | 004  | Graduate generated_project to a minimal Excel smoke path | P2 | M | 003 | DONE |
+| 005  | Add time-intelligence support through date-dimension data modeling | P1 | L | 003 | DONE |
+| 006  | Make the time-intelligence contract explicit and expand period measures | P1 | M | 005 | DONE |
+| 007  | Generalize time intelligence to measure-scoped date roles | P1 | L | 006 | DONE |
+| 008  | Teach the Tabular converter to emit runtime time metadata | P1 | M | 006, 007 | DONE |
+| 009  | Raise generated_project to an Excel compatibility gate | P2 | M | 008 | DONE |
+| 010  | Make converted complex measures behave like real Excel measures | P1 | L | 008, 009 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
@@ -19,11 +25,23 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 
 - 003 requires 001 and 002 because the parser fixes in 001 (clean measure
   names) and 002 (bounded exclusion scanning) must be in place before
-  moving more semantics into the parser. The semantic.rs helpers deleted
-  in 003 are the same ones fixed by 002.
+  moving more semantics into the parser.
 - 004 requires 003 because the generated project uses a different cube name
-  (`DW_FYS_F_UNDERSÖKNING`), and plan 003 makes the parser cube-agnostic so
-  it can handle that name without hardcoded `FROM [Sales]` logic.
+  (`DW_FYS_F_UNDERSÖKNING`), and plan 003 makes the parser cube-agnostic.
+- 005 requires 003 (parser cube-agnostic, structural axis dimensions) so
+  the date dimension can be detected without hardcoded cube names.
+- 006 requires 005 because the basic `date_dim` / `time_flag` plumbing must
+  already exist before tightening the config contract and adding more period
+  flags/measures.
+- 007 requires 006 because measure-scoped date roles build on the explicit,
+  non-defaulted time-intelligence contract.
+- 008 requires 006 and 007 because the converter should emit the stabilized
+  time-intelligence schema, including date-role binding, not the earlier
+  single-date-dimension shape.
+- 009 requires 008 because the generated project cannot become a meaningful
+  compatibility gate until conversion output matches the runtime time model.
+- 010 requires 008 and 009 because converted complex measures need both the
+  upgraded conversion metadata and a replayable generated-project proof loop.
 
 ## Findings considered and rejected
 
@@ -36,12 +54,30 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **Escape Malloy member values (SEC-03)**: only affects the Malloy runtime
   path (`MALLOY_RUNTIME=1`), which is not the default Excel path; deferred
   until Malloy becomes the default runtime.
-- **Remove `.unwrap()` panic on malformed XMLA (SEC-04)**: a real hardening
-  task, but lower impact than the semantic bugs in plans 001–003; can be
-  done as a standalone S-effort task later.
-- **Dependency upgrades (DEPS-01)**: non-blocking; Malloy 0.0.410 and
-  axum 0.8 upgrades should happen soon but don't gate the Excel correctness
-  work in plans 001–004.
 - **TMSCHEMA rowsets**: hardcoded stubs that don't affect Excel PivotTable
   usage; Power BI compatibility is explicitly out of scope per user
   direction.
+
+## Resolved independently (post-audit)
+
+- **SEC-04 (`.unwrap()` panic on malformed XMLA)**: fixed by replacing
+  with safe `find`/`and_then` chain in `handle_xmla`.
+- **DEPS-01 (dependency upgrades)**: axum 0.7→0.8, tower-http 0.5→0.6,
+  quick-xml 0.31→0.37, @malloydata/* 0.0.398→0.0.410.
+- **SEC-01 (bind 0.0.0.0, no body limit)**: changed default to 127.0.0.1,
+  added `BIND_ADDRESS` env var, added 1 MB `RequestBodyLimitLayer`.
+- **COR-01 (dead pub const)**: removed 11 unused constants from
+  `src/mdx/semantic.rs`.
+- **DX-01 (untracked project dirs)**: `git add project2/ project3/ project4/`.
+- **DOC-01 (stale README)**: removed deleted `project/` row, updated
+  test count 176→205, removed stale `--test-threads=1` requirement.
+- **DIR-01 (trace-replay)**: built `src/bin/trace_replay.rs`.
+- **Generated project smoke**: built `src/bin/seed_generated_db.rs`,
+  `data/seed_generated.sql`, `data/generated.db`.
+
+## Deferred for later planning
+
+- **Calendar hierarchies (Year -> Quarter -> Month -> Day)**: important for
+  Excel browsing, but deferred until the date-role contract (006-008) and
+  generated-project proof loop (009) are in place; otherwise the repo would
+  add hierarchy surface area before the underlying date semantics settle.

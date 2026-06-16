@@ -1,0 +1,7 @@
+{
+  "name": "Is Discontinued",
+  "dataType": "int64",
+  "sourceColumn": "isdiscontinued",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "23d0e088-bfeb-458c-8923-60e2e91fee3b"
+}

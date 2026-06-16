@@ -1,0 +1,7 @@
+{
+  "name": "Fixed Discount",
+  "dataType": "decimal",
+  "sourceColumn": "discount_fixed",
+  "sourceProviderType": "decimal",
+  "lineageTag": "66a10fe1-c879-4f95-9fac-a925f465ff6f"
+}
