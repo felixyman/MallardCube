@@ -306,6 +306,7 @@ mod tests {
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
+                    fallback_capability: None,
                     time_flag: None,
                 },
             ],
@@ -373,6 +374,7 @@ mod tests {
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
+                    fallback_capability: None,
                     time_flag: None,
                 },
                 MeasureDef {
@@ -385,6 +387,7 @@ mod tests {
                     numeric_precision: 18, numeric_scale: 2, expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
+                    fallback_capability: None,
                     time_flag: None,
                 },
             ],

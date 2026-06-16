@@ -188,10 +188,10 @@ Sample projects live at the repo root.
 
 | Project | Description |
 |---------|-------------|
-| `project2/` | Renamed variant proving name independence. |
-| `project3/` | Wider: 4 dims, 2 measures. Default startup project. |
+| `project2/` | Renamed variant proving name independence. 2 dims, 1 measure. |
+| `project3/` | Default startup. 5 dims (incl. Date with time intelligence), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
 | `project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
-| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, real sql_expr for Total Revenue. |
+| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 measures (Total Revenue + 3 fallback). |
 
 ## Converting SSAS Tabular models
 
@@ -284,14 +284,41 @@ For detailed documentation:
 - Malloy runtime with automatic direct-SQL fallback
 - Tabular Editor `.bim` structural conversion
 - Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
-- Explicit date-role dimension in the sample model (flag-based, not dynamic MDX function parsing)
+- Explicit date-role dimension (flag-based, not dynamic MDX function parsing)
+- Structured fallback SQL with capability gates (scalar-only, grouped-specific, universal)
+- Compatibility gate: discover + execute validation for converted projects
 
 **Partial / in progress:**
-- SQL fallback execution for converted complex measures
-- Star-schema join support at runtime
+- Fallback SQL for composite DAX measures (DIVIDE, CALCULATE, SUMX) — structural support exists, individual measure SQL must be written per model
+- Star-schema join execution at runtime
 
 **Not yet:**
-- Multi-level hierarchies
+- Multi-level hierarchies (Year → Quarter → Month → Day)
 - Postgres/MSSQL ingestion
 - Arrow/zero-copy transport
 - Security roles
+
+## Roadmap
+
+The project has completed its core engineering sprint (plans 001–010). Current
+direction:
+
+1. **Prove 3 real SSAS Tabular models end-to-end** — load real customer data into
+   DuckDB, convert via `convert_tabular`, pass the compatibility gate, and
+   connect Excel. This surfaces model-specific blockers before generalizing.
+
+2. **Minimal DAX measure support** — add conversion patterns for common DAX
+   (DIVIDE, CALCULATE with simple filters, SUMX over single-table iterators)
+   so more converted measures are executable without manual SQL.
+
+3. **Date dimension population** — auto-generate a populated `date_dim` table
+   from the converter when date-role tables are detected, so time intelligence
+   works out-of-box for converted projects.
+
+4. **Multi-level hierarchies** — only after 3 real models prove single-level
+   hierarchies are sufficient for Excel browsing in practice.
+
+Bugs and technical debt are tracked in `plans/README.md` and the
+`considered and rejected` / `deferred` sections. The top 3 active concerns
+are the converter measure pipeline, the bound-adapter exhaustiveness check
+(previously SEC-04), and the multi-fact rendering known gap.

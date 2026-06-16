@@ -8,7 +8,7 @@
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::model::{SemanticModel, FallbackShape};
+use crate::engine::model::{SemanticModel, FallbackCapability};
 use crate::engine::sql::sql_for_query_plan;
 use crate::proxy_project;
 
@@ -271,11 +271,11 @@ pub fn execute_plan_with_backend<B: QueryBackend>(
     let fallback_result = match plan {
         QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
             match model.classify_fallback(measure) {
-                Some(FallbackShape::Stub) => {
+                Some(FallbackCapability::Stub) => {
                     eprintln!("plan: measure '{}' fallback SQL is a TODO stub — returning empty", measure);
                     Some(QueryResult::Empty)
                 }
-                Some(FallbackShape::ScalarOnly) => match plan {
+                Some(FallbackCapability::ScalarOnly) => match plan {
                     QueryPlan::Total { .. } => None,
                     QueryPlan::GroupBy { .. } => {
                         eprintln!("plan: measure '{}' fallback SQL is scalar-only, cannot satisfy GroupBy — returning empty", measure);
@@ -283,7 +283,22 @@ pub fn execute_plan_with_backend<B: QueryBackend>(
                     }
                     _ => Some(QueryResult::Empty),
                 },
-                Some(FallbackShape::Full) => None,
+                Some(FallbackCapability::GroupedSpecific(ref dims)) => match plan {
+                    QueryPlan::GroupBy { group_by, .. } => {
+                        if group_by == dims {
+                            None // declared dimensions match — proceed
+                        } else {
+                            eprintln!("plan: measure '{}' fallback SQL only supports grouping by {:?}, got {:?} — returning empty",
+                                measure, dims, group_by);
+                            Some(QueryResult::Empty)
+                        }
+                    }
+                    _ => {
+                        eprintln!("plan: measure '{}' fallback SQL is grouped-specific, cannot satisfy non-GroupBy plan — returning empty", measure);
+                        Some(QueryResult::Empty)
+                    }
+                },
+                Some(FallbackCapability::Universal) => None,
                 None => None,
             }
         }

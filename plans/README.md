@@ -17,7 +17,7 @@ honor its STOP conditions, and update your row when done.
 | 007  | Generalize time intelligence to measure-scoped date roles | P1 | L | 006 | DONE |
 | 008  | Teach the Tabular converter to emit runtime time metadata | P1 | M | 006, 007 | DONE |
 | 009  | Raise generated_project to an Excel compatibility gate | P2 | M | 008 | DONE |
-| 010  | Make converted complex measures behave like real Excel measures | P1 | L | 008, 009 | TODO |
+| 010  | Make converted complex measures behave like real Excel measures | P1 | L | 008, 009 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 

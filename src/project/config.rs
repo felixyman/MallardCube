@@ -189,6 +189,8 @@ pub struct MeasureConfig {
     pub sql_fallback_file: Option<String>,
     #[serde(default)]
     pub time_intelligence: Option<MeasureTimeIntelligenceConfig>,
+    #[serde(default)]
+    pub fallback_capability: Option<String>,
 }
 
 fn default_aggregator() -> u32 { 1 }

@@ -24,16 +24,16 @@ How the SSAS Proxy works, module by module. For new developers.
      |  Discover -> rowset XML from model (xmla/discover/*.rs)
      |  Execute  -> MDX statement
      v
- MDX string
-   -> ParsedMdx (mdx/parser.rs, nom parser)
-   -> SemanticQuery (mdx/semantic.rs)
-   -> QueryPlan { Total | GroupBy | Count | Empty } (engine/plan.rs)
-   -> SQL or Malloy compilation (engine/sql.rs or engine/malloy.rs)
-   -> DuckDB execution (backend/mod.rs)
-   -> QueryResult { Scalar | Grouped | Pairs | Count | Empty }
-   -> Cellset XML rendering (execute/builders.rs + execute/axis_members.rs)
-   -> SOAP envelope wrap (xmla/response.rs)
-   -> HTTP response
+  MDX string
+    -> ParsedMdx (mdx/parser.rs, nom parser, cube-agnostic)
+    -> SemanticQuery (mdx/semantic.rs, sourced from ParsedMdx struct fields)
+    -> QueryPlan { Total | GroupBy | Count | Empty } (engine/plan.rs)
+    -> SQL or Malloy compilation (engine/sql.rs or engine/malloy.rs)
+    -> DuckDB execution with fallback capability gates (backend/mod.rs)
+    -> QueryResult { Scalar | Grouped | Pairs | Count | Empty }
+    -> Cellset XML rendering (execute/render.rs + execute/axis_members.rs)
+    -> SOAP envelope wrap (xmla/response.rs)
+    -> HTTP response
 ```
 
 ### Key data types
@@ -102,6 +102,8 @@ src/
       measure_groups.rs, measuregroup_dimensions.rs
       tmschema.rs                Tabular metadata rowsets
 
+  xmla_trace.rs                  NDJSON trace capture (XMLA_TRACE=1)
+
   backend/                       Database backends
     mod.rs                       DuckDB backend, QueryBackend trait, demo data generation
 
@@ -112,6 +114,9 @@ src/
     convert_tabular.rs           Tabular Editor .bim to Malloy + DuckDB converter
     inventory.rs                 Model inventory extractor
     seed_sql.rs                  Synthetic data SQL generator
+    trace_replay.rs              XMLA trace replay/compatibility validator
+    extract_trace_mdx.rs         Extract unique ExecuteStatement MDX from traces
+    seed_generated_db.rs         Generate synthetic data for generated_project
 ```
 
 ## Request dispatch in detail
@@ -180,27 +185,29 @@ See `docs/naming-contract.md` for full rules.
 
 | Component | Status | Notes |
 |---|---|---|
-| `engine/model.rs` | Stable | Semantic model types, well-documented |
-| `engine/plan.rs` | Stable | Query plan, plan construction, plan execution |
-| `engine/sql.rs` | Stable | SQL emission from QueryPlan |
+| `engine/model.rs` | Stable | Semantic model types, FallbackCapability, DateDimDef, multi-fact support |
+| `engine/plan.rs` | Stable | Query plan, plan construction, fallback execution with capability gates |
+| `engine/sql.rs` | Stable | SQL emission from QueryPlan, date-dim subquery, relationship joins |
 | `engine/normalize.rs` | Stable | Plan key normalization for caching |
 | `engine/timing.rs` | Stable | Timing instrumentation |
 | `engine/malloy.rs` | Stable | Malloy emission |
-| `project/config.rs` | Stable | Config schema |
-| `project/project.rs` | Stable | Project loader, model builder |
-| `xmla/discover/*.rs` | Stable | Metadata rowset generation |
+| `project/config.rs` | Stable | Config schema: time_intelligence, fallback_capability, is_date_role |
+| `project/project.rs` | Stable | Project loader, model builder, parse_fallback_capability |
+| `xmla/discover/*.rs` | Stable | Metadata rowset generation from model |
 | `xmla/response.rs` | Stable | SOAP envelope wrapper |
 | `xmla/cellset.rs` | Stable | Cellset/axis/member config types |
 | `xmla/parser.rs` | Stable | XMLA request parser |
-| `backend/mod.rs` | Stable | DuckDB backend |
-| `mdx/parser.rs` | Stable-ish | Nom parser, covers known patterns |
-| `mdx/semantic.rs` | Needs work | Some hardcoded dimension constants remain |
+| `xmla_trace.rs` | Stable | NDJSON trace capture for compatibility gate |
+| `backend/mod.rs` | Stable | DuckDB backend, date_dim seeding |
+| `mdx/parser.rs` | Stable | Nom parser, cube-agnostic, structural axis dimension detection |
+| `mdx/semantic.rs` | Stable | Classification driven by ParsedMdx structural fields |
+| `execute/dispatch.rs` | Stable | Statement routing, compatibility gate tests |
 | `execute/builders.rs` | Needs cleanup | Too large, mixed responsibilities |
 | `execute/axis_members.rs` | Needs cleanup | Heavy, some model-agnostic gaps |
 | `src/main.rs` | Needs cleanup | Mixed concerns, large match statement |
 | `src/lib.rs` | Transitional | Legacy flat re-exports should be phased out |
 | `engine/malloy_node.rs` | Legacy | One-shot compiler (replaced by long-lived) |
-| `bin/convert_tabular.rs` | Active | Tabular converter, growing feature set |
+| `bin/convert_tabular.rs` | Active | Tabular converter: fact detection, date-role detection, time metadata, DAX classification |
 
 ## Multi-fact semantics
 
@@ -217,23 +224,29 @@ When a project uses multiple fact tables (`fact_tables` in `proxy-config.json`):
 ## Test strategy
 
 ```bash
-cargo test --lib -- --test-threads=1
+cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
+- 221 tests covering MDX parsing, semantic classification, plan generation,
+  SQL and Malloy emission, compile path, result parity, metadata rowsets,
+  multi-fact routing, end-to-end cellset rendering, Excel replay/oracle
+  verification, time intelligence, and compatibility-gate assertions.
 - `engine/parity.rs` - Direct SQL vs Malloy result parity.
-- Worker-dependent tests require serialization (`--test-threads=1`).
 - Shared test fixtures: `src/test_support/fixtures.rs`.
 - `project/project.rs` - Config parsing and model building.
-- `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses.
+- `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses,
+  compatibility gate tests.
 - Benchmark: `cargo bench` runs `benches/pipeline.rs`.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `PROXY_CONFIG` | Path to `proxy-config.json` (default: `../project3/proxy-config.json`) |
+| `PROXY_CONFIG` | Path to `proxy-config.json` (default: `project3/proxy-config.json`) |
 | `MALLOY_RUNTIME` | Set to `1` to enable Malloy compile path |
+| `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
+| `BIND_ADDRESS` | Override listen address:port (default: `127.0.0.1:8080`) |
 
 ## Tools
 
@@ -243,6 +256,9 @@ cargo test --lib -- --test-threads=1
 | `cargo run --bin convert_tabular -- <src> <dest>` | Convert Tabular Editor folder to proxy project |
 | `cargo run --bin inventory -- <src>` | Extract model inventory from Tabular Editor folder |
 | `cargo run --bin seed_sql` | Generate DuckDB seed SQL from demo data generation |
+| `cargo run --bin trace_replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
+| `cargo run --bin extract_trace_mdx [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
+| `cargo run --bin seed_generated_db` | Seed generated_project DuckDB file with synthetic data |
 
 ## Appendix: Config reference
 
@@ -260,6 +276,8 @@ Every field in `proxy-config.json`, with descriptions and defaults.
 | `malloy_model_file` | string | required | Path to `.malloy` file, relative to config |
 | `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with synthetic in-memory data |
 | `fact_tables` | array | `[]` | Fact table definitions (multi-fact mode) |
+| `relationships` | array | `[]` | Dimension-to-fact table relationship definitions |
+| `time_intelligence` | object\|null | `null` | Global time-intelligence configuration (date_dimension block) |
 | `dimensions` | array | required | Dimension definitions |
 | `measures` | array | required | Measure definitions |
 
@@ -293,6 +311,7 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | `cardinality_hint` | u32 | required | Cardinality hint for XMLA metadata |
 | `fact_table` | string\|null | `null` | Bind to a specific fact table (multi-fact mode). `null` = primary fact table |
 | `shared` | bool | `false` | If true, this dimension is compatible with all fact tables |
+| `is_date_role` | bool | `false` | Marks this dimension as a date-role (calendar) dimension for time intelligence |
 
 **Dimension scoping rules:**
 - `shared: true` — dimension is compatible with all measures. Use for truly cross-fact dimensions (e.g. date).
@@ -320,6 +339,9 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | `numeric_precision` | u16 | `18` | XMLA NUMERIC_PRECISION |
 | `numeric_scale` | i16 | `2` | XMLA NUMERIC_SCALE |
 | `expression` | string | `""` | Original DAX expression (informational) |
+| `sql_fallback_file` | string\|null | `null` | Path to DuckDB SQL fallback file (complex measures) |
+| `fallback_capability` | string\|null | `null` | Shape capability: `"ScalarOnly"`, `"Universal"`, or `null` (auto-detect) |
+| `time_intelligence` | object\|null | `null` | Per-measure time intelligence config: `{"dimension_id", "flag_column"}` |
 
 ### db_path resolution
 
@@ -329,4 +351,31 @@ data (20k rows of `sales_fact`).
 
 When set, both the Rust backend and the Malloy JS worker open the same file.
 The JS worker receives the resolved path via the `DUCKDB_PATH` env var.
+
+### TimeIntelligenceConfig
+
+Top-level `time_intelligence.date_dimension` block:
+
+| Field | Type | Description |
+|---|---|---|
+| `dimension_id` | string | Which dimension serves as the calendar/date dimension |
+| `table_name` | string | DuckDB date dimension table name (default: `"date_dim"`) |
+| `date_key_column` | string | Date-key column joining to fact table (default: `"date_key"`) |
+| `full_date_column` | string | Full DATE-type column (default: `"full_date"`) |
+| `flag_columns` | object | Flag column names for period detection |
+| `flag_columns.year_column` | string | Year column (default: `"year"`) |
+| `flag_columns.quarter_column` | string | Quarter column (default: `"quarter"`) |
+| `flag_columns.month_column` | string | Month column (default: `"month"`) |
+| `flag_columns.ytd_flag_column` | string | YTD flag (default: `"ytd_flag"`) |
+| `flag_columns.prior_year_ytd_flag_column` | string | Prior-year YTD flag (default: `"prior_year_ytd_flag"`) |
+| `flag_columns.current_year_flag_column` | string | Current-year flag (default: `"current_year_flag"`) |
+| `flag_columns.qtd_flag_column` | string | Quarter-to-date flag (default: `"qtd_flag"`) |
+| `flag_columns.mtd_flag_column` | string | Month-to-date flag (default: `"mtd_flag"`) |
+
+Per-measure `time_intelligence` block:
+
+| Field | Type | Description |
+|---|---|---|
+| `dimension_id` | string\|null | Which date-role dimension this measure binds to |
+| `flag_column` | string | Which flag column to filter on (e.g. `"ytd_flag"`) |
 

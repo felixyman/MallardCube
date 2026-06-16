@@ -10,9 +10,17 @@ use std::path::Path;
 use std::sync::OnceLock;
 #[cfg(test)]
 use std::cell::RefCell;
-use crate::engine::model::{SemanticModel, DimensionDef, MeasureDef, Dialect, FactTable, RelationshipDef};
+use crate::engine::model::{SemanticModel, DimensionDef, MeasureDef, Dialect, FactTable, RelationshipDef, FallbackCapability};
 use crate::engine::plan::QueryPlan;
 use crate::proxy_config::ProxyConfig;
+
+fn parse_fallback_capability(s: &str) -> FallbackCapability {
+    match s {
+        "ScalarOnly" => FallbackCapability::ScalarOnly,
+        "Universal" => FallbackCapability::Universal,
+        _ => FallbackCapability::Stub,
+    }
+}
 
 /// Module-level project singleton. `None` until `init_project()` is called.
 static PROJECT: OnceLock<ProxyProject> = OnceLock::new();
@@ -170,6 +178,7 @@ impl ProxyProject {
                         expression: "SUM('Faktatabell'[Sales])".into(),
                         sql_fallback_file: None,
                         time_intelligence: None,
+                        fallback_capability: None,
                     },
                 ],
             },
@@ -271,6 +280,7 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             sql_fallback_sql: fallback_sql,
             time_flag: mc.time_intelligence.as_ref().map(|ti| ti.flag_column.clone()),
             date_dimension_id: mc.time_intelligence.as_ref().and_then(|ti| ti.dimension_id.clone()),
+            fallback_capability: mc.fallback_capability.as_deref().map(parse_fallback_capability),
         }
     }).collect();
 

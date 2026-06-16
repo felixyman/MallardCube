@@ -372,6 +372,7 @@ mod tests {
                     expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
+                    fallback_capability: None,
                     time_flag: None,
                 },
                 MeasureDef {
@@ -393,6 +394,7 @@ mod tests {
                     expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
+                    fallback_capability: None,
                     time_flag: None,
                 },
             ],

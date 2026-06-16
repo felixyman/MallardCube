@@ -19,13 +19,19 @@ pub enum Dialect {
     DuckDB,
 }
 
-/// The shape a fallback SQL query is compatible with.
-pub enum FallbackShape {
-    /// Scalar only — works for Total plans, not GroupBy.
+/// The shape(s) a fallback SQL query is compatible with.
+/// Used to gate execution at plan time — unsupported shapes return Empty.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FallbackCapability {
+    /// Execute for any plan shape (Total, GroupBy 1D, GroupBy 2D).
+    /// The fallback SQL is expected to handle any grouping the proxy sends it.
+    Universal,
+    /// Only for Total (scalar, no GROUP BY) plans.
     ScalarOnly,
-    /// Full — the SQL text is expected to work for all plan shapes.
-    Full,
-    /// Placeholder — the SQL is a TODO stub; do not execute.
+    /// Only for GroupBy plans with the specific declared dimension IDs.
+    /// The SQL text has its own GROUP BY that must align with these dimensions.
+    GroupedSpecific(Vec<DimId>),
+    /// Placeholder / TODO stub — always return Empty.
     Stub,
 }
 
@@ -140,6 +146,9 @@ pub struct MeasureDef {
     /// Which date-role dimension this measure binds to.
     /// When None, falls back to the global date_dim.
     pub date_dimension_id: Option<String>,
+    /// Deserialized fallback capability contract.
+    /// When set, takes precedence over auto-classification from SQL text.
+    pub fallback_capability: Option<FallbackCapability>,
 }
 
 impl MeasureDef {
@@ -315,18 +324,24 @@ impl SemanticModel {
     }
 
     /// Classify a measure's fallback SQL by supported shape.
-    /// Returns `None` when there is no fallback SQL.
-    pub fn classify_fallback(&self, meas_id: &str) -> Option<FallbackShape> {
+    /// Returns `None` when there is no fallback SQL or sql_expr is non-null
+    /// (the measure runs through normal SQL generation).
+    pub fn classify_fallback(&self, meas_id: &str) -> Option<FallbackCapability> {
         let meas = self.meas_def(meas_id);
+        // If the measure has an explicit capability declared, use it.
+        if let Some(cap) = &meas.fallback_capability {
+            return Some(cap.clone());
+        }
+        // Otherwise auto-classify from the SQL text.
         let sql = meas.sql_fallback_sql.as_deref()?;
         let upper = sql.to_uppercase();
         if upper.trim() == "SELECT 1 AS DUMMY;" || upper.contains("TODO") {
-            return Some(FallbackShape::Stub);
+            return Some(FallbackCapability::Stub);
         }
         if !upper.contains("GROUP BY") {
-            return Some(FallbackShape::ScalarOnly);
+            return Some(FallbackCapability::ScalarOnly);
         }
-        Some(FallbackShape::Full)
+        Some(FallbackCapability::Universal)
     }
 }
 
@@ -400,6 +415,7 @@ pub fn default_model() -> SemanticModel {
                 sql_fallback_sql: None,
                 time_flag: None,
                 date_dimension_id: None,
+                fallback_capability: None,
             },
         ],
         relationships: vec![],
