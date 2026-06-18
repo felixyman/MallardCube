@@ -77,6 +77,16 @@
 
 All tables use M (Power Query) partitions and must be loaded into DuckDB manually.
 
+**Quick start (with date-dimension bootstrap):**
+
+```
+duckdb data/f_undersokning.db < bootstrap.sql
+```
+
+This creates the schema, seeds a populated `date_dim` calendar table, and
+creates the DuckDB schema and seeded `date_dim`. (The `db_path` in `proxy-config.json` already points at this file.) Then load your own data into the
+listed tables below.
+
 Run `schema.sql` to create the tables, then load data via:
 
 - DuckDB CLI: `INSERT INTO ... SELECT ... FROM 'source.csv'`

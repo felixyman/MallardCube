@@ -18,8 +18,39 @@ honor its STOP conditions, and update your row when done.
 | 008  | Teach the Tabular converter to emit runtime time metadata | P1 | M | 006, 007 | DONE |
 | 009  | Raise generated_project to an Excel compatibility gate | P2 | M | 008 | DONE |
 | 010  | Make converted complex measures behave like real Excel measures | P1 | L | 008, 009 | DONE |
+| 011  | Add a converted-project qualification command | P1 | M | — | DONE |
+| 012  | Make generated_retail_analytics low-touch under the current converter | P1 | L | 011 | DONE |
+| 013  | Generate runnable bootstrap assets for converted projects | P1 | L | 011 | DONE |
+| 014  | Retire generated_project's remaining TODO fallback stubs | P1 | M | 011, 013 | DONE |
+| 015  | Add end-to-end value assertions for converted measures | P1 | M | — | DONE |
+| 016  | Stop shipping placeholder SQL as executable converted measures | P1 | M | 015 | DONE |
+| 017  | Resolve `db_path` relative to the config file everywhere | P1 | M | — | DONE |
+| 018  | Remove the `qualify <config> <trace>` singleton-init crash | P1 | S | 017 | DONE |
+| 019  | Make fallback capability detection conservative for scalar outer queries | P1 | M | 015 | DONE |
+| 020  | Reconcile the public CLI and documentation contract | P2 | S | 016, 017, 018 | DONE |
+| 021  | Retire the two retail stub fallbacks through converter-owned SQL generation | P1 | M | 015, 016, 019 | DONE |
+| 022  | Genericize converter fallback SQL lowering | P1 | M | 021 | DONE |
+| 023  | Third real model intake proof | P1 | L | 022 | TODO |
+| 024  | Security-role decision gate | P1 | L | 022 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
+
+## Reconcile Status
+
+- Reconciled on 2026-06-17 against the current working tree on git HEAD `c89764f`.
+- DONE plans 001-014 were spot-checked with cheap current-state verification.
+- Verification snapshot:
+  - `cargo test --lib` -> `229 passed; 0 failed`
+  - `cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json` -> `PARTIAL` (unsupported security role remains)
+  - `cargo run --bin xmla_proxy -- qualify generated_retail_analytics/proxy-config.json` -> `BLOCKED` (2 retail fallback measures still intentionally stubbed)
+- No `TODO`, `IN PROGRESS`, or `BLOCKED` plan rows remain in this index.
+- Next work requires a fresh planning pass rather than more reconciliation on this batch.
+- Fresh planning batch added below on 2026-06-17; current next work is plans 015-021.
+- Plans 015-021 are now DONE. Fresh batch 022-024 added on 2026-06-17.
+- Current verification snapshot (post-021):
+  - `cargo test --lib` -> `234 passed; 0 failed`
+  - `cargo run --bin xmla_proxy -- qualify generated_retail_analytics/proxy-config.json` -> `READY`
+  - `cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json` -> `PARTIAL` (unsupported security role)
 
 ## Dependency notes
 
@@ -42,6 +73,42 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   compatibility gate until conversion output matches the runtime time model.
 - 010 requires 008 and 009 because converted complex measures need both the
   upgraded conversion metadata and a replayable generated-project proof loop.
+- 011 starts the next batch by turning the existing converter, inventory, and
+  replay pieces into one explicit readiness gate for converted projects.
+- 012 depends on 011 because retail-conversion improvements should be measured
+  against the new qualification loop, not only against hand inspection.
+- 013 depends on 011 because bootstrap/date assets should satisfy an explicit
+  readiness contract rather than introduce more one-off smoke fixes.
+- 014 depends on 011 and 013 because retiring the remaining healthcare stubs
+  should be proved against the qualification gate and the standardized runnable
+  converted-project bootstrap path.
+- 015 starts the next batch by turning converted-project measure coverage into
+  real execution/value assertions instead of XML-envelope or raw-DuckDB smoke
+  tests.
+- 016 depends on 015 because placeholder-SQL cleanup should be locked to
+  failing value tests rather than done speculatively.
+- 017 is independent and can start immediately because config-relative path
+  normalization is already a correctness bug across serve / qualify / replay.
+- 018 depends on 017 because it touches the same qualify / trace tooling flow
+  and should reuse the shared path-handling contract rather than introducing a
+  second init-path special case.
+- 019 depends on 015 because fallback capability tightening should be driven by
+  grouped-execution characterization tests first.
+- 020 depends on 016, 017, and 018 because the docs/CLI contract should only be
+  frozen after placeholder SQL, path semantics, and qualify/replay behavior are
+  settled.
+- 021 depends on 015, 016, and 019 because retiring the two retail stubs needs
+  execution assertions, an honest non-placeholder converted-measure contract,
+  and conservative fallback capability handling.
+- 022 depends on 021 because it removes the retail-specific hardcoding that
+  Plan 021 introduced. The generic lowering must preserve the retail win while
+  making it repeatable for other models.
+- 023 depends on 022 because the third model intake proof is only meaningful
+  if the converter lowering is generic, not tuned for retail.
+- 024 depends on 022 because the security-role decision gate should land after
+  the converter is generic, so role metadata emission can be tested against
+  multiple models. Roles and converter lowering touch the same converter
+  output path, so landing them in sequence avoids merge conflicts.
 
 ## Findings considered and rejected
 
@@ -74,6 +141,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **DIR-01 (trace-replay)**: built `src/bin/trace_replay.rs`.
 - **Generated project smoke**: built `src/bin/seed_generated_db.rs`,
   `data/seed_generated.sql`, `data/generated.db`.
+- **Plan 011 (qualify command)**: built `src/tools/qualify.rs`, wired into
+  single binary as `qualify` subcommand. Emits READY/PARTIAL/BLOCKED verdicts
+  from machine-readable project state.
 
 ## Deferred for later planning
 

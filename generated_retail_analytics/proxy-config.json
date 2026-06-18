@@ -5,7 +5,7 @@
   "table_name": "sales",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
-  "db_path": null,
+  "db_path": "data/sales.db",
   "fact_tables": [
     {
       "id": "default",
@@ -154,66 +154,64 @@
       "fact_table": "default",
       "malloy_name": "gross_margin_%",
       "physical_expr": "",
-      "sql_expr": "",
-      "sql_fallback_file": "sql_fallback/gross_margin_pct.sql",
-      "fallback_capability": "ScalarOnly",
+      "sql_expr": "null",
       "caption": "Gross Margin %",
       "display_name": "Gross Margin %",
-      "description": "[manual]  = DIVIDE ( [Gross Profit], [Total Revenue], 0 ) // Gross margin as a percentage (profit / revenue)",
+      "description": "[sql_fallback]  = DIVIDE ( [Gross Profit], [Total Revenue], 0 ) // Gross margin as a percentage (profit / revenue)",
       "format_string": "#,##0.00",
       "units": "",
       "ordinal": 1,
       "visible": true,
-      "measure_group_name": "SALES"
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/gross_margin_%.sql"
     },
     {
       "id": "Gross Profit",
       "fact_table": "default",
       "malloy_name": "gross_profit",
       "physical_expr": "",
-      "sql_expr": "",
-      "sql_fallback_file": "sql_fallback/gross_profit.sql",
-      "fallback_capability": "ScalarOnly",
+      "sql_expr": "null",
       "caption": "Gross Profit",
       "display_name": "Gross Profit",
-      "description": "[manual]  = [Total Revenue] - [Total COGS] // Gross profit = revenue - COGS",
+      "description": "[sql_fallback]  = [Total Revenue] - [Total COGS] // Gross profit = revenue - COGS",
       "format_string": "#,##0.00",
       "units": "",
       "ordinal": 2,
       "visible": true,
-      "measure_group_name": "SALES"
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/gross_profit.sql"
     },
     {
       "id": "Total COGS",
       "fact_table": "default",
       "malloy_name": "total_cogs",
       "physical_expr": "",
-      "sql_expr": "",
-      "sql_fallback_file": "sql_fallback/total_cogs.sql",
-      "fallback_capability": "ScalarOnly",
+      "sql_expr": "null",
       "caption": "Total COGS",
       "display_name": "Total COGS",
-      "description": "[manual]  = SUMX ( FILTER ( 'Sales', 'Sales'[Is Return] = 0 ), 'Sales'[Sales Quantity] * RELATED ( 'Products'[Unit Cost] ) ) // Cost of Goods Sold (COGS) for non-return transactions",
+      "description": "[sql_fallback]  = SUMX ( FILTER ( 'Sales', 'Sales'[Is Return] = 0 ), 'Sales'[Sales Quantity] * RELATED ( 'Products'[Unit Cost] ) ) // Cost of Goods Sold (COGS) for non-return transactions",
       "format_string": "#,##0.00",
       "units": "",
       "ordinal": 3,
       "visible": true,
-      "measure_group_name": "SALES"
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/total_cogs.sql"
     },
     {
       "id": "Total Revenue",
       "fact_table": "default",
       "malloy_name": "total_revenue",
-      "physical_expr": "revenue.sum()",
-      "sql_expr": "SUM(CASE WHEN isreturn = 0 THEN CAST(net AS DOUBLE) ELSE 0 END)",
+      "physical_expr": "",
+      "sql_expr": "null",
       "caption": "Total Revenue",
       "display_name": "Total Revenue",
-      "description": "[manual]  = CALCULATE ( SUM ( 'Sales'[Net Sales (Revenue)] ), 'Sales'[Is Return] = 0 ) // Total revenue excluding returns",
+      "description": "[sql_fallback]  = CALCULATE ( SUM ( 'Sales'[Net Sales (Revenue)] ), 'Sales'[Is Return] = 0 ) // Total revenue excluding returns",
       "format_string": "#,##0.00",
       "units": "",
       "ordinal": 4,
       "visible": true,
-      "measure_group_name": "SALES"
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/total_revenue.sql"
     }
   ]
 }

@@ -228,7 +228,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 221 tests covering MDX parsing, semantic classification, plan generation,
+- 234 tests covering MDX parsing, semantic classification, plan generation,
   SQL and Malloy emission, compile path, result parity, metadata rowsets,
   multi-fact routing, end-to-end cellset rendering, Excel replay/oracle
   verification, time intelligence, and compatibility-gate assertions.
@@ -250,15 +250,15 @@ cargo test --lib
 
 ## Tools
 
-| Binary | Purpose |
+| Command | Purpose |
 |---|---|
-| `cargo run` | Start the proxy server (default binary) |
-| `cargo run --bin convert_tabular -- <src> <dest>` | Convert Tabular Editor folder to proxy project |
-| `cargo run --bin inventory -- <src>` | Extract model inventory from Tabular Editor folder |
-| `cargo run --bin seed_sql` | Generate DuckDB seed SQL from demo data generation |
-| `cargo run --bin trace_replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
-| `cargo run --bin extract_trace_mdx [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
-| `cargo run --bin seed_generated_db` | Seed generated_project DuckDB file with synthetic data |
+| `cargo run --bin xmla_proxy` | Start the proxy server |
+| `cargo run --bin xmla_proxy -- convert-tabular <src> <dest>` | Convert Tabular Editor folder to proxy project |
+| `cargo run --bin xmla_proxy -- inventory <src>` | Extract model inventory from Tabular Editor folder |
+| `cargo run --bin xmla_proxy -- qualify <config> [trace]` | Emit READY/PARTIAL/BLOCKED readiness verdict |
+| `cargo run --bin xmla_proxy -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
+| `cargo run --bin xmla_proxy -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
+| `cargo run --bin xmla_proxy -- seed-generated-db` | Seed generated_project DuckDB file with synthetic data |
 
 ## Appendix: Config reference
 

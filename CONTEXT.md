@@ -18,9 +18,9 @@
 - `src/bin/convert_tabular.rs` — Tabular Editor converter with fact detection, date-role detection, time metadata emission, DAX classification.
 - `src/bin/trace_replay.rs` — XMLA trace replay with discover + execute validation (compatibility gate).
 - `src/xmla_trace.rs` — NDJSON trace capture behind `XMLA_TRACE=1`.
-- **Test suite: 221 passing tests** (zero failures, no `--test-threads=1` required).
-- **Plans 001–010 complete** (see `plans/README.md`).
-- **Three converted projects**: `generated_project` (large Swedish healthcare), `generated_retail_analytics` (retail star schema with real measures).
+- **Test suite: 234 passing tests** (zero failures).
+- **Plans 001–019 complete** (see `plans/README.md`).
+- **Three converted projects**: `generated_project` (large Swedish healthcare), `generated_retail_analytics` (retail star schema), plus demo `project3`.
 
 ## Scope boundaries (current)
 - **Works**: Discover handshake, PivotTable execution (filter, drilldown, crossjoin, collapse), 2 fact tables with shared/scoped dims, time intelligence via date-dim flags (YTD/prior/QTD/MTD), fallback SQL with capability gates, compatibility gate.

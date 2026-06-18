@@ -363,7 +363,18 @@ pub(crate) fn build_cchildren_for_measures(query: &SemanticQuery, _result: &Quer
 }
 
 /// Route a classified query+result to the correct cellset builder.
+fn empty_cellset(query: &SemanticQuery) -> String {
+    render_response(
+        vec![full_slicer_axis(query)],
+        vec![],
+        &query.cell_props,
+    )
+}
+
 pub(crate) fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
+    if matches!(result, QueryResult::Empty) {
+        return empty_cellset(query);
+    }
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, &result),
         SemanticQueryKind::ChildrenCountLeafProduct => {

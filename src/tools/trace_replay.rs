@@ -32,8 +32,12 @@ pub fn run(args: Vec<String>) -> i32 {
         .expect("init project");
     let p = crate::proxy_project::project();
 
-    // Init backend from config
-    crate::backend::init_backend(p.config.db_path.as_deref())
+    // Init backend from config — resolve db_path relative to config dir
+    let db_path = crate::proxy_project::resolve_db_path(
+        config_path.unwrap_or("."),
+        p.config.db_path.as_deref(),
+    );
+    crate::backend::init_backend(db_path.as_deref())
         .expect("init backend");
 
     eprintln!("Project: {} | Cube: {}", p.config.catalog, p.config.cube);

@@ -1,10 +1,15 @@
--- Gross Profit: Total Revenue - Total COGS
--- DAX: [Total Revenue] - [Total COGS]
-WITH revenue AS (
-    SELECT COALESCE(SUM(CASE WHEN isreturn = 0 THEN CAST(net AS DOUBLE) ELSE 0 END), 0) AS val FROM sales
-),
-cogs AS (
-    SELECT COALESCE(SUM(CASE WHEN s.isreturn = 0 THEN s.qty * CAST(p.unitcost AS DOUBLE) ELSE 0 END), 0) AS val
-    FROM sales s JOIN products p ON s.productid = p.productid
-)
-SELECT revenue.val - cogs.val AS value FROM revenue, cogs
+-- Auto-generated from DAX: [Total Revenue] - [Total COGS]
+-- Arithmetic between measures
+
+SELECT COALESCE((-- Auto-generated from DAX: CALCULATE(SUM('Sales'[Net Sales(Revenue)]), 'Sales'[Is Return] = 0)
+-- CALCULATE(SUM(col), filter)
+
+SELECT COALESCE(SUM(CAST(net AS DOUBLE)), 0) AS value
+FROM sales
+WHERE isreturn = 0), 0) - COALESCE((-- Auto-generated from DAX: SUMX(FILTER('Sales', 'Sales'[Is Return] = 0), 'Sales'[Sales Quantity] * RELATED('Products'[Unit Cost]))
+-- SUMX(FILTER(...), qty * RELATED(dim.col))
+
+SELECT COALESCE(SUM(f.qty * CAST(d.unitcost AS DOUBLE)), 0) AS value
+FROM sales f
+JOIN products d ON f.productid = d.productid
+WHERE f.isreturn = 0), 0) AS value;

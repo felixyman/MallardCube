@@ -5,7 +5,6 @@ source: sales is duckdb.table('sales') extend {
   join_one: promotions with promotion_id
   join_one: customers with customer_id
 
-  measure: total_revenue is SUM(CASE WHEN isreturn = 0 THEN CAST(net AS DOUBLE) ELSE 0 END)
 }
 
 source: dates is duckdb.table('dates') extend {

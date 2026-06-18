@@ -62,10 +62,24 @@ pub fn run(args: Vec<String>) -> i32 {
         };
         let out_dir = args.get(2).cloned().unwrap_or_else(|| "generated_project".into());
 
-    let model = parse_model(&src_dir);
+    let mut model = parse_model(&src_dir);
 
     fs::create_dir_all(&out_dir).expect("create output dir");
     fs::create_dir_all(format!("{out_dir}/sql_fallback")).ok();
+
+    // Reclassify "simple" measures whose SQL hints return None (placeholder)
+    // as "sql_fallback" so the runtime never executes placeholder SQL.
+    for meas in model.fact_table.measures.iter_mut()
+        .chain(model.dimensions.iter_mut().flat_map(|t| &mut t.measures))
+        .chain(model.date_roles.iter_mut().flat_map(|t| &mut t.measures))
+    {
+        if meas.classification == "simple" {
+            let dax_expr = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
+            if dax_to_sql_hint(dax_expr, &meas.classification).is_none() {
+                meas.classification = "sql_fallback".to_string();
+            }
+        }
+    }
 
     // Generate SQL fallback files
     for meas in &model.fact_table.measures {
@@ -80,6 +94,25 @@ pub fn run(args: Vec<String>) -> i32 {
     fs::write(format!("{out_dir}/model.malloy"), render_malloy(&model)).expect("write malloy");
     fs::write(format!("{out_dir}/schema.sql"), render_schema(&model)).expect("write schema");
     fs::write(format!("{out_dir}/conversion-report.md"), render_report(&model)).expect("write report");
+
+    // Bootstrap assets: seed_date_dim.sql for time-intelligence projects
+    if !model.date_roles.is_empty() {
+        let seed_sql = include_str!("../../data/seed_date_dim.sql");
+        fs::write(format!("{out_dir}/seed_date_dim.sql"), seed_sql).ok();
+
+        let cube_db = format!("{}.db", malloy_name(&model.cube));
+        fs::create_dir_all(format!("{out_dir}/data")).ok();
+        let bootstrap = format!(
+            "-- Bootstrap script for {cube}\n\
+             -- Run against DuckDB to create a runnable database.\n\
+             --   duckdb {cube_db} < bootstrap.sql\n\n\
+             .read schema.sql\n\
+             .read seed_date_dim.sql\n",
+            cube = model.cube,
+            cube_db = cube_db,
+        );
+        fs::write(format!("{out_dir}/bootstrap.sql"), bootstrap).ok();
+    }
 
     eprintln!("Generated project in {out_dir}/");
     0
@@ -315,7 +348,22 @@ fn flatten_json_array(arr: &serde_json::Value) -> String {
     }
 }
 
+/// Normalize Tabular Editor DAX whitespace: `CALCULATE (` → `CALCULATE(`.
+/// Most exporters add spaces before/after parentheses that our classifiers
+/// and expression lowerers don't expect.
+fn normalize_dax(s: &str) -> String {
+    let s = s.trim();
+    let s = if let Some(idx) = s.find("//") { &s[..idx] } else { s };
+    s.trim()
+        .trim_start_matches('=')
+        .trim()
+        .replace(" (", "(")
+        .replace("( ", "(")
+        .replace(" )", ")")
+}
+
 fn classify_dax(expr: &str) -> String {
+    let expr = normalize_dax(expr);
     let upper = expr.to_uppercase();
     // Time intelligence: emit structured date-flag measures instead of sql_fallback
     if upper.contains("TOTALYTD") || upper.contains("DATESYTD") { return "time_ytd".into(); }
@@ -340,6 +388,12 @@ fn classify_dax(expr: &str) -> String {
         return "simple".into();
     }
     if upper.contains("DATATABLE(") { return "calculated_table".into(); }
+    // Arithmetic between measure/column references: [A] - [B], [A] * [B], etc.
+    if expr.contains('[') && expr.contains(']')
+        && (expr.contains("- [") || expr.contains("+ [") || expr.contains("* [") || expr.contains("/ ["))
+    {
+        return "sql_fallback".into();
+    }
     "manual".into()
 }
 
@@ -380,7 +434,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
   "table_name": "{table}",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
-  "db_path": null,
+  "db_path": {db_path},
   "fact_tables": [
 {facts}
   ],
@@ -398,6 +452,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
         cube = m.cube,
         source = malloy_name(&ft.ssas_name),
         table = malloy_name(&ft.name),
+        db_path = if m.date_roles.is_empty() { "null".to_string() } else { format!("\"data/{}.db\"", malloy_name(&m.cube)) },
         facts = facts,
         rels = rels,
         ti = ti_block,
@@ -540,14 +595,20 @@ fn render_measure_configs(m: &ConversionModel) -> String {
             _ => ("", "", ""),
         };
         let sql = if !time_class.is_empty() {
-            // Extract base expression from TOTALYTD(inner, ...) or SAMEPERIODLASTYEAR(inner, ...)
             let inner = extract_ti_inner(dax_expr);
             let malloy = dax_to_malloy_expr(&inner);
-            malloy_to_sql(&malloy)
+            malloy_to_sql(&malloy).unwrap_or_else(|| "null".to_string())
         } else {
-            dax_to_sql_hint(dax_expr, &meas.classification)
+            dax_to_sql_hint(dax_expr, &meas.classification).unwrap_or_else(|| "null".to_string())
         };
-        let pe = if meas.classification == "simple" || meas.classification == "time_ytd" || meas.classification == "time_prior_year" {
+        // When the converter cannot produce real SQL for a "simple" measure,
+        // downgrade it to sql_fallback so the runtime never executes a placeholder.
+        let effective_class = if meas.classification == "simple" && dax_to_sql_hint(dax_expr, &meas.classification).is_none() {
+            "sql_fallback"
+        } else {
+            meas.classification.as_str()
+        };
+        let pe = if effective_class == "simple" || effective_class == "time_ytd" || effective_class == "time_prior_year" {
             if !time_class.is_empty() {
                 dax_to_malloy_expr(&extract_ti_inner(dax_expr))
             } else {
@@ -556,7 +617,7 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         } else {
             String::new()
         };
-        let fb_line = if meas.classification == "sql_fallback" {
+        let fb_line = if effective_class == "sql_fallback" {
             format!(",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"", malloy_name(&meas.name))
         } else if !time_class.is_empty() {
             format!(",\n      \"time_intelligence\": {{ \"dimension_id\": \"{did}\", \"flag_column\": \"{fc}\" }}",
@@ -600,29 +661,29 @@ fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn dax_to_sql_hint(expr: &str, class: &str) -> String {
+fn dax_to_sql_hint(expr: &str, class: &str) -> Option<String> {
     match class {
         "simple" => {
-            // Try to emit a real SQL expression
             let malloy = dax_to_malloy_expr(expr);
             malloy_to_sql(&malloy)
         }
-        "sql_fallback" => "null".to_string(),
-        _ => "null".to_string(),
+        _ => Some("null".to_string()),
     }
 }
 
-fn malloy_to_sql(malloy: &str) -> String {
-    if malloy.contains("count(distinct true") { return "COUNT(DISTINCT ...)".into(); }
-    if malloy.contains(".count()") { return "COUNT(...)".into(); }
-    if malloy.contains(".sum()") { return "SUM(...)".into(); }
-    if malloy.contains(".avg()") { return "AVG(...)".into(); }
-    if malloy == "0.8" { return "0.8".into(); }
-    "SUM(1)".to_string()
+fn malloy_to_sql(malloy: &str) -> Option<String> {
+    // Only return SQL for patterns the converter can truly lower.
+    // Numeric constants are the only safe case; all aggregate/expression
+    // patterns must be explicitly handwritten as fallback SQL.
+    if let Ok(v) = malloy.trim().parse::<f64>() {
+        return Some(format!("{}", v));
+    }
+    None
 }
 
 fn dax_to_malloy_expr(dax: &str) -> String {
-    let dax = dax.trim();
+    let dax = normalize_dax(dax);
+    let dax = dax.as_str();
     let upper = dax.to_uppercase();
 
     // Constant value (e.g. "0.8")
@@ -923,12 +984,21 @@ SELECT 1 AS dummy;
 // ---- SQL fallback generation ----
 
 fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String {
-    let dax = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
-    let upper = dax.to_uppercase();
+    generate_fallback_sql_recursive(meas, model, &mut Vec::new())
+}
+
+fn generate_fallback_sql_recursive(meas: &MeasureInfo, model: &ConversionModel, visited: &mut Vec<String>) -> String {
+    let dax_raw = meas.expression.iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let dax = dax_raw.trim_start().trim_start_matches("=").trim().to_string();
+    let dax_one_line = normalize_dax(&dax);
+    let upper_one = dax_one_line.to_uppercase();
 
     // Pattern 1: MEDIAN(col) — DuckDB native
-    if upper.contains("MEDIAN(") {
-        if let Some(col_expr) = extract_dax_unary(&upper, "MEDIAN(") {
+    if upper_one.contains("MEDIAN(") {
+        if let Some(col_expr) = extract_dax_unary(&upper_one, "MEDIAN(") {
             if let Some(col) = extract_col(&col_expr) {
                 let fact_table = malloy_name(&model.fact_table.name);
                 return format!(
@@ -940,13 +1010,40 @@ fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String 
     }
 
     // Pattern 2: Cumulative YTD (FILTER + ALLSELECTED + ISONORAFTER)
-    if upper.contains("ALLSELECTED") && upper.contains("ISONORAFTER") {
-        return generate_cumulative_sql(dax, &upper, meas, model);
+    if upper_one.contains("ALLSELECTED") && upper_one.contains("ISONORAFTER") {
+        return generate_cumulative_sql(&dax_one_line, &upper_one, meas, model);
     }
 
-    // Pattern 3: AVERAGEX + KEEPFILTERS — too complex for auto-generation
-    // Keep annotated stub
-    render_fallback_stub(&meas.name, dax)
+    // Pattern 3: SUMX(FILTER(table, col=val), qty_col * RELATED(dim.dimcol))
+    if upper_one.contains("SUMX(") && upper_one.contains("FILTER(") && upper_one.contains("RELATED(") {
+        if let Some(sql) = generate_sumx_filter_related(&dax_one_line, &upper_one, model) {
+            return sql;
+        }
+    }
+
+    // Pattern 4: CALCULATE(SUM(col), filter) — simple filtered SUM
+    if upper_one.contains("CALCULATE(") && upper_one.contains("SUM(") {
+        if let Some(sql) = generate_calculate_sum(&dax_one_line, &upper_one, model) {
+            return sql;
+        }
+    }
+
+    // Pattern 5: [MeasureA] - [MeasureB] — arithmetic between two measures
+    if dax_one_line.trim().starts_with("[") && (dax_one_line.contains("- [") || dax_one_line.contains("-[")) {
+        if let Some(sql) = generate_measure_arithmetic(&dax_one_line, model, visited) {
+            return sql;
+        }
+    }
+
+    // Pattern 6: DIVIDE([MeasureA], [MeasureB], ...) — safe division
+    if upper_one.starts_with("DIVIDE(") && dax_one_line.contains('[') {
+        if let Some(sql) = generate_divide_measure_recursive(&dax_one_line, model, visited) {
+            return sql;
+        }
+    }
+
+    // Unsupported: keep annotated stub
+    render_fallback_stub(&meas.name, &dax_one_line)
 }
 
 fn generate_cumulative_sql(dax: &str, upper: &str, meas: &MeasureInfo, model: &ConversionModel) -> String {
@@ -1029,7 +1126,6 @@ fn extract_period_column(dax: &str) -> Option<String> {
 }
 
 fn extract_year_column(dax: &str) -> Option<String> {
-    // Find the year filter: 'calendar'[ÅR] = YEAR(TODAY())
     if let Some(year_pos) = dax.to_uppercase().find("YEAR(TODAY())") {
         let before = &dax[..year_pos];
         if let Some(last_brace) = before.rfind("'[") {
@@ -1053,6 +1149,272 @@ fn extract_base_measure(dax: &str) -> String {
         }
     }
     String::new()
+}
+
+fn generate_sumx_filter_related(dax: &str, upper: &str, model: &ConversionModel) -> Option<String> {
+    let fact = malloy_name(&model.fact_table.name);
+    let filter_parts = extract_filter_eq(dax)?;
+    let filter_col_raw = &filter_parts.0;
+    let filter_col = resolve_source_column(filter_col_raw, model);
+    let filter_val = &filter_parts.1;
+    let qty_col_raw = extract_first_mul_col(dax)?;
+    let qty_col = resolve_source_column(&qty_col_raw, model);
+    let related = extract_related_ref(dax)?;
+    let dim_table = malloy_name(&related.0);
+    let dim_col_raw = &related.1;
+    let dim_col = resolve_source_column(dim_col_raw, model);
+    let join_col = model.relationships.iter()
+        .find(|r| malloy_name(&r.to_table) == dim_table)
+        .and_then(|r| {
+            // Resolve SSAS column ref to actual sourceColumn
+            let raw = r.from_column.clone();
+            Some(resolve_source_column(&raw, model))
+        })
+        .unwrap_or_else(|| "id".into());
+
+    let sql = format!(
+        "-- Auto-generated from DAX: {dax}\n\
+         -- SUMX(FILTER(...), qty * RELATED(dim.col))\n\n\
+         SELECT COALESCE(SUM(f.{qty_col} * CAST(d.{dim_col} AS DOUBLE)), 0) AS value\n\
+         FROM {fact} f\n\
+         JOIN {dim_table} d ON f.{join_col} = d.{join_col}\n\
+         WHERE f.{filter_col} = {filter_val};\n",
+        dax = dax, qty_col = qty_col, dim_col = dim_col,
+        fact = fact, dim_table = dim_table, join_col = join_col,
+        filter_col = filter_col, filter_val = filter_val,
+    );
+    Some(sql)
+}
+
+fn extract_filter_eq(dax: &str) -> Option<(String, String)> {
+    // Parse 'Table'[Col] = value from FILTER(...) expression
+    let after_filter = dax.find("FILTER(")?;
+    let inner = &dax[after_filter + "FILTER(".len()..];
+    // Find the comparison: find '[' char after the first comma, then extract Col] = val
+    let first_comma = inner.find(',')?;
+    let rest = &inner[first_comma + 1..].trim();
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest[bracket_start..].find(']')? + bracket_start;
+    let col_name = &rest[bracket_start + 1..bracket_end];
+    let after_eq = rest[bracket_end + 1..].trim();
+    let eq_pos = after_eq.find('=')?;
+    let val = after_eq[eq_pos + 1..].trim();
+    // Stop at space, comma, or paren
+    let val_end = val.find(|c: char| c == ' ' || c == ',' || c == ')').unwrap_or(val.len());
+    let val = &val[..val_end];
+    Some((col_name.trim().to_string(), val.trim().to_string()))
+}
+
+fn extract_first_mul_col(dax: &str) -> Option<String> {
+    // Extract the first column in multiplication after FILTER
+    // Pattern: FILTER(...), 'Table'[QtyCol] * ...
+    let after_filter = dax.find("FILTER(")?;
+    let inner = &dax[after_filter + "FILTER(".len()..];
+    // Find the closing paren of FILTER (match depth)
+    let mut depth = 1;
+    let mut filter_end = 0;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { filter_end = i; break; } }
+            _ => {}
+        }
+    }
+    let after_filter_end = &inner[filter_end + 1..].trim().trim_start_matches(',').trim();
+    // Now find the first bracketed column reference (e.g., 'Sales'[Qty])
+    let bracket_start = after_filter_end.find('[')?;
+    let bracket_end = after_filter_end[bracket_start..].find(']')? + bracket_start;
+    Some(after_filter_end[bracket_start + 1..bracket_end].to_string())
+}
+
+fn extract_related_ref(dax: &str) -> Option<(String, String)> {
+    // Extract RELATED('DimTable'[DimCol])
+    let related_pos = dax.find("RELATED(")?;
+    let inner = &dax[related_pos + "RELATED(".len()..];
+    let close_paren = inner.find(')')?;
+    let related_inner = &inner[..close_paren];
+    // Parse 'DimTable'[DimCol] or [DimCol]
+    let (table, col) = parse_dax_col_ref(related_inner.trim())?;
+    Some((table, col))
+}
+
+/// Resolve a DAX column name to the actual sourceColumn (DB column) name.
+fn resolve_source_column(ssas_name: &str, model: &ConversionModel) -> String {
+    let needle = ssas_name.trim().to_lowercase().replace(' ', "");
+    for t in std::iter::once(&model.fact_table)
+        .chain(model.dimensions.iter())
+        .chain(model.date_roles.iter())
+        .chain(model.lookup_tables.iter())
+    {
+        for c in &t.columns {
+            if c.name.to_lowercase().replace(' ', "") == needle {
+                return c.source_column.clone();
+            }
+        }
+    }
+    // Fallback: lowercase with underscores
+    malloy_name(ssas_name)
+}
+fn parse_dax_col_ref(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    if let Some(apos) = s.find('\'') {
+        let table_end = s[apos + 1..].find('\'')? + apos + 1;
+        let table = &s[apos + 1..table_end];
+        let rest = s[table_end + 1..].trim();
+        let col = if rest.starts_with('[') && rest.contains(']') {
+            rest[1..].split(']').next()?
+        } else {
+            return None;
+        };
+        Some((table.to_string(), col.to_string()))
+    } else if s.starts_with('[') && s.contains(']') {
+        Some((String::new(), s[1..].split(']').next()?.to_string()))
+    } else {
+        None
+    }
+}
+
+fn generate_calculate_sum(dax: &str, upper: &str, model: &ConversionModel) -> Option<String> {
+    let fact = malloy_name(&model.fact_table.name);
+    let sum_col_raw = extract_aggregate_col(dax, "SUM")?;
+    let sum_col_name = resolve_source_column(&sum_col_raw, model);
+    let filter_info = extract_calculate_filter_eq(dax)?;
+    let filter_col = resolve_source_column(&filter_info.0, model);
+    let filter_val = &filter_info.1;
+
+    let sql = format!(
+        "-- Auto-generated from DAX: {dax}\n\
+         -- CALCULATE(SUM(col), filter)\n\n\
+         SELECT COALESCE(SUM(CAST({sum_col_name} AS DOUBLE)), 0) AS value\n\
+         FROM {fact}\n\
+         WHERE {filter_col} = {filter_val};\n",
+        dax = dax, sum_col_name = sum_col_name, fact = fact,
+        filter_col = filter_col, filter_val = filter_val,
+    );
+    Some(sql)
+}
+
+fn extract_aggregate_col(dax: &str, func: &str) -> Option<String> {
+    let pos = dax.to_uppercase().find(&format!("{}(", func))?;
+    let inner = &dax[pos + func.len() + 1..];
+    // Parse 'Table'[Col] — the aggregate's first argument
+    if let Some((_, col)) = parse_dax_col_ref(inner.trim()) {
+        return Some(col);
+    }
+    None
+}
+
+fn extract_calculate_filter_eq(dax: &str) -> Option<(String, String)> {
+    // In CALCULATE(expr, 'Table'[Col] = val, ...)
+    // Find the first comma after CALCULATE(, then parse the filter
+    let calc_start = dax.find("CALCULATE(")?;
+    let inner = &dax[calc_start + "CALCULATE(".len()..];
+    // Skip past the aggregate expression (match parens)
+    let mut depth = 1;
+    let mut comma_pos = None;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { break; } }
+            ',' if depth == 1 => { comma_pos = Some(i); break; }
+            _ => {}
+        }
+    }
+    let rest = &inner[comma_pos? + 1..].trim();
+    // Now parse 'Table'[Col] = val
+    let (table, col) = parse_dax_col_ref(rest)?;
+    let after_col = rest[rest.find(']')? + 1..].trim();
+    let eq_pos = after_col.find('=')?;
+    let val = after_col[eq_pos + 1..].trim();
+    let val_end = val.find(|c: char| c == ' ' || c == ',' || c == ')').unwrap_or(val.len());
+    Some((col, val[..val_end].to_string()))
+}
+
+fn generate_measure_arithmetic(dax: &str, model: &ConversionModel, visited: &mut Vec<String>) -> Option<String> {
+    let parts: Vec<&str> = dax.split(|c: char| c == '-' || c == '+' || c == '*' || c == '/')
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    if parts.len() < 2 { return None; }
+    let op = if dax.contains(" - [") || dax.contains("- [") { " - " }
+             else if dax.contains(" + [") || dax.contains("+ [") { " + " }
+             else if dax.contains(" * [") || dax.contains("* [") { " * " }
+             else if dax.contains(" / [") || dax.contains("/ [") { " / " }
+             else { return None; };
+
+    let measure_names: Vec<String> = parts.iter()
+        .map(|p| p.trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string())
+        .collect();
+
+    let mut subqueries = Vec::new();
+    for name in &measure_names {
+        let inner_sql = generate_sql_for_measure(name, model, visited)?;
+        subqueries.push(format!("({inner_sql})"));
+    }
+
+    let sql = format!(
+        "-- Auto-generated from DAX: {dax}\n\
+         -- Arithmetic between measures\n\n\
+         SELECT COALESCE({subq_a}, 0) {op} COALESCE({subq_b}, 0) AS value;\n",
+        dax = dax,
+        subq_a = subqueries.get(0)?,
+        subq_b = subqueries.get(1)?,
+        op = op.trim(),
+    );
+    Some(sql)
+}
+
+fn generate_divide_measure_recursive(dax: &str, model: &ConversionModel, visited: &mut Vec<String>) -> Option<String> {
+    let rest = dax.trim_start_matches("DIVIDE(").trim();
+    let args = split_args(rest);
+    if args.len() < 2 { return None; }
+    let meas_a = args[0].trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string();
+    let meas_b = args[1].trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string();
+    let subq_a = generate_sql_for_measure(&meas_a, model, visited)?;
+    let subq_b = generate_sql_for_measure(&meas_b, model, visited)?;
+
+    Some(format!(
+        "-- Auto-generated from DAX: {dax}\n\
+         -- DIVIDE(a, b) safe division\n\n\
+         SELECT CASE WHEN COALESCE(({subq_b}), 0) = 0 THEN NULL ELSE COALESCE(({subq_a}), 0) / COALESCE(({subq_b}), 0) END AS value;\n",
+        dax = dax,
+        subq_a = subq_a,
+        subq_b = subq_b,
+    ))
+}
+
+fn generate_sql_for_measure(name: &str, model: &ConversionModel, visited: &[String]) -> Option<String> {
+    let target = name.trim().to_lowercase();
+
+    if visited.iter().any(|v| v == &target) {
+        return None;
+    }
+
+    let meas = model.fact_table.measures.iter()
+        .find(|m| m.name.trim().to_lowercase() == target)?;
+
+    let mut new_visited = visited.to_vec();
+    new_visited.push(target.clone());
+
+    let all_measures: Vec<&MeasureInfo> = model.fact_table.measures.iter()
+        .chain(model.dimensions.iter().flat_map(|t| &t.measures))
+        .chain(model.date_roles.iter().flat_map(|t| &t.measures))
+        .collect();
+    let meas_ref = all_measures.iter()
+        .find(|m| m.name.trim().to_lowercase() == target)
+        .copied()
+        .unwrap_or(meas);
+
+    let sql = generate_fallback_sql_recursive(meas_ref, model, &mut new_visited);
+
+    if sql.contains("SELECT 1 AS dummy") || sql.contains("TODO") {
+        return None;
+    }
+
+    let sql = sql.trim().trim_end_matches(';').to_string();
+    if sql.is_empty() {
+        return None;
+    }
+    Some(sql)
 }
 
 fn render_schema(m: &ConversionModel) -> String {
@@ -1158,6 +1520,21 @@ fn render_report(m: &ConversionModel) -> String {
 
     out.push_str("\n## Data loading checklist\n\n");
     out.push_str("All tables use M (Power Query) partitions and must be loaded into DuckDB manually.\n\n");
+
+    if !m.date_roles.is_empty() {
+        let cube_db = format!("{}.db", malloy_name(&m.cube));
+        out.push_str(&format!(
+            "**Quick start (with date-dimension bootstrap):**\n\n\
+             ```\n\
+             duckdb data/{cube_db} < bootstrap.sql\n\
+             ```\n\n\
+             This creates the schema, seeds a populated `date_dim` calendar table, and\n\
+             sets `db_path` in `proxy-config.json`. Then load your own data into the\n\
+             listed tables below.\n\n",
+            cube_db = cube_db,
+        ));
+    }
+
     out.push_str("Run `schema.sql` to create the tables, then load data via:\n\n");
     out.push_str("- DuckDB CLI: `INSERT INTO ... SELECT ... FROM 'source.csv'`\n");
     out.push_str("- Or export your SSAS source to Parquet/CSV and import into DuckDB.\n\n");
@@ -1184,4 +1561,135 @@ fn render_report(m: &ConversionModel) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_generic_model() -> ConversionModel {
+        let fact = TableInfo {
+            name: "orders".into(),
+            ssas_name: "Orders".into(),
+            description: String::new(),
+            columns: vec![
+                ColumnInfo { name: "amount".into(), data_type: "double".into(), source_column: "amount".into(), is_hidden: false },
+                ColumnInfo { name: "qty".into(), data_type: "int64".into(), source_column: "qty".into(), is_hidden: false },
+                ColumnInfo { name: "status".into(), data_type: "int64".into(), source_column: "status".into(), is_hidden: false },
+                ColumnInfo { name: "itemid".into(), data_type: "int64".into(), source_column: "itemid".into(), is_hidden: false },
+            ],
+            measures: vec![
+                MeasureInfo {
+                    name: "Total Sales".into(),
+                    expression: vec!["= CALCULATE ( SUM ( 'Orders'[Amount] ), 'Orders'[Status] = 1 )".into()],
+                    display_folder: String::new(),
+                    classification: "sql_fallback".into(),
+                },
+                MeasureInfo {
+                    name: "Total Cost".into(),
+                    expression: vec!["= SUMX ( FILTER ( 'Orders', 'Orders'[Status] = 1 ), 'Orders'[Qty] * RELATED ( 'Items'[Unit Cost] ) )".into()],
+                    display_folder: String::new(),
+                    classification: "sql_fallback".into(),
+                },
+                MeasureInfo {
+                    name: "Net Profit".into(),
+                    expression: vec!["= [Total Sales] - [Total Cost]".into()],
+                    display_folder: String::new(),
+                    classification: "sql_fallback".into(),
+                },
+                MeasureInfo {
+                    name: "Margin Pct".into(),
+                    expression: vec!["= DIVIDE ( [Net Profit], [Total Sales], 0 )".into()],
+                    display_folder: String::new(),
+                    classification: "sql_fallback".into(),
+                },
+            ],
+            is_m_partition: false,
+            is_calculated: false,
+        };
+
+        let items = TableInfo {
+            name: "items".into(),
+            ssas_name: "Items".into(),
+            description: String::new(),
+            columns: vec![
+                ColumnInfo { name: "itemid".into(), data_type: "int64".into(), source_column: "itemid".into(), is_hidden: false },
+                ColumnInfo { name: "unitcost".into(), data_type: "double".into(), source_column: "unitcost".into(), is_hidden: false },
+            ],
+            measures: vec![],
+            is_m_partition: false,
+            is_calculated: false,
+        };
+
+        ConversionModel {
+            catalog: "TEST".into(),
+            cube: "Orders".into(),
+            fact_table: fact,
+            dimensions: vec![],
+            date_roles: vec![],
+            calculated_tables: vec![],
+            lookup_tables: vec![items],
+            relationships: vec![RelInfo {
+                from_table: "Orders".into(),
+                from_column: "Item ID".into(),
+                to_table: "Items".into(),
+                to_column: "Item ID".into(),
+            }],
+            roles: vec![],
+        }
+    }
+
+    #[test]
+    fn generic_calculate_sum_produces_real_sql() {
+        let model = make_generic_model();
+        let meas = model.fact_table.measures.iter()
+            .find(|m| m.name == "Total Sales").unwrap();
+        let sql = generate_fallback_sql(meas, &model);
+        assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
+        assert!(sql.contains("amount"), "should resolve amount column");
+        assert!(sql.contains("status"), "should resolve status filter");
+        assert!(sql.contains("orders"), "should use orders table");
+    }
+
+    #[test]
+    fn generic_sumx_filter_related_produces_real_sql() {
+        let model = make_generic_model();
+        let meas = model.fact_table.measures.iter()
+            .find(|m| m.name == "Total Cost").unwrap();
+        let sql = generate_fallback_sql(meas, &model);
+        assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
+        assert!(sql.contains("qty"), "should resolve qty column");
+        assert!(sql.contains("unitcost"), "should resolve unitcost column");
+        assert!(sql.contains("items"), "should join items table");
+    }
+
+    #[test]
+    fn generic_measure_arithmetic_produces_real_sql() {
+        let model = make_generic_model();
+        let meas = model.fact_table.measures.iter()
+            .find(|m| m.name == "Net Profit").unwrap();
+        let sql = generate_fallback_sql(meas, &model);
+        assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
+        assert!(sql.contains("amount"), "should contain Total Sales subquery");
+        assert!(sql.contains("qty"), "should contain Total Cost subquery");
+    }
+
+    #[test]
+    fn generic_divide_measure_produces_real_sql() {
+        let model = make_generic_model();
+        let meas = model.fact_table.measures.iter()
+            .find(|m| m.name == "Margin Pct").unwrap();
+        let sql = generate_fallback_sql(meas, &model);
+        assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
+        assert!(sql.contains("CASE WHEN"), "should be safe division");
+        assert!(sql.contains("amount"), "should contain Total Sales subquery");
+    }
+
+    #[test]
+    fn generate_sql_for_measure_no_hardcoded_retail_names() {
+        let source = include_str!("convert_tabular.rs");
+        assert!(!source.contains("\"TOTAL REVENUE\""), "no hardcoded TOTAL REVENUE");
+        assert!(!source.contains("\"TOTAL COGS\""), "no hardcoded TOTAL COGS");
+        assert!(!source.contains("\"GROSS PROFIT\""), "no hardcoded GROSS PROFIT");
+    }
 }

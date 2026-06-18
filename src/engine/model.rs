@@ -341,7 +341,12 @@ impl SemanticModel {
         if !upper.contains("GROUP BY") {
             return Some(FallbackCapability::ScalarOnly);
         }
-        Some(FallbackCapability::Universal)
+        // If GROUP BY appears anywhere in the SQL text, we cannot safely
+        // conclude the outer result is grouped (an inner subquery may group
+        // for aggregation while the outer SELECT returns one scalar).
+        // Default to ScalarOnly — callers that genuinely support grouped
+        // execution must carry explicit fallback_capability metadata.
+        Some(FallbackCapability::ScalarOnly)
     }
 }
 

@@ -57,6 +57,14 @@ enum Command {
     SeedGeneratedDb,
     /// Emit SQL to create demo fact tables
     SeedSql,
+    /// Qualify a converted project for Excel readiness
+    Qualify {
+        /// Path to proxy-config.json
+        #[arg(default_value = "project3/proxy-config.json")]
+        config: String,
+        /// Optional path to xmla-trace.jsonl for replay validation
+        trace: Option<String>,
+    },
 }
 
 // ---- debug file logging ----
@@ -118,6 +126,13 @@ async fn main() {
                 vec!["seed-sql".into()],
             ));
         }
+        Command::Qualify { config, trace } => {
+            let mut args = vec!["qualify".into(), config];
+            if let Some(t) = trace {
+                args.push(t);
+            }
+            std::process::exit(xmla_proxy::tools::qualify::run(args));
+        }
     }
 }
 
@@ -140,10 +155,13 @@ async fn run_server() {
             p.model.dimensions.len(), p.model.measures.len(),
         ));
 
-        let db_path = p.config.db_path.as_deref();
+        let db_path = proxy_project::resolve_db_path(
+            &config_path,
+            p.config.db_path.as_deref(),
+        );
         match db_path {
             Some(path) => {
-                backend::init_backend(Some(path))
+                backend::init_backend(Some(&path))
                     .expect(&format!("failed to open DuckDB: {path}"));
                 println!("🗄️  DuckDB: {path}");
                 debug_write(&format!("DuckDB: {path}"));

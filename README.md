@@ -5,8 +5,8 @@ server. Excel connects to it as a SSAS data source and gets PivotTable
 compatibility — filtering, drilldown, crossjoin, collapse — against your
 DuckDB data.
 
-Malloy is the primary semantic path. Direct SQL is the automatic fallback
-when Malloy compilation fails.
+Direct SQL is the default runtime path. Malloy is optional
+(`MALLOY_RUNTIME=1`) and verified by parity tests.
 
 ## Quick start
 
@@ -199,7 +199,7 @@ The converter turns a Tabular Editor folder (`.bim`, tables) into a Malloy +
 DuckDB project:
 
 ```bash
-cargo run --bin convert_tabular -- path/to/tabulareditor_src output_dir
+cargo run --bin xmla_proxy -- convert-tabular path/to/tabulareditor_src output_dir
 ```
 
 Output:
@@ -215,8 +215,8 @@ See `docs/ssas-to-malloy-conversion.md` for details.
 
 | Path | Trigger | Role |
 |------|---------|------|
+| **Direct SQL** | Always active | Rust emits SQL from `QueryPlan`. Default runtime path. |
 | **Malloy** | `MALLOY_RUNTIME=1` | Long-lived Node.js worker compiles Malloy to SQL, executes via DuckDB. |
-| **Direct SQL** | Always active | Rust emits SQL from `QueryPlan`. Safety net when Malloy fails. |
 
 Both produce identical results (verified by parity tests).
 
@@ -226,9 +226,10 @@ Both produce identical results (verified by parity tests).
 cargo test --lib
 ```
 
-221 tests covering MDX parsing, semantic classification, plan generation, SQL
+234 tests covering MDX parsing, semantic classification, plan generation, SQL
 and Malloy emission, compile path, result parity, metadata rowsets, multi-fact
-routing, end-to-end cellset rendering, and Excel replay/oracle verification.
+routing, end-to-end cellset rendering, Excel replay/oracle verification, time
+intelligence, and compatibility-gate assertions.
 
 ## Compatibility gate
 
@@ -249,7 +250,7 @@ it is considered "Excel-safe." The gate verifies three layers:
 XMLA_TRACE=1 cargo run
 
 # Replay the capture — validates discover + execute
-cargo run --bin trace_replay
+cargo run --bin xmla_proxy -- trace-replay
 
 # Run compatibility gate tests for generated projects
 cargo test --lib retail_analytics_
@@ -260,6 +261,44 @@ The `trace_replay` binary validates:
 - Discover/DBSCHEMA/MDSCHEMA entries: validates non-empty XML with `<row>` data
   and checks for expected catalog/cube names in key rowsets
 - Session entries: validates non-empty response with standard XMLA elements
+
+## Qualify: migration intake loop
+
+The `qualify` subcommand gives a readiness verdict for a converted project
+before you connect Excel:
+
+```bash
+cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json
+cargo run --bin xmla_proxy -- qualify generated_retail_analytics/proxy-config.json
+```
+
+Output: `READY`, `PARTIAL` (usable with caveats), or `BLOCKED` (stub fallbacks
+or broken config — not Excel-safe). Reason codes are machine-readable.
+
+**Full intake workflow:**
+
+1. **Inventory** the source export:
+   `cargo run --bin xmla_proxy -- inventory path/to/tabular_export/`
+
+2. **Convert** to a MallardCube project:
+   `cargo run --bin xmla_proxy -- convert-tabular path/to/tabular_export/ generated_project/`
+
+3. **Bootstrap** the database (for projects with date-role tables):
+   ```bash
+   cd generated_project/
+   duckdb data/<cube>.db < bootstrap.sql
+   # Then load your own data into the tables listed in schema.sql
+   ```
+
+4. **Qualify** the output before Excel:
+   `cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json`
+
+5. **Capture + replay** an Excel session to lock in compatibility:
+   ```bash
+   XMLA_TRACE=1 PROXY_CONFIG=generated_project/proxy-config.json cargo run
+   # ... use Excel ...
+   cargo run --bin xmla_proxy -- trace-replay xmla-trace.jsonl generated_project/proxy-config.json
+   ```
 
 ## Architecture
 
@@ -281,7 +320,7 @@ For detailed documentation:
 - Single or multiple fact tables with shared/scoped dimensions
 - One hierarchy per dimension: `(All)` + one leaf level
 - Up to 2 visible row dimensions
-- Malloy runtime with automatic direct-SQL fallback
+- Direct SQL execution with optional Malloy runtime path
 - Tabular Editor `.bim` structural conversion
 - Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
 - Explicit date-role dimension (flag-based, not dynamic MDX function parsing)

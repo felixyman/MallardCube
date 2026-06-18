@@ -5,7 +5,7 @@
   "table_name": "dw_fys_f_undersökning",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
-  "db_path": "data/generated.db",
+  "db_path": "../data/generated.db",
   "fact_tables": [
     {
       "id": "default",
@@ -677,6 +677,7 @@
       "ordinal": 20,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_kvartal)_cy.sql"
     },
     {
@@ -693,6 +694,7 @@
       "ordinal": 21,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_kvartal)_cy_1.sql"
     },
     {
@@ -709,6 +711,7 @@
       "ordinal": 22,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_månad)_cy_1.sql"
     },
     {
@@ -725,6 +728,7 @@
       "ordinal": 23,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_månad)_cy.sql"
     },
     {
@@ -741,6 +745,7 @@
       "ordinal": 24,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_vecka)_cy.sql"
     },
     {
@@ -757,6 +762,7 @@
       "ordinal": 25,
       "visible": true,
       "measure_group_name": "DW_FYS_F_UNDERSÖKNING",
+      "fallback_capability": "Universal",
       "sql_fallback_file": "sql_fallback/antal_utförda_remisser_(ack_vecka)_cy_1.sql"
     },
     {

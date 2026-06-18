@@ -7,8 +7,8 @@
 use crate::response::wrap_in_soap_envelope;
 use crate::mdx_semantic::{is_dax, is_mdx_select};
 use crate::execute_builders::{
-    get_execute_cellset_response, get_execute_dax_response,
-    get_execute_mdx_response,
+    get_execute_cellset_response, get_execute_cellset_response_with_backend,
+    get_execute_dax_response, get_execute_mdx_response,
 };
 
 // ---- public API called by main.rs ----
@@ -40,7 +40,8 @@ pub fn get_execute_statement_response(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::Backend;
+    use crate::backend::{Backend, QueryBackend};
+    use crate::engine::model::SemanticModel;
     use crate::mdx_semantic::*;
     use crate::proxy_project::{ProxyProject, with_test_project};
     use crate::test_fixtures::{
@@ -140,6 +141,64 @@ mod tests {
         let project = ProxyProject::load("generated_retail_analytics/proxy-config.json")
             .expect("load generated_retail_analytics");
         with_test_project(project, f)
+    }
+
+    fn with_generated_project<T>(f: impl FnOnce() -> T) -> T {
+        let project = ProxyProject::load("generated_project/proxy-config.json")
+            .expect("load generated_project");
+        with_test_project(project, f)
+    }
+
+    /// Test-only `QueryBackend` that wraps a file-based DuckDB connection.
+    /// Avoids the global `Backend` singleton so converted-project tests can
+    /// exercise their own databases without in-memory demo seeding.
+    struct FileQueryBackend(std::sync::Mutex<duckdb::Connection>);
+
+    impl QueryBackend for FileQueryBackend {
+        fn query_scalar(&self, sql: &str) -> f64 {
+            let conn = self.0.lock().unwrap();
+            conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0.0)
+        }
+
+        fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_grouped_1d");
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+                .expect("query_map query_grouped_1d")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+
+        fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_pairs");
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)))
+                .expect("query_map query_pairs")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+
+        fn query_count(&self, sql: &str) -> u32 {
+            let conn = self.0.lock().unwrap();
+            conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
+        }
+    }
+
+    fn extract_cell_value(xml: &str) -> Option<String> {
+        let cell_start = xml.find("<Cell CellOrdinal=\"0\"")?;
+        let val_start = xml[cell_start..].find("<Value")?;
+        let abs_val_start = cell_start + val_start;
+        let close = xml[abs_val_start..].find('>')?;
+        let content_start = abs_val_start + close + 1;
+        let content_end = xml[content_start..].find("</Value>")?;
+        Some(xml[content_start..content_start + content_end].to_string())
+    }
+
+    fn extract_fmt_value(xml: &str) -> Option<String> {
+        let start = xml.find("<FmtValue>")?;
+        let content_start = start + "<FmtValue>".len();
+        let content_end = xml[content_start..].find("</FmtValue>")?;
+        Some(xml[content_start..content_start + content_end].to_string())
     }
 
     fn axis_captions(xml: &str, axis_name: &str) -> Vec<String> {
@@ -1360,14 +1419,45 @@ mod tests {
     }
 
     #[test]
-    fn retail_analytics_execute_total_revenue_renders_cellset() {
+    fn retail_analytics_total_revenue_is_fallback_returns_empty() {
+        // Total Revenue is no longer a stub — Plan 021 generated real SQL.
+        // The fallback returns a real value (0 on empty DB).
         with_retail_analytics(|| {
+            let project = crate::proxy_project::project();
+            let conn = duckdb::Connection::open(
+                "generated_retail_analytics/data/sales.db"
+            ).expect("open retail db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
             let mdx = "SELECT  FROM [SALES] WHERE ([Measures].[Total Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml = get_execute_statement_response(mdx);
-            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "missing mddataset namespace");
+            let xml = get_execute_cellset_response_with_backend(
+                mdx, &backend, &project.model,
+            );
+
+            assert!(!xml.is_empty(), "should not panic on fallback measure");
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "missing mddataset");
             assert!(xml.contains("<Axes>"), "missing axes");
-            assert!(xml.contains("<CellData>"), "missing cell data");
+            // Real fallback SQL now returns a value
+            assert!(xml.contains("<Cell "), "real fallback should have Cell elements");
         });
+    }
+
+    #[test]
+    fn retail_analytics_config_has_no_placeholder_sql() {
+        // Verify the checked-in config contract: no converted measure
+        // should use SUM(1), SUM(...), AVG(...), etc. as sql_expr.
+        let config_text = std::fs::read_to_string(
+            "generated_retail_analytics/proxy-config.json"
+        ).expect("read retail config");
+        let line = config_text.lines().find(|l| l.contains("sql_expr"))
+            .unwrap_or("");
+        // All measures should be sql_fallback (sql_expr: "null").
+        // Placeholder aggregations should never appear.
+        assert!(!config_text.contains("SUM(1)"), "SUM(1) placeholder found in config");
+        assert!(!config_text.contains("SUM(...)"), "SUM(...) placeholder found in config");
+        assert!(!config_text.contains("AVG(...)"), "AVG(...) placeholder found in config");
+        assert!(!config_text.contains("COUNT(...)"), "COUNT(...) placeholder found in config");
+        assert!(!config_text.contains("COUNT(DISTINCT ...)"), "COUNT(DISTINCT ...) placeholder found in config");
     }
 
     #[test]
@@ -1381,6 +1471,71 @@ mod tests {
                 assert!(!xml.is_empty(), "should not panic on stub measure");
                 // Stubs return Empty QueryResult — cellset has no cell data
             }
+        });
+    }
+
+    #[test]
+    fn generated_project_fallback_measures_return_real_data() {
+        // ---- direct DuckDB characterization (independent data-proof) ----
+        use duckdb::Connection;
+        let conn = Connection::open("data/generated.db").expect("open generated db");
+
+        // DVT measure: should find matching rows in the fixture
+        let dvt_count: f64 = conn.query_row(
+            "SELECT COUNT(DISTINCT f.remissnummer) AS value
+             FROM dw_fys_f_undersökning f
+             JOIN dw_fys_d_remisskoder rk ON f.remisskoderid = rk.remisskoderid
+             JOIN dw_fys_d_produkt p ON f.produktid = p.produktid
+             JOIN dw_fys_kalender_signeringsdatum kd ON f.signeringsdatum = kd.signeringsdatum
+             JOIN dw_fys_d_beställare b ON f.beställareid = b.beställareid
+             WHERE rk.akut = 'Ja'
+               AND p.produktkod IN ('516', '526', '524')
+               AND f.beställningstimme BETWEEN 8 AND 14
+               AND kd.veckodagssiffra BETWEEN 1 AND 5
+               AND RIGHT(b.beställarekod, 3) = 'M08'",
+            [], |r| r.get(0)
+        ).expect("DVT query");
+        assert!(dvt_count > 0.0, "DVT measure should return > 0 remissnummer, got {dvt_count}");
+
+        // Medeltid measure: should return a non-null average
+        let medeltid: Option<f64> = conn.query_row(
+            "SELECT AVG(avg_per_remiss) FROM (
+                SELECT AVG(undersökningsslut_till_signering_ej_akut) AS avg_per_remiss
+                FROM dw_fys_f_undersökning
+                GROUP BY remissnummer
+            ) sub",
+            [], |r| r.get(0)
+        ).expect("Medeltid query");
+        assert!(medeltid.is_some(), "Medeltid measure should return a value");
+        assert!(medeltid.unwrap() > 0.0, "Medeltid should be > 0, got {medeltid:?}");
+
+        // ---- execution-path assertions (prove the proxy returns the same) ----
+        with_generated_project(|| {
+            let project = crate::proxy_project::project();
+            let conn = Connection::open("data/generated.db").expect("open generated db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            // DVT measure through proxy execution
+            let mdx_dvt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Antal signerade DVT-remisser]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml_dvt = get_execute_cellset_response_with_backend(
+                mdx_dvt, &backend, &project.model,
+            );
+            assert!(xml_dvt.contains("<CellData>"), "DVT execution should produce cellset");
+            let dvt_val = extract_cell_value(&xml_dvt)
+                .expect("DVT cellset should contain <Value>");
+            let dvt_parsed: f64 = dvt_val.parse().expect("DVT value should be numeric");
+            assert!(dvt_parsed > 0.0, "DVT measure should return > 0 through proxy execution, got {dvt_parsed}");
+
+            // Medeltid measure through proxy execution
+            let mdx_mt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Medeltid Undersökningsslut till signering (ej akut)]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml_mt = get_execute_cellset_response_with_backend(
+                mdx_mt, &backend, &project.model,
+            );
+            assert!(xml_mt.contains("<CellData>"), "Medeltid execution should produce cellset");
+            let mt_val = extract_cell_value(&xml_mt)
+                .expect("Medeltid cellset should contain <Value>");
+            let mt_parsed: f64 = mt_val.parse().expect("Medeltid value should be numeric");
+            assert!(mt_parsed > 0.0, "Medeltid should return > 0 through proxy execution, got {mt_parsed}");
         });
     }
 }

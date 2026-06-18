@@ -65,6 +65,25 @@ pub fn init_project(config_path: Option<&str>) -> Result<(), String> {
     PROJECT.set(p).map_err(|_| "project already initialised".into())
 }
 
+/// Resolve `db_path` relative to the directory containing the config file.
+/// If `db_path` is None, returns None.  If `db_path` is absolute, returns it
+/// unchanged.  This is the canonical resolution rule shared by `serve`,
+/// `qualify`, and `trace_replay`.
+pub fn resolve_db_path(config_path: &str, db_path: Option<&str>) -> Option<String> {
+    db_path.map(|db| {
+        let p = Path::new(db);
+        if p.is_absolute() {
+            return db.to_string();
+        }
+        Path::new(config_path)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(db)
+            .to_string_lossy()
+            .to_string()
+    })
+}
+
 pub struct ProxyProject {
     pub config: ProxyConfig,
     pub model: SemanticModel,
@@ -1057,5 +1076,31 @@ mod tests {
         assert_eq!(p.model.date_dim.as_ref().unwrap().dimension_id, "Dates");
         // date_dims contains the Dates entry
         assert!(p.model.date_dims.contains_key("Dates"));
+    }
+
+    // ---- resolve_db_path canonical behaviour ----
+
+    #[test]
+    fn resolve_db_path_relative_resolves_against_config_dir() {
+        let resolved = resolve_db_path(
+            "generated_retail_analytics/proxy-config.json",
+            Some("data/sales.db"),
+        );
+        assert_eq!(resolved, Some("generated_retail_analytics/data/sales.db".into()));
+    }
+
+    #[test]
+    fn resolve_db_path_absolute_is_passthrough() {
+        let resolved = resolve_db_path(
+            "any/proxy-config.json",
+            Some("/abs/path/db.db"),
+        );
+        assert_eq!(resolved, Some("/abs/path/db.db".into()));
+    }
+
+    #[test]
+    fn resolve_db_path_none_is_none() {
+        let resolved = resolve_db_path("any/proxy-config.json", None);
+        assert_eq!(resolved, None);
     }
 }

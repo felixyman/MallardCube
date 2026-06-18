@@ -1,11 +1,11 @@
 -- SQL fallback for: Medeltid Undersökningsslut till signering (ej akut)
--- Original DAX:  AVERAGEX( KEEPFILTERS(VALUES('dw_fys F_Undersökning'[Remissnummer])), CALCULATE(AVERAGE('dw_fys F_Undersökning'[Undersökningsslut till signering - ej akut])) )
---
--- Pattern notes:
---   AVERAGEX — row-level iteration
---   KEEPFILTERS — filter context preservation
---
--- TODO: Implement DuckDB SQL equivalent.
--- Runs via the proxy's direct SQL fallback path.
+-- Original DAX: AVERAGEX(KEEPFILTERS(VALUES(...)), AVERAGE(...))
+-- Per remissnummer average of undersökningsslut_till_signering_ej_akut,
+-- then average of those per-remiss values.
 
-SELECT 1 AS dummy;
+SELECT AVG(avg_per_remiss) AS value
+FROM (
+    SELECT AVG(undersökningsslut_till_signering_ej_akut) AS avg_per_remiss
+    FROM dw_fys_f_undersökning
+    GROUP BY remissnummer
+) sub
