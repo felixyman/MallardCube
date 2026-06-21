@@ -115,6 +115,8 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub relationships: Vec<RelationshipConfig>,
     #[serde(default)]
+    pub roles: Vec<RoleConfig>,
+    #[serde(default)]
     pub time_intelligence: Option<TimeIntelligenceConfig>,
     pub dimensions: Vec<DimensionConfig>,
     pub measures: Vec<MeasureConfig>,
@@ -135,6 +137,23 @@ pub struct RelationshipConfig {
     pub dimension_id: String,
     pub dim_table: String,
     pub dim_column: String,
+}
+
+/// Security role detected during Tabular model conversion.
+///
+/// Deliberately minimal: captures role name and description only.
+/// Does NOT capture full SSAS role semantics (table permissions, row filters,
+/// member security). The proxy does not enforce roles at runtime — they are
+/// informational, surfacing in `qualify` as PARTIAL to remind operators that
+/// security must be handled outside the proxy.
+///
+/// An `enforced` field is intentionally omitted (YAGNI): no role will be
+/// `enforced: true` until runtime enforcement is implemented.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoleConfig {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

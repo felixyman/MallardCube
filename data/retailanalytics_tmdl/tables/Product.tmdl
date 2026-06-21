@@ -1,0 +1,11 @@
+table Product
+	column ProductKey
+		dataType: int64
+		sourceColumn: ProductKey
+		isKey
+	column ProductName
+		dataType: string
+		sourceColumn: ProductName
+		isHidden: true
+	partition Product = m
+		mode: import

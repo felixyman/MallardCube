@@ -128,6 +128,12 @@
       "dim_column": "fakturamottagareid"
     }
   ],
+  "roles": [
+    {
+      "name": "fys_läsbehörighet",
+      "description": "Läsbehörighet för fys-data"
+    }
+  ],
   "dimensions": [
     {
       "id": "dw_fys D_Beställare",

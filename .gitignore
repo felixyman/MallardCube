@@ -4,3 +4,4 @@ debug-last-run.log
 xmla-trace.jsonl
 data/generated.db
 /js/node_modules
+.slim/deepwork/

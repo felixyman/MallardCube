@@ -28,11 +28,14 @@ enum Command {
     Serve,
     /// Convert a Tabular Editor export to proxy project
     ConvertTabular {
-        /// Path to Tabular Editor source directory
+        /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
         src_dir: String,
         /// Output directory (default: generated_project)
         #[arg(default_value = "generated_project")]
         out_dir: String,
+        /// Number of dummy rows for fact tables (default: 10000)
+        #[arg(long, default_value = "10000")]
+        dummy_rows: usize,
     },
     /// Replay an XMLA trace against the current project
     TraceReplay {
@@ -50,7 +53,7 @@ enum Command {
     },
     /// Build inventory report from a Tabular Editor export
     Inventory {
-        /// Path to Tabular Editor source directory
+        /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
         src_dir: String,
     },
     /// Seed DuckDB with generated_project test data
@@ -94,9 +97,9 @@ async fn main() {
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_server().await,
-        Command::ConvertTabular { src_dir, out_dir } => {
+        Command::ConvertTabular { src_dir, out_dir, dummy_rows } => {
             std::process::exit(xmla_proxy::tools::convert_tabular::run(
-                vec!["convert-tabular".into(), src_dir, out_dir],
+                vec!["convert-tabular".into(), src_dir, out_dir, format!("--dummy-rows={}", dummy_rows)],
             ));
         }
         Command::TraceReplay { trace_path, project } => {

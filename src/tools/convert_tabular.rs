@@ -1,6 +1,12 @@
 use std::fs;
 use std::path::Path;
 
+use super::data_loader;
+use super::parse_bim;
+use super::parse_folder;
+use super::parse_tmdl;
+use super::tabular_model::*;
+
 // ---- conversion model ----
 
 struct ConversionModel {
@@ -13,56 +19,82 @@ struct ConversionModel {
     lookup_tables: Vec<TableInfo>,
     relationships: Vec<RelInfo>,
     roles: Vec<RoleInfo>,
+    data_sources: Vec<DataSourceInfo>,
 }
 
-struct TableInfo {
-    name: String,
-    ssas_name: String,
-    description: String,
-    columns: Vec<ColumnInfo>,
-    measures: Vec<MeasureInfo>,
-    is_m_partition: bool,
-    is_calculated: bool,
-}
-
-struct ColumnInfo {
-    name: String,
-    data_type: String,
-    source_column: String,
-    is_hidden: bool,
-}
-
-#[derive(Debug, Clone)]
-struct MeasureInfo {
-    name: String,
-    expression: Vec<String>,
-    display_folder: String,
-    classification: String,
-}
-
-struct RelInfo {
-    from_table: String,
-    from_column: String,
-    to_table: String,
-    to_column: String,
-}
-
-struct RoleInfo {
-    name: String,
-    description: String,
+impl ConversionModel {
+    /// Reconstruct a `TabularModel` from this classified model.
+    /// Used by the data loader renderers which operate on `TabularModel`.
+    fn to_tabular_model(&self) -> TabularModel {
+        TabularModel {
+            name: self.catalog.clone(),
+            compatibility_level: 0,
+            tables: std::iter::once(&self.fact_table)
+                .chain(&self.dimensions)
+                .chain(&self.date_roles)
+                .chain(&self.lookup_tables)
+                .cloned()
+                .collect(),
+            relationships: self.relationships.clone(),
+            roles: self.roles.clone(),
+            data_sources: self.data_sources.clone(),
+        }
+    }
 }
 
 pub fn run(args: Vec<String>) -> i32 {
     let src_dir = match args.get(1) {
         Some(d) => d,
         None => {
-                eprintln!("Usage: mallardcube convert-tabular <tabulareditor_src> [output_dir]");
+                eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
+                eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
                 return 1;
             }
         };
         let out_dir = args.get(2).cloned().unwrap_or_else(|| "generated_project".into());
+ 
+         let mut dummy_rows = 10000usize;
+         for arg in &args {
+             if let Some(val) = arg.strip_prefix("--dummy-rows=") {
+                 if let Ok(n) = val.parse::<usize>() {
+                     dummy_rows = n;
+                 }
+             }
+         }
+ 
+         let src_path = Path::new(src_dir);
+        if !src_path.exists() {
+            eprintln!("Error: Path '{}' does not exist", src_dir);
+            return 1;
+        }
+        let detected = detect_format(src_path);
+        let format_name = match detected {
+            Some(TabularFormat::Bim) => "BIM",
+            Some(TabularFormat::Tmdl) => "TMDL",
+            Some(TabularFormat::Folder) => "folder",
+            None => "",
+        };
+        if !format_name.is_empty() {
+            eprintln!("Detected format: {}", format_name);
+        }
+        let (parsed, warnings) = match detected {
+            Some(TabularFormat::Bim) => parse_bim::parse_model(src_dir),
+            Some(TabularFormat::Tmdl) => parse_tmdl::parse_model(src_dir),
+            Some(TabularFormat::Folder) => parse_folder::parse_model(src_dir),
+            None => {
+                eprintln!("Error: '{}' is neither a .bim file nor a directory with Tabular Editor files", src_dir);
+                eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
+                return 1;
+            }
+        };
+    for w in &warnings {
+        eprintln!("WARNING: {}", w);
+    }
+    let mut model = classify_model(parsed);
 
-    let mut model = parse_model(&src_dir);
+    let total = 1 + model.dimensions.len() + model.date_roles.len() + model.calculated_tables.len() + model.lookup_tables.len();
+    eprintln!("Classified {} tables ({} fact, {} dimension, {} date-role, {} calculated, {} lookup)",
+        total, 1, model.dimensions.len(), model.date_roles.len(), model.calculated_tables.len(), model.lookup_tables.len());
 
     fs::create_dir_all(&out_dir).expect("create output dir");
     fs::create_dir_all(format!("{out_dir}/sql_fallback")).ok();
@@ -74,7 +106,7 @@ pub fn run(args: Vec<String>) -> i32 {
         .chain(model.date_roles.iter_mut().flat_map(|t| &mut t.measures))
     {
         if meas.classification == "simple" {
-            let dax_expr = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
+            let dax_expr = meas.expression.as_str();
             if dax_to_sql_hint(dax_expr, &meas.classification).is_none() {
                 meas.classification = "sql_fallback".to_string();
             }
@@ -93,37 +125,63 @@ pub fn run(args: Vec<String>) -> i32 {
     fs::write(format!("{out_dir}/proxy-config.json"), render_proxy_config(&model)).expect("write config");
     fs::write(format!("{out_dir}/model.malloy"), render_malloy(&model)).expect("write malloy");
     fs::write(format!("{out_dir}/schema.sql"), render_schema(&model)).expect("write schema");
+
+    // Data loading scripts
+    let fact_names: Vec<String> = vec![model.fact_table.name.clone()];
+    let date_role_names: Vec<String> = model.date_roles.iter().map(|t| t.name.clone()).collect();
+
+    // Reconstruct TabularModel for load script generators
+    let tabular_model = model.to_tabular_model();
+
+    fs::write(format!("{out_dir}/load_data.sql"),
+        data_loader::render_load_script(&tabular_model, &fact_names, &date_role_names))
+        .expect("write load_data.sql");
+
+    let dim_rows = (dummy_rows / 10).max(100);
+    fs::write(format!("{out_dir}/load_dummy_data.sql"),
+        data_loader::render_dummy_data_script(&tabular_model, &fact_names, &date_role_names, dummy_rows, dim_rows))
+        .expect("write load_dummy_data.sql");
+
     fs::write(format!("{out_dir}/conversion-report.md"), render_report(&model)).expect("write report");
 
-    // Bootstrap assets: seed_date_dim.sql for time-intelligence projects
+    // Bootstrap script (always emitted)
+    let cube_db = format!("{}.db", malloy_name(&model.cube));
+    fs::create_dir_all(format!("{out_dir}/data")).ok();
+
+    let mut bootstrap = format!(
+        "-- Bootstrap script for {cube}\n\
+         -- Run against DuckDB to create a runnable database.\n\
+         --   duckdb {cube_db} < bootstrap.sql\n\n\
+         .read schema.sql\n",
+        cube = model.cube,
+        cube_db = cube_db,
+    );
+
     if !model.date_roles.is_empty() {
         let seed_sql = include_str!("../../data/seed_date_dim.sql");
         fs::write(format!("{out_dir}/seed_date_dim.sql"), seed_sql).ok();
-
-        let cube_db = format!("{}.db", malloy_name(&model.cube));
-        fs::create_dir_all(format!("{out_dir}/data")).ok();
-        let bootstrap = format!(
-            "-- Bootstrap script for {cube}\n\
-             -- Run against DuckDB to create a runnable database.\n\
-             --   duckdb {cube_db} < bootstrap.sql\n\n\
-             .read schema.sql\n\
-             .read seed_date_dim.sql\n",
-            cube = model.cube,
-            cube_db = cube_db,
-        );
-        fs::write(format!("{out_dir}/bootstrap.sql"), bootstrap).ok();
+        bootstrap.push_str(".read seed_date_dim.sql\n");
     }
 
+    bootstrap.push_str(".read load_dummy_data.sql\n");
+    bootstrap.push_str("\n-- For real data, replace the line above with:\n");
+    bootstrap.push_str("-- .read load_data.sql\n");
+
+    fs::write(format!("{out_dir}/bootstrap.sql"), bootstrap).expect("write bootstrap.sql");
+
     eprintln!("Generated project in {out_dir}/");
+    eprintln!("  Files: proxy-config.json, model.malloy, schema.sql, load_data.sql, load_dummy_data.sql, bootstrap.sql, conversion-report.md");
     0
 }
 
-// ---- parser ----
+// ---- model classification ----
 
-fn parse_model(src_dir: &str) -> ConversionModel {
-    let tables = parse_all_tables(&format!("{src_dir}/tables"));
-    let rels = parse_relationships(&format!("{src_dir}/relationships"));
-    let roles = parse_roles(&format!("{src_dir}/roles"));
+fn classify_model(parsed: TabularModel) -> ConversionModel {
+    let model_name = parsed.name.clone();
+    let mut tables = parsed.tables;
+    let rels = parsed.relationships;
+    let roles = parsed.roles;
+    let data_sources = parsed.data_sources;
 
     // Classify tables
     let mut fact = Vec::new();
@@ -132,8 +190,8 @@ fn parse_model(src_dir: &str) -> ConversionModel {
     let mut calcs = Vec::new();
     let mut lookups = Vec::new();
 
-    for t in tables {
-        if t.is_calculated {
+    for t in tables.drain(..) {
+        if t.is_calculated() {
             calcs.push(t);
         } else {
             let lower = t.name.to_lowercase();
@@ -182,7 +240,7 @@ fn parse_model(src_dir: &str) -> ConversionModel {
         TableInfo {
             name: "unknown".into(), ssas_name: "unknown".into(),
             description: String::new(), columns: vec![], measures: vec![],
-            is_m_partition: false, is_calculated: false,
+            partitions: vec![], hierarchies: vec![],
         }
     };
 
@@ -193,7 +251,7 @@ fn parse_model(src_dir: &str) -> ConversionModel {
     ft.measures.append(&mut calc_measures);
 
     ConversionModel {
-        catalog: ssas_name_to_id("SemanticModel"),
+        catalog: ssas_name_to_id(&model_name),
         cube: ssas_name_to_id(&ft.ssas_name),
         fact_table: ft,
         dimensions: dims,
@@ -202,217 +260,7 @@ fn parse_model(src_dir: &str) -> ConversionModel {
         lookup_tables: lookups,
         relationships: rels,
         roles,
-    }
-}
-
-fn parse_all_tables(dir: &str) -> Vec<TableInfo> {
-    let mut tables = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return tables; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() { continue; }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-
-        let meta_path = path.join(format!("{name}.json"));
-        let (ssas_name, desc) = parse_table_meta(&meta_path);
-
-        let columns = parse_columns(&path.join("columns"));
-        let measures = parse_measures(&path.join("measures"));
-        let partitions = parse_partitions(&path.join("partitions"));
-
-        let is_m = partitions.iter().any(|(_, st)| st == "m");
-        let is_calc = partitions.iter().any(|(_, st)| st == "calculated");
-
-        tables.push(TableInfo {
-            name,
-            ssas_name,
-            description: desc,
-            columns,
-            measures,
-            is_m_partition: is_m,
-            is_calculated: is_calc,
-        });
-    }
-    tables
-}
-
-fn parse_table_meta(path: &Path) -> (String, String) {
-    if let Ok(text) = fs::read_to_string(path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-            let ssas = v["name"].as_str().unwrap_or("").to_string();
-            let desc = v["description"].as_str().unwrap_or("").to_string();
-            return (ssas, desc);
-        }
-    }
-    (String::new(), String::new())
-}
-
-fn parse_columns(dir: &Path) -> Vec<ColumnInfo> {
-    let mut cols = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return cols; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let dt = v["dataType"].as_str().unwrap_or("string").to_string();
-                let sc = v["sourceColumn"].as_str().unwrap_or(&name).to_string();
-                let hidden = v["isHidden"].as_bool().unwrap_or(false);
-                cols.push(ColumnInfo { name, data_type: dt, source_column: sc, is_hidden: hidden });
-            }
-        }
-    }
-    cols.sort_by(|a, b| a.name.cmp(&b.name));
-    cols
-}
-
-fn parse_measures(dir: &Path) -> Vec<MeasureInfo> {
-    let mut measures = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return measures; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let expr = flatten_json_array(&v["expression"]);
-                let folder = v["displayFolder"].as_str().unwrap_or("").to_string();
-                let classification = classify_dax(&expr);
-                measures.push(MeasureInfo { name, expression: vec![expr], display_folder: folder, classification });
-            }
-        }
-    }
-    measures.sort_by(|a, b| a.name.cmp(&b.name));
-    measures
-}
-
-fn parse_partitions(dir: &Path) -> Vec<(String, String)> {
-    let mut parts = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return parts; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let st = v["source"]["type"].as_str().unwrap_or("").to_string();
-                parts.push((name, st));
-            }
-        }
-    }
-    parts
-}
-
-fn parse_relationships(dir: &str) -> Vec<RelInfo> {
-    let mut rels = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return rels; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                rels.push(RelInfo {
-                    from_table: v["fromTable"].as_str().unwrap_or("").to_string(),
-                    from_column: v["fromColumn"].as_str().unwrap_or("").to_string(),
-                    to_table: v["toTable"].as_str().unwrap_or("").to_string(),
-                    to_column: v["toColumn"].as_str().unwrap_or("").to_string(),
-                });
-            }
-        }
-    }
-    rels
-}
-
-fn parse_roles(dir: &str) -> Vec<RoleInfo> {
-    let mut roles = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return roles; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                roles.push(RoleInfo {
-                    name: v["name"].as_str().unwrap_or("").to_string(),
-                    description: v["description"].as_str().unwrap_or("").to_string(),
-                });
-            }
-        }
-    }
-    roles
-}
-
-fn flatten_json_array(arr: &serde_json::Value) -> String {
-    match arr {
-        serde_json::Value::Array(vals) => vals.iter()
-            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-            .collect::<Vec<_>>()
-            .join(" "),
-        serde_json::Value::String(s) => s.clone(),
-        _ => String::new(),
-    }
-}
-
-/// Normalize Tabular Editor DAX whitespace: `CALCULATE (` → `CALCULATE(`.
-/// Most exporters add spaces before/after parentheses that our classifiers
-/// and expression lowerers don't expect.
-fn normalize_dax(s: &str) -> String {
-    let s = s.trim();
-    let s = if let Some(idx) = s.find("//") { &s[..idx] } else { s };
-    s.trim()
-        .trim_start_matches('=')
-        .trim()
-        .replace(" (", "(")
-        .replace("( ", "(")
-        .replace(" )", ")")
-}
-
-fn classify_dax(expr: &str) -> String {
-    let expr = normalize_dax(expr);
-    let upper = expr.to_uppercase();
-    // Time intelligence: emit structured date-flag measures instead of sql_fallback
-    if upper.contains("TOTALYTD") || upper.contains("DATESYTD") { return "time_ytd".into(); }
-    if upper.contains("SAMEPERIODLASTYEAR") { return "time_prior_year".into(); }
-    if upper.contains("ALLSELECTED") || upper.contains("ISONORAFTER") || (upper.contains("CALCULATE(") && upper.contains("FILTER(")) { return "sql_fallback".into(); }
-    if upper.contains("ALL(") || upper.contains("ALLEXCEPT") || upper.contains("KEEPFILTERS") { return "sql_fallback".into(); }
-    if upper.contains("SUMX(") || upper.contains("AVERAGEX(") || upper.contains("MAXX(") || upper.contains("RANKX(") { return "sql_fallback".into(); }
-    if upper.contains("TODAY()") || upper.contains("NOW()") || upper.contains("UTCNOW()") || upper.contains("SAMEPERIODLASTYEAR") { return "sql_fallback".into(); }
-    if upper.contains("CALCULATE(") {
-        if !upper.contains("ALL(") && !upper.contains("FILTER(") && !upper.contains("KEEPFILTERS") { return "simple".into(); }
-        return "sql_fallback".into();
-    }
-    if upper.contains("MEDIAN(") || upper.contains("PERCENTILE(") { return "sql_fallback".into(); }
-    let trimmed = expr.trim();
-    if trimmed.parse::<f64>().is_ok() || trimmed.starts_with('"') { return "simple".into(); }
-    if upper.contains("SUM(") || upper.contains("COUNT(") || upper.contains("COUNTA(") || upper.contains("COUNTROWS(") || upper.contains("DISTINCTCOUNT(") || upper.contains("MIN(") || upper.contains("MAX(") || upper.contains("AVERAGE(") { return "simple".into(); }
-    if upper.contains("DIVIDE(") {
-        if upper.contains("CALCULATE(") && !upper.contains("ALLSELECTED") && !upper.contains("ISONORAFTER")
-            && !upper.contains("ALL(") && !upper.contains("FILTER(") {
-            return "simple".into();
-        }
-        return "simple".into();
-    }
-    if upper.contains("DATATABLE(") { return "calculated_table".into(); }
-    // Arithmetic between measure/column references: [A] - [B], [A] * [B], etc.
-    if expr.contains('[') && expr.contains(']')
-        && (expr.contains("- [") || expr.contains("+ [") || expr.contains("* [") || expr.contains("/ ["))
-    {
-        return "sql_fallback".into();
-    }
-    "manual".into()
-}
-
-fn ssas_name_to_id(name: &str) -> String {
-    name.replace(' ', "_").replace('-', "_").to_uppercase()
-}
-
-fn malloy_name(name: &str) -> String {
-    name.to_lowercase().replace(' ', "_").replace('-', "_")
-}
-
-fn duckdb_type(bim_type: &str) -> &str {
-    match bim_type {
-        "int64" => "BIGINT",
-        "double" => "DOUBLE",
-        "string" => "VARCHAR",
-        "dateTime" => "TIMESTAMP",
-        "boolean" => "BOOLEAN",
-        _ => "VARCHAR",
+        data_sources,
     }
 }
 
@@ -424,6 +272,7 @@ fn render_proxy_config(m: &ConversionModel) -> String {
     let meas = render_measure_configs(m);
     let facts = render_fact_table_configs(m);
     let rels = render_relationships(m);
+    let roles = render_roles(m);
     let ti_block = render_time_intelligence_block(m);
 
     format!(
@@ -440,6 +289,9 @@ fn render_proxy_config(m: &ConversionModel) -> String {
   ],
   "relationships": [
 {rels}
+  ],
+  "roles": [
+{roles}
   ],{ti}
   "dimensions": [
 {dims}
@@ -455,10 +307,28 @@ fn render_proxy_config(m: &ConversionModel) -> String {
         db_path = if m.date_roles.is_empty() { "null".to_string() } else { format!("\"data/{}.db\"", malloy_name(&m.cube)) },
         facts = facts,
         rels = rels,
+        roles = roles,
         ti = ti_block,
         dims = dims,
         meas = meas,
     ).replace("{{", "{").replace("}}", "}")
+}
+
+fn render_roles(m: &ConversionModel) -> String {
+    let mut out = String::new();
+    for (i, r) in m.roles.iter().enumerate() {
+        out.push_str(&format!(
+            r##"    {{{{
+      "name": "{}",
+      "description": "{}"
+    }}}}"##,
+            r.name, r.description,
+        ).replace("{{", "{").replace("}}", "}"));
+        if i + 1 < m.roles.len() {
+            out.push_str(",\n");
+        }
+    }
+    out
 }
 
 fn render_fact_table_configs(m: &ConversionModel) -> String {
@@ -585,7 +455,7 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         .chain(m.date_roles.iter().flat_map(|t| &t.measures))
         .collect();
     for (i, meas) in all_measures.iter().enumerate() {
-        let dax_expr = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
+        let dax_expr = meas.expression.as_str();
         // For time measures, extract the inner aggregation for the sql_expr.
         let (time_class, flag_col, time_dim_id) = match meas.classification.as_str() {
             "time_ytd" => ("time_ytd", "ytd_flag",
@@ -925,7 +795,7 @@ fn render_malloy(m: &ConversionModel) -> String {
     // Emit simple measures
     for meas in &ft.measures {
         if meas.classification == "simple" {
-            let expr = meas.expression.first().map(|s| s.as_str()).unwrap_or("");
+            let expr = meas.expression.as_str();
             let malloy_expr = dax_to_malloy_expr(expr);
             out.push_str(&format!("  measure: {} is {malloy_expr}  -- {}\n",
                 malloy_name(&meas.name), meas.name));
@@ -988,10 +858,7 @@ fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String 
 }
 
 fn generate_fallback_sql_recursive(meas: &MeasureInfo, model: &ConversionModel, visited: &mut Vec<String>) -> String {
-    let dax_raw = meas.expression.iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let dax_raw = meas.expression.clone();
     let dax = dax_raw.trim_start().trim_start_matches("=").trim().to_string();
     let dax_one_line = normalize_dax(&dax);
     let upper_one = dax_one_line.to_uppercase();
@@ -1481,8 +1348,10 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str(&format!("- Relationships: {}\n", m.relationships.len()));
     out.push_str(&format!("- Measures: {} (simple: {}, sql_fallback: {}, manual: {})\n",
         m.fact_table.measures.len(), simple.len(), fallback.len(), manual.len()));
-    out.push_str(&format!("- M-partition tables: {} (all must be loaded manually)\n\n",
-        if m.fact_table.is_m_partition { 1usize } else { 0 } + m.dimensions.iter().filter(|t| t.is_m_partition).count() + m.date_roles.iter().filter(|t| t.is_m_partition).count()));
+    out.push_str(&format!("- M-partition tables: {} (load_data.sql attempts automated loading, see load_data.sql for details)\n\n",
+        if m.fact_table.is_m_partition() { 1usize } else { 0 }
+        + m.dimensions.iter().filter(|t| t.is_m_partition()).count()
+        + m.date_roles.iter().filter(|t| t.is_m_partition()).count()));
 
     // Join map
     out.push_str("## Join Map\n\n");
@@ -1497,7 +1366,7 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("## Simple measures (Malloy)\n\n");
     out.push_str("| Measure | DAX | Malloy |\n|---|---|---|\n");
     for m in &simple {
-        let dax = m.expression.first().map(|s| s.as_str()).unwrap_or("");
+        let dax = m.expression.as_str();
         let malloy = dax_to_malloy_expr(dax);
         out.push_str(&format!("| {} | {} | {} |\n", m.name, dax, malloy));
     }
@@ -1505,7 +1374,7 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("\n## SQL fallback measures\n\n");
     out.push_str("| Measure | DAX pattern | Fallback file |\n|---|---|---|\n");
     for m in &fallback {
-        let dax = m.expression.first().map(|s| s.as_str()).unwrap_or("");
+        let dax = m.expression.as_str();
         out.push_str(&format!("| {} | {} | sql_fallback/{}.sql |\n",
             m.name, dax, malloy_name(&m.name)));
     }
@@ -1514,30 +1383,33 @@ fn render_report(m: &ConversionModel) -> String {
         out.push_str("\n## Manual review required\n\n");
         out.push_str("| Measure | DAX pattern |\n|---|---|\n");
         for m in &manual {
-            out.push_str(&format!("| {} | {} |\n", m.name, m.expression.first().map(|s| s.as_str()).unwrap_or("")));
+            out.push_str(&format!("| {} | {} |\n", m.name, m.expression.as_str()));
         }
     }
 
-    out.push_str("\n## Data loading checklist\n\n");
-    out.push_str("All tables use M (Power Query) partitions and must be loaded into DuckDB manually.\n\n");
+    out.push_str("\n## Data loading\n\n");
+    out.push_str("The converter generates three SQL files for data loading:\n\n");
+    out.push_str("- `schema.sql` — CREATE TABLE statements (run first)\n");
+    out.push_str("- `load_data.sql` — loads real data from source databases (requires DuckDB extensions or CSV files)\n");
+    out.push_str("- `load_dummy_data.sql` — generates synthetic data for testing (always works)\n\n");
 
-    if !m.date_roles.is_empty() {
-        let cube_db = format!("{}.db", malloy_name(&m.cube));
-        out.push_str(&format!(
-            "**Quick start (with date-dimension bootstrap):**\n\n\
-             ```\n\
-             duckdb data/{cube_db} < bootstrap.sql\n\
-             ```\n\n\
-             This creates the schema, seeds a populated `date_dim` calendar table, and\n\
-             sets `db_path` in `proxy-config.json`. Then load your own data into the\n\
-             listed tables below.\n\n",
-            cube_db = cube_db,
-        ));
+    if !m.data_sources.is_empty() {
+        out.push_str("### Data sources detected\n\n");
+        out.push_str("| Name | Provider | Server | Database |\n|---|---|---|---|\n");
+        for ds in &m.data_sources {
+            out.push_str(&format!("| {} | {} | {} | {} |\n", ds.name, ds.provider, ds.server, ds.database));
+        }
+        out.push('\n');
     }
 
-    out.push_str("Run `schema.sql` to create the tables, then load data via:\n\n");
-    out.push_str("- DuckDB CLI: `INSERT INTO ... SELECT ... FROM 'source.csv'`\n");
-    out.push_str("- Or export your SSAS source to Parquet/CSV and import into DuckDB.\n\n");
+    out.push_str("### Quick start\n\n");
+    let cube_db = format!("{}.db", malloy_name(&m.cube));
+    out.push_str(&format!(
+        "```\nduckdb data/{cube_db} < bootstrap.sql\n```\n\n\
+         This creates the schema, seeds `date_dim` (if needed), and loads dummy data.\n\
+         For real data, edit `bootstrap.sql` to use `load_data.sql` instead.\n\n",
+        cube_db = cube_db,
+    ));
 
     out.push_str("### Tables to load\n\n");
     out.push_str(&format!("- [ ] `{}` (fact)\n", malloy_name(&m.fact_table.name)));
@@ -1545,7 +1417,7 @@ fn render_report(m: &ConversionModel) -> String {
         out.push_str(&format!("- [ ] `{}` (dimension)\n", malloy_name(&t.name)));
     }
     for t in &m.date_roles {
-        out.push_str(&format!("- [ ] `{}` (date-role)\n", malloy_name(&t.name)));
+        out.push_str(&format!("- [ ] `{}` (date-role, seeded by seed_date_dim.sql)\n", malloy_name(&t.name)));
     }
     for t in &m.lookup_tables {
         out.push_str(&format!("- [ ] `{}` (lookup)\n", malloy_name(&t.name)));
@@ -1581,31 +1453,31 @@ mod tests {
             measures: vec![
                 MeasureInfo {
                     name: "Total Sales".into(),
-                    expression: vec!["= CALCULATE ( SUM ( 'Orders'[Amount] ), 'Orders'[Status] = 1 )".into()],
+                    expression: "= CALCULATE ( SUM ( 'Orders'[Amount] ), 'Orders'[Status] = 1 )".into(),
                     display_folder: String::new(),
                     classification: "sql_fallback".into(),
                 },
                 MeasureInfo {
                     name: "Total Cost".into(),
-                    expression: vec!["= SUMX ( FILTER ( 'Orders', 'Orders'[Status] = 1 ), 'Orders'[Qty] * RELATED ( 'Items'[Unit Cost] ) )".into()],
+                    expression: "= SUMX ( FILTER ( 'Orders', 'Orders'[Status] = 1 ), 'Orders'[Qty] * RELATED ( 'Items'[Unit Cost] ) )".into(),
                     display_folder: String::new(),
                     classification: "sql_fallback".into(),
                 },
                 MeasureInfo {
                     name: "Net Profit".into(),
-                    expression: vec!["= [Total Sales] - [Total Cost]".into()],
+                    expression: "= [Total Sales] - [Total Cost]".into(),
                     display_folder: String::new(),
                     classification: "sql_fallback".into(),
                 },
                 MeasureInfo {
                     name: "Margin Pct".into(),
-                    expression: vec!["= DIVIDE ( [Net Profit], [Total Sales], 0 )".into()],
+                    expression: "= DIVIDE ( [Net Profit], [Total Sales], 0 )".into(),
                     display_folder: String::new(),
                     classification: "sql_fallback".into(),
                 },
             ],
-            is_m_partition: false,
-            is_calculated: false,
+            partitions: vec![],
+            hierarchies: vec![],
         };
 
         let items = TableInfo {
@@ -1617,8 +1489,8 @@ mod tests {
                 ColumnInfo { name: "unitcost".into(), data_type: "double".into(), source_column: "unitcost".into(), is_hidden: false },
             ],
             measures: vec![],
-            is_m_partition: false,
-            is_calculated: false,
+            partitions: vec![],
+            hierarchies: vec![],
         };
 
         ConversionModel {
@@ -1636,6 +1508,7 @@ mod tests {
                 to_column: "Item ID".into(),
             }],
             roles: vec![],
+            data_sources: vec![],
         }
     }
 
@@ -1691,5 +1564,187 @@ mod tests {
         assert!(!source.contains("\"TOTAL REVENUE\""), "no hardcoded TOTAL REVENUE");
         assert!(!source.contains("\"TOTAL COGS\""), "no hardcoded TOTAL COGS");
         assert!(!source.contains("\"GROSS PROFIT\""), "no hardcoded GROSS PROFIT");
+    }
+
+    #[test]
+    fn test_conversion_model_has_data_sources() {
+        let mut parsed = TabularModel {
+            name: "Test".into(),
+            compatibility_level: 1500,
+            tables: vec![],
+            relationships: vec![],
+            roles: vec![],
+            data_sources: vec![DataSourceInfo {
+                name: "Src".into(),
+                provider: "SqlClient".into(),
+                server: "srv".into(),
+                database: "db".into(),
+                connection_string: "".into(),
+            }],
+        };
+        // Add at least one table to avoid panic
+        parsed.tables.push(TableInfo {
+            name: "Sales".into(),
+            ssas_name: "Sales".into(),
+            description: String::new(),
+            columns: vec![ColumnInfo {
+                name: "Amount".into(),
+                data_type: "double".into(),
+                source_column: "amount".into(),
+                is_hidden: false,
+            }],
+            measures: vec![],
+            partitions: vec![],
+            hierarchies: vec![],
+        });
+        let model = classify_model(parsed);
+        assert_eq!(model.data_sources.len(), 1);
+        assert_eq!(model.data_sources[0].name, "Src");
+        assert_eq!(model.data_sources[0].server, "srv");
+    }
+
+    #[test]
+    fn test_run_emits_load_scripts() {
+        let src = "data/retailanalytics_tabular";
+        let out_dir = std::env::temp_dir().join("test_run_emits_load_scripts");
+        let _ = fs::remove_dir_all(&out_dir);
+        let out_str = out_dir.to_string_lossy().to_string();
+
+        let code = run(vec![
+            "convert-tabular".into(),
+            src.into(),
+            out_str,
+            "--dummy-rows=5000".into(),
+        ]);
+        assert_eq!(code, 0);
+
+        assert!(out_dir.join("load_data.sql").exists(), "load_data.sql should exist");
+        assert!(out_dir.join("load_dummy_data.sql").exists(), "load_dummy_data.sql should exist");
+        assert!(out_dir.join("bootstrap.sql").exists(), "bootstrap.sql should exist");
+        assert!(out_dir.join("proxy-config.json").exists(), "proxy-config.json should exist");
+
+        // Verify dummy data uses the flag value
+        let dummy = fs::read_to_string(out_dir.join("load_dummy_data.sql")).unwrap();
+        assert!(dummy.contains("generate_series(1, 5000)"), "should use --dummy-rows=5000 for fact table");
+        assert!(dummy.contains("generate_series(1, 500)"), "dimension table rows should be dummy_rows/10");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&out_dir);
+    }
+
+    #[test]
+    fn test_run_always_emits_bootstrap() {
+        // Create a minimal .bim file with no date roles
+        let src_dir = std::env::temp_dir().join("test_no_date_model");
+        let _ = fs::create_dir_all(&src_dir);
+        let bim_path = src_dir.join("model.bim");
+        // Minimal BIM with a single table and no date tables
+        let bim_content = r#"{
+  "name": "NoDate",
+  "compatibilityLevel": 1500,
+  "model": {
+    "tables": [
+      {
+        "name": "Sales",
+        "columns": [
+          { "name": "Amount", "dataType": "double", "sourceColumn": "amount" }
+        ],
+        "partitions": [
+          {
+            "name": "Part",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM dbo.sales"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Products",
+        "columns": [
+          { "name": "Name", "dataType": "string", "sourceColumn": "name" }
+        ],
+        "partitions": [
+          {
+            "name": "Part",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM dbo.products"
+            }
+          }
+        ]
+      }
+    ],
+    "relationships": []
+  }
+}"#;
+        fs::write(&bim_path, bim_content).unwrap();
+
+        let out_dir = std::env::temp_dir().join("test_no_date_out");
+        let _ = fs::remove_dir_all(&out_dir);
+        let out_str = out_dir.to_string_lossy().to_string();
+
+        let code = run(vec![
+            "convert-tabular".into(),
+            bim_path.to_string_lossy().to_string(),
+            out_str,
+        ]);
+        assert_eq!(code, 0);
+
+        // bootstrap.sql must always be emitted
+        assert!(out_dir.join("bootstrap.sql").exists(), "bootstrap.sql should always exist");
+        assert!(!out_dir.join("seed_date_dim.sql").exists(), "seed_date_dim.sql should NOT exist (no date roles)");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&out_dir);
+    }
+
+    #[test]
+    fn test_bootstrap_references_dummy_data() {
+        // Use the retail fixture which has date roles
+        let src = "data/retailanalytics_tabular";
+        let out_dir = std::env::temp_dir().join("test_bootstrap_refs");
+        let _ = fs::remove_dir_all(&out_dir);
+        let out_str = out_dir.to_string_lossy().to_string();
+
+        let code = run(vec![
+            "convert-tabular".into(),
+            src.into(),
+            out_str,
+        ]);
+        assert_eq!(code, 0);
+
+        let bootstrap = fs::read_to_string(out_dir.join("bootstrap.sql")).unwrap();
+        assert!(bootstrap.contains(".read load_dummy_data.sql"), "bootstrap should reference load_dummy_data.sql");
+        assert!(bootstrap.contains(".read schema.sql"), "bootstrap should reference schema.sql");
+        assert!(bootstrap.contains("-- .read load_data.sql"), "bootstrap should have load_data.sql commented out");
+
+        // With date roles, should also reference seed_date_dim.sql
+        assert!(bootstrap.contains(".read seed_date_dim.sql"), "should reference seed_date_dim.sql when date roles present");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&out_dir);
+    }
+
+    #[test]
+    fn test_report_documents_data_sources() {
+        let mut model = make_generic_model();
+        model.data_sources.push(DataSourceInfo {
+            name: "TestSource".into(),
+            provider: "System.Data.SqlClient".into(),
+            server: "MY-SERVER".into(),
+            database: "MyDB".into(),
+            connection_string: "".into(),
+        });
+
+        let report = render_report(&model);
+        assert!(report.contains("Data sources detected"), "report should mention data sources");
+        assert!(report.contains("TestSource"), "report should include data source name");
+        assert!(report.contains("MY-SERVER"), "report should include data source server");
+        assert!(report.contains("load_data.sql"), "report should reference load_data.sql");
+        assert!(report.contains("load_dummy_data.sql"), "report should reference load_dummy_data.sql");
+        assert!(report.contains("bootstrap.sql"), "report should reference bootstrap.sql");
+        assert!(report.contains("Quick start"), "report should have quick start section");
     }
 }

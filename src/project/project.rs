@@ -139,6 +139,7 @@ impl ProxyProject {
                 db_path: None,
                 fact_tables: vec![],
                 relationships: vec![],
+                roles: vec![],
                 time_intelligence: None,
                 dimensions: vec![
                     crate::proxy_config::DimensionConfig {

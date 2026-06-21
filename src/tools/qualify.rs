@@ -93,24 +93,15 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
         }
     }
 
-    // --- check roles from sibling conversion-report.md ---
-    let report_path = Path::new(config_path).parent()
-        .map(|d| d.join("conversion-report.md"));
-    if let Some(report_path) = report_path {
-        if let Ok(text) = fs::read_to_string(&report_path) {
-            if let Some(roles_section) = text.split("## Roles").nth(1) {
-                // Check if there are actual named roles beyond the intro text
-                let role_lines: Vec<&str> = roles_section.trim().lines()
-                    .filter(|l| l.starts_with("- ") && l.contains(":"))
-                    .collect();
-                if !role_lines.is_empty() {
-                    partial.push(format!(
-                        "{} unsupported security role(s) detected in conversion report",
-                        role_lines.len()
-                    ));
-                }
-            }
-        }
+    // --- check roles from config ---
+    // Roles are informational only (not enforced by the proxy). They surface as
+    // PARTIAL rather than READY to remind operators that security must be handled
+    // outside the proxy. This is intentional: the proxy cannot enforce SSAS roles.
+    if !p.config.roles.is_empty() {
+        partial.push(format!(
+            "{} unsupported security role(s) detected in config",
+            p.config.roles.len()
+        ));
     }
 
     // --- check time intelligence ---
