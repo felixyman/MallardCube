@@ -230,7 +230,7 @@ pub fn execute_plan_with_sql(plan: &QueryPlan, sql: &str) -> QueryResult {
     execute_plan_sql_with_backend(plan, sql, Backend::get())
 }
 
-pub fn execute_plan_sql_with_backend<B: QueryBackend>(
+pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     plan: &QueryPlan,
     sql: &str,
     backend: &B,
@@ -256,7 +256,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend>(
     }
 }
 
-pub fn execute_plan_with_backend<B: QueryBackend>(
+pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
     plan: &QueryPlan,
     model: &SemanticModel,
     backend: &B,

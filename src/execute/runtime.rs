@@ -4,16 +4,15 @@
 /// instrumentation, and the two execution paths (direct SQL and Malloy).
 /// Used by `builders.rs` and `main.rs`.
 
-use crate::backend::{Backend, QueryBackend};
-use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_sql, plan_from_semantic};
-use crate::engine::model::SemanticModel;
+use crate::backend::QueryBackend;
+use crate::engine::plan::{execute_plan_with_backend, execute_plan_sql_with_backend, plan_from_semantic};
 use crate::engine::normalize::plan_key;
 use crate::engine::timing::{Timings, RuntimePath};
 use crate::engine::malloy_compiler::MalloyCompiler;
 use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
 use crate::engine::cache::PlanCache;
 use crate::mdx_semantic::{SemanticQueryKind};
-use crate::execute::render::dispatch;
+use crate::execute::render::dispatch_with_backend;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -75,9 +74,10 @@ pub fn warm_malloy_worker() {
     }
 }
 
-/// Instrumented variant — collects timing spans and logs them to stderr.
-/// Use for Excel workload measurement. Always uses the direct SQL path.
-pub fn get_execute_cellset_response_timed(mdx: &str) -> (String, Timings) {
+pub fn get_execute_cellset_response_timed_with_backend<B: QueryBackend + ?Sized>(
+    mdx: &str,
+    backend: &B,
+) -> (String, Timings) {
     use std::time::Instant;
 
     let t0 = Instant::now();
@@ -91,7 +91,7 @@ pub fn get_execute_cellset_response_timed(mdx: &str) -> (String, Timings) {
 
     let t0 = Instant::now();
     let model = &crate::proxy_project::project().model;
-    let result = execute_plan(&plan, model);
+    let result = execute_plan_with_backend(&plan, model, backend);
     let sql_execute_us = (Instant::now() - t0).as_micros() as u64;
 
     let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us, 0);
@@ -99,17 +99,16 @@ pub fn get_execute_cellset_response_timed(mdx: &str) -> (String, Timings) {
     timings.sql_execute_us = sql_execute_us;
 
     let t0 = Instant::now();
-    let xml = dispatch(&query, &result);
+    let xml = dispatch_with_backend(&query, &result, backend);
     timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
     timings.finish();
     (xml, timings)
 }
 
-/// Instrumented variant with optional Malloy runtime path.
-/// When USE_MALLOY_RUNTIME is true and the query is a supported analytic shape,
-/// the SQL is obtained via the long-lived Malloy compiler instead of the Rust
-/// SQL emitter. Compiled SQL is cached by PlanKey.
-pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings) {
+pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + ?Sized>(
+    mdx: &str,
+    backend: &B,
+) -> (String, Timings) {
     use std::time::Instant;
 
     let t0 = Instant::now();
@@ -158,21 +157,21 @@ pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings)
             eprintln!("  Malloy source:\n{source}");
 
             let t1 = Instant::now();
-            let fallback = execute_plan(&plan, &model);
+            let fallback = execute_plan_with_backend(&plan, &model, backend);
             let exec_us = (Instant::now() - t1).as_micros() as u64;
             (fallback, RuntimePath::DirectSql, compile_us, false, 0.0, exec_us)
         } else {
             let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
 
             let t0 = Instant::now();
-            let r = execute_plan_with_sql(&plan, &sql);
+            let r = execute_plan_sql_with_backend(&plan, &sql, backend);
             let exec_us = (Instant::now() - t0).as_micros() as u64;
 
             (r, path, compile_us, was_hit, worker_compile_ms, exec_us)
         }
     } else {
         let t0 = Instant::now();
-        let r = execute_plan(&plan, &model);
+        let r = execute_plan_with_backend(&plan, &model, backend);
         let exec_us = (Instant::now() - t0).as_micros() as u64;
         (r, RuntimePath::DirectSql, 0, false, 0.0, exec_us)
     };
@@ -185,7 +184,7 @@ pub fn get_execute_cellset_response_timed_malloy(mdx: &str) -> (String, Timings)
     timings.sql_execute_us = sql_execute_us;
 
     let t0 = Instant::now();
-    let xml = dispatch(&query, &result);
+    let xml = dispatch_with_backend(&query, &result, backend);
     timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
     timings.finish();
     (xml, timings)

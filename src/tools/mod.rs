@@ -1,8 +1,9 @@
 pub mod convert_tabular;
 pub mod data_loader;
 pub mod extract_trace_mdx;
-pub mod m_query;
 pub mod inventory;
+pub mod load_replay;
+pub mod m_query;
 pub mod parse_bim;
 pub mod parse_folder;
 pub mod parse_tmdl;

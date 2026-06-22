@@ -1,17 +1,23 @@
 use axum::{
-    http::{header, HeaderMap, HeaderName, StatusCode},
+    Router,
+    extract::State,
+    http::{HeaderMap, HeaderName, StatusCode, header},
     response::IntoResponse,
     routing::post,
-    Router,
 };
 use clap::{Parser, Subcommand};
-use std::net::SocketAddr;
-use std::sync::Mutex;
 use std::io::Write;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use xmla_proxy::parser::{parse_xmla, XmlaRequest};
+use xmla_proxy::parser::{XmlaRequest, parse_xmla};
 use xmla_proxy::*;
+
+#[derive(Clone)]
+struct AppState {
+    backend_source: backend::BackendSource,
+}
 
 // ---- CLI ----
 
@@ -51,6 +57,12 @@ enum Command {
         #[arg(default_value = "xmla-trace.jsonl")]
         path: String,
     },
+    /// Concurrently replay captured XMLA requests against a live /xmla endpoint
+    LoadReplay {
+        /// Arguments forwarded to the load-replay tool
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Build inventory report from a Tabular Editor export
     Inventory {
         /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
@@ -75,8 +87,8 @@ enum Command {
 static DEBUG_LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 fn init_debug_log() {
-    let file = std::fs::File::create("debug-last-run.log")
-        .expect("failed to create debug-last-run.log");
+    let file =
+        std::fs::File::create("debug-last-run.log").expect("failed to create debug-last-run.log");
     *DEBUG_LOG.lock().unwrap() = Some(file);
 }
 
@@ -97,12 +109,22 @@ async fn main() {
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_server().await,
-        Command::ConvertTabular { src_dir, out_dir, dummy_rows } => {
-            std::process::exit(xmla_proxy::tools::convert_tabular::run(
-                vec!["convert-tabular".into(), src_dir, out_dir, format!("--dummy-rows={}", dummy_rows)],
-            ));
+        Command::ConvertTabular {
+            src_dir,
+            out_dir,
+            dummy_rows,
+        } => {
+            std::process::exit(xmla_proxy::tools::convert_tabular::run(vec![
+                "convert-tabular".into(),
+                src_dir,
+                out_dir,
+                format!("--dummy-rows={}", dummy_rows),
+            ]));
         }
-        Command::TraceReplay { trace_path, project } => {
+        Command::TraceReplay {
+            trace_path,
+            project,
+        } => {
             let mut args = vec!["trace-replay".into(), trace_path];
             if let Some(p) = project {
                 args.push(p);
@@ -110,24 +132,29 @@ async fn main() {
             std::process::exit(xmla_proxy::tools::trace_replay::run(args));
         }
         Command::ExtractTrace { path } => {
-            std::process::exit(xmla_proxy::tools::extract_trace_mdx::run(
-                vec!["extract-trace".into(), path],
-            ));
+            std::process::exit(xmla_proxy::tools::extract_trace_mdx::run(vec![
+                "extract-trace".into(),
+                path,
+            ]));
+        }
+        Command::LoadReplay { args } => {
+            let mut forwarded = vec!["load-replay".into()];
+            forwarded.extend(args);
+            std::process::exit(xmla_proxy::tools::load_replay::run(forwarded));
         }
         Command::Inventory { src_dir } => {
-            std::process::exit(xmla_proxy::tools::inventory::run(
-                vec!["inventory".into(), src_dir],
-            ));
+            std::process::exit(xmla_proxy::tools::inventory::run(vec![
+                "inventory".into(),
+                src_dir,
+            ]));
         }
         Command::SeedGeneratedDb => {
-            std::process::exit(xmla_proxy::tools::seed_generated_db::run(
-                vec!["seed-generated-db".into()],
-            ));
+            std::process::exit(xmla_proxy::tools::seed_generated_db::run(vec![
+                "seed-generated-db".into(),
+            ]));
         }
         Command::SeedSql => {
-            std::process::exit(xmla_proxy::tools::seed_sql::run(
-                vec!["seed-sql".into()],
-            ));
+            std::process::exit(xmla_proxy::tools::seed_sql::run(vec!["seed-sql".into()]));
         }
         Command::Qualify { config, trace } => {
             let mut args = vec!["qualify".into(), config];
@@ -147,36 +174,38 @@ async fn run_server() {
     let config_path = std::env::var("PROXY_CONFIG")
         .ok()
         .unwrap_or_else(|| "project3/proxy-config.json".into());
-    proxy_project::init_project(Some(&config_path))
-        .expect("init project");
+    proxy_project::init_project(Some(&config_path)).expect("init project");
 
-    {
+    let state = {
         let p = proxy_project::project();
         println!("📁 Project loaded: {}", p.config.catalog);
-        debug_write(&format!("Project loaded: {} | cube={} | {} dims, {} measures",
-            p.config.catalog, p.config.cube,
-            p.model.dimensions.len(), p.model.measures.len(),
+        debug_write(&format!(
+            "Project loaded: {} | cube={} | {} dims, {} measures",
+            p.config.catalog,
+            p.config.cube,
+            p.model.dimensions.len(),
+            p.model.measures.len(),
         ));
 
-        let db_path = proxy_project::resolve_db_path(
-            &config_path,
-            p.config.db_path.as_deref(),
-        );
-        match db_path {
+        let db_path = proxy_project::resolve_db_path(&config_path, p.config.db_path.as_deref());
+        let backend_source = match db_path {
             Some(path) => {
-                backend::init_backend(Some(&path))
-                    .expect(&format!("failed to open DuckDB: {path}"));
+                let source = backend::init_backend_source(Some(&path))
+                    .expect(&format!("failed to configure DuckDB: {path}"));
                 println!("🗄️  DuckDB: {path}");
                 debug_write(&format!("DuckDB: {path}"));
+                source
             }
             None => {
-                backend::init_backend(None)
-                    .expect("failed to init demo DuckDB");
-                println!("🧪 DuckDB: demo (in-memory)");
-                debug_write("DuckDB: demo (in-memory)");
+                let source =
+                    backend::init_backend_source(None).expect("failed to init demo DuckDB");
+                println!("🧪 DuckDB: demo ({})", source.path().display());
+                debug_write(&format!("DuckDB: demo ({})", source.path().display()));
+                source
             }
-        }
-    }
+        };
+        std::sync::Arc::new(AppState { backend_source })
+    };
 
     if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
         execute_builders::enable_malloy_runtime();
@@ -188,12 +217,13 @@ async fn run_server() {
         debug_write("Malloy runtime: disabled");
     }
 
-    let bind_addr = std::env::var("BIND_ADDRESS")
-        .unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let bind_addr = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let app = Router::new()
         .route("/xmla", post(handle_xmla))
+        .with_state(state)
         .layer(RequestBodyLimitLayer::new(1_048_576)); // 1 MB
-    let addr: SocketAddr = bind_addr.parse()
+    let addr: SocketAddr = bind_addr
+        .parse()
         .expect("invalid BIND_ADDRESS (e.g. 127.0.0.1:8080 or 0.0.0.0:8080)");
     println!("🚀 SSAS Proxy running on http://{}", addr);
 
@@ -205,7 +235,10 @@ async fn run_server() {
 
 fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/xml; charset=utf-8".parse().unwrap());
+    headers.insert(
+        header::CONTENT_TYPE,
+        "text/xml; charset=utf-8".parse().unwrap(),
+    );
     headers.insert(header::SERVER, "SSAS-Proxy/2.0".parse().unwrap());
     headers.insert(header::CONNECTION, "close".parse().unwrap());
     headers.insert(
@@ -246,13 +279,13 @@ fn log_discover_context(body: &str) {
 
 // ---- XMLA request handler ----
 
-async fn handle_xmla(body: String) -> impl IntoResponse {
-    let request_type = body
-        .find("<RequestType>")
-        .and_then(|start| {
-            let after = start + 13;
-            body[after..].find("</RequestType>").map(|end| &body[after..after + end])
-        });
+async fn handle_xmla(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+    let request_type = body.find("<RequestType>").and_then(|start| {
+        let after = start + 13;
+        body[after..]
+            .find("</RequestType>")
+            .map(|end| &body[after..after + end])
+    });
     if let Some(rt) = request_type {
         println!("🔍 RequestType: {}", rt);
     }
@@ -267,22 +300,43 @@ async fn handle_xmla(body: String) -> impl IntoResponse {
         println!("🔍 Execute body:\n{}", body);
     }
 
-    let response_body = route_request(&request, &body);
+    let request_for_worker = request.clone();
+    let body_for_worker = body.clone();
+    let backend_source = state.backend_source.clone();
+    let response_body = tokio::task::spawn_blocking(move || {
+        let backend = backend_source
+            .checkout()
+            .expect("failed to checkout DuckDB backend");
+        route_request(&request_for_worker, &body_for_worker, &backend)
+    })
+    .await
+    .expect("XMLA worker task panicked");
 
     if body.contains("MDSCHEMA_MEMBERS") {
-        println!("📤 RESPONSE (MdschemaMembers):\n{}", &response_body[..response_body.len().min(2000)]);
+        println!(
+            "📤 RESPONSE (MdschemaMembers):\n{}",
+            &response_body[..response_body.len().min(2000)]
+        );
     }
 
     (StatusCode::OK, headers, response_body)
 }
 
 /// Route a parsed XMLA request to the appropriate handler.
-fn route_request(request: &XmlaRequest, body: &str) -> String {
+fn route_request<B: backend::QueryBackend + ?Sized>(
+    request: &XmlaRequest,
+    body: &str,
+    backend: &B,
+) -> String {
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
             let resp = execute::dispatch::get_empty_execute_response();
             xmla_proxy::xmla_trace::trace_request(
-                &format!("{:?}", request), body, &resp, None, None,
+                &format!("{:?}", request),
+                body,
+                &resp,
+                None,
+                None,
             );
             resp
         }
@@ -290,14 +344,20 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
         XmlaRequest::DiscoverProperties { property_names } => {
             let resp = if property_names.len() == 1 && property_names[0] == "Catalog" {
                 println!("Excel asking for Catalog");
-                properties::get_single_property_response("Catalog",
-                    &proxy_project::project().config.catalog)
+                properties::get_single_property_response(
+                    "Catalog",
+                    &proxy_project::project().config.catalog,
+                )
             } else {
                 println!("Excel asking for properties: {:?}", property_names);
                 properties::get_properties_response(property_names)
             };
             xmla_proxy::xmla_trace::trace_request(
-                &format!("{:?}", request), body, &resp, None, None,
+                &format!("{:?}", request),
+                body,
+                &resp,
+                None,
+                None,
             );
             resp
         }
@@ -354,12 +414,19 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
             debug_write(body);
-            let (resp, timings) = execute_builders::get_execute_cellset_response_timed_malloy(mdx);
+            let (resp, timings) =
+                execute_builders::get_execute_cellset_response_timed_malloy_with_backend(
+                    mdx, backend,
+                );
             debug_write("RESPONSE XML:");
             debug_write(&resp);
             debug_write(&timings.to_log_line());
             xmla_proxy::xmla_trace::trace_request(
-                "ExecuteStatement", body, &resp, Some(mdx), Some(&timings),
+                "ExecuteStatement",
+                body,
+                &resp,
+                Some(mdx),
+                Some(&timings),
             );
             resp
         }
@@ -370,11 +437,24 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
             xmla_proxy::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaMembers { member_unique_name, tree_op } => {
-            println!("📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})", member_unique_name, tree_op);
+        XmlaRequest::MdschemaMembers {
+            member_unique_name,
+            tree_op,
+        } => {
+            println!(
+                "📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})",
+                member_unique_name, tree_op
+            );
             debug_write("===== MDSCHEMA_MEMBERS REQUEST =====");
-            debug_write(&format!("filter_member: {:?}, tree_op: {:?}", member_unique_name, tree_op));
-            let resp = members::get_members_response(member_unique_name.as_deref(), *tree_op);
+            debug_write(&format!(
+                "filter_member: {:?}, tree_op: {:?}",
+                member_unique_name, tree_op
+            ));
+            let resp = members::get_members_response_with_backend(
+                member_unique_name.as_deref(),
+                *tree_op,
+                backend,
+            );
             debug_write("RESPONSE XML:");
             debug_write(&resp);
             xmla_proxy::xmla_trace::trace_request("MdschemaMembers", body, &resp, None, None);
@@ -408,7 +488,13 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
         XmlaRequest::MdschemaMeasureGroupDimensions => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
             let resp = measuregroup_dimensions::get_measuregroup_dimensions_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaMeasureGroupDimensions", body, &resp, None, None);
+            xmla_proxy::xmla_trace::trace_request(
+                "MdschemaMeasureGroupDimensions",
+                body,
+                &resp,
+                None,
+                None,
+            );
             resp
         }
 
@@ -469,7 +555,13 @@ fn route_request(request: &XmlaRequest, body: &str) -> String {
         XmlaRequest::DiscoverCalcDependency => {
             println!("📥 DISCOVER_CALC_DEPENDENCY");
             let resp = tmschema::get_discover_calc_dependency_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverCalcDependency", body, &resp, None, None);
+            xmla_proxy::xmla_trace::trace_request(
+                "DiscoverCalcDependency",
+                body,
+                &resp,
+                None,
+                None,
+            );
             resp
         }
 

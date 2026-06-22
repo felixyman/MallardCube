@@ -1,10 +1,19 @@
 use duckdb::{Connection, params};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 pub struct Backend {
     conn: Mutex<Connection>,
 }
+
+#[derive(Debug, Clone)]
+pub enum BackendSource {
+    File { path: PathBuf },
+    Demo { path: PathBuf },
+}
+
+static DEMO_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // ---- backend trait ----
 
@@ -13,6 +22,43 @@ pub trait QueryBackend {
     fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)>;
     fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)>;
     fn query_count(&self, sql: &str) -> u32;
+    fn query_strings(&self, sql: &str) -> Vec<String>;
+}
+
+impl BackendSource {
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::File { path: path.into() }
+    }
+
+    pub fn demo() -> Result<Self, duckdb::Error> {
+        let path = std::env::temp_dir().join(format!(
+            "mallardcube-demo-{}-{}.duckdb",
+            std::process::id(),
+            DEMO_DB_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| {
+                duckdb::Error::InvalidParameterName(format!(
+                    "failed to remove stale demo DuckDB {}: {e}",
+                    path.display()
+                ))
+            })?;
+        }
+        Backend::create_demo_file(&path)?;
+        Ok(Self::Demo { path })
+    }
+
+    pub fn checkout(&self) -> Result<Backend, duckdb::Error> {
+        match self {
+            Self::File { path } | Self::Demo { path } => Backend::open(path),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::File { path } | Self::Demo { path } => path,
+        }
+    }
 }
 
 // ---- benchmark config ----
@@ -231,6 +277,13 @@ pub fn init_backend(db_path: Option<&str>) -> Result<(), duckdb::Error> {
     Ok(())
 }
 
+pub fn init_backend_source(db_path: Option<&str>) -> Result<BackendSource, duckdb::Error> {
+    match db_path {
+        Some(path) => Ok(BackendSource::file(path)),
+        None => BackendSource::demo(),
+    }
+}
+
 // ---- DuckDB Backend impl of QueryBackend ----
 
 impl QueryBackend for Backend {
@@ -248,6 +301,10 @@ impl QueryBackend for Backend {
 
     fn query_count(&self, sql: &str) -> u32 {
         Backend::query_count(self, sql)
+    }
+
+    fn query_strings(&self, sql: &str) -> Vec<String> {
+        Backend::query_strings(self, sql)
     }
 }
 
@@ -278,8 +335,23 @@ impl Backend {
         })
     }
 
+    pub fn create_demo_file(path: &Path) -> Result<Self, duckdb::Error> {
+        let conn = Connection::open(path)?;
+        Self::seed_demo_connection(&conn)?;
+        Ok(Backend {
+            conn: Mutex::new(conn),
+        })
+    }
+
     pub fn new() -> Result<Self, duckdb::Error> {
         let conn = Connection::open_in_memory()?;
+        Self::seed_demo_connection(&conn)?;
+        Ok(Backend {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn seed_demo_connection(conn: &Connection) -> Result<(), duckdb::Error> {
         conn.execute_batch(
             "CREATE TABLE faktatabell (
                  produktkategori VARCHAR NOT NULL,
@@ -320,16 +392,14 @@ impl Backend {
                     r.revenue,
                     r.units,
                     r.date_key,
-                ]);
+                ])?;
             }
-            let _ = app.flush();
+            app.flush()?;
         }
         // Seed date_dim calendar so YTD measures resolve.
         let date_dim_sql = include_str!("../../data/seed_date_dim.sql");
         conn.execute_batch(date_dim_sql)?;
-        Ok(Backend {
-            conn: Mutex::new(conn),
-        })
+        Ok(())
     }
 
     pub fn new_with_config(config: &BenchmarkDataConfig) -> Result<Self, duckdb::Error> {
@@ -350,9 +420,9 @@ impl Backend {
                     row.produktkategori.as_str(),
                     row.region.as_str(),
                     row.sales,
-                ]);
+                ])?;
             }
-            app.flush();
+            app.flush()?;
         }
 
         Ok(Backend {
@@ -444,6 +514,15 @@ impl Backend {
             .unwrap_or(0)
     }
 
+    pub fn query_strings(&self, sql: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql).expect("prepare query_strings");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query_map query_strings")
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
     pub fn execute_ddl(&self, sql: &str) {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(sql).expect("execute_ddl");
@@ -479,7 +558,18 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::Backend;
+    use crate::backend::{Backend, BackendSource};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_db_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "mallardcube-{name}-{}-{}.duckdb",
+            std::process::id(),
+            TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     #[test]
     fn date_dim_seed_has_all_period_flags() {
@@ -502,5 +592,54 @@ mod tests {
             assert!(count > 0, "should have at least one {flag} = true row today");
             assert!(count <= max, "{flag} should not exceed {max} rows");
         }
+    }
+
+    #[test]
+    fn concurrent_file_backed_checkouts_read_same_database() {
+        let path = temp_db_path("concurrent-file-backed");
+        let db = Backend::create_demo_file(&path).expect("create demo file");
+        let expected = db.query_scalar("SELECT SUM(revenue) FROM sales_fact");
+        drop(db);
+
+        let source = BackendSource::file(path.clone());
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let source = source.clone();
+            handles.push(std::thread::spawn(move || {
+                let backend = source.checkout().expect("checkout backend");
+                backend.query_scalar("SELECT SUM(revenue) FROM sales_fact")
+            }));
+        }
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("join reader"), expected);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_demo_checkouts_share_seeded_data() {
+        let source = BackendSource::demo().expect("create demo source");
+        let expected = source
+            .checkout()
+            .expect("checkout expected backend")
+            .query_scalar("SELECT SUM(revenue) FROM sales_fact");
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let source = source.clone();
+            handles.push(std::thread::spawn(move || {
+                let backend = source.checkout().expect("checkout backend");
+                backend.query_count("SELECT COUNT(*) FROM sales_fact")
+                    as u64
+                    + backend.query_scalar("SELECT SUM(revenue) FROM sales_fact") as u64
+            }));
+        }
+
+        for handle in handles {
+            let combined = handle.join().expect("join demo reader");
+            assert_eq!(combined, 20_000 + expected as u64);
+        }
+        let _ = std::fs::remove_file(source.path());
     }
 }

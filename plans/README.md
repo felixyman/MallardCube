@@ -32,7 +32,8 @@ honor its STOP conditions, and update your row when done.
 | 022  | Genericize converter fallback SQL lowering | P1 | M | 021 | DONE |
 | 023  | Third real model intake proof | P1 | L | 022 | TODO |
 | 024  | Security-role decision gate | P1 | L | 022 | TODO |
-| 025  | Make direct-SQL XMLA execution concurrent across users | P1 | L | — | TODO |
+| 025  | Make direct-SQL XMLA execution concurrent across users | P1 | L | — | DONE |
+| 026  | Security roles and UserContext for the direct-SQL runtime | P1 | L | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
@@ -113,6 +114,11 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - 025 is independent and can start immediately because the current multi-user
   bottleneck is in the live server execution path (`main.rs` + backend
   singleton), not in converter output or role handling.
+- 026 is independent of 025 (concurrency) and 024 (decision gate). It
+  implements the security-role enforcement that 024 was the decision gate for.
+  It depends on the direct-SQL path being the default (already true) but not
+  on the concurrency refactor. Native Kerberos is explicitly out of scope;
+  the plan defines a trusted-proxy auth boundary instead.
 
 ## Findings considered and rejected
 

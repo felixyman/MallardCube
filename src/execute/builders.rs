@@ -8,12 +8,10 @@
 
 use crate::response::wrap_in_soap_envelope;
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::plan::{QueryResult, execute_plan, execute_plan_with_sql, execute_plan_with_backend, plan_from_semantic};
+use crate::engine::plan::{execute_plan, execute_plan_with_backend, plan_from_semantic};
 use crate::engine::model::SemanticModel;
-use crate::engine::normalize::plan_key;
-use crate::engine::timing::{Timings, RuntimePath};
-use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-use crate::execute::render::dispatch;
+use crate::mdx_semantic::SemanticQuery;
+use crate::execute::render::{dispatch, dispatch_with_backend};
 
 // Re-export Malloy runtime machinery at the same path callers expect.
 pub use crate::execute::runtime::{
@@ -21,8 +19,8 @@ pub use crate::execute::runtime::{
     enable_malloy_runtime,
     disable_malloy_runtime,
     warm_malloy_worker,
-    get_execute_cellset_response_timed,
-    get_execute_cellset_response_timed_malloy,
+    get_execute_cellset_response_timed_with_backend,
+    get_execute_cellset_response_timed_malloy_with_backend,
 };
 
 // ---- public API consumed by execute.rs dispatch ----
@@ -41,7 +39,7 @@ pub fn execute_semantic_query_with_backend<B: QueryBackend>(
 ) -> String {
     let plan = plan_from_semantic(query);
     let result = execute_plan_with_backend(&plan, model, backend);
-    dispatch(query, &result)
+    dispatch_with_backend(query, &result, backend)
 }
 
 pub fn get_execute_cellset_response(mdx: &str) -> String {

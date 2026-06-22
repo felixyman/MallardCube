@@ -5,6 +5,7 @@
 /// Consumed by `execute_builders` for all cellset response construction.
 
 use crate::cellset;
+use crate::backend::QueryBackend;
 use crate::mdx_semantic::{includes_prop, DimensionFilter, SemanticQuery};
 use crate::proxy_project;
 
@@ -37,9 +38,13 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
     proxy_project::project().model.dim_def_opt(dim)
 }
 
-fn dim_children_count(dim: &crate::engine::model::DimensionDef) -> u32 {
-    crate::backend::Backend::get()
-        .distinct_count_in(proxy_project::project().model.dim_table(&dim.id), &dim.physical_field)
+fn dim_children_count<B: QueryBackend + ?Sized>(
+    dim: &crate::engine::model::DimensionDef,
+    backend: &B,
+) -> u32 {
+    let table = proxy_project::project().model.dim_table(&dim.id);
+    let sql = format!("SELECT COUNT(DISTINCT {}) FROM {table}", dim.physical_field);
+    backend.query_count(&sql)
 }
 
 fn dim_props_leaf(
@@ -63,11 +68,12 @@ fn dim_props_leaf(
     )
 }
 
-fn dim_props_all(
+fn dim_props_all<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
+    backend: &B,
 ) -> Vec<(String, String)> {
-    let count = dim_children_count(dim);
+    let count = dim_children_count(dim, backend);
     filter_dim_props(
         vec![
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
@@ -161,9 +167,10 @@ fn leaf_member_for_dim(
     }
 }
 
-fn all_member_for_dim(
+fn all_member_for_dim<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
+    backend: &B,
 ) -> cellset::MemberConfig {
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
@@ -172,7 +179,7 @@ fn all_member_for_dim(
         l_name: dim.all_level_unique_name(),
         l_num: 0,
         display_info: 5,
-        dim_props: dim_props_all(dim, requested),
+        dim_props: dim_props_all(dim, requested, backend),
     }
 }
 
@@ -416,11 +423,19 @@ pub(crate) fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> ce
     }
 }
 
-pub(crate) fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
+pub(crate) fn all_member_for_with_backend<B: QueryBackend + ?Sized>(
+    dim: &str,
+    requested: &[String],
+    backend: &B,
+) -> cellset::MemberConfig {
     match dim_def(dim) {
-        Some(d) => all_member_for_dim(d, requested),
+        Some(d) => all_member_for_dim(d, requested, backend),
         None => unknown_dim_member(dim, "All"),
     }
+}
+
+pub(crate) fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
+    all_member_for_with_backend(dim, requested, crate::backend::Backend::get())
 }
 
 pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::HierarchyConfig {
@@ -463,6 +478,13 @@ pub(crate) fn filter_members_for(dim: &str, filters: &[DimensionFilter]) -> Vec<
 }
 
 pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
+    full_slicer_axis_with_backend(query, crate::backend::Backend::get())
+}
+
+pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+) -> cellset::AxisConfig {
     let project = proxy_project::project();
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
@@ -488,7 +510,7 @@ pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
 
         let slc = query.slicers.iter().find(|s| s.dimension == dim.id);
         if slc.map(|s| s.is_all).unwrap_or(true) {
-            members.push(all_member_for_dim(dim, &[]));
+            members.push(all_member_for_dim(dim, &[], backend));
         } else {
             let dim_members = filter_members_for(&dim.id, &query.filters);
             for name in &dim_members {

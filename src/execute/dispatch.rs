@@ -7,7 +7,7 @@
 use crate::response::wrap_in_soap_envelope;
 use crate::mdx_semantic::{is_dax, is_mdx_select};
 use crate::execute_builders::{
-    get_execute_cellset_response, get_execute_cellset_response_with_backend,
+    get_execute_cellset_response,
     get_execute_dax_response, get_execute_mdx_response,
 };
 
@@ -182,6 +182,15 @@ mod tests {
             let conn = self.0.lock().unwrap();
             conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
         }
+
+        fn query_strings(&self, sql: &str) -> Vec<String> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_strings");
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .expect("query_map query_strings")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
     }
 
     fn extract_cell_value(xml: &str) -> Option<String> {
@@ -291,6 +300,33 @@ mod tests {
             .collect();
         let values = rows.iter().map(|(_, _, value)| *value).collect();
         (tuples, values)
+    }
+
+    #[test]
+    fn concurrent_execute_cellset_with_injected_backends() {
+        with_project3(|| {
+            let source = crate::backend::BackendSource::demo().expect("create demo source");
+            let mut handles = Vec::new();
+            for mdx in [MDX_SLICER_ALL, MDX_DRILLDOWN, MDX_REGION_DRILLDOWN, MDX_CROSSJOIN_PROBE] {
+                let source = source.clone();
+                handles.push(std::thread::spawn(move || {
+                    with_project3(|| {
+                        let backend = source.checkout().expect("checkout backend");
+                        crate::execute_builders::get_execute_cellset_response_with_backend(
+                            mdx,
+                            &backend,
+                            &crate::proxy_project::project().model,
+                        )
+                    })
+                }));
+            }
+
+            for handle in handles {
+                let xml = handle.join().expect("join execute worker");
+                assert!(xml.contains("<CellData>"), "missing cell data in {xml}");
+            }
+            let _ = std::fs::remove_file(source.path());
+        });
     }
 
     fn collapse_first_dimension(sql: &str, excluded: &str) -> (Vec<Vec<String>>, Vec<f64>) {
@@ -1430,7 +1466,7 @@ mod tests {
             let backend = FileQueryBackend(std::sync::Mutex::new(conn));
 
             let mdx = "SELECT  FROM [SALES] WHERE ([Measures].[Total Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml = get_execute_cellset_response_with_backend(
+            let xml = crate::execute_builders::get_execute_cellset_response_with_backend(
                 mdx, &backend, &project.model,
             );
 
@@ -1517,7 +1553,7 @@ mod tests {
 
             // DVT measure through proxy execution
             let mdx_dvt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Antal signerade DVT-remisser]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml_dvt = get_execute_cellset_response_with_backend(
+            let xml_dvt = crate::execute_builders::get_execute_cellset_response_with_backend(
                 mdx_dvt, &backend, &project.model,
             );
             assert!(xml_dvt.contains("<CellData>"), "DVT execution should produce cellset");
@@ -1528,7 +1564,7 @@ mod tests {
 
             // Medeltid measure through proxy execution
             let mdx_mt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Medeltid Undersökningsslut till signering (ej akut)]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml_mt = get_execute_cellset_response_with_backend(
+            let xml_mt = crate::execute_builders::get_execute_cellset_response_with_backend(
                 mdx_mt, &backend, &project.model,
             );
             assert!(xml_mt.contains("<CellData>"), "Medeltid execution should produce cellset");

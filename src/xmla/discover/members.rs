@@ -4,7 +4,7 @@
 /// values) plus synthetic `All` members from the semantic model.
 /// No hardcoded business values remain.
 
-use crate::backend::Backend;
+use crate::backend::{Backend, QueryBackend};
 use crate::proxy_project;
 use crate::response::xml_escape;
 use uuid::Uuid;
@@ -43,7 +43,10 @@ struct MemberRow {
     children_cardinality: u32,
 }
 
-fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<MemberRow> {
+fn build_all_member_rows<B: QueryBackend + ?Sized>(
+    model: &crate::engine::model::SemanticModel,
+    backend: &B,
+) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
@@ -52,7 +55,12 @@ fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Mem
         let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let cardinality = Backend::get().distinct_count_in(model.dim_table_for_discovery(&dim.id), &dim.physical_field);
+        let sql = format!(
+            "SELECT COUNT(DISTINCT {}) FROM {}",
+            dim.physical_field,
+            model.dim_table_for_discovery(&dim.id)
+        );
+        let cardinality = backend.query_count(&sql);
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
             xml: xml_member_row(
@@ -73,7 +81,10 @@ fn build_all_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Mem
     rows
 }
 
-fn build_leaf_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<MemberRow> {
+fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
+    model: &crate::engine::model::SemanticModel,
+    backend: &B,
+) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
@@ -82,7 +93,13 @@ fn build_leaf_member_rows(model: &crate::engine::model::SemanticModel) -> Vec<Me
         let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let values = Backend::get().distinct_values_in(model.dim_table_for_discovery(&dim.id), &dim.physical_field);
+        let sql = format!(
+            "SELECT DISTINCT {} FROM {} ORDER BY {}",
+            dim.physical_field,
+            model.dim_table_for_discovery(&dim.id),
+            dim.physical_field
+        );
+        let values = backend.query_strings(&sql);
         for (ordinal, val) in values.iter().enumerate() {
             let ordinal = ordinal as u32 + 1;
             let leaf_member_u = format!("{}.&[{}]", hier_u, val);
@@ -172,20 +189,24 @@ fn xml_member_row(
     )
 }
 
-fn all_member_rows() -> Vec<MemberRow> {
+fn all_member_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_all_member_rows(&project.model)
+    build_all_member_rows(&project.model, backend)
 }
 
-fn leaf_member_rows() -> Vec<MemberRow> {
+fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_leaf_member_rows(&project.model)
+    build_leaf_member_rows(&project.model, backend)
+}
+
+fn all_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
+    let mut rows = all_member_rows_with_backend(backend);
+    rows.append(&mut leaf_member_rows_with_backend(backend));
+    rows
 }
 
 fn all_rows() -> Vec<MemberRow> {
-    let mut rows = all_member_rows();
-    rows.append(&mut leaf_member_rows());
-    rows
+    all_rows_with_backend(Backend::get())
 }
 
 // ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
@@ -208,7 +229,15 @@ fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> 
 // ---- public API ----
 
 pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -> String {
-    let rows = all_rows();
+    get_members_response_with_backend(member_filter, tree_op, Backend::get())
+}
+
+pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
+    member_filter: Option<&str>,
+    tree_op: Option<i32>,
+    backend: &B,
+) -> String {
+    let rows = all_rows_with_backend(backend);
 
     let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
         (Some(filter), Some(1)) => {
