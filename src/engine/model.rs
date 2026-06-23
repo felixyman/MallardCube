@@ -43,6 +43,223 @@ impl Dialect {
     }
 }
 
+// ---------------------------------------------------------------------------
+// User context and role resolution
+// ---------------------------------------------------------------------------
+
+/// Access level to a table for a user.
+///
+/// Returned by `effective_table_filter`:
+/// - `Full` — no restriction (admin bypass, or no role filter on this table).
+/// - `Filtered(sql)` — a valid DuckDB WHERE clause fragment, already OR'd
+///   across roles. Append with AND when emitting SQL.
+/// - `Hidden` — table is completely invisible (OLS `metadata_permission: none`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableAccess {
+    Full,
+    Filtered(String),
+    Hidden,
+}
+
+/// Runtime user identity and resolved roles.
+///
+/// Built from a trusted header (e.g. `X-User`) by `resolve_user_context()`.
+/// Threaded through plan generation and SQL emission to enforce RLS/OLS.
+/// When no `auth` config is present, the proxy uses `admin_default()` which
+/// bypasses all security (backward compat).
+#[derive(Debug, Clone)]
+pub struct UserContext {
+    pub user_id: String,
+    pub groups: Vec<String>,
+    pub roles: Vec<String>,
+    pub is_administrator: bool,
+}
+
+impl UserContext {
+    /// Default context when no auth is configured: full administrative access.
+    /// Matching current behavior where every request sees every row.
+    pub fn admin_default() -> Self {
+        Self {
+            user_id: String::new(),
+            groups: vec![],
+            roles: vec![],
+            is_administrator: true,
+        }
+    }
+
+    /// Deny-all context: no roles, not an administrator.
+    /// Used when auth is configured but the user does not match any role.
+    pub fn deny_all() -> Self {
+        Self {
+            user_id: String::new(),
+            groups: vec![],
+            roles: vec![],
+            is_administrator: false,
+        }
+    }
+}
+
+/// Resolve a user's identity against the configured roles.
+///
+/// Matches `user_id` and each `group` against `role.members[].member_name`.
+/// Returns a `UserContext` with the union of all matching role names and
+/// whether any matched role has `model_permission: Administrator`.
+///
+/// When `config.auth` is `None`, returns the admin default (full access,
+/// backward compat). When auth is configured but no roles match, returns
+/// a deny-all context (empty roles, not admin).
+pub fn resolve_user_context(
+    config: &crate::project::config::ProxyConfig,
+    user_id: &str,
+    groups: &[String],
+) -> UserContext {
+    use crate::project::config::ModelPermission;
+
+    let Some(_auth) = &config.auth else {
+        return UserContext::admin_default();
+    };
+
+    let mut matched_roles: Vec<String> = Vec::new();
+    let mut is_admin = false;
+
+    for role in &config.roles {
+        let member_match = role.members.iter().any(|m| {
+            m.member_name == user_id || groups.iter().any(|g| g == &m.member_name)
+        });
+        if member_match {
+            matched_roles.push(role.name.clone());
+            if role.model_permission == ModelPermission::Administrator {
+                is_admin = true;
+            }
+        }
+    }
+
+    if matched_roles.is_empty() {
+        return UserContext::deny_all();
+    }
+
+    UserContext {
+        user_id: user_id.to_string(),
+        groups: groups.to_vec(),
+        roles: matched_roles,
+        is_administrator: is_admin,
+    }
+}
+
+/// Compute the effective model-level permission across all matched roles.
+///
+/// Returns the most permissive: Administrator > Read > None.
+/// If the user is an administrator, returns `Administrator` unconditionally.
+pub fn effective_model_permission(
+    config: &crate::project::config::ProxyConfig,
+    user: &UserContext,
+) -> crate::project::config::ModelPermission {
+    use crate::project::config::ModelPermission;
+
+    if user.is_administrator {
+        return ModelPermission::Administrator;
+    }
+
+    let mut result = ModelPermission::None;
+    let role_names: std::collections::HashSet<&str> =
+        user.roles.iter().map(|s| s.as_str()).collect();
+
+    for role in &config.roles {
+        if role_names.contains(role.name.as_str()) {
+            match &role.model_permission {
+                ModelPermission::Administrator => return ModelPermission::Administrator,
+                ModelPermission::Read => result = ModelPermission::Read,
+                ModelPermission::None => {}
+            }
+        }
+    }
+
+    result
+}
+
+/// Compute the effective table-level access for a user on a table.
+///
+/// SSAS-correct union order (Full > Hidden > Filtered):
+/// 1. Admin users always get `Full` (bypass RLS/OLS).
+/// 2. If any matched role has no `table_permission` entry for this table,
+///    that role grants `Full`. Union: Full wins over everything.
+/// 3. If any matched role has `metadata_permission: None` for this table
+///    AND no role grants full → `Hidden`.
+/// 4. If all matched roles have `filter_expression` for this table (and
+///    none are Full-granting), OR them together → `Filtered(sql)`.
+/// 5. Otherwise → `Full`.
+pub fn effective_table_filter(
+    config: &crate::project::config::ProxyConfig,
+    user: &UserContext,
+    table_name: &str,
+) -> TableAccess {
+    use crate::project::config::ModelPermission;
+
+    // 1. Admin bypasses all RLS/OLS.
+    if user.is_administrator {
+        return TableAccess::Full;
+    }
+
+    let role_names: std::collections::HashSet<&str> =
+        user.roles.iter().map(|s| s.as_str()).collect();
+
+    let mut filters: Vec<String> = Vec::new();
+    let mut any_hidden = false;
+    let mut any_role_grants_full = false;
+
+    for role in &config.roles {
+        if !role_names.contains(role.name.as_str()) {
+            continue;
+        }
+        let mut role_has_permission = false;
+        for tp in &role.table_permissions {
+            if tp.table != table_name {
+                continue;
+            }
+            role_has_permission = true;
+            if tp.metadata_permission == ModelPermission::None {
+                any_hidden = true;
+            }
+            if !tp.filter_expression.is_empty() {
+                filters.push(tp.filter_expression.clone());
+            }
+        }
+        // SSAS: no table_permission entry for this table = full access for
+        // this role. Union semantics: if any role grants full, result is Full.
+        if !role_has_permission {
+            any_role_grants_full = true;
+        }
+    }
+
+    // 2. SSAS union semantics: Full (from any role's no-entry) wins over
+    //    both Hidden and Filtered.
+    if any_role_grants_full {
+        return TableAccess::Full;
+    }
+
+    // 3. OLS hide applies only when no role grants full access.
+    if any_hidden {
+        return TableAccess::Hidden;
+    }
+
+    // 4. OR remaining filter expressions across roles (union semantics).
+    if filters.is_empty() {
+        return TableAccess::Full;
+    }
+
+    let combined = if filters.len() == 1 {
+        filters.into_iter().next().unwrap()
+    } else {
+        filters
+            .into_iter()
+            .map(|f| format!("({})", f))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    };
+
+    TableAccess::Filtered(combined)
+}
+
 /// A fact table that hosts measures and dimensions.
 pub struct FactTable {
     pub id: String,
@@ -426,5 +643,443 @@ pub fn default_model() -> SemanticModel {
         relationships: vec![],
         date_dim: None,
         date_dims: HashMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::config::ProxyConfig;
+    use crate::project::config::ModelPermission;
+
+    fn parse_config(json: &str) -> ProxyConfig {
+        serde_json::from_str(json).expect("parse config")
+    }
+
+    // -- resolve_user_context tests --
+
+    #[test]
+    fn role_resolve_no_auth_is_admin() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": []
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &[]);
+        assert!(ctx.is_administrator);
+        assert!(ctx.roles.is_empty());
+    }
+
+    #[test]
+    fn role_resolve_admin_bypass() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "Admins",
+                "model_permission": "administrator",
+                "members": [{"member_name": "DOMAIN\\admin", "member_type": "user"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\admin", &[]);
+        assert!(ctx.is_administrator);
+        assert_eq!(ctx.roles, vec!["Admins"]);
+    }
+
+    #[test]
+    fn role_resolve_single_role_single_table() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "EU_Region",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\alice", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "sales_fact",
+                    "filter_expression": "region = 'EU'"
+                }]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\alice", &[]);
+        assert!(!ctx.is_administrator);
+        assert_eq!(ctx.roles, vec!["EU_Region"]);
+
+        let access = effective_table_filter(&cfg, &ctx, "sales_fact");
+        assert_eq!(access, TableAccess::Filtered("region = 'EU'".into()));
+    }
+
+    #[test]
+    fn role_resolve_multiple_roles_union() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "EU_Region",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\bob", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "sales_fact",
+                        "filter_expression": "region = 'EU'"
+                    }]
+                },
+                {
+                    "name": "LargeSales",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\bob", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "sales_fact",
+                        "filter_expression": "amount > 1000"
+                    }]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\bob", &[]);
+        assert_eq!(ctx.roles.len(), 2);
+        assert!(ctx.roles.contains(&"EU_Region".into()));
+        assert!(ctx.roles.contains(&"LargeSales".into()));
+
+        let access = effective_table_filter(&cfg, &ctx, "sales_fact");
+        match access {
+            TableAccess::Filtered(sql) => {
+                assert!(sql.contains("OR"), "expected OR union, got: {}", sql);
+                assert!(sql.contains("region = 'EU'"));
+                assert!(sql.contains("amount > 1000"));
+            }
+            other => panic!("expected Filtered, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn role_resolve_ols_hide() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "OlsRole",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\user", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "secret_table",
+                    "metadata_permission": "none"
+                }]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &[]);
+        assert!(!ctx.is_administrator);
+
+        let access = effective_table_filter(&cfg, &ctx, "secret_table");
+        assert_eq!(access, TableAccess::Hidden);
+    }
+
+    #[test]
+    fn role_resolve_no_matching_role_deny_all() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "SomeRole",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\specific_user", "member_type": "user"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\unknown", &[]);
+        assert!(!ctx.is_administrator);
+        assert!(ctx.roles.is_empty());
+
+        let perm = effective_model_permission(&cfg, &ctx);
+        assert_eq!(perm, ModelPermission::None);
+    }
+
+    // -- effective_model_permission tests --
+
+    #[test]
+    fn role_effective_model_permission_admin() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "Admins",
+                "model_permission": "administrator",
+                "members": [{"member_name": "DOMAIN\\admin", "member_type": "user"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\admin", &[]);
+        let perm = effective_model_permission(&cfg, &ctx);
+        assert_eq!(perm, ModelPermission::Administrator);
+    }
+
+    #[test]
+    fn role_effective_model_permission_read() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "Readers",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\reader", "member_type": "user"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\reader", &[]);
+        let perm = effective_model_permission(&cfg, &ctx);
+        assert_eq!(perm, ModelPermission::Read);
+    }
+
+    #[test]
+    fn role_effective_model_permission_none() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "Denied",
+                "model_permission": "none",
+                "members": [{"member_name": "DOMAIN\\denied_user", "member_type": "user"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\denied_user", &[]);
+        let perm = effective_model_permission(&cfg, &ctx);
+        assert_eq!(perm, ModelPermission::None);
+    }
+
+    // -- effective_table_filter tests --
+
+    #[test]
+    fn role_effective_table_filter_no_filter_full() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "ReadAll",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\viewer", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "some_table",
+                    "filter_expression": ""
+                }]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\viewer", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "some_table");
+        assert_eq!(access, TableAccess::Full);
+    }
+
+    #[test]
+    fn role_effective_table_filter_admin_bypass() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "Admins",
+                "model_permission": "administrator",
+                "members": [{"member_name": "DOMAIN\\god", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "any_table",
+                    "filter_expression": "restrictive = true",
+                    "metadata_permission": "none"
+                }]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\god", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "any_table");
+        assert_eq!(access, TableAccess::Full);
+    }
+
+    #[test]
+    fn role_resolve_group_membership() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "GroupRole",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\group1", "member_type": "group"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &["DOMAIN\\group1".into()]);
+        assert!(!ctx.is_administrator);
+        assert_eq!(ctx.roles, vec!["GroupRole"]);
+    }
+
+    #[test]
+    fn role_effective_table_filter_no_table_permission_full() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "PartialRole",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\u", "member_type": "user"}],
+                "table_permissions": [{"table": "table_a", "filter_expression": "col = 1"}]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\u", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "other_table");
+        assert_eq!(access, TableAccess::Full);
+    }
+
+    #[test]
+    fn role_most_permissive_wins() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "Restricted",
+                    "model_permission": "none",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
+                },
+                {
+                    "name": "ExtraReader",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let perm = effective_model_permission(&cfg, &ctx);
+        assert_eq!(perm, ModelPermission::Read);
+    }
+
+    // -- Multi-role union: Full wins over Hidden/Filtered --
+
+    #[test]
+    fn role_multi_role_filter_plus_no_entry_is_full() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "FilteredRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "sales_fact",
+                        "filter_expression": "region = 'EU'"
+                    }]
+                },
+                {
+                    "name": "UnrestrictedRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "sales_fact");
+        assert_eq!(access, TableAccess::Full);
+    }
+
+    #[test]
+    fn role_multi_role_ols_hide_plus_no_entry_is_full() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "OlsRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "secret_table",
+                        "metadata_permission": "none"
+                    }]
+                },
+                {
+                    "name": "UnrestrictedRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "secret_table");
+        assert_eq!(access, TableAccess::Full);
+    }
+
+    #[test]
+    fn role_same_role_ols_hide_plus_filter_is_hidden() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "MixedRole",
+                "model_permission": "read",
+                "members": [{"member_name": "DOMAIN\\u", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "mixed_table",
+                    "filter_expression": "col = 1",
+                    "metadata_permission": "none"
+                }]
+            }]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\u", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "mixed_table");
+        assert_eq!(access, TableAccess::Hidden);
+    }
+
+    #[test]
+    fn role_multi_role_both_ols_hide_is_hidden() {
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "OlsRole1",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "hidden_table",
+                        "metadata_permission": "none"
+                    }]
+                },
+                {
+                    "name": "OlsRole2",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "hidden_table",
+                        "metadata_permission": "none"
+                    }]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "hidden_table");
+        assert_eq!(access, TableAccess::Hidden);
     }
 }
