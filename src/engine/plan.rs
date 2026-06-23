@@ -8,8 +8,9 @@
 
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::model::{SemanticModel, FallbackCapability};
-use crate::engine::sql::sql_for_query_plan;
+use crate::engine::model::{SemanticModel, FallbackCapability, UserContext, effective_model_permission, effective_table_filter, TableAccess};
+use crate::engine::sql::sql_for_query_plan_with_context;
+use crate::project::config::{ModelPermission, ProxyConfig};
 use crate::proxy_project;
 
 // ---------------------------------------------------------------------------
@@ -140,7 +141,53 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
 
 /// Testable variant that accepts a model directly instead of reading
 /// the global project singleton.
+///
+/// Legacy wrapper: passes admin_default() UserContext, uses global project config.
 pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
+    let project = proxy_project::project();
+    plan_from_semantic_with_model_and_context(query, model, &UserContext::admin_default(), &project.config)
+}
+
+/// Full variant: applies role-based gating on top of plan construction.
+///
+/// Gating rules:
+/// 1. If `effective_model_permission(config, user) == None` → `QueryPlan::Empty`
+/// 2. If the plan's fact/dimension table is Hidden via OLS → `QueryPlan::Empty`
+pub fn plan_from_semantic_with_model_and_context(
+    query: &SemanticQuery,
+    model: &SemanticModel,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> QueryPlan {
+    // Gate 1: model-level permission — None means deny all.
+    if effective_model_permission(config, user) == ModelPermission::None {
+        return QueryPlan::Empty;
+    }
+
+    let plan = build_plan_inner(query, model);
+
+    // Gate 2: table-level access — Hidden means deny.
+    match &plan {
+        QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
+            let fact_table = model.fact_table_for_measure(measure);
+            if effective_table_filter(config, user, &fact_table.table_name) == TableAccess::Hidden {
+                return QueryPlan::Empty;
+            }
+        }
+        QueryPlan::Count { dimension } => {
+            let table = model.dim_table_for_discovery(dimension);
+            if effective_table_filter(config, user, table) == TableAccess::Hidden {
+                return QueryPlan::Empty;
+            }
+        }
+        QueryPlan::Empty => {}
+    }
+
+    plan
+}
+
+/// Build a plan from a semantic query without role gating.
+fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
     // Resolve measure: use the explicitly requested one, or pick a
     // default that is compatible with the axis dimensions' fact tables.
     let meas: MeasId = query.measure.as_deref()
@@ -256,18 +303,19 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     }
 }
 
-pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
+/// Execute a plan with user-context-aware SQL generation.
+/// Falls back to admin-default SQL only when no fallback SQL is configured.
+/// Role predicates are appended to generated SQL for non-admin users.
+pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
     plan: &QueryPlan,
     model: &SemanticModel,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> QueryResult {
     // If the plan's measure has pre-loaded fallback SQL, use it instead of
-    // generating SQL from the plan. Fallback files are pre-written SQL that
-    // handle complex measures (MEDIAN, cumulative, etc.).
-    //
-    // Gate unsupported fallback shapes: stubs and scalar-only fallbacks
-    // that cannot satisfy grouped plans must fail closed — do NOT silently
-    // fall through to generated SQL.
+    // generating SQL from the plan. Role predicates are NOT applied to
+    // fallback SQL (pre-written static SQL). This is a documented limitation.
     let fallback_result = match plan {
         QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
             match model.classify_fallback(measure) {
@@ -286,7 +334,7 @@ pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
                 Some(FallbackCapability::GroupedSpecific(ref dims)) => match plan {
                     QueryPlan::GroupBy { group_by, .. } => {
                         if group_by == dims {
-                            None // declared dimensions match — proceed
+                            None
                         } else {
                             eprintln!("plan: measure '{}' fallback SQL only supports grouping by {:?}, got {:?} — returning empty",
                                 measure, dims, group_by);
@@ -314,9 +362,10 @@ pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
         }
         _ => None,
     };
+    // Use context-aware SQL generation when not using pre-written fallback SQL.
     let sql = fallback_sql
         .map(|s| s.to_string())
-        .unwrap_or_else(|| sql_for_query_plan(model, plan));
+        .unwrap_or_else(|| sql_for_query_plan_with_context(model, plan, user, config));
 
     if sql.is_empty() {
         return QueryResult::Empty;
@@ -345,4 +394,13 @@ pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
 
         QueryPlan::Empty => QueryResult::Empty,
     }
+}
+
+pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
+    plan: &QueryPlan,
+    model: &SemanticModel,
+    backend: &B,
+) -> QueryResult {
+    // Legacy wrapper: uses admin-default user context (no role filtering).
+    execute_plan_with_backend_and_context(plan, model, backend, &UserContext::admin_default(), &proxy_project::project().config)
 }

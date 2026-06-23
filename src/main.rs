@@ -11,7 +11,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tower_http::limit::RequestBodyLimitLayer;
 
+use xmla_proxy::engine::model::{UserContext, resolve_user_context};
 use xmla_proxy::parser::{XmlaRequest, parse_xmla};
+use xmla_proxy::project::config::ProxyConfig;
 use xmla_proxy::*;
 
 #[derive(Clone)]
@@ -207,6 +209,15 @@ async fn run_server() {
         std::sync::Arc::new(AppState { backend_source })
     };
 
+    // Warn if roles are defined but no auth config (roles are not enforced).
+    {
+        let p = proxy_project::project();
+        if !p.config.roles.is_empty() && p.config.auth.is_none() {
+            println!("⚠️  WARNING: {} role(s) defined but no auth config — security is NOT enforced", p.config.roles.len());
+            debug_write(&format!("WARNING: {} role(s) without auth config", p.config.roles.len()));
+        }
+    }
+
     if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
         execute_builders::enable_malloy_runtime();
         println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");
@@ -229,6 +240,33 @@ async fn run_server() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Build a `UserContext` from request headers and proxy config.
+///
+/// - If `config.auth` is `None` → returns admin default (no auth = full access).
+/// - If `auth.trusted_proxy` is true → reads trusted header (default `X-User`).
+///   If present, resolves roles; if missing, returns deny-all (fail closed).
+/// - If `auth.trusted_proxy` is false → returns admin default.
+fn build_user_context(headers: &HeaderMap, config: &ProxyConfig) -> UserContext {
+    let Some(auth) = &config.auth else {
+        return UserContext::admin_default();
+    };
+    if auth.trusted_proxy {
+        let header_name = HeaderName::from_bytes(auth.trusted_header.as_bytes())
+            .unwrap_or_else(|_| HeaderName::from_static("x-user"));
+        if let Some(user_id) = headers
+            .get(&header_name)
+            .and_then(|v| v.to_str().ok())
+        {
+            resolve_user_context(config, user_id, &[])
+        } else {
+            // Missing trusted header: deny all (fail closed).
+            UserContext::deny_all()
+        }
+    } else {
+        UserContext::admin_default()
+    }
 }
 
 // ---- HTTP helpers ----
@@ -279,7 +317,11 @@ fn log_discover_context(body: &str) {
 
 // ---- XMLA request handler ----
 
-async fn handle_xmla(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+async fn handle_xmla(
+    State(state): State<Arc<AppState>>,
+    http_headers: HeaderMap,
+    body: String,
+) -> impl IntoResponse {
     let request_type = body.find("<RequestType>").and_then(|start| {
         let after = start + 13;
         body[after..]
@@ -288,6 +330,12 @@ async fn handle_xmla(State(state): State<Arc<AppState>>, body: String) -> impl I
     });
     if let Some(rt) = request_type {
         println!("🔍 RequestType: {}", rt);
+    }
+
+    let config = proxy_project::project().config.clone();
+    let user_context = build_user_context(&http_headers, &config);
+    if !user_context.is_administrator && !user_context.roles.is_empty() {
+        println!("🔐 User '{}' authenticated as roles: {:?}", user_context.user_id, user_context.roles);
     }
 
     let headers = default_headers();
@@ -302,12 +350,14 @@ async fn handle_xmla(State(state): State<Arc<AppState>>, body: String) -> impl I
 
     let request_for_worker = request.clone();
     let body_for_worker = body.clone();
+    let user_ctx = user_context.clone();
+    let cfg = config.clone();
     let backend_source = state.backend_source.clone();
     let response_body = tokio::task::spawn_blocking(move || {
         let backend = backend_source
             .checkout()
             .expect("failed to checkout DuckDB backend");
-        route_request(&request_for_worker, &body_for_worker, &backend)
+        route_request(&request_for_worker, &body_for_worker, &backend, &user_ctx, &cfg)
     })
     .await
     .expect("XMLA worker task panicked");
@@ -327,6 +377,8 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
     request: &XmlaRequest,
     body: &str,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> String {
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
@@ -416,7 +468,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             debug_write(body);
             let (resp, timings) =
                 execute_builders::get_execute_cellset_response_timed_malloy_with_backend(
-                    mdx, backend,
+                    mdx, backend, user, config,
                 );
             debug_write("RESPONSE XML:");
             debug_write(&resp);

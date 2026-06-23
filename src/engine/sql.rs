@@ -6,16 +6,37 @@
 ///   separate dimension tables)
 
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
-use crate::engine::model::SemanticModel;
+use crate::engine::model::{SemanticModel, UserContext, effective_table_filter, TableAccess};
+use crate::project::config::ProxyConfig;
 use std::collections::{HashMap, HashSet};
 
-/// Generate SQL for the given plan.
+/// Legacy: generate SQL for a plan with an admin-default (no role filtering) context.
 pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
+    sql_for_query_plan_with_context(model, plan, &UserContext::admin_default(), &empty_config())
+}
+
+/// Full variant: generate SQL for a plan, injecting role-filter predicates.
+///
+/// Role predicates are obtained from `effective_table_filter` and:
+/// - Emitted as raw SQL in the WHERE clause using `f.` (fact table) or
+///   `_{dim_id}.` (dimension table) aliases.
+/// - Join clauses for filtered dimension tables are emitted automatically
+///   via `role_filter_join_clauses`.
+///
+/// The calling converter/operator is responsible for writing valid DuckDB
+/// SQL fragments that match the alias convention.
+pub fn sql_for_query_plan_with_context(
+    model: &SemanticModel,
+    plan: &QueryPlan,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> String {
     match plan {
         QueryPlan::Total { measure, filters } => {
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
-            let (joins, wc) = joins_and_where(model, filters);
+            let mut joined: HashSet<String> = HashSet::new();
+            let (joins, wc) = joins_and_where(model, filters, &mut joined, user, config, table);
             format!("SELECT {} FROM {} f{}{}",
                 meas.sql_expr, table, joins, wc)
         }
@@ -24,12 +45,13 @@ pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
 
-            let (col_map, joins) = resolve_group_cols(model, group_by);
+            let mut joined: HashSet<String> = HashSet::new();
+            let (col_map, joins) = resolve_group_cols(model, group_by, &mut joined, user, config);
             let col_names: Vec<&str> = group_by.iter()
                 .map(|d| col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??"))
                 .collect();
 
-            let wc = sql_where_with_cols(model, filters, &col_map);
+            let wc = sql_where_with_cols(model, filters, &col_map, user, config, table);
             let group_nums: Vec<String> = (1..=col_names.len())
                 .map(|i| i.to_string()).collect();
             format!(
@@ -46,7 +68,8 @@ pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
 
         QueryPlan::Count { dimension } => {
             let dim = model.dim_def(dimension);
-            let (col_map, joins) = resolve_group_cols(model, &[dimension.clone()]);
+            let mut joined: HashSet<String> = HashSet::new();
+            let (col_map, joins) = resolve_group_cols(model, &[dimension.clone()], &mut joined, user, config);
             let col = col_map.get(dimension.as_str())
                 .map(|s| s.as_str()).unwrap_or(&dim.physical_field);
             let from = if joins.is_empty() {
@@ -62,14 +85,79 @@ pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
     }
 }
 
-/// Resolve qualified column names and generate JOINs for group-by dimensions.
+/// Return the role-filter SQL predicate for a table, or empty string when the
+/// user has unfettered access (`Full` or `Hidden` — gating handled in plan.rs).
+fn role_filter_predicate_for_table(
+    config: &ProxyConfig,
+    user: &UserContext,
+    table_name: &str,
+) -> String {
+    match effective_table_filter(config, user, table_name) {
+        TableAccess::Filtered(sql) => sql,
+        TableAccess::Full | TableAccess::Hidden => String::new(),
+    }
+}
+
+/// Build JOIN clauses for dimension tables that have role filters, deduping
+/// against already-joined aliases via the `joined` set.
+///
+/// Each filtered dimension table gets a JOIN on its relationship:
+/// `JOIN dim_table _dim_id ON f.fact_col = _dim_id.dim_col`
+fn role_filter_join_clauses(
+    model: &SemanticModel,
+    user: &UserContext,
+    config: &ProxyConfig,
+    joined: &mut HashSet<String>,
+) -> String {
+    let mut joins: Vec<String> = Vec::new();
+    for rel in &model.relationships {
+        let access = effective_table_filter(config, user, &rel.dim_table);
+        if let TableAccess::Filtered(_) = access {
+            let alias = format!("_{}", rel.dimension_id).replace(' ', "_").to_lowercase();
+            if joined.insert(alias.clone()) {
+                joins.push(format!(
+                    " JOIN {} {alias} ON f.{fact_col} = {alias}.{dim_col}",
+                    rel.dim_table,
+                    fact_col = rel.fact_column,
+                    dim_col = rel.dim_column,
+                ));
+            }
+        }
+    }
+    joins.join("")
+}
+
+/// Minimal empty config used by the legacy wrappers (role predicates are
+/// always empty for admin-default users, so config content is irrelevant).
+fn empty_config() -> ProxyConfig {
+    ProxyConfig {
+        catalog: String::new(),
+        cube: String::new(),
+        source_name: String::new(),
+        table_name: String::new(),
+        dialect: "duckdb".into(),
+        malloy_model_file: String::new(),
+        db_path: None,
+        fact_tables: vec![],
+        relationships: vec![],
+        roles: vec![],
+        auth: None,
+        time_intelligence: None,
+        dimensions: vec![],
+        measures: vec![],
+    }
+}
+
+/// Resolve column names including role-filter JOINs deduped via `joined`.
 fn resolve_group_cols(
     model: &SemanticModel,
     group_by: &[String],
+    joined: &mut HashSet<String>,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> (HashMap<String, String>, String) {
     let mut col_map: HashMap<String, String> = HashMap::new();
     let mut join_lines: Vec<String> = Vec::new();
-    let mut joined: HashSet<String> = HashSet::new();
 
     for dim_id in group_by {
         let dim = model.dim_def(dim_id);
@@ -90,14 +178,22 @@ fn resolve_group_cols(
         }
     }
 
+    // Add role-filter JOINs for dimension tables with role predicates.
+    let role_joins = role_filter_join_clauses(model, user, config, joined);
+    join_lines.push(role_joins);
+
     (col_map, join_lines.join(""))
 }
 
-/// Build WHERE clause from filters, using optional resolved column names.
+/// Build WHERE clause including role-filter predicates for the fact table
+/// and all relationship-dimension tables.
 fn sql_where_with_cols(
     model: &SemanticModel,
     filters: &[TypedDimensionFilter],
     col_map: &HashMap<String, String>,
+    user: &UserContext,
+    config: &ProxyConfig,
+    fact_table_name: &str,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -129,6 +225,19 @@ fn sql_where_with_cols(
         }
     }
 
+    // Append role predicates: fact table filter first, then each relationship
+    // dimension table that has a role filter.
+    let fact_pred = role_filter_predicate_for_table(config, user, fact_table_name);
+    if !fact_pred.is_empty() {
+        parts.push(format!("({})", fact_pred));
+    }
+    for rel in &model.relationships {
+        let dim_pred = role_filter_predicate_for_table(config, user, &rel.dim_table);
+        if !dim_pred.is_empty() {
+            parts.push(format!("({})", dim_pred));
+        }
+    }
+
     if parts.is_empty() {
         String::new()
     } else {
@@ -136,13 +245,16 @@ fn sql_where_with_cols(
     }
 }
 
-/// Collect JOIN clauses and WHERE clauses for filters.
+/// Collect JOINs and WHERE including role-filter JOINs and predicates.
 fn joins_and_where(
     model: &SemanticModel,
     filters: &[TypedDimensionFilter],
+    joined: &mut HashSet<String>,
+    user: &UserContext,
+    config: &ProxyConfig,
+    fact_table_name: &str,
 ) -> (String, String) {
     let mut join_lines: Vec<String> = Vec::new();
-    let mut joined: HashSet<String> = HashSet::new();
     let mut col_map: HashMap<String, String> = HashMap::new();
 
     for f in filters {
@@ -164,7 +276,11 @@ fn joins_and_where(
         }
     }
 
-    let wc = sql_where_with_cols(model, filters, &col_map);
+    // Add role-filter JOINs for dimension tables with role predicates.
+    let role_joins = role_filter_join_clauses(model, user, config, joined);
+    join_lines.push(role_joins);
+
+    let wc = sql_where_with_cols(model, filters, &col_map, user, config, fact_table_name);
     (join_lines.join(""), wc)
 }
 

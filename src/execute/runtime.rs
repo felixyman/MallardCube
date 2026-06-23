@@ -5,7 +5,8 @@
 /// Used by `builders.rs` and `main.rs`.
 
 use crate::backend::QueryBackend;
-use crate::engine::plan::{execute_plan_with_backend, execute_plan_sql_with_backend, plan_from_semantic};
+use crate::engine::plan::{execute_plan_with_backend, execute_plan_with_backend_and_context, execute_plan_sql_with_backend, plan_from_semantic, plan_from_semantic_with_model_and_context};
+use crate::engine::model::UserContext;
 use crate::engine::normalize::plan_key;
 use crate::engine::timing::{Timings, RuntimePath};
 use crate::engine::malloy_compiler::MalloyCompiler;
@@ -13,6 +14,7 @@ use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
 use crate::engine::cache::PlanCache;
 use crate::mdx_semantic::{SemanticQueryKind};
 use crate::execute::render::dispatch_with_backend;
+use crate::project::config::ProxyConfig;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -108,6 +110,8 @@ pub fn get_execute_cellset_response_timed_with_backend<B: QueryBackend + ?Sized>
 pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + ?Sized>(
     mdx: &str,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> (String, Timings) {
     use std::time::Instant;
 
@@ -116,12 +120,17 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
     let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
 
     let t0 = Instant::now();
-    let plan = plan_from_semantic(&query);
+    let model = &crate::proxy_project::project().model;
+    let plan = plan_from_semantic_with_model_and_context(&query, model, user, config);
     let plan_us = (Instant::now() - t0).as_micros() as u64;
     let key = plan_key(&plan);
 
-    let model = &crate::proxy_project::project().model;
+    // Malloy runtime has no role filtering — only admin users may use it.
+    // Non-admin users always fall through to direct SQL which includes
+    // role predicates. This is a documented limitation (Malloy path does
+    // not inject role filters).
     let use_malloy = USE_MALLOY_RUNTIME.load(Ordering::Relaxed)
+        && user.is_administrator
         && matches!(query.kind, SemanticQueryKind::SlicerAllAndMeasure
             | SemanticQueryKind::SlicerOnly
             | SemanticQueryKind::DrilldownCategories
@@ -157,7 +166,7 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
             eprintln!("  Malloy source:\n{source}");
 
             let t1 = Instant::now();
-            let fallback = execute_plan_with_backend(&plan, &model, backend);
+            let fallback = execute_plan_with_backend_and_context(&plan, &model, backend, user, config);
             let exec_us = (Instant::now() - t1).as_micros() as u64;
             (fallback, RuntimePath::DirectSql, compile_us, false, 0.0, exec_us)
         } else {
@@ -171,7 +180,7 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
         }
     } else {
         let t0 = Instant::now();
-        let r = execute_plan_with_backend(&plan, &model, backend);
+        let r = execute_plan_with_backend_and_context(&plan, &model, backend, user, config);
         let exec_us = (Instant::now() - t0).as_micros() as u64;
         (r, RuntimePath::DirectSql, 0, false, 0.0, exec_us)
     };
@@ -188,4 +197,66 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
     timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
     timings.finish();
     (xml, timings)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::model::{default_model, resolve_user_context};
+    use crate::engine::plan::QueryPlan;
+    use crate::engine::sql::sql_for_query_plan_with_context;
+    use crate::project::config::ProxyConfig;
+
+    fn parse_config(json: &str) -> ProxyConfig {
+        serde_json::from_str(json).expect("parse config")
+    }
+
+    /// E2E test: verify that role filter predicates are injected into the SQL
+    /// when calling through the runtime path with a non-admin user context.
+    ///
+    /// This catches the CRITICAL regression where runtime.rs discards the
+    /// in-scope user/config and uses admin defaults instead.
+    #[test]
+    fn role_e2e_filtered_sql_through_runtime() {
+        let config_str = r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [{
+                "name": "EU_Region",
+                "model_permission": "read",
+                "members": [{"member_name": "user1", "member_type": "user"}],
+                "table_permissions": [{
+                    "table": "faktatabell",
+                    "filter_expression": "region = 'EU'"
+                }]
+            }]
+        }"#;
+        let config: ProxyConfig = parse_config(config_str);
+        let user = resolve_user_context(&config, "user1", &[]);
+        assert!(!user.is_administrator);
+        assert_eq!(user.roles, vec!["EU_Region"]);
+
+        let model = default_model();
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![],
+        };
+
+        let sql = sql_for_query_plan_with_context(&model, &plan, &user, &config);
+        assert!(
+            sql.contains("region = 'EU'"),
+            "SQL should contain role filter predicate, got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("WHERE"),
+            "SQL should have a WHERE clause with role filter, got: {}",
+            sql
+        );
+    }
 }
