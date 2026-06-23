@@ -298,15 +298,45 @@ fn parse_roles(model: &serde_json::Value) -> Vec<RoleInfo> {
         return roles;
     };
     for role_val in arr {
+        let name = role_val["name"].as_str().unwrap_or("").to_string();
+        let description = role_val["description"].as_str().unwrap_or("").to_string();
+        let model_permission = role_val["modelPermission"]
+            .as_str()
+            .unwrap_or("read")
+            .to_string();
+
+        let mut members = Vec::new();
+        if let Some(members_arr) = role_val["members"].as_array() {
+            for m in members_arr {
+                members.push(RoleMemberInfo {
+                    member_name: m["memberName"].as_str().unwrap_or("").to_string(),
+                    member_type: m["memberType"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+
+        let mut table_permissions = Vec::new();
+        if let Some(tps_arr) = role_val["tablePermissions"].as_array() {
+            for tp in tps_arr {
+                let dax_filter = tp["filterExpression"].as_str().map(|s| s.to_string());
+                table_permissions.push(TablePermissionInfo {
+                    table: tp["name"].as_str().unwrap_or("").to_string(),
+                    filter_expression: String::new(),
+                    dax_filter,
+                    metadata_permission: tp["metadataPermission"]
+                        .as_str()
+                        .unwrap_or("read")
+                        .to_string(),
+                });
+            }
+        }
+
         roles.push(RoleInfo {
-            name: role_val["name"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            description: role_val["description"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            name,
+            description,
+            model_permission,
+            members,
+            table_permissions,
         });
     }
     roles

@@ -79,6 +79,7 @@ fn is_known_object_type(word: &str) -> bool {
             | "level"
             | "relationship"
             | "role"
+            | "member"
             | "tablePermission"
             | "modelPermission"
     )
@@ -703,17 +704,64 @@ fn build_role(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<RoleInfo> 
     let name = obj.name.clone();
     let description = obj.description.clone();
 
-    // Check for tablePermission children (RLS not supported)
-    for child in &obj.children {
-        if child.object_type == "tablePermission" {
-            warnings.push(format!(
-                "role '{}' has tablePermission '{}' — RLS security is not supported",
-                name, child.name
-            ));
+    // Extract modelPermission from properties (default "read")
+    let mut model_permission = "read".to_string();
+    for (key, val) in &obj.properties {
+        if key == "modelPermission" {
+            model_permission = val.clone();
         }
     }
 
-    Some(RoleInfo { name, description })
+    // Parse member children
+    let mut members = Vec::new();
+    for child in &obj.children {
+        if child.object_type == "member" {
+            let member_name = child.name.clone();
+            let mut member_type = String::new();
+            for (key, val) in &child.properties {
+                if key == "memberType" {
+                    member_type = val.clone();
+                }
+            }
+            members.push(RoleMemberInfo {
+                member_name,
+                member_type,
+            });
+        }
+    }
+
+    // Parse tablePermission children
+    let mut table_permissions = Vec::new();
+    for child in &obj.children {
+        if child.object_type == "tablePermission" {
+            let table = child.name.clone();
+            let dax_filter = if child.expression.is_empty() {
+                None
+            } else {
+                Some(child.expression.clone())
+            };
+            let mut metadata_permission = "read".to_string();
+            for (key, val) in &child.properties {
+                if key == "metadataPermission" {
+                    metadata_permission = val.clone();
+                }
+            }
+            table_permissions.push(TablePermissionInfo {
+                table,
+                filter_expression: String::new(),
+                dax_filter,
+                metadata_permission,
+            });
+        }
+    }
+
+    Some(RoleInfo {
+        name,
+        description,
+        model_permission,
+        members,
+        table_permissions,
+    })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

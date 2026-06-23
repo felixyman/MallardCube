@@ -9,7 +9,7 @@
 /// - PARTIAL: usable but needs manual follow-up (roles, manual measures, etc.).
 /// - BLOCKED: not honestly Excel-safe (stub fallbacks, broken config, etc.).
 
-use std::fs;
+use crate::project::config::ModelPermission;
 use std::path::Path;
 
 #[derive(Debug, PartialEq)]
@@ -94,14 +94,49 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     }
 
     // --- check roles from config ---
-    // Roles are informational only (not enforced by the proxy). They surface as
-    // PARTIAL rather than READY to remind operators that security must be handled
-    // outside the proxy. This is intentional: the proxy cannot enforce SSAS roles.
-    if !p.config.roles.is_empty() {
-        partial.push(format!(
-            "{} unsupported security role(s) detected in config",
-            p.config.roles.len()
-        ));
+    // Roles with SQL filter_expression (RLS) or model_permission: Administrator
+    // are enforced at runtime and should NOT cause PARTIAL. Only unsupported role
+    // shapes flag PARTIAL.
+    if p.config.auth.is_none() {
+        if !p.config.roles.is_empty() {
+            partial.push(
+                "roles defined but no auth config — roles will not be enforced at runtime".into(),
+            );
+        }
+    } else {
+        for role in &p.config.roles {
+            let has_enforced_rls = role
+                .table_permissions
+                .iter()
+                .any(|tp| !tp.filter_expression.is_empty());
+            let is_admin = role.model_permission == ModelPermission::Administrator;
+
+            // Enforced roles (RLS filter or Administrator) are fine.
+            if has_enforced_rls || is_admin {
+                continue;
+            }
+
+            // Unsupported shape: role with members but no table permissions.
+            if !role.members.is_empty() && role.table_permissions.is_empty() {
+                partial.push(format!(
+                    "role '{}' has members but no table permissions (no RLS enforced)",
+                    role.name
+                ));
+            }
+
+            // Unsupported shape: table permissions with empty filter and Read metadata
+            // (full access, no enforcement).
+            for tp in &role.table_permissions {
+                if tp.filter_expression.is_empty()
+                    && tp.metadata_permission == ModelPermission::Read
+                {
+                    partial.push(format!(
+                        "role '{}' table '{}' has no filter (full access)",
+                        role.name, tp.table
+                    ));
+                }
+            }
+        }
     }
 
     // --- check time intelligence ---
@@ -196,12 +231,12 @@ mod tests {
     #[test]
     fn generated_project_is_partial_with_unsupported_roles() {
         let v = qualify("generated_project/proxy-config.json", None);
-        // Plan 014 retired both stub fallbacks. Only unsupported roles remain.
+        // Plan 014 retired both stub fallbacks. No auth config + roles defined.
         assert_eq!(v.label(), "PARTIAL",
             "expected PARTIAL, got {}: {:?}", v.label(), v.reasons());
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
-        assert!(reasons.iter().any(|r| r.contains("security role")),
-            "should report unsupported roles: {:?}", reasons);
+        assert!(reasons.iter().any(|r| r.contains("no auth config")),
+            "should report missing auth config: {:?}", reasons);
     }
 
     #[test]

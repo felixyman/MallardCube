@@ -82,9 +82,41 @@ pub struct RelInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RoleMemberInfo {
+    pub member_name: String,
+    #[serde(default)]
+    pub member_type: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TablePermissionInfo {
+    pub table: String,
+    #[serde(default)]
+    pub filter_expression: String,
+    #[serde(default)]
+    pub dax_filter: Option<String>,
+    #[serde(default = "default_metadata_permission")]
+    pub metadata_permission: String,
+}
+
+fn default_metadata_permission() -> String {
+    "read".into()
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RoleInfo {
     pub name: String,
     pub description: String,
+    #[serde(default = "default_model_permission")]
+    pub model_permission: String,
+    #[serde(default)]
+    pub members: Vec<RoleMemberInfo>,
+    #[serde(default)]
+    pub table_permissions: Vec<TablePermissionInfo>,
+}
+
+fn default_model_permission() -> String {
+    "read".into()
 }
 
 // ---- Shared utility functions ----

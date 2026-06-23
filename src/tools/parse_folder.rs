@@ -236,9 +236,45 @@ fn parse_roles(dir: &str) -> Vec<RoleInfo> {
         let path = entry.path();
         if let Ok(text) = fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let name = v["name"].as_str().unwrap_or("").to_string();
+                let description = v["description"].as_str().unwrap_or("").to_string();
+                let model_permission = v["modelPermission"]
+                    .as_str()
+                    .unwrap_or("read")
+                    .to_string();
+
+                let mut members = Vec::new();
+                if let Some(members_arr) = v["members"].as_array() {
+                    for m in members_arr {
+                        members.push(RoleMemberInfo {
+                            member_name: m["memberName"].as_str().unwrap_or("").to_string(),
+                            member_type: m["memberType"].as_str().unwrap_or("").to_string(),
+                        });
+                    }
+                }
+
+                let mut table_permissions = Vec::new();
+                if let Some(tps_arr) = v["tablePermissions"].as_array() {
+                    for tp in tps_arr {
+                        let dax_filter = tp["filterExpression"].as_str().map(|s| s.to_string());
+                        table_permissions.push(TablePermissionInfo {
+                            table: tp["name"].as_str().unwrap_or("").to_string(),
+                            filter_expression: String::new(),
+                            dax_filter,
+                            metadata_permission: tp["metadataPermission"]
+                                .as_str()
+                                .unwrap_or("read")
+                                .to_string(),
+                        });
+                    }
+                }
+
                 roles.push(RoleInfo {
-                    name: v["name"].as_str().unwrap_or("").to_string(),
-                    description: v["description"].as_str().unwrap_or("").to_string(),
+                    name,
+                    description,
+                    model_permission,
+                    members,
+                    table_permissions,
                 });
             }
         }

@@ -317,12 +317,49 @@ fn render_proxy_config(m: &ConversionModel) -> String {
 fn render_roles(m: &ConversionModel) -> String {
     let mut out = String::new();
     for (i, r) in m.roles.iter().enumerate() {
+        // Render members
+        let members_json: String = r.members.iter()
+            .map(|m| format!(
+                r##"{{{{\n          \"member_name\": \"{}\",\n          \"member_type\": \"{}\"\n        }}}}"##,
+                json_escape(&m.member_name),
+                json_escape(&m.member_type),
+            ).replace("{{", "{").replace("}}", "}"))
+            .collect::<Vec<_>>()
+            .join(",\n");
+
+        // Render table permissions
+        let tp_json: String = r.table_permissions.iter()
+            .map(|tp| {
+                let dax = tp.dax_filter.as_ref()
+                    .map(|s| format!("\n          \"dax_filter\": \"{}\",", json_escape(s)))
+                    .unwrap_or_default();
+                format!(
+                    r##"{{{{\n          \"table\": \"{}\",\n          \"filter_expression\": \"\",{}\n          \"metadata_permission\": \"{}\"\n        }}}}"##,
+                    json_escape(&tp.table),
+                    dax,
+                    tp.metadata_permission,
+                ).replace("{{", "{").replace("}}", "}")
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+
         out.push_str(&format!(
             r##"    {{{{
       "name": "{}",
-      "description": "{}"
+      "description": "{}",
+      "model_permission": "{}",
+      "members": [
+        {}
+      ],
+      "table_permissions": [
+        {}
+      ]
     }}}}"##,
-            r.name, r.description,
+            json_escape(&r.name),
+            json_escape(&r.description),
+            r.model_permission,
+            members_json,
+            tp_json,
         ).replace("{{", "{").replace("}}", "}"));
         if i + 1 < m.roles.len() {
             out.push_str(",\n");
@@ -1425,11 +1462,44 @@ fn render_report(m: &ConversionModel) -> String {
 
     if !m.roles.is_empty() {
         out.push_str("\n## Roles\n\n");
-        out.push_str("Security roles detected but NOT supported by the proxy:\n\n");
+        out.push_str(&format!("{} roles detected\n\n", m.roles.len()));
         for r in &m.roles {
-            out.push_str(&format!("- {}: {}\n", r.name, r.description));
+            out.push_str(&format!("### {} ({})\n\n", r.name, r.model_permission));
+            if !r.description.is_empty() {
+                out.push_str(&format!("{}\n\n", r.description));
+            }
+
+            if !r.members.is_empty() {
+                out.push_str("**Members:**\n\n");
+                out.push_str("| Name | Type |\n|---|---|\n");
+                for m in &r.members {
+                    out.push_str(&format!("| {} | {} |\n", m.member_name, m.member_type));
+                }
+                out.push('\n');
+            }
+
+            if r.table_permissions.is_empty() {
+                out.push_str("No table permissions — full access to all tables.\n\n");
+            } else {
+                out.push_str("**Table permissions:**\n\n");
+                out.push_str("| Table | SQL filter | DAX filter | Metadata permission | Status |\n|---|---|---|---|---|\n");
+                for tp in &r.table_permissions {
+                    let dax_str = tp.dax_filter.as_deref().unwrap_or("-");
+                    let sql_str = if tp.filter_expression.is_empty() { "(empty)" } else { &tp.filter_expression };
+                    let status = if tp.metadata_permission == "none" {
+                        "OLS — table hidden"
+                    } else if tp.dax_filter.is_some() && tp.filter_expression.is_empty() {
+                        "DAX filter preserved, SQL filter empty — manual SQL translation required"
+                    } else if !tp.filter_expression.is_empty() {
+                        "Enforced (SQL filter)"
+                    } else {
+                        "No filter — full access"
+                    };
+                    out.push_str(&format!("| {} | {} | {} | {} | {} |\n", tp.table, sql_str, dax_str, tp.metadata_permission, status));
+                }
+                out.push('\n');
+            }
         }
-        out.push_str("\nMust be enforced outside the proxy if needed.\n");
     }
 
     out

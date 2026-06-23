@@ -335,7 +335,120 @@ For detailed documentation:
 - Multi-level hierarchies (Year → Quarter → Month → Day)
 - Postgres/MSSQL ingestion
 - Arrow/zero-copy transport
-- Security roles
+
+## Security and roles
+
+The proxy supports SSAS Tabular-style role-based security via a trusted-proxy
+auth boundary. Roles enforce **row-level security (RLS)** through SQL predicates,
+**object-level security (OLS)** by hiding tables, and **model-level permission**
+gating (read / administrator / none).
+
+### Auth boundary
+
+The proxy does not implement Windows Authentication (Kerberos/NTLM) natively.
+Instead, it reads the authenticated user identity from a configurable HTTP
+header set by a trusted reverse proxy (IIS, nginx, etc.).
+
+```jsonc
+{
+  "auth": {
+    "trusted_proxy": true,
+    "trusted_header": "X-User"    // default
+  }
+}
+```
+
+- **`trusted_proxy: true`** — the proxy reads the `X-User` header (or your
+  configured header name) and resolves roles against that user identity.
+- **Header missing** when `trusted_proxy` is enabled → the proxy returns a 401
+  (deny closed).
+- **`auth` absent** (or null) → no user context is built; all requests see all
+  data with administrator privileges (backward-compat mode). Roles are
+  informational only.
+
+Place IIS with Windows Authentication or nginx with a Kerberos module in front
+of the proxy. The reverse proxy terminates auth and sets the trusted header
+before forwarding requests.
+
+### Role configuration
+
+```jsonc
+{
+  "roles": [
+    {
+      "name": "EU_Sales_Managers",
+      "description": "EU region sales managers — read only",
+      "model_permission": "read",
+      "members": [
+        { "member_name": "DOMAIN\\jsmith", "member_type": "user" },
+        { "member_name": "DOMAIN\\EU-Sales", "member_type": "group" }
+      ],
+      "table_permissions": [
+        {
+          "table": "sales_fact",
+          "filter_expression": "f.region = 'EU'",
+          "dax_filter": "Sales[Region] = \"EU\"",
+          "metadata_permission": "read"
+        },
+        {
+          "table": "dim_territory",
+          "filter_expression": "_territory.region = 'EU'",
+          "metadata_permission": "read"
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "trusted_proxy": true
+  }
+}
+```
+
+### SQL filter contract
+
+`filter_expression` is a **raw DuckDB SQL fragment** placed in the WHERE
+clause of every query scanning that table. The table aliasing convention is:
+
+| Table role | Alias |
+|---|---|
+| Fact table | `f` |
+| Dimension table | `_<dimension_id>` (e.g. `_territory`, `_product`) |
+
+Examples:
+
+- `"f.region = 'EU'"` — filter directly on the fact table column
+- `"_territory.region = 'EU'"` — filter on a joined dimension; the proxy
+  cascades it through the active relationship
+
+When the converter emits role metadata, it leaves `filter_expression` empty
+and preserves the original DAX in `dax_filter`. Operators must manually
+translate DAX to SQL using the aliases above.
+
+### Semantics
+
+| Concept | Behavior |
+|---|---|
+| **Multiple roles** | Union (OR) — a user in multiple roles sees the union of all rows. |
+| **No matching role** (auth configured) | Deny all — empty query results, empty discover rowsets. |
+| **No auth configured** | Administrator default — all data visible, roles informational. |
+| **`model_permission: administrator`** | Bypasses RLS and OLS entirely. |
+| **`model_permission: none`** | Deny all — empty results for all queries. |
+| **No `table_permission` for a table** | Full access to that table (SSAS convention). |
+| **`metadata_permission: none`** | OLS — table hidden from metadata and queries (Empty plan). |
+
+### What is enforced
+
+| Feature | Enforced? | Notes |
+|---|---|---|
+| RLS via SQL predicates | Yes | Applied as WHERE clause on every fact/dimension scan |
+| Model-level read/deny | Yes | Plan returns Empty when permission is `none` |
+| OLS (table-level hide) | Yes | Table hidden via Empty plan / empty member list |
+| MDSCHEMA_MEMBERS filtering | Yes | Dimension table RLS applied to member enumeration |
+| **Malloy runtime** | **No** | `MALLOY_RUNTIME=1` does not enforce roles — only direct SQL is secured |
+| DAX-to-SQL lowering | No | Converter emits DAX in `dax_filter`; `filter_expression` left empty for manual fill-in |
+| Column-level OLS | No | Only table-level `metadata_permission` is supported |
+| Dynamic `USERNAME()` | No | `USERNAME()` and `USERPRINCIPALNAME()` are not substituted at runtime |
+| Native Kerberos | No | Authentication must be terminated by a reverse proxy |
 
 ## Roadmap
 

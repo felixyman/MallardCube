@@ -506,6 +506,8 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
                 member_unique_name.as_deref(),
                 *tree_op,
                 backend,
+                user,
+                config,
             );
             debug_write("RESPONSE XML:");
             debug_write(&resp);

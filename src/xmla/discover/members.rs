@@ -5,6 +5,8 @@
 /// No hardcoded business values remain.
 
 use crate::backend::{Backend, QueryBackend};
+use crate::engine::model::{effective_table_filter, TableAccess, UserContext};
+use crate::project::config::ProxyConfig;
 use crate::proxy_project;
 use crate::response::xml_escape;
 use uuid::Uuid;
@@ -46,21 +48,42 @@ struct MemberRow {
 fn build_all_member_rows<B: QueryBackend + ?Sized>(
     model: &crate::engine::model::SemanticModel,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
+        let dim_table = model.dim_table_for_discovery(&dim.id);
+        let access = effective_table_filter(config, user, dim_table);
+
+        // OLS-hidden dimensions are completely excluded from member lists.
+        if access == TableAccess::Hidden {
+            continue;
+        }
+
         let dim_u = dim.dimension_unique_name();
         let hier_u = dim.hierarchy_unique_name();
         let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let sql = format!(
-            "SELECT COUNT(DISTINCT {}) FROM {}",
-            dim.physical_field,
-            model.dim_table_for_discovery(&dim.id)
-        );
-        let cardinality = backend.query_count(&sql);
+        let cardinality = match &access {
+            TableAccess::Filtered(sql) => {
+                let sql_count = format!(
+                    "SELECT COUNT(DISTINCT {}) FROM {} WHERE {}",
+                    dim.physical_field, dim_table, sql
+                );
+                backend.query_count(&sql_count)
+            }
+            _ => {
+                let sql = format!(
+                    "SELECT COUNT(DISTINCT {}) FROM {}",
+                    dim.physical_field,
+                    dim_table,
+                );
+                backend.query_count(&sql)
+            }
+        };
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
             xml: xml_member_row(
@@ -84,21 +107,37 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
 fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
     model: &crate::engine::model::SemanticModel,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
+        let dim_table = model.dim_table_for_discovery(&dim.id);
+        let access = effective_table_filter(config, user, dim_table);
+
+        // OLS-hidden dimensions produce no leaf members.
+        if access == TableAccess::Hidden {
+            continue;
+        }
+
         let dim_u = dim.dimension_unique_name();
         let hier_u = dim.hierarchy_unique_name();
         let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let sql = format!(
-            "SELECT DISTINCT {} FROM {} ORDER BY {}",
-            dim.physical_field,
-            model.dim_table_for_discovery(&dim.id),
-            dim.physical_field
-        );
+        let sql = match &access {
+            TableAccess::Filtered(sql_filter) => format!(
+                "SELECT DISTINCT {} FROM {} WHERE {} ORDER BY {}",
+                dim.physical_field, dim_table, sql_filter, dim.physical_field
+            ),
+            _ => format!(
+                "SELECT DISTINCT {} FROM {} ORDER BY {}",
+                dim.physical_field,
+                dim_table,
+                dim.physical_field
+            ),
+        };
         let values = backend.query_strings(&sql);
         for (ordinal, val) in values.iter().enumerate() {
             let ordinal = ordinal as u32 + 1;
@@ -189,24 +228,37 @@ fn xml_member_row(
     )
 }
 
-fn all_member_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
+fn all_member_rows_with_backend<B: QueryBackend + ?Sized>(
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_all_member_rows(&project.model, backend)
+    build_all_member_rows(&project.model, backend, user, config)
 }
 
-fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
+fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_leaf_member_rows(&project.model, backend)
+    build_leaf_member_rows(&project.model, backend, user, config)
 }
 
-fn all_rows_with_backend<B: QueryBackend + ?Sized>(backend: &B) -> Vec<MemberRow> {
-    let mut rows = all_member_rows_with_backend(backend);
-    rows.append(&mut leaf_member_rows_with_backend(backend));
+fn all_rows_with_backend<B: QueryBackend + ?Sized>(
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Vec<MemberRow> {
+    let mut rows = all_member_rows_with_backend(backend, user, config);
+    rows.append(&mut leaf_member_rows_with_backend(backend, user, config));
     rows
 }
 
 fn all_rows() -> Vec<MemberRow> {
-    all_rows_with_backend(Backend::get())
+    let project = proxy_project::project();
+    all_rows_with_backend(Backend::get(), &UserContext::admin_default(), &project.config)
 }
 
 // ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
@@ -229,15 +281,21 @@ fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> 
 // ---- public API ----
 
 pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -> String {
-    get_members_response_with_backend(member_filter, tree_op, Backend::get())
+    let project = proxy_project::project();
+    get_members_response_with_backend(
+        member_filter, tree_op, Backend::get(),
+        &UserContext::admin_default(), &project.config,
+    )
 }
 
 pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     member_filter: Option<&str>,
     tree_op: Option<i32>,
     backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> String {
-    let rows = all_rows_with_backend(backend);
+    let rows = all_rows_with_backend(backend, user, config);
 
     let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
         (Some(filter), Some(1)) => {
