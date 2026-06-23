@@ -179,14 +179,14 @@ pub fn effective_model_permission(
 
 /// Compute the effective table-level access for a user on a table.
 ///
-/// SSAS-correct union order (Full > Hidden > Filtered):
+/// SSAS-correct union order (least restrictive wins across roles):
 /// 1. Admin users always get `Full` (bypass RLS/OLS).
-/// 2. If any matched role has no `table_permission` entry for this table,
-///    that role grants `Full`. Union: Full wins over everything.
-/// 3. If any matched role has `metadata_permission: None` for this table
-///    AND no role grants full → `Hidden`.
-/// 4. If all matched roles have `filter_expression` for this table (and
-///    none are Full-granting), OR them together → `Filtered(sql)`.
+/// 2. If any matched role grants full access (no `table_permission` entry,
+///    or `Read` with empty `filter_expression`) → `Full`.
+/// 3. If any matched role grants read access with a filter → `Filtered`
+///    (OR of all filters from read-granting roles). Wins over Hidden.
+/// 4. If ALL matched roles hide this table (`metadata_permission: None`
+///    and no role grants read/full) → `Hidden`.
 /// 5. Otherwise → `Full`.
 pub fn effective_table_filter(
     config: &crate::project::config::ProxyConfig,
@@ -206,6 +206,7 @@ pub fn effective_table_filter(
     let mut filters: Vec<String> = Vec::new();
     let mut any_hidden = false;
     let mut any_role_grants_full = false;
+    let mut any_role_grants_read = false;
 
     for role in &config.roles {
         if !role_names.contains(role.name.as_str()) {
@@ -218,10 +219,17 @@ pub fn effective_table_filter(
             }
             role_has_permission = true;
             if tp.metadata_permission == ModelPermission::None {
+                // OLS hide for this role.
                 any_hidden = true;
-            }
-            if !tp.filter_expression.is_empty() {
-                filters.push(tp.filter_expression.clone());
+            } else {
+                // Read or Administrator metadata: grants read access.
+                if tp.filter_expression.is_empty() {
+                    // Read with no filter = full access for this role.
+                    any_role_grants_full = true;
+                } else {
+                    any_role_grants_read = true;
+                    filters.push(tp.filter_expression.clone());
+                }
             }
         }
         // SSAS: no table_permission entry for this table = full access for
@@ -231,33 +239,35 @@ pub fn effective_table_filter(
         }
     }
 
-    // 2. SSAS union semantics: Full (from any role's no-entry) wins over
-    //    both Hidden and Filtered.
+    // 2. SSAS union semantics: Full (from any role's no-entry or Read with
+    //    empty filter) wins over both Hidden and Filtered.
     if any_role_grants_full {
         return TableAccess::Full;
     }
 
-    // 3. OLS hide applies only when no role grants full access.
+    // 3. If any role grants read access with a filter, the user sees filtered
+    //    rows. This wins over Hidden because the read-granting role provides
+    //    access. SSAS: least restrictive permission wins across roles.
+    if any_role_grants_read {
+        let combined = if filters.len() == 1 {
+            filters.into_iter().next().unwrap()
+        } else {
+            filters
+                .into_iter()
+                .map(|f| format!("({})", f))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        };
+        return TableAccess::Filtered(combined);
+    }
+
+    // 4. All matched roles hide this table (no role grants read or full).
     if any_hidden {
         return TableAccess::Hidden;
     }
 
-    // 4. OR remaining filter expressions across roles (union semantics).
-    if filters.is_empty() {
-        return TableAccess::Full;
-    }
-
-    let combined = if filters.len() == 1 {
-        filters.into_iter().next().unwrap()
-    } else {
-        filters
-            .into_iter()
-            .map(|f| format!("({})", f))
-            .collect::<Vec<_>>()
-            .join(" OR ")
-    };
-
-    TableAccess::Filtered(combined)
+    // 5. No permissions at all for this table → Full.
+    TableAccess::Full
 }
 
 /// A fact table that hosts measures and dimensions.
@@ -1081,5 +1091,77 @@ mod tests {
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "hidden_table");
         assert_eq!(access, TableAccess::Hidden);
+    }
+
+    #[test]
+    fn role_multi_role_ols_hide_plus_rls_filter_is_filtered() {
+        // SSAS union semantics: if one role hides a table (OLS) and another
+        // role grants read access with a filter (RLS), the least restrictive
+        // wins → Filtered (not Hidden). The user sees filtered rows.
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "OlsRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "mixed_table",
+                        "metadata_permission": "none"
+                    }]
+                },
+                {
+                    "name": "RlsRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "mixed_table",
+                        "filter_expression": "region = 'EU'",
+                        "metadata_permission": "read"
+                    }]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "mixed_table");
+        assert_eq!(access, TableAccess::Filtered("region = 'EU'".to_string()));
+    }
+
+    #[test]
+    fn role_multi_role_ols_hide_plus_read_no_filter_is_full() {
+        // SSAS union: one role hides (OLS), another grants Read with no filter
+        // (full access). Least restrictive wins → Full.
+        let cfg = parse_config(r#"{
+            "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
+            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dimensions": [], "measures": [],
+            "auth": { "trusted_proxy": true },
+            "roles": [
+                {
+                    "name": "OlsRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "mixed_table",
+                        "metadata_permission": "none"
+                    }]
+                },
+                {
+                    "name": "ReadRole",
+                    "model_permission": "read",
+                    "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "mixed_table",
+                        "metadata_permission": "read"
+                    }]
+                }
+            ]
+        }"#);
+        let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
+        let access = effective_table_filter(&cfg, &ctx, "mixed_table");
+        assert_eq!(access, TableAccess::Full);
     }
 }
