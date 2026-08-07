@@ -1,0 +1,7 @@
+{
+  "name": "Brand",
+  "dataType": "string",
+  "sourceColumn": "brand",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "43d19112-ab91-4602-b378-b5ee2c1a78e3"
+}

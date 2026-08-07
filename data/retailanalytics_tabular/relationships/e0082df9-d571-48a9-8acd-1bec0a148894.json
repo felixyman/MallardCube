@@ -1,0 +1,7 @@
+{
+  "name": "e0082df9-d571-48a9-8acd-1bec0a148894",
+  "fromTable": "Sales",
+  "fromColumn": "Product ID",
+  "toTable": "Products",
+  "toColumn": "Product ID"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "d5bf8517-41e9-4d44-8f5c-aaf51c8e9d0a",
+  "fromTable": "Sales",
+  "fromColumn": "Store ID",
+  "toTable": "Stores",
+  "toColumn": "Store ID"
+}

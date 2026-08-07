@@ -1,0 +1,7 @@
+{
+  "name": "Loyalty Points",
+  "dataType": "int64",
+  "sourceColumn": "points",
+  "sourceProviderType": "int",
+  "lineageTag": "b4a6ce51-6496-4a8a-8570-79b34725896b"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Product ID",
+  "dataType": "int64",
+  "sourceColumn": "productid",
+  "sourceProviderType": "int",
+  "lineageTag": "7591e13c-f753-4a7b-a641-a4a7b56ce196"
+}

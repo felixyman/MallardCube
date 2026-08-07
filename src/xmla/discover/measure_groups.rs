@@ -17,18 +17,17 @@ pub fn get_measure_groups_response() -> String {
     let model = &project.model;
     let mut rows = String::new();
     let mut seen = BTreeSet::new();
-    for m in &model.measures {
-        if seen.insert(m.measure_group_name.clone()) {
+    for ft in &model.fact_tables {
+        if seen.insert(ft.measure_group_name.clone()) {
             rows.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
-            <MEASUREGROUP_NAME>{}</MEASUREGROUP_NAME>
-            <MEASUREGROUP_CAPTION>{}</MEASUREGROUP_CAPTION>
+            <MEASUREGROUP_NAME>{mg}</MEASUREGROUP_NAME>
+            <MEASUREGROUP_CAPTION>{mg}</MEASUREGROUP_CAPTION>
           </row>
 "#,
-                m.measure_group_name,
-                m.measure_group_name,
+                mg = ft.measure_group_name,
                 catalog = project.config.catalog,
                 cube = project.config.cube,
             ));

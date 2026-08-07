@@ -5,6 +5,7 @@
 /// Consumed by `execute_builders` for all cellset response construction.
 
 use crate::cellset;
+use crate::backend::QueryBackend;
 use crate::mdx_semantic::{includes_prop, DimensionFilter, SemanticQuery};
 use crate::proxy_project;
 
@@ -37,9 +38,13 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
     proxy_project::project().model.dim_def_opt(dim)
 }
 
-fn dim_children_count(dim: &crate::engine::model::DimensionDef) -> u32 {
-    crate::backend::Backend::get()
-        .distinct_count_in(&proxy_project::project().model.table_name, &dim.physical_field)
+fn dim_children_count<B: QueryBackend + ?Sized>(
+    dim: &crate::engine::model::DimensionDef,
+    backend: &B,
+) -> u32 {
+    let table = proxy_project::project().model.dim_table(&dim.id);
+    let sql = format!("SELECT COUNT(DISTINCT {}) FROM {table}", dim.physical_field);
+    backend.query_count(&sql)
 }
 
 fn dim_props_leaf(
@@ -63,11 +68,12 @@ fn dim_props_leaf(
     )
 }
 
-fn dim_props_all(
+fn dim_props_all<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
+    backend: &B,
 ) -> Vec<(String, String)> {
-    let count = dim_children_count(dim);
+    let count = dim_children_count(dim, backend);
     filter_dim_props(
         vec![
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
@@ -161,9 +167,10 @@ fn leaf_member_for_dim(
     }
 }
 
-fn all_member_for_dim(
+fn all_member_for_dim<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
+    backend: &B,
 ) -> cellset::MemberConfig {
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
@@ -172,7 +179,7 @@ fn all_member_for_dim(
         l_name: dim.all_level_unique_name(),
         l_num: 0,
         display_info: 5,
-        dim_props: dim_props_all(dim, requested),
+        dim_props: dim_props_all(dim, requested, backend),
     }
 }
 
@@ -195,10 +202,43 @@ fn default_measure() -> &'static crate::engine::model::MeasureDef {
     project.model.meas_def(&id)
 }
 
+fn measure_by_id(measure_id: &str) -> &crate::engine::model::MeasureDef {
+    proxy_project::project().model.meas_def(measure_id)
+}
+
+pub(crate) fn measure_id_for_query(query: &SemanticQuery) -> String {
+    let project = proxy_project::project();
+    query.measure.as_deref()
+        .and_then(|name| {
+            project.model.measures.iter().find(|m| {
+                m.id == name || m.caption == name || m.display_name == name
+            })
+        })
+        .map(|m| m.id.clone())
+        .or_else(|| project.model.default_measure_id())
+        .unwrap_or_else(|| {
+            project.model.measures.first()
+                .map(|m| m.id.clone())
+                .unwrap_or_default()
+        })
+}
+
 // ---- cell constructors ----
 
 pub(crate) fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
-    let m = default_measure();
+    measurement_cell_for_measure(ordinal, value, default_measure())
+}
+
+pub(crate) fn measurement_cell_for(ordinal: u32, value: f64, measure_id: &str) -> cellset::CellConfig {
+    measurement_cell_for_measure(ordinal, value, measure_by_id(measure_id))
+}
+
+pub(crate) fn measurement_cell_for_query(query: &SemanticQuery, ordinal: u32, value: f64) -> cellset::CellConfig {
+    let measure_id = measure_id_for_query(query);
+    measurement_cell_for(ordinal, value, &measure_id)
+}
+
+fn measurement_cell_for_measure(ordinal: u32, value: f64, m: &crate::engine::model::MeasureDef) -> cellset::CellConfig {
     let fmt = if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
@@ -244,6 +284,12 @@ pub(crate) fn measures_member(unique_name: &str, caption: &str) -> cellset::Memb
 
 pub(crate) fn measures_total_member() -> cellset::MemberConfig {
     let m = default_measure();
+    measures_member(&m.measure_unique_name(), &m.display_name)
+}
+
+pub(crate) fn measures_total_member_for_query(query: &SemanticQuery) -> cellset::MemberConfig {
+    let measure_id = measure_id_for_query(query);
+    let m = measure_by_id(&measure_id);
     measures_member(&m.measure_unique_name(), &m.display_name)
 }
 
@@ -309,6 +355,16 @@ pub(crate) fn measures_axis() -> cellset::AxisConfig {
     }
 }
 
+pub(crate) fn measures_axis_for_query(query: &SemanticQuery) -> cellset::AxisConfig {
+    cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies: vec![measures_hierarchy()],
+        tuples: vec![cellset::TupleConfig {
+            members: vec![measures_total_member_for_query(query)],
+        }],
+    }
+}
+
 pub(crate) fn measures_hierarchy() -> cellset::HierarchyConfig {
     cellset::HierarchyConfig {
         name: MEASURES_HIER.into(),
@@ -367,11 +423,19 @@ pub(crate) fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> ce
     }
 }
 
-pub(crate) fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
+pub(crate) fn all_member_for_with_backend<B: QueryBackend + ?Sized>(
+    dim: &str,
+    requested: &[String],
+    backend: &B,
+) -> cellset::MemberConfig {
     match dim_def(dim) {
-        Some(d) => all_member_for_dim(d, requested),
+        Some(d) => all_member_for_dim(d, requested, backend),
         None => unknown_dim_member(dim, "All"),
     }
+}
+
+pub(crate) fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
+    all_member_for_with_backend(dim, requested, crate::backend::Backend::get())
 }
 
 pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::HierarchyConfig {
@@ -414,13 +478,20 @@ pub(crate) fn filter_members_for(dim: &str, filters: &[DimensionFilter]) -> Vec<
 }
 
 pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
+    full_slicer_axis_with_backend(query, crate::backend::Backend::get())
+}
+
+pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+) -> cellset::AxisConfig {
     let project = proxy_project::project();
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
 
     // Measures always appear first on the slicer axis.
     hierarchies.push(measures_hierarchy());
-    members.push(measures_total_member());
+    members.push(measures_total_member_for_query(query));
 
     let mut dims: Vec<&crate::engine::model::DimensionDef> = project
         .model
@@ -439,7 +510,7 @@ pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
 
         let slc = query.slicers.iter().find(|s| s.dimension == dim.id);
         if slc.map(|s| s.is_all).unwrap_or(true) {
-            members.push(all_member_for_dim(dim, &[]));
+            members.push(all_member_for_dim(dim, &[], backend));
         } else {
             let dim_members = filter_members_for(&dim.id, &query.filters);
             for name in &dim_members {

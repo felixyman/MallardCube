@@ -24,32 +24,6 @@ pub fn is_mdx_select(mdx: &str) -> bool {
         || (upper.starts_with("WITH") && upper.contains("SELECT "))
 }
 
-// ---- reusable dimension/measure identifiers ----
-
-pub const PRODUKTKATEGORI_HIER: &str = "[Produktkategori].[Produktkategori]";
-pub const PRODUKTKATEGORI_ALL_U: &str = "[Produktkategori].[Produktkategori].[All]";
-pub const PRODUKTKATEGORI_ALL_L: &str = "[Produktkategori].[Produktkategori].[(All)]";
-pub const PRODUKTKATEGORI_LEAF_L: &str = "[Produktkategori].[Produktkategori].[Produktkategori]";
-pub const MEASURES_HIER: &str = "[Measures]";
-pub const MEASURES_LEVEL: &str = "[Measures].[MeasuresLevel]";
-
-pub const REGION_HIER: &str = "[Region].[Region]";
-pub const REGION_ALL_U: &str = "[Region].[Region].[All]";
-pub const REGION_ALL_L: &str = "[Region].[Region].[(All)]";
-pub const REGION_LEAF_L: &str = "[Region].[Region].[Region]";
-
-pub const PRODUKTKATEGORI_PROP_NAMES: &[&str] = &[
-    "PARENT_UNIQUE_NAME",
-    "HIERARCHY_UNIQUE_NAME",
-    "MEMBER_NAME",
-    "MEMBER_KEY",
-    "MEMBER_TYPE",
-    "MEMBER_VALUE",
-    "PARENT_LEVEL",
-    "PARENT_COUNT",
-    "CHILDREN_CARDINALITY",
-];
-
 // ---- property parsing (delegates to nom parser) ----
 
 pub fn parse_dimension_properties(mdx: &str) -> Vec<String> {
@@ -205,43 +179,6 @@ pub struct SemanticQuery {
     pub measure: Option<String>,
 }
 
-fn row_dimension_from_mdx(mdx: &str) -> Option<String> {
-    let project = crate::proxy_project::project();
-    let select_end = mdx.find(&format!("FROM [{}]", project.config.cube))
-        .or_else(|| mdx.find("FROM [Model]"))
-        .unwrap_or(mdx.len());
-    let select_part = &mdx[..select_end];
-    for dim in &project.model.dimensions {
-        if select_part.contains(&format!("[{}]", dim.id)) {
-            return Some(dim.id.clone());
-        }
-    }
-    None
-}
-
-fn parse_axis_dimensions(mdx: &str) -> Vec<String> {
-    let mut result = Vec::new();
-    let project = crate::proxy_project::project();
-    let from_pos = mdx.find(&format!("FROM [{}]", project.config.cube))
-        .or_else(|| mdx.find("FROM [Model]"))
-        .unwrap_or(mdx.len());
-    let select_part = &mdx[..from_pos];
-    let axis_expr_end = select_part.find("DIMENSION PROPERTIES").unwrap_or(select_part.len());
-    let axis_expr = &select_part[..axis_expr_end];
-
-    // Collect all configured dimension IDs and scan for them in the axis
-    // expression, preserving positional order.
-    let project = crate::proxy_project::project();
-    let mut positions: Vec<(usize, String)> = project.model.dimensions.iter()
-        .filter_map(|d| axis_expr.find(&format!("[{0}]", d.id)).map(|p| (p, d.id.clone())))
-        .collect();
-    positions.sort_by_key(|(p, _)| *p);
-
-    for (_, dim) in positions {
-        result.push(dim);
-    }
-    result
-}
 
 // ---- main classification entry point ----
 
@@ -285,63 +222,26 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         _ => None,
     };
 
+    let project = crate::proxy_project::project();
+
     SemanticQuery {
         kind,
         dim_props: parsed.dim_props.clone(),
         cell_props: parsed.cell_props.clone(),
         filters: filters_from_parsed(&parsed),
         cchildren_leaf_name,
-        row_dimension: row_dimension_from_mdx(mdx),
-        axis_dimensions: parse_axis_dimensions(mdx),
+        row_dimension: parsed.axis_dimension_ids.iter()
+            .find(|id| project.model.dim_def_opt(id).is_some())
+            .cloned(),
+        axis_dimensions: parsed.axis_dimension_ids.iter()
+            .filter(|id| project.model.dim_def_opt(id).is_some())
+            .cloned()
+            .collect(),
         slicers: slicers_from_parsed(&parsed),
-        excluded_members: parse_excluded_members(mdx),
-        drilldown_member_hierarchy: parse_drilldown_member_hierarchy(mdx),
+        excluded_members: parsed.excluded_members.iter().map(|(dim, key)| {
+            ExcludedMember { dimension: dim.clone(), key: key.clone() }
+        }).collect(),
+        drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
     }
-}
-
-fn parse_excluded_members(mdx: &str) -> Vec<ExcludedMember> {
-    let model = &crate::proxy_project::project().model;
-    let default_dim = model.default_dimension_id()
-        .unwrap_or_else(|| "Produktkategori".into());
-    let mut result = Vec::new();
-    let Some(excl_start) = mdx.find("{-{") else { return result; };
-    let excl = &mdx[excl_start..];
-    let mut search_from = 0;
-    while let Some(amp) = excl[search_from..].find("&[") {
-        let begin = search_from + amp + 2;
-        if let Some(end) = excl[begin..].find(']') {
-            let key = excl[begin..begin + end].to_string();
-            // Look backwards from the &[ to find the preceding [Dimension]
-            let before = &excl[..search_from + amp];
-            let dim = if let Some(last_dot) = before.rfind("].") {
-                if let Some(open) = before[..last_dot].rfind('[') {
-                    let raw = &before[open + 1..last_dot];
-                    model.lookup_dimension(raw)
-                        .map(|d| d.id.clone())
-                        .unwrap_or_else(|| raw.to_string())
-                } else { default_dim.clone() }
-            } else { default_dim.clone() };
-            result.push(ExcludedMember { dimension: dim, key });
-            search_from = begin + end;
-        } else {
-            break;
-        }
-    }
-    result
-}
-
-fn parse_drilldown_member_hierarchy(mdx: &str) -> Option<String> {
-    let Some(excl_start) = mdx.find("{-{") else { return None; };
-    let after_excl = &mdx[excl_start..];
-    let Some(close) = after_excl[2..].find("}}") else { return None; };
-    let rest = &after_excl[2 + close + 2..];
-    let trimmed = rest.trim_start();
-    let trimmed = trimmed.strip_prefix(',').unwrap_or(trimmed).trim_start();
-    if !trimmed.starts_with('[') { return None; }
-    let bracket_end = trimmed[1..].find(']')?;
-    let hier = &trimmed[1..bracket_end + 1];
-    let hier = hier.trim_matches(|c: char| c == '[' || c == ']');
-    let model = &crate::proxy_project::project().model;
-    model.lookup_dimension(hier).map(|d| d.id.clone())
 }

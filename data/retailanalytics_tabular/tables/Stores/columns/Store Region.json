@@ -1,0 +1,7 @@
+{
+  "name": "Store Region",
+  "dataType": "string",
+  "sourceColumn": "region",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "dfa93d2f-11ce-48d9-aea9-aeb96d999d62"
+}

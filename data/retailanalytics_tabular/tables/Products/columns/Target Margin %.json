@@ -1,0 +1,7 @@
+{
+  "name": "Target Margin %",
+  "dataType": "decimal",
+  "sourceColumn": "margin_pct",
+  "sourceProviderType": "decimal",
+  "lineageTag": "d3b90749-15b2-4fe2-8758-d1b3d789bf36"
+}

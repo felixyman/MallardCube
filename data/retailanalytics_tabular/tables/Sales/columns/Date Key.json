@@ -1,0 +1,7 @@
+{
+  "name": "Date Key",
+  "dataType": "int64",
+  "sourceColumn": "datekey",
+  "sourceProviderType": "int",
+  "lineageTag": "7e78f2eb-f9b2-453c-8828-cc9a8855bb42"
+}

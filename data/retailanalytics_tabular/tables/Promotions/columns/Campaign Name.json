@@ -1,0 +1,7 @@
+{
+  "name": "Campaign Name",
+  "dataType": "string",
+  "sourceColumn": "promoname",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "64886fa4-ea7d-4f81-bf0b-112b8b08385b"
+}

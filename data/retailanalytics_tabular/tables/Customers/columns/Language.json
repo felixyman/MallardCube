@@ -1,0 +1,7 @@
+{
+  "name": "Language",
+  "dataType": "string",
+  "sourceColumn": "lang",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "cab693dd-7204-4cac-848a-d6c6dc60a6dc"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Redemption Rate %",
+  "dataType": "decimal",
+  "sourceColumn": "redemption_rate",
+  "sourceProviderType": "decimal",
+  "lineageTag": "9533e3ee-dc37-4696-a2fb-7bfdc0f19d6c"
+}

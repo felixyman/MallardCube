@@ -1,0 +1,7 @@
+{
+  "name": "Annual Income",
+  "dataType": "decimal",
+  "sourceColumn": "annualincome",
+  "sourceProviderType": "decimal",
+  "lineageTag": "4acdcbc6-62ce-4017-b766-14bb66d6f747"
+}

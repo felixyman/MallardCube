@@ -1,0 +1,7 @@
+{
+  "name": "Distance to City Center (km)",
+  "dataType": "decimal",
+  "sourceColumn": "distancetocitycenterkm",
+  "sourceProviderType": "decimal",
+  "lineageTag": "ac40fd01-2a11-4e4e-8e71-60af40f2aac3"
+}

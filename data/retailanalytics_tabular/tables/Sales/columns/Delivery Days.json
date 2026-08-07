@@ -1,0 +1,7 @@
+{
+  "name": "Delivery Days",
+  "dataType": "int64",
+  "sourceColumn": "deliverydays",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "d088f51b-fd65-4c1f-b22c-200a56e70446"
+}

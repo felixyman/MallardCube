@@ -1,0 +1,7 @@
+{
+  "name": "SKU Count",
+  "dataType": "int64",
+  "sourceColumn": "skucount",
+  "sourceProviderType": "int",
+  "lineageTag": "5c215974-025a-485f-86d3-0c22b71ee858"
+}

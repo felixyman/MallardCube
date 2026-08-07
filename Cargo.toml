@@ -5,16 +5,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1.0", features = ["full"] }
-tower-http = { version = "0.5", features = ["trace"] }
-quick-xml = "0.31"
+tower-http = { version = "0.6", features = ["trace", "limit"] }
+quick-xml = "0.37"
 rusqlite = { version = "0.31", features = ["bundled"] }
 duckdb = { version = "1.10503.1", features = ["bundled"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v5"] }
 nom = "7"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

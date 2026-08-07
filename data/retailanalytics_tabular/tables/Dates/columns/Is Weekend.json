@@ -1,0 +1,7 @@
+{
+  "name": "Is Weekend",
+  "dataType": "int64",
+  "sourceColumn": "isweekend",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "0d1b9aa4-2b5a-4127-b919-732f8d6d0a80"
+}

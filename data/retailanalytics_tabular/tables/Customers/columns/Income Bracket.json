@@ -1,0 +1,7 @@
+{
+  "name": "Income Bracket",
+  "dataType": "string",
+  "sourceColumn": "incomebracket",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "bf57d63b-f768-4334-a5c0-116bbc6754a9"
+}

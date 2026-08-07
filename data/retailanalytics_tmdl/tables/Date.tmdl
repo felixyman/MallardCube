@@ -1,0 +1,12 @@
+table Date
+	column DateKey
+		dataType: dateTime
+		sourceColumn: DateKey
+	column Year
+		dataType: int64
+		sourceColumn: Year
+	hierarchy 'Calendar Hierarchy'
+		level Year
+			column: Year
+	partition Date = m
+		mode: import

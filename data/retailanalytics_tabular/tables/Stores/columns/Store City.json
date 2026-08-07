@@ -1,0 +1,7 @@
+{
+  "name": "Store City",
+  "dataType": "string",
+  "sourceColumn": "city",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "891b4385-7a3d-4e8c-a522-e7a06d2cb9b6"
+}

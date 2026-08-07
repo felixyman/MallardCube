@@ -1,0 +1,2483 @@
+{
+  "tables": [
+    {
+      "name": "CARMAe",
+      "table_type": "",
+      "description": "",
+      "columns": [
+        {
+          "name": "Beskrivning",
+          "data_type": "string",
+          "source_column": "Beskrivning",
+          "is_hidden": false
+        },
+        {
+          "name": "Kategori",
+          "data_type": "string",
+          "source_column": "Kategori",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Namn",
+          "data_type": "string",
+          "source_column": "Namn",
+          "is_hidden": false
+        },
+        {
+          "name": "Namn och beskrivning",
+          "data_type": "string",
+          "source_column": "Namn och beskrivning",
+          "is_hidden": false
+        },
+        {
+          "name": "ObjektKod",
+          "data_type": "int64",
+          "source_column": "ObjektKod",
+          "is_hidden": true
+        },
+        {
+          "name": "Objektnyckel",
+          "data_type": "string",
+          "source_column": "Objektnyckel",
+          "is_hidden": false
+        },
+        {
+          "name": "ObjektschemaKod",
+          "data_type": "string",
+          "source_column": "ObjektschemaKod",
+          "is_hidden": true
+        },
+        {
+          "name": "Objekttyp",
+          "data_type": "string",
+          "source_column": "Objekttyp",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Status",
+          "data_type": "string",
+          "source_column": "Status",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "Daggrupp",
+      "table_type": "",
+      "description": "",
+      "columns": [
+        {
+          "name": "Från",
+          "data_type": "int64",
+          "source_column": "[Från]",
+          "is_hidden": false
+        },
+        {
+          "name": "Id",
+          "data_type": "int64",
+          "source_column": "[Id]",
+          "is_hidden": false
+        },
+        {
+          "name": "Namn",
+          "data_type": "string",
+          "source_column": "[Namn]",
+          "is_hidden": false
+        },
+        {
+          "name": "Till",
+          "data_type": "int64",
+          "source_column": "[Till]",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "CalculatedTable 1",
+          "source_type": "calculated",
+          "is_m": false
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Beställare",
+      "table_type": "",
+      "description": "Beställare av undersökningar",
+      "columns": [
+        {
+          "name": "Adress",
+          "data_type": "string",
+          "source_column": "Adress",
+          "is_hidden": false
+        },
+        {
+          "name": "Beställare",
+          "data_type": "string",
+          "source_column": "Beställare",
+          "is_hidden": false
+        },
+        {
+          "name": "BeställareId",
+          "data_type": "int64",
+          "source_column": "BeställareId",
+          "is_hidden": true
+        },
+        {
+          "name": "BeställareKod",
+          "data_type": "string",
+          "source_column": "BeställareKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Intern%2fExtern",
+          "data_type": "string",
+          "source_column": "Intern/Extern",
+          "is_hidden": false
+        },
+        {
+          "name": "Kostnadsställe",
+          "data_type": "string",
+          "source_column": "Kostnadsställe",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Postadress",
+          "data_type": "string",
+          "source_column": "Postadress",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Tillfällig adress",
+          "data_type": "string",
+          "source_column": "Tillfällig adress",
+          "is_hidden": false
+        },
+        {
+          "name": "VårdtypKod",
+          "data_type": "string",
+          "source_column": "VårdtypKod",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Fakturamottagare",
+      "table_type": "",
+      "description": "Fakturamottagare av undersökning",
+      "columns": [
+        {
+          "name": "Adress",
+          "data_type": "string",
+          "source_column": "Adress",
+          "is_hidden": false
+        },
+        {
+          "name": "Fakturamottagare",
+          "data_type": "string",
+          "source_column": "Fakturamottagare",
+          "is_hidden": false
+        },
+        {
+          "name": "FakturamottagareId",
+          "data_type": "int64",
+          "source_column": "FakturamottagareId",
+          "is_hidden": true
+        },
+        {
+          "name": "FakturamottagareKod",
+          "data_type": "string",
+          "source_column": "FakturamottagareKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Intern%2fExtern",
+          "data_type": "string",
+          "source_column": "Intern/Extern",
+          "is_hidden": false
+        },
+        {
+          "name": "Kostnadsställe",
+          "data_type": "string",
+          "source_column": "Kostnadsställe",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Postadress",
+          "data_type": "string",
+          "source_column": "Postadress",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Tillfällig adress",
+          "data_type": "string",
+          "source_column": "Tillfällig adress",
+          "is_hidden": false
+        },
+        {
+          "name": "VårdtypKod",
+          "data_type": "string",
+          "source_column": "VårdtypKod",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Patient",
+      "table_type": "",
+      "description": "Patient som undersöks, av GDPR-skäl döljs personuppgifter",
+      "columns": [
+        {
+          "name": "Efternamn",
+          "data_type": "string",
+          "source_column": "Efternamn",
+          "is_hidden": true
+        },
+        {
+          "name": "Förnamn",
+          "data_type": "string",
+          "source_column": "Förnamn",
+          "is_hidden": true
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "PatientId",
+          "data_type": "int64",
+          "source_column": "PatientId",
+          "is_hidden": false
+        },
+        {
+          "name": "PatientKod",
+          "data_type": "string",
+          "source_column": "PatientKod",
+          "is_hidden": true
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Produkt",
+      "table_type": "",
+      "description": "Debitterbar produkt samt information som kopplas till detta",
+      "columns": [
+        {
+          "name": "BIS Kod",
+          "data_type": "string",
+          "source_column": "BIS Kod",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Metodgrupp",
+          "data_type": "string",
+          "source_column": "Metodgrupp",
+          "is_hidden": false
+        },
+        {
+          "name": "ProduktId",
+          "data_type": "int64",
+          "source_column": "ProduktId",
+          "is_hidden": true
+        },
+        {
+          "name": "ProduktKod",
+          "data_type": "string",
+          "source_column": "ProduktKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Produktbeskrivning",
+          "data_type": "string",
+          "source_column": "Produktbeskrivning",
+          "is_hidden": false
+        },
+        {
+          "name": "Produktgrupp",
+          "data_type": "string",
+          "source_column": "Produktgrupp",
+          "is_hidden": false
+        },
+        {
+          "name": "SLL Kod",
+          "data_type": "string",
+          "source_column": "SLL Kod",
+          "is_hidden": false
+        },
+        {
+          "name": "Sektion",
+          "data_type": "string",
+          "source_column": "Sektion",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Vårdval undergrupp",
+          "data_type": "string",
+          "source_column": "Vårdval undergrupp",
+          "is_hidden": false
+        },
+        {
+          "name": "Vårdvalsavtal",
+          "data_type": "string",
+          "source_column": "Vårdvalsavtal",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Remissgrupp",
+      "table_type": "",
+      "description": "Remissgruppering",
+      "columns": [
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Remissgrupp",
+          "data_type": "string",
+          "source_column": "Remissgrupp",
+          "is_hidden": false
+        },
+        {
+          "name": "RemissgruppId",
+          "data_type": "int64",
+          "source_column": "RemissgruppId",
+          "is_hidden": true
+        },
+        {
+          "name": "RemissgruppKod",
+          "data_type": "int64",
+          "source_column": "RemissgruppKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Remisskoder",
+      "table_type": "",
+      "description": "Olika koder/attribut kopplade till remiss, t.ex. akut, modifieringsattribut, undersökningsstatus, utebliven",
+      "columns": [
+        {
+          "name": "Akut",
+          "data_type": "string",
+          "source_column": "Akut",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Modifieringsattribut",
+          "data_type": "string",
+          "source_column": "Modifieringsattribut",
+          "is_hidden": false
+        },
+        {
+          "name": "Remissattribut",
+          "data_type": "string",
+          "source_column": "Remissattribut",
+          "is_hidden": false
+        },
+        {
+          "name": "RemisskoderId",
+          "data_type": "int64",
+          "source_column": "RemisskoderId",
+          "is_hidden": true
+        },
+        {
+          "name": "RemisskoderKod",
+          "data_type": "string",
+          "source_column": "RemisskoderKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Undersökningsstatus",
+          "data_type": "string",
+          "source_column": "Undersökningsstatus",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsvikt",
+          "data_type": "string",
+          "source_column": "Undersökningsvikt",
+          "is_hidden": false
+        },
+        {
+          "name": "Utebliven",
+          "data_type": "string",
+          "source_column": "Utebliven",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Remisstatus",
+      "table_type": "",
+      "description": "Status på remissen",
+      "columns": [
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Remisstatus",
+          "data_type": "string",
+          "source_column": "Remisstatus",
+          "is_hidden": false
+        },
+        {
+          "name": "RemisstatusId",
+          "data_type": "int64",
+          "source_column": "RemisstatusId",
+          "is_hidden": true
+        },
+        {
+          "name": "RemisstatusKod",
+          "data_type": "int64",
+          "source_column": "RemisstatusKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Signerare",
+      "table_type": "",
+      "description": "Personal som signerar undersökning",
+      "columns": [
+        {
+          "name": "Befattning, signerare",
+          "data_type": "string",
+          "source_column": "Befattning, signerare",
+          "is_hidden": false
+        },
+        {
+          "name": "Efternamn, signerare",
+          "data_type": "string",
+          "source_column": "Efternamn, signerare",
+          "is_hidden": false
+        },
+        {
+          "name": "Förnamn, signerare",
+          "data_type": "string",
+          "source_column": "Förnamn, signerare",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Signerare",
+          "data_type": "string",
+          "source_column": "Signerare",
+          "is_hidden": false
+        },
+        {
+          "name": "SignerareId",
+          "data_type": "int64",
+          "source_column": "SignerareId",
+          "is_hidden": true
+        },
+        {
+          "name": "SignerareKod",
+          "data_type": "string",
+          "source_column": "SignerareKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys D_Utförare",
+      "table_type": "",
+      "description": "Personal som utför undersökning",
+      "columns": [
+        {
+          "name": "Befattning, utförare",
+          "data_type": "string",
+          "source_column": "Befattning, utförare",
+          "is_hidden": false
+        },
+        {
+          "name": "Efternamn, utförare",
+          "data_type": "string",
+          "source_column": "Efternamn, utförare",
+          "is_hidden": false
+        },
+        {
+          "name": "Förnamn, utförare",
+          "data_type": "string",
+          "source_column": "Förnamn, utförare",
+          "is_hidden": false
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": true
+        },
+        {
+          "name": "Utförare",
+          "data_type": "string",
+          "source_column": "Utförare",
+          "is_hidden": false
+        },
+        {
+          "name": "UtförareId",
+          "data_type": "int64",
+          "source_column": "UtförareId",
+          "is_hidden": true
+        },
+        {
+          "name": "UtförareKod",
+          "data_type": "string",
+          "source_column": "UtförareKod",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys F_Undersökning",
+      "table_type": "",
+      "description": "Faktatabell för undersökningar, varje rad motsvarar antigen en inkommen remiss, eltt bokat besök eller en debitterad produkt. Endast fakturerbara produkter inkluderas.",
+      "columns": [
+        {
+          "name": "BeställareId",
+          "data_type": "int64",
+          "source_column": "BeställareId",
+          "is_hidden": true
+        },
+        {
+          "name": "Beställning till signering",
+          "data_type": "double",
+          "source_column": "Beställning till signering",
+          "is_hidden": false
+        },
+        {
+          "name": "Beställning till undersökningsstart",
+          "data_type": "double",
+          "source_column": "Beställning till undersökningsstart",
+          "is_hidden": false
+        },
+        {
+          "name": "Beställning till undersökningsstart (Akut & timmar)",
+          "data_type": "double",
+          "source_column": "Beställning till undersökningsstart (Akut & timmar)",
+          "is_hidden": true
+        },
+        {
+          "name": "Beställning till undersökningsstart (Akut)",
+          "data_type": "double",
+          "source_column": "Beställning till undersökningsstart (Akut)",
+          "is_hidden": true
+        },
+        {
+          "name": "Beställning till undersökningsstart (timmar)",
+          "data_type": "double",
+          "source_column": "Beställning till undersökningsstart (timmar)",
+          "is_hidden": false
+        },
+        {
+          "name": "Beställningsdatum",
+          "data_type": "dateTime",
+          "source_column": "Beställningsdatum",
+          "is_hidden": true
+        },
+        {
+          "name": "Beställningsdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Beställningsdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "Beställningstimme",
+          "data_type": "int64",
+          "source_column": "Beställningstimme",
+          "is_hidden": false
+        },
+        {
+          "name": "Bokningsdatum",
+          "data_type": "dateTime",
+          "source_column": "Bokningsdatum",
+          "is_hidden": true
+        },
+        {
+          "name": "Bokningsdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Bokningsdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "FakturamottagareId",
+          "data_type": "int64",
+          "source_column": "FakturamottagareId",
+          "is_hidden": true
+        },
+        {
+          "name": "Flagga Akuten",
+          "data_type": "int64",
+          "source_column": "Flagga Akuten",
+          "is_hidden": true
+        },
+        {
+          "name": "Källa",
+          "data_type": "string",
+          "source_column": "Källa",
+          "is_hidden": true
+        },
+        {
+          "name": "Måldatum_från",
+          "data_type": "dateTime",
+          "source_column": "Måldatum_från",
+          "is_hidden": true
+        },
+        {
+          "name": "Måldatum_till",
+          "data_type": "dateTime",
+          "source_column": "Måldatum_till",
+          "is_hidden": true
+        },
+        {
+          "name": "Måldatumtid_från",
+          "data_type": "dateTime",
+          "source_column": "Måldatumtid_från",
+          "is_hidden": true
+        },
+        {
+          "name": "Måldatumtid_till",
+          "data_type": "dateTime",
+          "source_column": "Måldatumtid_till",
+          "is_hidden": true
+        },
+        {
+          "name": "PatientId",
+          "data_type": "int64",
+          "source_column": "PatientId",
+          "is_hidden": true
+        },
+        {
+          "name": "ProduktId",
+          "data_type": "int64",
+          "source_column": "ProduktId",
+          "is_hidden": true
+        },
+        {
+          "name": "Registrering till signering",
+          "data_type": "double",
+          "source_column": "Registrering till signering",
+          "is_hidden": false
+        },
+        {
+          "name": "Registreringsdatum",
+          "data_type": "dateTime",
+          "source_column": "Registreringsdatum",
+          "is_hidden": true
+        },
+        {
+          "name": "Registreringsdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Registreringsdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "Remiss till bokning",
+          "data_type": "double",
+          "source_column": "Remiss till bokning",
+          "is_hidden": false
+        },
+        {
+          "name": "Remiss till idag",
+          "data_type": "int64",
+          "source_column": "Remiss till idag",
+          "is_hidden": false
+        },
+        {
+          "name": "Remiss till undersökningsstart",
+          "data_type": "double",
+          "source_column": "Remiss till undersökningsstart",
+          "is_hidden": false
+        },
+        {
+          "name": "Remissdatum",
+          "data_type": "dateTime",
+          "source_column": "Remissdatum",
+          "is_hidden": true
+        },
+        {
+          "name": "Remissdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Remissdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "RemissgruppId",
+          "data_type": "int64",
+          "source_column": "RemissgruppId",
+          "is_hidden": true
+        },
+        {
+          "name": "RemisskoderId",
+          "data_type": "int64",
+          "source_column": "RemisskoderId",
+          "is_hidden": true
+        },
+        {
+          "name": "Remissnummer",
+          "data_type": "string",
+          "source_column": "RemissKod",
+          "is_hidden": false
+        },
+        {
+          "name": "RemisstatusId",
+          "data_type": "int64",
+          "source_column": "RemisstatusId",
+          "is_hidden": true
+        },
+        {
+          "name": "Remisstimme",
+          "data_type": "int64",
+          "source_column": "Remisstimme",
+          "is_hidden": false
+        },
+        {
+          "name": "SignerareId",
+          "data_type": "int64",
+          "source_column": "SignerareId",
+          "is_hidden": true
+        },
+        {
+          "name": "Signeringsdatum",
+          "data_type": "dateTime",
+          "source_column": "Signeringsdatum",
+          "is_hidden": true
+        },
+        {
+          "name": "Signeringsdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Signeringsdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "Signeringsstatus",
+          "data_type": "string",
+          "source_column": "Signeringsstatus",
+          "is_hidden": false
+        },
+        {
+          "name": "Signeringstimme",
+          "data_type": "int64",
+          "source_column": "Signeringstimme",
+          "is_hidden": false
+        },
+        {
+          "name": "Skapad",
+          "data_type": "dateTime",
+          "source_column": "Skapad",
+          "is_hidden": false
+        },
+        {
+          "name": "Sortering väntetidsgrupp",
+          "data_type": "int64",
+          "source_column": "Sortering väntetidsgrupp",
+          "is_hidden": true
+        },
+        {
+          "name": "Tabell",
+          "data_type": "string",
+          "source_column": "Tabell",
+          "is_hidden": true
+        },
+        {
+          "name": "UndersökningId",
+          "data_type": "int64",
+          "source_column": "UndersökningId",
+          "is_hidden": true
+        },
+        {
+          "name": "UndersökningKod",
+          "data_type": "string",
+          "source_column": "UndersökningKod",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsslut",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsslut",
+          "is_hidden": true
+        },
+        {
+          "name": "Undersökningsslut till signering",
+          "data_type": "double",
+          "source_column": "Undersökningsslut till signering",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsslut till signering - ej akut",
+          "data_type": "double",
+          "source_column": "Undersökningsslut till signering - ej akut",
+          "is_hidden": true
+        },
+        {
+          "name": "Undersökningsslutdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsslutdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningssluttimme",
+          "data_type": "int64",
+          "source_column": "Undersökningssluttimme",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsstart",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsstart",
+          "is_hidden": true
+        },
+        {
+          "name": "Undersökningsstartdatumtid",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsstartdatumtid",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsstarttimme",
+          "data_type": "int64",
+          "source_column": "Undersökningsstarttimme",
+          "is_hidden": false
+        },
+        {
+          "name": "UtförareId",
+          "data_type": "int64",
+          "source_column": "UtförareId",
+          "is_hidden": true
+        },
+        {
+          "name": "Väntetidsgruppering",
+          "data_type": "string",
+          "source_column": "Väntetidsgruppering",
+          "is_hidden": false
+        }
+      ],
+      "measures": [
+        {
+          "name": "Andel signerade DVT Under två timmar",
+          "expression": " DIVIDE(CALCULATE([Antal signerade DVT-remisser],'dw_fys F_Undersökning'[Beställning till signering]<=0.083333),[Antal signerade DVT-remisser])",
+          "display_folder": "Mätetal DVT-remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Andel under fyra timmar",
+          "expression": " DIVIDE([Antal remisser akuta inneliggande (Under fyra timmar)],[Antal remisser akuta inneliggande])",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal bokade remisser",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]=\"Tid\")",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal obokade remisser",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]=\"Ej tid\")",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal osignerade utförda undersökningar",
+          "expression": "CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Signeringsstatus]=\"Osignerad\",'dw_fys D_Remisskoder'[Undersökningsstatus]=\"Utförd\")",
+          "display_folder": "Mätetal, undersökning",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal patienter",
+          "expression": "DISTINCTCOUNT('dw_fys F_Undersökning'[PatientId])",
+          "display_folder": "Mätetal, bas",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser",
+          "expression": "DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer])",
+          "display_folder": "Mätetal, bas",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser akuta inneliggande",
+          "expression": " CALCULATE(DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer]),'dw_fys F_Undersökning'[Flagga Akuten]=1)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser akuta inneliggande (Under fyra timmar)",
+          "expression": " CALCULATE([Antal remisser akuta inneliggande], 'dw_fys F_Undersökning'[Undersökningsslut till signering]<=0.1666667)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser i urval",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] =\"Ja\",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]<> BLANK())",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser som väntat %3e30 dagar",
+          "expression": " CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 30, 'dw_fys F_Undersökning'[Remiss till idag] <=60)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser som väntat %3e60 dagar",
+          "expression": " CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 60, 'dw_fys F_Undersökning'[Remiss till idag] <= 90)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remisser som väntat %3e90 dagar",
+          "expression": " CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 90)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal remissiser med tid inom 4 veckor",
+          "expression": "CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28)",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal saknade remisser i underlag",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] =\"Ja\",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]= BLANK())",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal signerade DVT-remisser",
+          "expression": " SUMMARIZE( FILTER('dw_fys D_Remisskoder',[Akut] =\"Ja\"), \"Antal remisser\", CALCULATE([Antal remisser] , 'dw_fys D_Produkt'[ProduktKod] IN {\"516\" ,  \"526\", \"524\"} , 'dw_fys F_Undersökning'[Beställningstimme] IN { 8, 9, 10, 11, 12, 13, 14} , 'dw_fys Kalender_Signeringsdatum'[VeckodagsSiffra] IN { 1,2,3,4,5} , RIGHT('dw_fys D_Beställare'[BeställareKod],3)  IN {\"M08\"} ) )",
+          "display_folder": "Mätetal DVT-remiss",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal undersökningar",
+          "expression": "COUNT('dw_fys F_Undersökning'[UndersökningId])",
+          "display_folder": "Mätetal, bas",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal uteblivna remisser",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Utebliven]=\"Ja\")",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal utförda remisser",
+          "expression": "CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Undersökningsstatus]=\"Utförd\")",
+          "display_folder": "Mätetal, remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Antal utförda remisser (ack Kvartal) CY",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Kvartal]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Kvartal],    MAX('dw_fys Kalender_Undersökningsslut'[Kvartal]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY()) )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal utförda remisser (ack Kvartal) CY-1",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Kvartal]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Kvartal],    MAX('dw_fys Kalender_Undersökningsslut'[Kvartal]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY())-1 )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal utförda remisser (ack Månad) CY-1",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Månad]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Månad],    MAX('dw_fys Kalender_Undersökningsslut'[Månad]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY())-1 )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal utförda remisser (ack månad) CY",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Månad]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Månad],    MAX('dw_fys Kalender_Undersökningsslut'[Månad]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY()) )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal utförda remisser (ack vecka) CY",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Vecka]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Vecka],    MAX('dw_fys Kalender_Undersökningsslut'[Vecka]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY()) )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Antal utförda remisser (ack vecka) CY-1",
+          "expression": "CALCULATE( [Antal utförda remisser], FILTER( ALLSELECTED('dw_fys Kalender_Undersökningsslut'[Vecka]), ISONORAFTER('dw_fys Kalender_Undersökningsslut'[Vecka],    MAX('dw_fys Kalender_Undersökningsslut'[Vecka]), DESC) ),'dw_fys Kalender_Undersökningsslut'[ÅR] = YEAR(TODAY())-1 )",
+          "display_folder": "Mätetal - Utförda remisser",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Medeltid Undersökningsslut till signering (ej akut)",
+          "expression": " AVERAGEX( KEEPFILTERS(VALUES('dw_fys F_Undersökning'[Remissnummer])), CALCULATE(AVERAGE('dw_fys F_Undersökning'[Undersökningsslut till signering - ej akut])) )",
+          "display_folder": "Mätetal, remiss",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Medeltid registrering till signering",
+          "expression": "AVERAGE('dw_fys F_Undersökning'[Registrering till signering])",
+          "display_folder": "Mätetal, ledtider",
+          "classification": "simple"
+        },
+        {
+          "name": "Medeltid undersökningsslut till signering",
+          "expression": "AVERAGE('dw_fys F_Undersökning'[Undersökningsslut till signering])",
+          "display_folder": "Mätetal, ledtider",
+          "classification": "simple"
+        },
+        {
+          "name": "Median beställning till undersökning",
+          "expression": "MEDIAN('dw_fys F_Undersökning'[Beställning till undersökningsstart])",
+          "display_folder": "Mätetal, ledtider",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Median beställning till undersökning (Akut & timmar)",
+          "expression": "MEDIAN('dw_fys F_Undersökning'[Beställning till undersökningsstart (Akut & timmar)])",
+          "display_folder": "Mätetal, ledtider",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Median beställning till undersökning (Akut)",
+          "expression": "MEDIAN('dw_fys F_Undersökning'[Beställning till undersökningsstart (Akut)])",
+          "display_folder": "Mätetal, ledtider",
+          "classification": "sql_fallback"
+        },
+        {
+          "name": "Referens DVT remiss",
+          "expression": " 0.8",
+          "display_folder": "Mätetal DVT-remiss",
+          "classification": "simple"
+        },
+        {
+          "name": "Tid inom 4 veckor från skickad remiss",
+          "expression": "CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28)/[Antal undersökningar]",
+          "display_folder": "Mätetal, undersökning",
+          "classification": "simple"
+        }
+      ],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys Kalender_Beställningsdatum",
+      "table_type": "",
+      "description": "Kalender kopplad till beställningsdatum, hämtas fryn Fysweb om data saknas i Fyspaf",
+      "columns": [
+        {
+          "name": "Beställningsdatum",
+          "data_type": "dateTime",
+          "source_column": "Beställningsdatum",
+          "is_hidden": false
+        },
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": []
+    },
+    {
+      "name": "dw_fys Kalender_Bokningsdatum",
+      "table_type": "",
+      "description": "Kalender för bokningsdatum",
+      "columns": [
+        {
+          "name": "Bokningsdatum",
+          "data_type": "dateTime",
+          "source_column": "Bokningsdatum",
+          "is_hidden": false
+        },
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    },
+    {
+      "name": "dw_fys Kalender_Måldatum",
+      "table_type": "",
+      "description": "",
+      "columns": [
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr räkenskapsår",
+          "data_type": "int64",
+          "source_column": "DagÅr räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": true
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Måldatum",
+          "data_type": "dateTime",
+          "source_column": "Måldatum",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    },
+    {
+      "name": "dw_fys Kalender_Remissdatum",
+      "table_type": "",
+      "description": "Kalender för när remiss skickades",
+      "columns": [
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Remissdatum",
+          "data_type": "dateTime",
+          "source_column": "Remissdatum",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    },
+    {
+      "name": "dw_fys Kalender_Signeringsdatum",
+      "table_type": "",
+      "description": "Kalender för när undersökning signerades",
+      "columns": [
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Signeringsdatum",
+          "data_type": "dateTime",
+          "source_column": "Signeringsdatum",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    },
+    {
+      "name": "dw_fys Kalender_Undersökningsslut",
+      "table_type": "",
+      "description": "Kalender för när undersökning avslutades",
+      "columns": [
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsslut",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsslut",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "Veckodag dynamisk",
+          "data_type": "string",
+          "source_column": "Veckodag dynamisk",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "Veckodagsiffra, dynamisk",
+          "data_type": "double",
+          "source_column": "Veckodagsiffra, dynamisk",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    },
+    {
+      "name": "dw_fys Kalender_Undersökningsstart",
+      "table_type": "",
+      "description": "Kalender för när undersökning startades",
+      "columns": [
+        {
+          "name": "CapioVecka",
+          "data_type": "int64",
+          "source_column": "CapioVecka",
+          "is_hidden": false
+        },
+        {
+          "name": "DagMånad",
+          "data_type": "int64",
+          "source_column": "DagMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn",
+          "data_type": "string",
+          "source_column": "DagNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "DagNamn kort",
+          "data_type": "string",
+          "source_column": "DagNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTyp",
+          "data_type": "string",
+          "source_column": "DagTyp",
+          "is_hidden": false
+        },
+        {
+          "name": "DagTypId",
+          "data_type": "int64",
+          "source_column": "DagTypId",
+          "is_hidden": false
+        },
+        {
+          "name": "DagÅr",
+          "data_type": "int64",
+          "source_column": "DagÅr",
+          "is_hidden": false
+        },
+        {
+          "name": "Datum",
+          "data_type": "dateTime",
+          "source_column": "Datum",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal",
+          "data_type": "int64",
+          "source_column": "Kvartal",
+          "is_hidden": false
+        },
+        {
+          "name": "Kvartal räkenskapsår",
+          "data_type": "string",
+          "source_column": "Kvartal räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "KvartalNamn",
+          "data_type": "string",
+          "source_column": "KvartalNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad",
+          "data_type": "int64",
+          "source_column": "Månad",
+          "is_hidden": false
+        },
+        {
+          "name": "Månad räkenskapsår",
+          "data_type": "string",
+          "source_column": "Månad räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn",
+          "data_type": "string",
+          "source_column": "MånadNamn",
+          "is_hidden": false
+        },
+        {
+          "name": "MånadNamn kort",
+          "data_type": "string",
+          "source_column": "MånadNamn kort",
+          "is_hidden": false
+        },
+        {
+          "name": "Undersökningsstart",
+          "data_type": "dateTime",
+          "source_column": "Undersökningsstart",
+          "is_hidden": false
+        },
+        {
+          "name": "Vecka",
+          "data_type": "int64",
+          "source_column": "Vecka",
+          "is_hidden": false
+        },
+        {
+          "name": "VeckodagsSiffra",
+          "data_type": "int64",
+          "source_column": "VeckodagsSiffra",
+          "is_hidden": false
+        },
+        {
+          "name": "År",
+          "data_type": "int64",
+          "source_column": "År",
+          "is_hidden": false
+        },
+        {
+          "name": "År räkenskapsår",
+          "data_type": "string",
+          "source_column": "År räkenskapsår",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad",
+          "data_type": "string",
+          "source_column": "ÅrMånad",
+          "is_hidden": false
+        },
+        {
+          "name": "ÅrMånad räkenskapsår",
+          "data_type": "string",
+          "source_column": "ÅrMånad räkenskapsår",
+          "is_hidden": false
+        }
+      ],
+      "measures": [],
+      "partitions": [
+        {
+          "name": "Partition",
+          "source_type": "m",
+          "is_m": true
+        }
+      ],
+      "hierarchies": [
+        "Datumhierarki"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "BeställareId",
+      "to_table": "dw_fys D_Beställare",
+      "to_column": "BeställareId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "FakturamottagareId",
+      "to_table": "dw_fys D_Fakturamottagare",
+      "to_column": "FakturamottagareId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "PatientId",
+      "to_table": "dw_fys D_Patient",
+      "to_column": "PatientId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "ProduktId",
+      "to_table": "dw_fys D_Produkt",
+      "to_column": "ProduktId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "RemissgruppId",
+      "to_table": "dw_fys D_Remissgrupp",
+      "to_column": "RemissgruppId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "RemisskoderId",
+      "to_table": "dw_fys D_Remisskoder",
+      "to_column": "RemisskoderId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "RemisstatusId",
+      "to_table": "dw_fys D_Remisstatus",
+      "to_column": "RemisstatusId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "SignerareId",
+      "to_table": "dw_fys D_Signerare",
+      "to_column": "SignerareId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "UtförareId",
+      "to_table": "dw_fys D_Utförare",
+      "to_column": "UtförareId"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Beställningsdatum",
+      "to_table": "dw_fys Kalender_Beställningsdatum",
+      "to_column": "Beställningsdatum"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Bokningsdatum",
+      "to_table": "dw_fys Kalender_Bokningsdatum",
+      "to_column": "Bokningsdatum"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Måldatum_från",
+      "to_table": "dw_fys Kalender_Måldatum",
+      "to_column": "Måldatum"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Remissdatum",
+      "to_table": "dw_fys Kalender_Remissdatum",
+      "to_column": "Remissdatum"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Signeringsdatum",
+      "to_table": "dw_fys Kalender_Signeringsdatum",
+      "to_column": "Signeringsdatum"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Undersökningsslut",
+      "to_table": "dw_fys Kalender_Undersökningsslut",
+      "to_column": "Undersökningsslut"
+    },
+    {
+      "from_table": "dw_fys F_Undersökning",
+      "from_column": "Undersökningsstart",
+      "to_table": "dw_fys Kalender_Undersökningsstart",
+      "to_column": "Undersökningsstart"
+    }
+  ],
+  "roles": [
+    {
+      "name": "fys_läsbehörighet",
+      "description": "Läsbehörighet för fys-data"
+    }
+  ],
+  "summary": {
+    "table_count": 19,
+    "fact_tables": [
+      "dw_fys F_Undersökning"
+    ],
+    "dimension_tables": [
+      "dw_fys D_Beställare",
+      "dw_fys D_Fakturamottagare",
+      "dw_fys D_Patient",
+      "dw_fys D_Produkt",
+      "dw_fys D_Remissgrupp",
+      "dw_fys D_Remisskoder",
+      "dw_fys D_Remisstatus",
+      "dw_fys D_Signerare",
+      "dw_fys D_Utförare"
+    ],
+    "date_role_tables": [
+      "dw_fys Kalender_Beställningsdatum",
+      "dw_fys Kalender_Bokningsdatum",
+      "dw_fys Kalender_Måldatum",
+      "dw_fys Kalender_Remissdatum",
+      "dw_fys Kalender_Signeringsdatum",
+      "dw_fys Kalender_Undersökningsslut",
+      "dw_fys Kalender_Undersökningsstart"
+    ],
+    "calculated_tables": [
+      "Daggrupp"
+    ],
+    "relationship_count": 16,
+    "measure_count": 33,
+    "simple_measures": 22,
+    "sql_fallback_measures": 11,
+    "manual_measures": 0,
+    "m_partition_tables": [
+      "CARMAe",
+      "dw_fys D_Beställare",
+      "dw_fys D_Fakturamottagare",
+      "dw_fys D_Patient",
+      "dw_fys D_Produkt",
+      "dw_fys D_Remissgrupp",
+      "dw_fys D_Remisskoder",
+      "dw_fys D_Remisstatus",
+      "dw_fys D_Signerare",
+      "dw_fys D_Utförare",
+      "dw_fys F_Undersökning",
+      "dw_fys Kalender_Beställningsdatum",
+      "dw_fys Kalender_Bokningsdatum",
+      "dw_fys Kalender_Måldatum",
+      "dw_fys Kalender_Remissdatum",
+      "dw_fys Kalender_Signeringsdatum",
+      "dw_fys Kalender_Undersökningsslut",
+      "dw_fys Kalender_Undersökningsstart"
+    ]
+  }
+}

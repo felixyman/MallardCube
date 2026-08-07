@@ -1,0 +1,7 @@
+{
+  "name": "Safety Stock Level",
+  "dataType": "int64",
+  "sourceColumn": "minstock",
+  "sourceProviderType": "int",
+  "lineageTag": "f864cf30-bdfc-461a-a5ba-c0f34ecdb12c"
+}
