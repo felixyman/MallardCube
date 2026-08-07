@@ -1,0 +1,7 @@
+{
+  "name": "Sales Quantity",
+  "dataType": "int64",
+  "sourceColumn": "qty",
+  "sourceProviderType": "int",
+  "lineageTag": "a4bc82a2-384e-4e85-a2db-90f144a31177"
+}

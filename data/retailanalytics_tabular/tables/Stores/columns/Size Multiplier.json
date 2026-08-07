@@ -1,0 +1,7 @@
+{
+  "name": "Size Multiplier",
+  "dataType": "decimal",
+  "sourceColumn": "storesizemultiplier",
+  "sourceProviderType": "decimal",
+  "lineageTag": "09059865-4acb-4900-9e80-39a4731b2ebe"
+}

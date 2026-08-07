@@ -1,0 +1,310 @@
+{
+  "name": "SemanticModel",
+  "compatibilityLevel": 1700,
+  "model": {
+    "tables": [
+      {
+        "name": "Sales",
+        "lineageTag": "f1b91dae-a309-44d9-9efa-81e045f9850c",
+        "columns": [
+          { "name": "Customer ID", "dataType": "int64", "sourceColumn": "customerid" },
+          { "name": "Date Key", "dataType": "int64", "sourceColumn": "datekey" },
+          { "name": "Delivery Days", "dataType": "int64", "sourceColumn": "deliverydays" },
+          { "name": "Discount Amount", "dataType": "decimal", "sourceColumn": "discountamount" },
+          { "name": "Gross Sales Value", "dataType": "decimal", "sourceColumn": "grossvalue" },
+          { "name": "Is Discounted", "dataType": "int64", "sourceColumn": "discountapplied" },
+          { "name": "Is Return", "dataType": "int64", "sourceColumn": "isreturn" },
+          { "name": "Net Sales (Revenue)", "dataType": "decimal", "sourceColumn": "net" },
+          { "name": "Payment Method", "dataType": "string", "sourceColumn": "payment" },
+          { "name": "Product ID", "dataType": "int64", "sourceColumn": "productid" },
+          { "name": "Promotion ID", "dataType": "int64", "sourceColumn": "promoid" },
+          { "name": "Purchase Hour", "dataType": "int64", "sourceColumn": "hour" },
+          { "name": "Return Reason", "dataType": "string", "sourceColumn": "returnreason" },
+          { "name": "Sales Channel", "dataType": "string", "sourceColumn": "channel" },
+          { "name": "Sales Quantity", "dataType": "int64", "sourceColumn": "qty" },
+          { "name": "Shipping Cost", "dataType": "decimal", "sourceColumn": "shipcost" },
+          { "name": "Shipping Weight", "dataType": "decimal", "sourceColumn": "shipweight" },
+          { "name": "Store ID", "dataType": "int64", "sourceColumn": "storeid" },
+          { "name": "Tax Amount", "dataType": "decimal", "sourceColumn": "taxamount" },
+          { "name": "Tax Rate %", "dataType": "decimal", "sourceColumn": "tax_rate" },
+          { "name": "Transaction ID", "dataType": "int64", "sourceColumn": "salesid" },
+          { "name": "Unit Price", "dataType": "decimal", "sourceColumn": "unitprice" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_sales",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_sales]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Products",
+        "lineageTag": "5488c9f8-c0d8-495b-9af7-3cb2f2855d4c",
+        "columns": [
+          { "name": "Brand", "dataType": "string", "sourceColumn": "brand" },
+          { "name": "Category", "dataType": "string", "sourceColumn": "category" },
+          { "name": "Color", "dataType": "string", "sourceColumn": "color" },
+          { "name": "Eco Score", "dataType": "int64", "sourceColumn": "ecoscore" },
+          { "name": "Has Warranty", "dataType": "int64", "sourceColumn": "haswarranty" },
+          { "name": "Inventory Status", "dataType": "string", "sourceColumn": "stockstatus" },
+          { "name": "Is Active Product", "dataType": "int64", "sourceColumn": "isactive" },
+          { "name": "Is Discontinued", "dataType": "int64", "sourceColumn": "isdiscontinued" },
+          { "name": "Is Eco-Friendly", "dataType": "int64", "sourceColumn": "ecofriendly" },
+          { "name": "Material", "dataType": "string", "sourceColumn": "material" },
+          { "name": "Product ID", "dataType": "int64", "sourceColumn": "productid" },
+          { "name": "Product Name", "dataType": "string", "sourceColumn": "name" },
+          { "name": "Rating", "dataType": "decimal", "sourceColumn": "productrating" },
+          { "name": "Regular Price", "dataType": "decimal", "sourceColumn": "unitprice" },
+          { "name": "Release Year", "dataType": "int64", "sourceColumn": "releaseyear" },
+          { "name": "Safety Stock Level", "dataType": "int64", "sourceColumn": "minstock" },
+          { "name": "Seasonality Factor", "dataType": "decimal", "sourceColumn": "seasonalityfactor" },
+          { "name": "SKU Count", "dataType": "int64", "sourceColumn": "skucount" },
+          { "name": "Supplier ID", "dataType": "int64", "sourceColumn": "supplierid" },
+          { "name": "Target Margin %", "dataType": "decimal", "sourceColumn": "margin_pct" },
+          { "name": "Tax Rate %", "dataType": "decimal", "sourceColumn": "tax_rate" },
+          { "name": "Unit Cost", "dataType": "decimal", "sourceColumn": "unitcost" },
+          { "name": "Warranty Months", "dataType": "int64", "sourceColumn": "warrantymonths" },
+          { "name": "Weight (kg)", "dataType": "decimal", "sourceColumn": "weight" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_products",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_products]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Customers",
+        "lineageTag": "00e77a2f-766a-4271-acaa-daf8b90f94c4",
+        "columns": [
+          { "name": "Age", "dataType": "int64", "sourceColumn": "age" },
+          { "name": "Annual Income", "dataType": "decimal", "sourceColumn": "annualincome" },
+          { "name": "Children Count", "dataType": "int64", "sourceColumn": "childrencount" },
+          { "name": "Customer City", "dataType": "string", "sourceColumn": "city" },
+          { "name": "Customer ID", "dataType": "int64", "sourceColumn": "customerid" },
+          { "name": "Customer Name", "dataType": "string", "sourceColumn": "fullname" },
+          { "name": "Education Level", "dataType": "string", "sourceColumn": "education" },
+          { "name": "Email Address", "dataType": "string", "sourceColumn": "email" },
+          { "name": "Gender", "dataType": "string", "sourceColumn": "gender" },
+          { "name": "Has Newsletter", "dataType": "int64", "sourceColumn": "hassubscription" },
+          { "name": "Income Bracket", "dataType": "string", "sourceColumn": "incomebracket" },
+          { "name": "Is Active", "dataType": "int64", "sourceColumn": "isactive" },
+          { "name": "Language", "dataType": "string", "sourceColumn": "lang" },
+          { "name": "Loyalty Points", "dataType": "int64", "sourceColumn": "points" },
+          { "name": "Loyalty Segment", "dataType": "string", "sourceColumn": "loyaltysegment" },
+          { "name": "Loyalty Tier", "dataType": "string", "sourceColumn": "tier" },
+          { "name": "Marital Status", "dataType": "string", "sourceColumn": "maritalstatus" },
+          { "name": "Preferred Channel", "dataType": "string", "sourceColumn": "preferredcontact" },
+          { "name": "Recency Days", "dataType": "int64", "sourceColumn": "dayssincelastpurchase" },
+          { "name": "Registration Date", "dataType": "dateTime", "sourceColumn": "regdate" },
+          { "name": "Satisfaction Score", "dataType": "decimal", "sourceColumn": "satisfactionscore" },
+          { "name": "Spend Multiplier", "dataType": "decimal", "sourceColumn": "spendmultiplier" },
+          { "name": "Total Lifetime Spend", "dataType": "decimal", "sourceColumn": "totalspend" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_customers",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_customers]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Stores",
+        "lineageTag": "123a6219-05a6-4ca1-8d04-cc605768bddf",
+        "columns": [
+          { "name": "Annual Rent Cost", "dataType": "decimal", "sourceColumn": "annualrentcost" },
+          { "name": "Distance to City Center (km)", "dataType": "decimal", "sourceColumn": "distancetocitycenterkm" },
+          { "name": "Employee Count", "dataType": "int64", "sourceColumn": "staff" },
+          { "name": "Floor Count", "dataType": "int64", "sourceColumn": "floornumber" },
+          { "name": "Has Cafe", "dataType": "int64", "sourceColumn": "hascafe" },
+          { "name": "Has Local Delivery", "dataType": "int64", "sourceColumn": "hasdeliveryservice" },
+          { "name": "Last Renovation", "dataType": "int64", "sourceColumn": "renovationyear" },
+          { "name": "Opening Year", "dataType": "int64", "sourceColumn": "openingyear" },
+          { "name": "Parking Spots", "dataType": "int64", "sourceColumn": "parkingspots" },
+          { "name": "Size (sqm)", "dataType": "int64", "sourceColumn": "sizem2" },
+          { "name": "Size Multiplier", "dataType": "decimal", "sourceColumn": "storesizemultiplier" },
+          { "name": "Store City", "dataType": "string", "sourceColumn": "city" },
+          { "name": "Store ID", "dataType": "int64", "sourceColumn": "storeid" },
+          { "name": "Store Name", "dataType": "string", "sourceColumn": "storename" },
+          { "name": "Store Rating", "dataType": "decimal", "sourceColumn": "storerating" },
+          { "name": "Store Region", "dataType": "string", "sourceColumn": "region" },
+          { "name": "Store Type", "dataType": "string", "sourceColumn": "type" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_stores",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_stores]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Promotions",
+        "lineageTag": "9481d398-7bdc-4d56-aefe-7655f2c2ad47",
+        "columns": [
+          { "name": "Campaign Budget", "dataType": "decimal", "sourceColumn": "budget" },
+          { "name": "Campaign Discount %", "dataType": "decimal", "sourceColumn": "discount_pct" },
+          { "name": "Campaign Name", "dataType": "string", "sourceColumn": "promoname" },
+          { "name": "Discount Cap", "dataType": "decimal", "sourceColumn": "maxdiscountcap" },
+          { "name": "End Date", "dataType": "dateTime", "sourceColumn": "enddate" },
+          { "name": "Fixed Discount", "dataType": "decimal", "sourceColumn": "discount_fixed" },
+          { "name": "Is Active Campaign", "dataType": "int64", "sourceColumn": "isactive" },
+          { "name": "Is Stackable", "dataType": "int64", "sourceColumn": "isstackable" },
+          { "name": "Marketing Channel", "dataType": "string", "sourceColumn": "channel" },
+          { "name": "Minimum Spend", "dataType": "int64", "sourceColumn": "minspend" },
+          { "name": "Promotion ID", "dataType": "int64", "sourceColumn": "promoid" },
+          { "name": "Promo Type", "dataType": "string", "sourceColumn": "type" },
+          { "name": "Promo Uplift", "dataType": "decimal", "sourceColumn": "promoupliftfactor" },
+          { "name": "Redemption Rate %", "dataType": "decimal", "sourceColumn": "redemption_rate" },
+          { "name": "Requires Promo Code", "dataType": "int64", "sourceColumn": "coderequired" },
+          { "name": "Start Date", "dataType": "dateTime", "sourceColumn": "startdate" },
+          { "name": "Target Segment", "dataType": "string", "sourceColumn": "targetaudience" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_promotions",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_promotions]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Dates",
+        "lineageTag": "f4ee5c52-d5f2-4812-9e6f-aeedd8214a07",
+        "dataCategory": "Time",
+        "columns": [
+          { "name": "Calendar Date", "dataType": "dateTime", "sourceColumn": "fulldate" },
+          { "name": "Date Key", "dataType": "int64", "sourceColumn": "datekey" },
+          { "name": "Is Holiday", "dataType": "int64", "sourceColumn": "isholiday" },
+          { "name": "Is Weekend", "dataType": "int64", "sourceColumn": "isweekend" },
+          { "name": "Month Name", "dataType": "string", "sourceColumn": "monthname" },
+          { "name": "Month Number", "dataType": "int64", "sourceColumn": "monthnumber" },
+          { "name": "Quarter", "dataType": "string", "sourceColumn": "quartername" },
+          { "name": "Quarter Number", "dataType": "int64", "sourceColumn": "quarternumber" },
+          { "name": "Weekday", "dataType": "string", "sourceColumn": "weekdayname" },
+          { "name": "Weekday Number", "dataType": "int64", "sourceColumn": "weekdaynumber" },
+          { "name": "Year", "dataType": "int64", "sourceColumn": "year" },
+          { "name": "Year-Month", "dataType": "string", "sourceColumn": "yearmonth" },
+          { "name": "Year-Month ID", "dataType": "int64", "sourceColumn": "yearmonthnumber" },
+          { "name": "Year-Quarter", "dataType": "string", "sourceColumn": "yearquarter" },
+          { "name": "Year-Quarter ID", "dataType": "int64", "sourceColumn": "yearquarternumber" },
+          { "name": "Year-Week", "dataType": "string", "sourceColumn": "yearweek" },
+          { "name": "Year-Week ID", "dataType": "int64", "sourceColumn": "yearweeknumber" }
+        ],
+        "partitions": [
+          {
+            "name": "vw_dates",
+            "source": {
+              "type": "query",
+              "query": "SELECT * FROM [dbo].[vw_dates]",
+              "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+            }
+          }
+        ],
+        "hierarchies": [
+          {
+            "name": "Calendar Hierarchy",
+            "lineageTag": "4074fbad-1842-45fb-a823-22268ae451e9",
+            "levels": [
+              { "name": "year", "ordinal": 0, "column": "Year" },
+              { "name": "quartername", "ordinal": 1, "column": "Quarter" },
+              { "name": "monthname", "ordinal": 2, "column": "Month Name" },
+              { "name": "fulldate", "ordinal": 3, "column": "Calendar Date" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "DAX",
+        "lineageTag": "3d54d45c-7c93-4486-ad2f-41160a76e53f",
+        "measures": [
+          {
+            "name": "Total Revenue",
+            "expression": "= CALCULATE(SUM('Sales'[Net Sales (Revenue)]), 'Sales'[Is Return] = 0)",
+            "formatString": "$ #,##0.00"
+          },
+          {
+            "name": "Total COGS",
+            "expression": "= SUMX(FILTER('Sales', 'Sales'[Is Return] = 0), 'Sales'[Sales Quantity] * RELATED('Products'[Unit Cost]))",
+            "formatString": "$ #,##0.00"
+          },
+          {
+            "name": "Gross Profit",
+            "expression": "= [Total Revenue] - [Total COGS]",
+            "formatString": "$ #,##0.00"
+          },
+          {
+            "name": "Gross Margin %",
+            "expression": "= DIVIDE([Gross Profit], [Total Revenue], 0)",
+            "formatString": "#,##0.00 %"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "New Calculated Table",
+            "mode": "import",
+            "source": {
+              "type": "calculated",
+              "expression": "{ \"\" }"
+            }
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "name": "fa2e8126-4367-438d-b1ac-7e82ef08c447",
+        "fromTable": "Sales",
+        "fromColumn": "Customer ID",
+        "toTable": "Customers",
+        "toColumn": "Customer ID"
+      },
+      {
+        "name": "e0082df9-d571-48a9-8acd-1bec0a148894",
+        "fromTable": "Sales",
+        "fromColumn": "Product ID",
+        "toTable": "Products",
+        "toColumn": "Product ID"
+      },
+      {
+        "name": "d5bf8517-41e9-4d44-8f5c-aaf51c8e9d0a",
+        "fromTable": "Sales",
+        "fromColumn": "Store ID",
+        "toTable": "Stores",
+        "toColumn": "Store ID"
+      },
+      {
+        "name": "e54e11c5-de81-4a1a-baf0-4ad178d47a5c",
+        "fromTable": "Sales",
+        "fromColumn": "Promotion ID",
+        "toTable": "Promotions",
+        "toColumn": "Promotion ID"
+      },
+      {
+        "name": "a4fcc5fb-ed59-4b92-af5b-f2d84c88d5da",
+        "fromTable": "Sales",
+        "fromColumn": "Date Key",
+        "toTable": "Dates",
+        "toColumn": "Date Key"
+      }
+    ]
+  }
+}

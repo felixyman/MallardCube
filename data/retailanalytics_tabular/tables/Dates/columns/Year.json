@@ -1,0 +1,7 @@
+{
+  "name": "Year",
+  "dataType": "int64",
+  "sourceColumn": "year",
+  "sourceProviderType": "smallint",
+  "lineageTag": "71a887b9-2b53-4a4f-863e-743539d46aac"
+}

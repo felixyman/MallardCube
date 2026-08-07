@@ -1,0 +1,7 @@
+{
+  "name": "Start Date",
+  "dataType": "dateTime",
+  "sourceColumn": "startdate",
+  "sourceProviderType": "date",
+  "lineageTag": "6460ec25-264a-42f0-b76e-b33d3cc3568e"
+}

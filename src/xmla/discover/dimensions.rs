@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{discover_rowset_envelope, UUID_TYPE, xml_escape};
 use crate::proxy_project;
 
 const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -74,12 +74,12 @@ pub fn get_dimensions_response() -> String {
           </row>
 "#,
             i + 2,
-            caption = d.caption,
-            dim_u = d.dimension_unique_name(),
+            caption = xml_escape(&d.caption),
+            dim_u = xml_escape(&d.dimension_unique_name()),
             ordinal = d.ordinal,
             cardinality = d.cardinality_hint,
-            hier_u = d.hierarchy_unique_name(),
-            description = d.description,
+            hier_u = xml_escape(&d.hierarchy_unique_name()),
+            description = xml_escape(&d.description),
             visible = d.visible,
         ));
     }

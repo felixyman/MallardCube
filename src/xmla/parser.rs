@@ -1,7 +1,7 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum XmlaRequest {
     DiscoverProperties { property_names: Vec<String> },
     DiscoverSchemaRowsets,

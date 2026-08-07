@@ -1,0 +1,6 @@
+{
+  "name": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics",
+  "connectionString": "data source=DESKTOP-PONL6H6\\MSSQLSERVER01;initial catalog=retailanalytics;persist security info=True;user id=sa",
+  "impersonationMode": "impersonateServiceAccount",
+  "provider": "System.Data.SqlClient"
+}

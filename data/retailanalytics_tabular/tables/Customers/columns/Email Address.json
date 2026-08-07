@@ -1,0 +1,7 @@
+{
+  "name": "Email Address",
+  "dataType": "string",
+  "sourceColumn": "email",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "8296718e-ae14-4978-a4ea-f7f2761ed378"
+}

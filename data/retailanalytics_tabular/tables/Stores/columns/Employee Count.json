@@ -1,0 +1,7 @@
+{
+  "name": "Employee Count",
+  "dataType": "int64",
+  "sourceColumn": "staff",
+  "sourceProviderType": "smallint",
+  "lineageTag": "8c4cf9fd-309c-45ad-8811-b80a52518136"
+}

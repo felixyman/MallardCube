@@ -1,0 +1,19 @@
+{
+  "name": "vw_dates",
+  "source": {
+    "type": "query",
+    "query": [
+      "SELECT",
+      "\t*",
+      "FROM",
+      "\t[dbo].[vw_dates]"
+    ],
+    "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+  },
+  "annotations": [
+    {
+      "name": "TabularEditor_TableSchema",
+      "value": "{\"Name\":\"vw_dates\",\"Schema\":\"dbo\",\"Database\":\"retailanalytics\",\"IncludedColumns\":[\"datekey\",\"fulldate\",\"year\",\"quarternumber\",\"quartername\",\"monthnumber\",\"monthname\",\"weekdaynumber\",\"weekdayname\",\"isweekend\",\"yearmonth\",\"yearmonthnumber\",\"yearquarter\",\"yearquarternumber\",\"yearweek\",\"yearweeknumber\",\"isholiday\"],\"SelectAll\":true}"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Material",
+  "dataType": "string",
+  "sourceColumn": "material",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "a3708a3a-5cb3-49b6-bc77-ec208023867c"
+}

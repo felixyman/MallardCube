@@ -1,0 +1,7 @@
+{
+  "name": "Quarter Number",
+  "dataType": "int64",
+  "sourceColumn": "quarternumber",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "74f1ecf9-17ba-4845-8998-5a74ff3ffae6"
+}

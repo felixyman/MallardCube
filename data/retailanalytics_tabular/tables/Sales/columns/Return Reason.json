@@ -1,0 +1,7 @@
+{
+  "name": "Return Reason",
+  "dataType": "string",
+  "sourceColumn": "returnreason",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "ac1cc86c-32e4-450f-9dd4-7b17080d635e"
+}

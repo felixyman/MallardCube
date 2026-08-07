@@ -1,0 +1,7 @@
+{
+  "name": "Tax Amount",
+  "dataType": "decimal",
+  "sourceColumn": "taxamount",
+  "sourceProviderType": "decimal",
+  "lineageTag": "25efe83d-3c04-4613-bf75-cb1e60b872e9"
+}

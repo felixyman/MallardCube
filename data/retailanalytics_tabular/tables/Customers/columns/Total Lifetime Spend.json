@@ -1,0 +1,7 @@
+{
+  "name": "Total Lifetime Spend",
+  "dataType": "decimal",
+  "sourceColumn": "totalspend",
+  "sourceProviderType": "decimal",
+  "lineageTag": "f5a3254c-3271-412a-9563-38cd0dc148a6"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "Calendar Date",
+  "dataType": "dateTime",
+  "isKey": true,
+  "sourceColumn": "fulldate",
+  "sourceProviderType": "date",
+  "lineageTag": "11e9fad5-a33c-413a-a75f-c21056fca895",
+  "annotations": [
+    {
+      "name": "TabularEditor_MarkAsDateKey",
+      "value": "1"
+    }
+  ]
+}

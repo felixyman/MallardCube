@@ -1,0 +1,7 @@
+{
+  "name": "Promo Type",
+  "dataType": "string",
+  "sourceColumn": "type",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "127d7874-44fe-480b-8e43-97b7fcddc60c"
+}

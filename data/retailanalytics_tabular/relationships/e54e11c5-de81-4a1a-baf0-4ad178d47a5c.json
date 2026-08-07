@@ -1,0 +1,7 @@
+{
+  "name": "e54e11c5-de81-4a1a-baf0-4ad178d47a5c",
+  "fromTable": "Sales",
+  "fromColumn": "Promotion ID",
+  "toTable": "Promotions",
+  "toColumn": "Promotion ID"
+}

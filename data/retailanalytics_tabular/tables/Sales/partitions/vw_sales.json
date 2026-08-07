@@ -1,0 +1,19 @@
+{
+  "name": "vw_sales",
+  "source": {
+    "type": "query",
+    "query": [
+      "SELECT",
+      "\t*",
+      "FROM",
+      "\t[dbo].[vw_sales]"
+    ],
+    "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+  },
+  "annotations": [
+    {
+      "name": "TabularEditor_TableSchema",
+      "value": "{\"Name\":\"vw_sales\",\"Schema\":\"dbo\",\"Database\":\"retailanalytics\",\"IncludedColumns\":[\"salesid\",\"datekey\",\"productid\",\"customerid\",\"storeid\",\"promoid\",\"qty\",\"unitprice\",\"tax_rate\",\"net\",\"payment\",\"channel\",\"grossvalue\",\"discountamount\",\"taxamount\",\"shipcost\",\"isreturn\",\"shipweight\",\"discountapplied\",\"returnreason\",\"deliverydays\",\"hour\"],\"SelectAll\":true}"
+    }
+  ]
+}

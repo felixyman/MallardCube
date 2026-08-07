@@ -1,0 +1,7 @@
+{
+  "name": "Warranty Months",
+  "dataType": "int64",
+  "sourceColumn": "warrantymonths",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "2ee7f658-9de8-447d-8d0f-0e53999aa58d"
+}

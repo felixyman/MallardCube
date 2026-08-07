@@ -1,0 +1,7 @@
+{
+  "name": "Campaign Budget",
+  "dataType": "decimal",
+  "sourceColumn": "budget",
+  "sourceProviderType": "decimal",
+  "lineageTag": "76d4f25c-948a-4e93-8207-f07fbaacf849"
+}

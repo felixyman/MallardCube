@@ -1,0 +1,7 @@
+{
+  "name": "Has Local Delivery",
+  "dataType": "int64",
+  "sourceColumn": "hasdeliveryservice",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "d47b57c4-4709-43ad-9eab-2118949ccf04"
+}

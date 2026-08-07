@@ -1,0 +1,7 @@
+{
+  "name": "Transaction ID",
+  "dataType": "int64",
+  "sourceColumn": "salesid",
+  "sourceProviderType": "bigint",
+  "lineageTag": "d9758232-1923-44de-b45c-76440abd1cf5"
+}

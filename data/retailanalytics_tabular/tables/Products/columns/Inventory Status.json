@@ -1,0 +1,7 @@
+{
+  "name": "Inventory Status",
+  "dataType": "string",
+  "sourceColumn": "stockstatus",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "387798ab-15be-46df-8643-47803c68e5fc"
+}

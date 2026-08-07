@@ -1,0 +1,7 @@
+{
+  "name": "Last Renovation",
+  "dataType": "int64",
+  "sourceColumn": "renovationyear",
+  "sourceProviderType": "smallint",
+  "lineageTag": "0c7b405e-f59f-487d-823c-f08d349e09cb"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Purchase Hour",
+  "dataType": "int64",
+  "sourceColumn": "hour",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "24b25324-c5bf-4c17-b655-ed74b8631fdd"
+}

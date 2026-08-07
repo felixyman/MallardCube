@@ -1,0 +1,7 @@
+{
+  "name": "Campaign Discount %",
+  "dataType": "decimal",
+  "sourceColumn": "discount_pct",
+  "sourceProviderType": "decimal",
+  "lineageTag": "0a9062e2-6101-49df-b512-6fcf6942f3df"
+}

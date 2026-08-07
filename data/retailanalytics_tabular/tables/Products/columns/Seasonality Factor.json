@@ -1,0 +1,7 @@
+{
+  "name": "Seasonality Factor",
+  "dataType": "decimal",
+  "sourceColumn": "seasonalityfactor",
+  "sourceProviderType": "decimal",
+  "lineageTag": "4861e93b-a5b5-4333-ac88-dc61269c7ee8"
+}

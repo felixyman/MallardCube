@@ -1,0 +1,21 @@
+/// Sales transactions fact table
+table Sales
+	column OrderKey
+		dataType: int64
+		sourceColumn: OrderKey
+		isKey
+	column ProductKey
+		dataType: int64
+		sourceColumn: ProductKey
+	column OrderDate
+		dataType: dateTime
+		sourceColumn: OrderDate
+	measure 'Total Revenue' =
+		SUM(Sales[SalesAmount])
+		formatString: $#,0.00
+	measure Revenue =
+		CALCULATE(SUM(Sales[SalesAmount]))
+		formatString: $#,0.00
+		displayFolder: Financial Metrics
+	partition Sales = m
+		mode: import

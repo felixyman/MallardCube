@@ -1,0 +1,7 @@
+{
+  "name": "Is Active Product",
+  "dataType": "int64",
+  "sourceColumn": "isactive",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "be8beacc-9cfb-4cf8-bf78-348ea961f157"
+}

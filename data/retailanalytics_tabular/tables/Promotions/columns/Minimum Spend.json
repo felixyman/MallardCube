@@ -1,0 +1,7 @@
+{
+  "name": "Minimum Spend",
+  "dataType": "int64",
+  "sourceColumn": "minspend",
+  "sourceProviderType": "int",
+  "lineageTag": "04106dda-e9a9-4a5e-916e-7736363f4f82"
+}

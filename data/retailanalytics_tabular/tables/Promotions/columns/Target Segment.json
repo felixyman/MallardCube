@@ -1,0 +1,7 @@
+{
+  "name": "Target Segment",
+  "dataType": "string",
+  "sourceColumn": "targetaudience",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "df97bb9e-df84-423e-8ce6-b26059f6c1b0"
+}

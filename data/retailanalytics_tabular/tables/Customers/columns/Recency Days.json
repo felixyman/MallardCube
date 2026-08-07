@@ -1,0 +1,7 @@
+{
+  "name": "Recency Days",
+  "dataType": "int64",
+  "sourceColumn": "dayssincelastpurchase",
+  "sourceProviderType": "int",
+  "lineageTag": "7b99281b-30f1-4f1c-99c6-a928391c3873"
+}

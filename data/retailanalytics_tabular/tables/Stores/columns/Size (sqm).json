@@ -1,0 +1,7 @@
+{
+  "name": "Size (sqm)",
+  "dataType": "int64",
+  "sourceColumn": "sizem2",
+  "sourceProviderType": "int",
+  "lineageTag": "d234233d-17e5-443b-ae02-f38b74b59890"
+}

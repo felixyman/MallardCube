@@ -1,0 +1,30 @@
+{
+  "name": "Calendar Hierarchy",
+  "lineageTag": "4074fbad-1842-45fb-a823-22268ae451e9",
+  "levels": [
+    {
+      "name": "year",
+      "ordinal": 0,
+      "column": "Year",
+      "lineageTag": "f7292ab5-e92d-473f-b323-40c48fdd4d3b"
+    },
+    {
+      "name": "quartername",
+      "ordinal": 1,
+      "column": "Quarter",
+      "lineageTag": "f7ae57e8-daef-4485-a3b9-b844712d01d1"
+    },
+    {
+      "name": "monthname",
+      "ordinal": 2,
+      "column": "Month Name",
+      "lineageTag": "de44f1ef-8c3f-4e66-b2cb-423d7fe70f91"
+    },
+    {
+      "name": "fulldate",
+      "ordinal": 3,
+      "column": "Calendar Date",
+      "lineageTag": "908ed5ee-011b-45e0-8b08-a8d926c4a5b1"
+    }
+  ]
+}

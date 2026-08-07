@@ -1,0 +1,7 @@
+{
+  "name": "Gender",
+  "dataType": "string",
+  "sourceColumn": "gender",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "c51e4f93-f2a8-4f73-a384-4d1cd857b24c"
+}

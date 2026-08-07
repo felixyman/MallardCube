@@ -1,0 +1,7 @@
+{
+  "name": "Shipping Cost",
+  "dataType": "decimal",
+  "sourceColumn": "shipcost",
+  "sourceProviderType": "decimal",
+  "lineageTag": "e9e5b46c-9b0e-45cc-8296-1413c533e539"
+}

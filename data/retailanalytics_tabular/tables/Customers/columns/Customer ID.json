@@ -1,0 +1,7 @@
+{
+  "name": "Customer ID",
+  "dataType": "int64",
+  "sourceColumn": "customerid",
+  "sourceProviderType": "int",
+  "lineageTag": "d0a30f6c-a104-4635-a7ba-06b467bdff42"
+}

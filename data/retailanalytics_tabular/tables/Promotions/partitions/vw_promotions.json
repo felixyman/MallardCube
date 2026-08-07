@@ -1,0 +1,19 @@
+{
+  "name": "vw_promotions",
+  "source": {
+    "type": "query",
+    "query": [
+      "SELECT",
+      "\t*",
+      "FROM",
+      "\t[dbo].[vw_promotions]"
+    ],
+    "dataSource": "DESKTOP-PONL6H6\\MSSQLSERVER01 retailanalytics"
+  },
+  "annotations": [
+    {
+      "name": "TabularEditor_TableSchema",
+      "value": "{\"Name\":\"vw_promotions\",\"Schema\":\"dbo\",\"Database\":\"retailanalytics\",\"IncludedColumns\":[\"promoid\",\"promoname\",\"discount_pct\",\"discount_fixed\",\"type\",\"isactive\",\"minspend\",\"channel\",\"budget\",\"startdate\",\"enddate\",\"targetaudience\",\"maxdiscountcap\",\"isstackable\",\"redemption_rate\",\"coderequired\",\"promoupliftfactor\"],\"SelectAll\":true}"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Sales Channel",
+  "dataType": "string",
+  "sourceColumn": "channel",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "9156cbd3-09ab-49af-a2db-bccbb880be51"
+}

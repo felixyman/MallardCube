@@ -1,0 +1,7 @@
+{
+  "name": "Education Level",
+  "dataType": "string",
+  "sourceColumn": "education",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "ddc90f45-ea4d-44e9-b800-09273f799ca0"
+}

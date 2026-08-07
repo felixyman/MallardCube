@@ -1,0 +1,7 @@
+{
+  "name": "Promotion ID",
+  "dataType": "int64",
+  "sourceColumn": "promoid",
+  "sourceProviderType": "int",
+  "lineageTag": "92e5a9a5-1d69-4b66-a5aa-c7aa860130eb"
+}

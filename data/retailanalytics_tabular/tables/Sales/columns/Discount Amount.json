@@ -1,0 +1,7 @@
+{
+  "name": "Discount Amount",
+  "dataType": "decimal",
+  "sourceColumn": "discountamount",
+  "sourceProviderType": "decimal",
+  "lineageTag": "42f45a71-653f-488f-a7ac-f891def0fb75"
+}

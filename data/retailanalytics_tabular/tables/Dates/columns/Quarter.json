@@ -1,0 +1,8 @@
+{
+  "name": "Quarter",
+  "dataType": "string",
+  "sourceColumn": "quartername",
+  "sortByColumn": "Quarter Number",
+  "sourceProviderType": "nchar",
+  "lineageTag": "5f32bfa7-8081-4a0b-a25a-a4607f7f0da5"
+}

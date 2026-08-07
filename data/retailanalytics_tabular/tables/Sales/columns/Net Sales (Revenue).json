@@ -1,0 +1,7 @@
+{
+  "name": "Net Sales (Revenue)",
+  "dataType": "decimal",
+  "sourceColumn": "net",
+  "sourceProviderType": "decimal",
+  "lineageTag": "43068d1e-723c-42dd-8d83-7db21e46c85d"
+}

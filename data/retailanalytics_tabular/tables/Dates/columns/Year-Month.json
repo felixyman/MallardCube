@@ -1,0 +1,8 @@
+{
+  "name": "Year-Month",
+  "dataType": "string",
+  "sourceColumn": "yearmonth",
+  "sortByColumn": "Year-Month ID",
+  "sourceProviderType": "nchar",
+  "lineageTag": "094d0fb9-a643-4fcb-b5d5-261d5b6f793b"
+}

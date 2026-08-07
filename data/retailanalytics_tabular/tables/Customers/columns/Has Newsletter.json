@@ -1,0 +1,7 @@
+{
+  "name": "Has Newsletter",
+  "dataType": "int64",
+  "sourceColumn": "hassubscription",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "f8b1876f-05cc-4ceb-b547-6116fc21d3b4"
+}

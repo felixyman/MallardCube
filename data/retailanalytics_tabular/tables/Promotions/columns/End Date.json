@@ -1,0 +1,7 @@
+{
+  "name": "End Date",
+  "dataType": "dateTime",
+  "sourceColumn": "enddate",
+  "sourceProviderType": "date",
+  "lineageTag": "27ea6ed3-2f93-44a2-915a-f451a55d4115"
+}

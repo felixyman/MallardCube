@@ -1,0 +1,7 @@
+{
+  "name": "Parking Spots",
+  "dataType": "int64",
+  "sourceColumn": "parkingspots",
+  "sourceProviderType": "smallint",
+  "lineageTag": "6d5493b7-2e6a-4e8d-b3ac-e5c25a565dda"
+}

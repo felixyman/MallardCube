@@ -1,0 +1,7 @@
+{
+  "name": "Is Eco-Friendly",
+  "dataType": "int64",
+  "sourceColumn": "ecofriendly",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "406198d3-0374-49cc-8ef9-dc454468a997"
+}

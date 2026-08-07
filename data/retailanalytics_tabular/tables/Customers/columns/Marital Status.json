@@ -1,0 +1,7 @@
+{
+  "name": "Marital Status",
+  "dataType": "string",
+  "sourceColumn": "maritalstatus",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "30218dab-7a86-428f-a5af-3ca506a3a8f8"
+}

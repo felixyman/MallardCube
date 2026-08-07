@@ -1,0 +1,7 @@
+{
+  "name": "Release Year",
+  "dataType": "int64",
+  "sourceColumn": "releaseyear",
+  "sourceProviderType": "smallint",
+  "lineageTag": "5de68db2-e3cb-4f77-a3a6-9668e13bf231"
+}

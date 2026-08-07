@@ -1,0 +1,217 @@
+{
+  "catalog": "SEMANTICMODEL",
+  "cube": "SALES",
+  "source_name": "sales",
+  "table_name": "sales",
+  "dialect": "duckdb",
+  "malloy_model_file": "model.malloy",
+  "db_path": "data/sales.db",
+  "fact_tables": [
+    {
+      "id": "default",
+      "source_name": "sales",
+      "table_name": "sales",
+      "measure_group_name": "SALES"
+    }
+  ],
+  "relationships": [
+    {
+      "fact_table": "default",
+      "fact_column": "date_key",
+      "dimension_id": "Dates",
+      "dim_table": "dates",
+      "dim_column": "date_key"
+    },
+    {
+      "fact_table": "default",
+      "fact_column": "store_id",
+      "dimension_id": "Stores",
+      "dim_table": "stores",
+      "dim_column": "store_id"
+    },
+    {
+      "fact_table": "default",
+      "fact_column": "product_id",
+      "dimension_id": "Products",
+      "dim_table": "products",
+      "dim_column": "product_id"
+    },
+    {
+      "fact_table": "default",
+      "fact_column": "promotion_id",
+      "dimension_id": "Promotions",
+      "dim_table": "promotions",
+      "dim_column": "promotion_id"
+    },
+    {
+      "fact_table": "default",
+      "fact_column": "customer_id",
+      "dimension_id": "Customers",
+      "dim_table": "customers",
+      "dim_column": "customer_id"
+    }
+  ],
+  "time_intelligence": {
+    "date_dimension": {
+      "dimension_id": "Dates",
+      "table_name": "dates",
+      "date_key_column": "date_key",
+      "full_date_column": "full_date",
+      "flag_columns": {
+        "year_column": "year",
+        "quarter_column": "quarter",
+        "month_column": "month",
+        "ytd_flag_column": "ytd_flag",
+        "prior_year_ytd_flag_column": "prior_year_ytd_flag",
+        "current_year_flag_column": "current_year_flag",
+        "qtd_flag_column": "qtd_flag",
+        "mtd_flag_column": "mtd_flag"
+      }
+    }
+  },
+
+  "dimensions": [
+    {
+      "id": "Dates",
+      "malloy_name": "dates",
+      "physical_field": "dates.fulldate",
+      "caption": "Dates",
+      "description": "",
+      "hierarchy_name": "Dates",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Dates",
+      "ordinal": 1,
+      "fact_table": "default",
+      "visible": true,
+      "has_all": true,
+          "cardinality_hint": 100,
+      "is_date_role": true
+    },
+    {
+      "id": "Customers",
+      "malloy_name": "customers",
+      "physical_field": "customers.age",
+      "caption": "Customers",
+      "description": "",
+      "hierarchy_name": "Customers",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Customers",
+      "ordinal": 2,
+      "visible": true,
+      "has_all": true,
+          "cardinality_hint": 100,
+      "shared": true
+    },
+    {
+      "id": "Products",
+      "malloy_name": "products",
+      "physical_field": "products.brand",
+      "caption": "Products",
+      "description": "",
+      "hierarchy_name": "Products",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Products",
+      "ordinal": 3,
+      "visible": true,
+      "has_all": true,
+          "cardinality_hint": 100,
+      "shared": true
+    },
+    {
+      "id": "Promotions",
+      "malloy_name": "promotions",
+      "physical_field": "promotions.budget",
+      "caption": "Promotions",
+      "description": "",
+      "hierarchy_name": "Promotions",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Promotions",
+      "ordinal": 4,
+      "visible": true,
+      "has_all": true,
+          "cardinality_hint": 100,
+      "shared": true
+    },
+    {
+      "id": "Stores",
+      "malloy_name": "stores",
+      "physical_field": "stores.annualrentcost",
+      "caption": "Stores",
+      "description": "",
+      "hierarchy_name": "Stores",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Stores",
+      "ordinal": 5,
+      "visible": true,
+      "has_all": true,
+          "cardinality_hint": 100,
+      "shared": true
+    }
+  ],
+  "measures": [
+    {
+      "id": "Gross Margin %",
+      "fact_table": "default",
+      "malloy_name": "gross_margin_%",
+      "physical_expr": "",
+      "sql_expr": "null",
+      "caption": "Gross Margin %",
+      "display_name": "Gross Margin %",
+      "description": "[sql_fallback]  = DIVIDE ( [Gross Profit], [Total Revenue], 0 ) // Gross margin as a percentage (profit / revenue)",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 1,
+      "visible": true,
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/gross_margin_%.sql"
+    },
+    {
+      "id": "Gross Profit",
+      "fact_table": "default",
+      "malloy_name": "gross_profit",
+      "physical_expr": "",
+      "sql_expr": "null",
+      "caption": "Gross Profit",
+      "display_name": "Gross Profit",
+      "description": "[sql_fallback]  = [Total Revenue] - [Total COGS] // Gross profit = revenue - COGS",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 2,
+      "visible": true,
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/gross_profit.sql"
+    },
+    {
+      "id": "Total COGS",
+      "fact_table": "default",
+      "malloy_name": "total_cogs",
+      "physical_expr": "",
+      "sql_expr": "null",
+      "caption": "Total COGS",
+      "display_name": "Total COGS",
+      "description": "[sql_fallback]  = SUMX ( FILTER ( 'Sales', 'Sales'[Is Return] = 0 ), 'Sales'[Sales Quantity] * RELATED ( 'Products'[Unit Cost] ) ) // Cost of Goods Sold (COGS) for non-return transactions",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 3,
+      "visible": true,
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/total_cogs.sql"
+    },
+    {
+      "id": "Total Revenue",
+      "fact_table": "default",
+      "malloy_name": "total_revenue",
+      "physical_expr": "",
+      "sql_expr": "null",
+      "caption": "Total Revenue",
+      "display_name": "Total Revenue",
+      "description": "[sql_fallback]  = CALCULATE ( SUM ( 'Sales'[Net Sales (Revenue)] ), 'Sales'[Is Return] = 0 ) // Total revenue excluding returns",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 4,
+      "visible": true,
+      "measure_group_name": "SALES",
+      "sql_fallback_file": "sql_fallback/total_revenue.sql"
+    }
+  ]
+}

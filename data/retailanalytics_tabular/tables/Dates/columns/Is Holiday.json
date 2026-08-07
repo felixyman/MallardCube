@@ -1,0 +1,7 @@
+{
+  "name": "Is Holiday",
+  "dataType": "int64",
+  "sourceColumn": "isholiday",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "fade6d8b-cf6b-4029-989e-5104777f04d5"
+}

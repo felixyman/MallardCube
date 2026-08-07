@@ -1,0 +1,7 @@
+{
+  "name": "Tax Rate %",
+  "dataType": "decimal",
+  "sourceColumn": "tax_rate",
+  "sourceProviderType": "decimal",
+  "lineageTag": "ae306e1a-7ab3-4802-ae3c-059d8c63620b"
+}

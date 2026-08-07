@@ -1,0 +1,13 @@
+{
+  "name": "Total COGS",
+  "expression": [
+    "",
+    "= SUMX (",
+    "    FILTER ( 'Sales', 'Sales'[Is Return] = 0 ),",
+    "    'Sales'[Sales Quantity] * RELATED ( 'Products'[Unit Cost] )",
+    ")",
+    "// Cost of Goods Sold (COGS) for non-return transactions"
+  ],
+  "formatString": "$ #,##0.00",
+  "lineageTag": "f8fb9eb4-278d-43b6-abc2-58a6d227273c"
+}

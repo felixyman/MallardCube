@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{discover_rowset_envelope, UUID_TYPE, xml_escape};
 use crate::proxy_project;
 
 const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -68,12 +68,12 @@ pub fn get_levels_response() -> String {
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>{}</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>{}</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-{:012}</LEVEL_GUID>
-            <LEVEL_CAPTION>{}</LEVEL_CAPTION>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{all_name}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{all_unique}</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{guid:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{all_name}</LEVEL_CAPTION>
             <LEVEL_NUMBER>0</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
             <LEVEL_TYPE>1</LEVEL_TYPE>
@@ -86,12 +86,11 @@ pub fn get_levels_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-            d.dimension_unique_name(),
-            d.hierarchy_unique_name(),
-            d.all_level_name,
-            d.all_level_unique_name(),
-            base_guid,
-            d.all_level_name,
+            dim_u = xml_escape(&d.dimension_unique_name()),
+            hier_u = xml_escape(&d.hierarchy_unique_name()),
+            all_name = xml_escape(&d.all_level_name),
+            all_unique = xml_escape(&d.all_level_unique_name()),
+            guid = base_guid,
             catalog = project.config.catalog,
             cube = project.config.cube,
         ));
@@ -101,32 +100,30 @@ pub fn get_levels_response() -> String {
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_NAME>{}</LEVEL_NAME>
-            <LEVEL_UNIQUE_NAME>{}</LEVEL_UNIQUE_NAME>
-            <LEVEL_GUID>00000000-0000-0000-0000-{:012}</LEVEL_GUID>
-            <LEVEL_CAPTION>{}</LEVEL_CAPTION>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{leaf_name}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{leaf_unique}</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{guid:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{leaf_name}</LEVEL_CAPTION>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
-            <LEVEL_CARDINALITY>{}</LEVEL_CARDINALITY>
+            <LEVEL_CARDINALITY>{cardinality}</LEVEL_CARDINALITY>
             <LEVEL_TYPE>0</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
             <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>{}</LEVEL_KEY_CARDINALITY>
+            <LEVEL_KEY_CARDINALITY>{cardinality}</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-            d.dimension_unique_name(),
-            d.hierarchy_unique_name(),
-            d.leaf_level_name,
-            d.leaf_level_unique_name(),
-            base_guid + 1,
-            d.leaf_level_name,
-            d.cardinality_hint,
-            d.cardinality_hint,
+            dim_u = xml_escape(&d.dimension_unique_name()),
+            hier_u = xml_escape(&d.hierarchy_unique_name()),
+            leaf_name = xml_escape(&d.leaf_level_name),
+            leaf_unique = xml_escape(&d.leaf_level_unique_name()),
+            guid = base_guid + 1,
+            cardinality = d.cardinality_hint,
             catalog = project.config.catalog,
             cube = project.config.cube,
         ));

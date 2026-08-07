@@ -1,0 +1,7 @@
+{
+  "name": "Loyalty Segment",
+  "dataType": "string",
+  "sourceColumn": "loyaltysegment",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "567fb7ba-893e-40f8-857a-8c753e4f014d"
+}

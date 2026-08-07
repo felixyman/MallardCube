@@ -1,0 +1,7 @@
+{
+  "name": "Store Rating",
+  "dataType": "decimal",
+  "sourceColumn": "storerating",
+  "sourceProviderType": "decimal",
+  "lineageTag": "a2cfad60-8029-444a-b2b1-25aa06e51a92"
+}

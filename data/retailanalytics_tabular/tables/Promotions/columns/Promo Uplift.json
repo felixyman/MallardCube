@@ -1,0 +1,7 @@
+{
+  "name": "Promo Uplift",
+  "dataType": "decimal",
+  "sourceColumn": "promoupliftfactor",
+  "sourceProviderType": "decimal",
+  "lineageTag": "1b0a8a89-b26a-4c5b-bd7e-2034d890ed1d"
+}

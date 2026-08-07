@@ -1,0 +1,10 @@
+{
+  "name": "Total Revenue",
+  "expression": [
+    "",
+    "= CALCULATE ( SUM ( 'Sales'[Net Sales (Revenue)] ), 'Sales'[Is Return] = 0 )",
+    "// Total revenue excluding returns"
+  ],
+  "formatString": "$ #,##0.00",
+  "lineageTag": "f60458dc-727c-467b-bc87-9558e680c8d9"
+}
