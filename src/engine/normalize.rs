@@ -3,7 +3,6 @@
 ///
 /// Two plans that would produce the same SQL/Malloy should produce
 /// the same key. Key format is human-readable and deterministic.
-
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
 
 /// Return a stable string key for a QueryPlan.
@@ -12,16 +11,16 @@ use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
 pub fn plan_key(plan: &QueryPlan) -> String {
     match plan {
         QueryPlan::Total { measure, filters } => {
-            format!("total|measure={}", measure)
-                + &filter_suffix(filters)
+            format!("total|measure={}", measure) + &filter_suffix(filters)
         }
 
-        QueryPlan::GroupBy { measure, group_by, filters } => {
-            format!(
-                "groupby|measure={}|dims={}",
-                measure,
-                group_by.join(","),
-            ) + &filter_suffix(filters)
+        QueryPlan::GroupBy {
+            measure,
+            group_by,
+            filters,
+        } => {
+            format!("groupby|measure={}|dims={}", measure, group_by.join(","),)
+                + &filter_suffix(filters)
         }
 
         QueryPlan::Count { dimension } => {
@@ -38,12 +37,12 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
     }
 
     // Sort filters by dimension key for determinism
-    let mut ordered: Vec<(&TypedDimensionFilter, &str)> = filters.iter()
-        .map(|f| (f, f.dimension.as_str()))
-        .collect();
+    let mut ordered: Vec<(&TypedDimensionFilter, &str)> =
+        filters.iter().map(|f| (f, f.dimension.as_str())).collect();
     ordered.sort_by_key(|(_, dk)| *dk);
 
-    let parts: Vec<String> = ordered.iter()
+    let parts: Vec<String> = ordered
+        .iter()
         .filter(|(f, _)| !f.members.is_empty())
         .map(|(f, dk)| {
             let mut members: Vec<&str> = f.members.iter().map(|s| s.as_str()).collect();
@@ -70,7 +69,10 @@ mod tests {
 
     #[test]
     fn total_no_filter() {
-        let plan = QueryPlan::Total { measure: "TotalSales".into(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![],
+        };
         assert_eq!(plan_key(&plan), "total|measure=TotalSales");
     }
 
@@ -84,7 +86,10 @@ mod tests {
                 members: vec!["North".into()],
             }],
         };
-        assert_eq!(plan_key(&plan), "total|measure=TotalSales|filters=Region=North");
+        assert_eq!(
+            plan_key(&plan),
+            "total|measure=TotalSales|filters=Region=North"
+        );
     }
 
     #[test]
@@ -94,7 +99,10 @@ mod tests {
             group_by: vec!["Produktkategori".into(), "Region".into()],
             filters: vec![],
         };
-        assert_eq!(plan_key(&plan), "groupby|measure=TotalSales|dims=Produktkategori,Region");
+        assert_eq!(
+            plan_key(&plan),
+            "groupby|measure=TotalSales|dims=Produktkategori,Region"
+        );
     }
 
     #[test]
@@ -159,7 +167,9 @@ mod tests {
 
     #[test]
     fn count_key() {
-        let plan = QueryPlan::Count { dimension: "Produktkategori".into() };
+        let plan = QueryPlan::Count {
+            dimension: "Produktkategori".into(),
+        };
         assert_eq!(plan_key(&plan), "count|dim=Produktkategori");
     }
 

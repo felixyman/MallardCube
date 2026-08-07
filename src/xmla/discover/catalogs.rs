@@ -1,5 +1,5 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
 use crate::proxy_project;
+use crate::response::{UUID_TYPE, discover_rowset_envelope};
 
 const CATALOG_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="DESCRIPTION" name="DESCRIPTION" type="xsd:string" minOccurs="0"/>

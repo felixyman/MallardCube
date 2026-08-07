@@ -1,3 +1,9 @@
+use crate::backend::{Backend, QueryBackend};
+use crate::engine::model::{
+    FallbackCapability, SemanticModel, TableAccess, UserContext, effective_model_permission,
+    effective_table_filter,
+};
+use crate::engine::sql::sql_for_query_plan_with_context;
 /// Backend-neutral query plan.
 ///
 /// Describes what to compute, not how to format the XML response.
@@ -5,11 +11,7 @@
 /// builders via `execute_plan`.
 ///
 /// Designed to be translatable to both SQL (current) and Malloy (future).
-
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
-use crate::backend::{Backend, QueryBackend};
-use crate::engine::model::{SemanticModel, FallbackCapability, UserContext, effective_model_permission, effective_table_filter, TableAccess};
-use crate::engine::sql::sql_for_query_plan_with_context;
 use crate::project::config::{ModelPermission, ProxyConfig};
 use crate::proxy_project;
 
@@ -83,13 +85,14 @@ pub enum QueryResult {
 // ---------------------------------------------------------------------------
 
 fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
-    source.iter().map(|f| {
-        TypedDimensionFilter {
+    source
+        .iter()
+        .map(|f| TypedDimensionFilter {
             dimension: f.dimension.clone(),
             members: f.members.clone(),
             time_flag: None,
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 /// Build filters for a plan, adding a time_flag filter if the selected
@@ -100,14 +103,14 @@ fn filters_with_time_flag(
     source_filters: &[TypedDimensionFilter],
 ) -> Vec<TypedDimensionFilter> {
     let mut result = compatible_filters(model, meas_id, source_filters);
-    if let Some(date_dim) = model.date_dim_for_measure(meas_id) {
-        if let Some(flag) = model.meas_def(meas_id).time_flag.as_ref() {
-            result.push(TypedDimensionFilter {
-                dimension: date_dim.dimension_id.clone(),
-                members: vec![],
-                time_flag: Some(flag.clone()),
-            });
-        }
+    if let Some(date_dim) = model.date_dim_for_measure(meas_id)
+        && let Some(flag) = model.meas_def(meas_id).time_flag.as_ref()
+    {
+        result.push(TypedDimensionFilter {
+            dimension: date_dim.dimension_id.clone(),
+            members: vec![],
+            time_flag: Some(flag.clone()),
+        });
     }
     result
 }
@@ -115,7 +118,8 @@ fn filters_with_time_flag(
 /// Resolve an MDX-axis string to a model dimension ID, falling back
 /// to `default_dim` when the string doesn't match any configured dimension.
 fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
-    model.lookup_dimension(s)
+    model
+        .lookup_dimension(s)
         .map(|d| d.id.clone())
         .unwrap_or(default)
 }
@@ -123,8 +127,13 @@ fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
 /// Return only the filters that are compatible with the selected measure.
 /// Unrelated dimension filters are silently ignored (matching SSAS behavior
 /// for unrelated dimensions).
-fn compatible_filters(model: &SemanticModel, meas_id: &str, filters: &[TypedDimensionFilter]) -> Vec<TypedDimensionFilter> {
-    filters.iter()
+fn compatible_filters(
+    model: &SemanticModel,
+    meas_id: &str,
+    filters: &[TypedDimensionFilter],
+) -> Vec<TypedDimensionFilter> {
+    filters
+        .iter()
         .filter(|f| model.dim_is_compatible_with_measure(&f.dimension, meas_id))
         .cloned()
         .collect()
@@ -145,7 +154,12 @@ pub fn plan_from_semantic(query: &SemanticQuery) -> QueryPlan {
 /// Legacy wrapper: passes admin_default() UserContext, uses global project config.
 pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
     let project = proxy_project::project();
-    plan_from_semantic_with_model_and_context(query, model, &UserContext::admin_default(), &project.config)
+    plan_from_semantic_with_model_and_context(
+        query,
+        model,
+        &UserContext::admin_default(),
+        &project.config,
+    )
 }
 
 /// Full variant: applies role-based gating on top of plan construction.
@@ -190,44 +204,54 @@ pub fn plan_from_semantic_with_model_and_context(
 fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
     // Resolve measure: use the explicitly requested one, or pick a
     // default that is compatible with the axis dimensions' fact tables.
-    let meas: MeasId = query.measure.as_deref()
-        .and_then(|name| model.measures.iter().find(|m| m.caption == name).map(|m| m.id.clone()))
+    let meas: MeasId = query
+        .measure
+        .as_deref()
+        .and_then(|name| {
+            model
+                .measures
+                .iter()
+                .find(|m| m.caption == name)
+                .map(|m| m.id.clone())
+        })
         .or_else(|| {
             for dim_id in &query.axis_dimensions {
-                if let Some(dim) = model.dim_def_opt(dim_id) {
-                    if let Some(ref dim_table) = dim.table_name {
-                        if let Some(id) = model.default_measure_for_table(dim_table) {
-                            return Some(id);
-                        }
-                    }
+                if let Some(dim) = model.dim_def_opt(dim_id)
+                    && let Some(ref dim_table) = dim.table_name
+                    && let Some(id) = model.default_measure_for_table(dim_table)
+                {
+                    return Some(id);
                 }
             }
             None
         })
         .or_else(|| model.default_measure_id())
         .unwrap_or_else(|| "TotalSales".into());
-    let default_dim = model.default_dimension_id()
+    let default_dim = model
+        .default_dimension_id()
         .unwrap_or_else(|| "Produktkategori".into());
 
-    let dim = query.axis_dimensions.first()
+    let dim = query
+        .axis_dimensions
+        .first()
         .map(|s| s.as_str())
         .unwrap_or("");
 
     match query.kind {
-        SemanticQueryKind::ChildrenCountForAll
-        | SemanticQueryKind::ChildrenCountLeafProduct => {
-            let d = if dim.is_empty() { default_dim } else { resolve_dim(dim, model, default_dim.clone()) };
+        SemanticQueryKind::ChildrenCountForAll | SemanticQueryKind::ChildrenCountLeafProduct => {
+            let d = if dim.is_empty() {
+                default_dim
+            } else {
+                resolve_dim(dim, model, default_dim.clone())
+            };
             QueryPlan::Count { dimension: d }
         }
 
         SemanticQueryKind::ChildrenCountMeasures
         | SemanticQueryKind::MeasureChildrenEmpty
-        | SemanticQueryKind::LeafChildrenEmpty => {
-            QueryPlan::Empty
-        }
+        | SemanticQueryKind::LeafChildrenEmpty => QueryPlan::Empty,
 
-        SemanticQueryKind::SlicerAllAndMeasure
-        | SemanticQueryKind::SlicerOnly => {
+        SemanticQueryKind::SlicerAllAndMeasure | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {
                 measure: meas.clone(),
                 filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
@@ -239,11 +263,17 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         | SemanticQueryKind::MeasureByCategory
         | SemanticQueryKind::DrilldownMemberProbe => {
             let group_by: Vec<DimId> = if query.axis_dimensions.len() >= 2 {
-                query.axis_dimensions.iter()
+                query
+                    .axis_dimensions
+                    .iter()
                     .map(|a| resolve_dim(a, model, default_dim.clone()))
                     .collect()
             } else {
-                let d = if dim.is_empty() { default_dim } else { resolve_dim(dim, model, default_dim) };
+                let d = if dim.is_empty() {
+                    default_dim
+                } else {
+                    resolve_dim(dim, model, default_dim)
+                };
                 vec![d]
             };
             QueryPlan::GroupBy {
@@ -253,12 +283,10 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
             }
         }
 
-        SemanticQueryKind::AllLevelMembers => {
-            QueryPlan::Total {
-                measure: meas,
-                filters: vec![],
-            }
-        }
+        SemanticQueryKind::AllLevelMembers => QueryPlan::Total {
+            measure: meas,
+            filters: vec![],
+        },
     }
 }
 
@@ -286,9 +314,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
         return QueryResult::Empty;
     }
     match plan {
-        QueryPlan::Total { .. } => {
-            QueryResult::Scalar(backend.query_scalar(sql))
-        }
+        QueryPlan::Total { .. } => QueryResult::Scalar(backend.query_scalar(sql)),
         QueryPlan::GroupBy { group_by, .. } => {
             if group_by.len() >= 2 {
                 QueryResult::Pairs(backend.query_pairs(sql))
@@ -296,9 +322,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
                 QueryResult::Grouped(backend.query_grouped_1d(sql))
             }
         }
-        QueryPlan::Count { .. } => {
-            QueryResult::Count(backend.query_count(sql))
-        }
+        QueryPlan::Count { .. } => QueryResult::Count(backend.query_count(sql)),
         QueryPlan::Empty => QueryResult::Empty,
     }
 }
@@ -320,13 +344,19 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => {
             match model.classify_fallback(measure) {
                 Some(FallbackCapability::Stub) => {
-                    eprintln!("plan: measure '{}' fallback SQL is a TODO stub — returning empty", measure);
+                    eprintln!(
+                        "plan: measure '{}' fallback SQL is a TODO stub — returning empty",
+                        measure
+                    );
                     Some(QueryResult::Empty)
                 }
                 Some(FallbackCapability::ScalarOnly) => match plan {
                     QueryPlan::Total { .. } => None,
                     QueryPlan::GroupBy { .. } => {
-                        eprintln!("plan: measure '{}' fallback SQL is scalar-only, cannot satisfy GroupBy — returning empty", measure);
+                        eprintln!(
+                            "plan: measure '{}' fallback SQL is scalar-only, cannot satisfy GroupBy — returning empty",
+                            measure
+                        );
                         Some(QueryResult::Empty)
                     }
                     _ => Some(QueryResult::Empty),
@@ -336,13 +366,18 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
                         if group_by == dims {
                             None
                         } else {
-                            eprintln!("plan: measure '{}' fallback SQL only supports grouping by {:?}, got {:?} — returning empty",
-                                measure, dims, group_by);
+                            eprintln!(
+                                "plan: measure '{}' fallback SQL only supports grouping by {:?}, got {:?} — returning empty",
+                                measure, dims, group_by
+                            );
                             Some(QueryResult::Empty)
                         }
                     }
                     _ => {
-                        eprintln!("plan: measure '{}' fallback SQL is grouped-specific, cannot satisfy non-GroupBy plan — returning empty", measure);
+                        eprintln!(
+                            "plan: measure '{}' fallback SQL is grouped-specific, cannot satisfy non-GroupBy plan — returning empty",
+                            measure
+                        );
                         Some(QueryResult::Empty)
                     }
                 },
@@ -402,5 +437,11 @@ pub fn execute_plan_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
 ) -> QueryResult {
     // Legacy wrapper: uses admin-default user context (no role filtering).
-    execute_plan_with_backend_and_context(plan, model, backend, &UserContext::admin_default(), &proxy_project::project().config)
+    execute_plan_with_backend_and_context(
+        plan,
+        model,
+        backend,
+        &UserContext::admin_default(),
+        &proxy_project::project().config,
+    )
 }

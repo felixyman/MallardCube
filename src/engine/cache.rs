@@ -1,17 +1,19 @@
+use crate::engine::malloy::malloy_for_query_plan;
+use crate::engine::malloy_compiler::{MalloyCompileError, MalloyCompiler};
+use crate::engine::model::SemanticModel;
+use crate::engine::normalize::plan_key;
+use crate::engine::plan::QueryPlan;
+use crate::engine::sql::sql_for_query_plan;
 /// Text caching for SQL and Malloy emission.
 ///
 /// Keyed by normalized PlanKey from `engine/normalize`.
 /// Caches only deterministic text, not runtime results.
 /// Thread-safe via Mutex, designed for a single process.
-
 use std::collections::HashMap;
-use std::sync::{Mutex, atomic::{AtomicU64, Ordering}};
-use crate::engine::plan::QueryPlan;
-use crate::engine::model::SemanticModel;
-use crate::engine::normalize::plan_key;
-use crate::engine::sql::sql_for_query_plan;
-use crate::engine::malloy::malloy_for_query_plan;
-use crate::engine::malloy_compiler::{MalloyCompiler, MalloyCompileError};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 pub struct PlanCache {
     sql: Mutex<HashMap<String, String>>,
@@ -95,7 +97,11 @@ impl PlanCache {
         let hits = self.hits.load(Ordering::Relaxed) as f64;
         let misses = self.misses.load(Ordering::Relaxed) as f64;
         let total = hits + misses;
-        if total == 0.0 { 0.0 } else { hits / total * 100.0 }
+        if total == 0.0 {
+            0.0
+        } else {
+            hits / total * 100.0
+        }
     }
 }
 
@@ -112,14 +118,17 @@ impl Default for PlanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::plan::TypedDimensionFilter;
     use crate::engine::model::default_model;
+    use crate::engine::plan::TypedDimensionFilter;
 
     #[test]
     fn sql_is_cached_same_key() {
         let cache = PlanCache::new();
         let model = default_model();
-        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".to_string(),
+            filters: vec![],
+        };
         let a = cache.get_or_generate_sql(&plan, &model);
         let b = cache.get_or_generate_sql(&plan, &model);
         assert_eq!(a, b, "same plan should return same cached SQL");
@@ -146,15 +155,31 @@ mod tests {
         let a = QueryPlan::Total {
             measure: "TotalSales".to_string(),
             filters: vec![
-                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] , time_flag: None },
-                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] , time_flag: None },
+                TypedDimensionFilter {
+                    dimension: "Region".to_string(),
+                    members: vec!["North".into()],
+                    time_flag: None,
+                },
+                TypedDimensionFilter {
+                    dimension: "Produktkategori".to_string(),
+                    members: vec!["Kategori A".into()],
+                    time_flag: None,
+                },
             ],
         };
         let b = QueryPlan::Total {
             measure: "TotalSales".to_string(),
             filters: vec![
-                TypedDimensionFilter { dimension: "Produktkategori".to_string(), members: vec!["Kategori A".into()] , time_flag: None },
-                TypedDimensionFilter { dimension: "Region".to_string(), members: vec!["North".into()] , time_flag: None },
+                TypedDimensionFilter {
+                    dimension: "Produktkategori".to_string(),
+                    members: vec!["Kategori A".into()],
+                    time_flag: None,
+                },
+                TypedDimensionFilter {
+                    dimension: "Region".to_string(),
+                    members: vec!["North".into()],
+                    time_flag: None,
+                },
             ],
         };
         let sql_a = cache.get_or_generate_sql(&a, &model);
@@ -167,7 +192,10 @@ mod tests {
         use crate::engine::malloy_compiler::NullCompiler;
         let cache = PlanCache::new();
         let model = default_model();
-        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".to_string(),
+            filters: vec![],
+        };
         let compiler = NullCompiler;
         let (a, hit_a, _ms_a) = cache.get_or_compile(&plan, &model, &compiler).unwrap();
         assert!(!hit_a, "first call should be a miss");

@@ -42,10 +42,7 @@ pub fn parse_model(path: &str) -> (TabularModel, Vec<String>) {
         }
     };
 
-    let name = root["name"]
-        .as_str()
-        .unwrap_or("SemanticModel")
-        .to_string();
+    let name = root["name"].as_str().unwrap_or("SemanticModel").to_string();
     let compat_level = root["compatibilityLevel"].as_i64().unwrap_or(0);
 
     // Warn about unsupported compatibility levels
@@ -63,18 +60,18 @@ pub fn parse_model(path: &str) -> (TabularModel, Vec<String>) {
     let roles = parse_roles(model);
 
     // Warn about shared expressions (not supported)
-    if let Some(exprs) = model["expressions"].as_array() {
-        if !exprs.is_empty() {
-            let names: Vec<String> = exprs
-                .iter()
-                .filter_map(|e| e["name"].as_str().map(|s| s.to_string()))
-                .collect();
-            warnings.push(format!(
-                "model.expressions contains {} shared expression(s): {} — NOT supported",
-                names.len(),
-                names.join(", ")
-            ));
-        }
+    if let Some(exprs) = model["expressions"].as_array()
+        && !exprs.is_empty()
+    {
+        let names: Vec<String> = exprs
+            .iter()
+            .filter_map(|e| e["name"].as_str().map(|s| s.to_string()))
+            .collect();
+        warnings.push(format!(
+            "model.expressions contains {} shared expression(s): {} — NOT supported",
+            names.len(),
+            names.join(", ")
+        ));
     }
 
     (
@@ -96,15 +93,9 @@ fn parse_tables(model: &serde_json::Value) -> Vec<TableInfo> {
         return tables;
     };
     for table_val in arr {
-        let tname = table_val["name"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let tname = table_val["name"].as_str().unwrap_or("").to_string();
         let ssas_name = tname.clone();
-        let description = table_val["description"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let description = table_val["description"].as_str().unwrap_or("").to_string();
 
         let columns = parse_columns(table_val);
         let measures = parse_measures(table_val);
@@ -131,14 +122,8 @@ fn parse_columns(table_val: &serde_json::Value) -> Vec<ColumnInfo> {
         return cols;
     };
     for col_val in arr {
-        let name = col_val["name"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let dt = col_val["dataType"]
-            .as_str()
-            .unwrap_or("string")
-            .to_string();
+        let name = col_val["name"].as_str().unwrap_or("").to_string();
+        let dt = col_val["dataType"].as_str().unwrap_or("string").to_string();
         let sc = col_val["sourceColumn"]
             .as_str()
             .unwrap_or(&name)
@@ -161,15 +146,9 @@ fn parse_measures(table_val: &serde_json::Value) -> Vec<MeasureInfo> {
         return measures;
     };
     for meas_val in arr {
-        let name = meas_val["name"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let name = meas_val["name"].as_str().unwrap_or("").to_string();
         let expr = flatten_json_array(&meas_val["expression"]);
-        let folder = meas_val["displayFolder"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let folder = meas_val["displayFolder"].as_str().unwrap_or("").to_string();
         let classification = classify_dax(&expr);
         measures.push(MeasureInfo {
             name,
@@ -188,10 +167,7 @@ fn parse_partitions(table_val: &serde_json::Value) -> Vec<PartitionInfo> {
         return parts;
     };
     for part_val in arr {
-        let name = part_val["name"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let name = part_val["name"].as_str().unwrap_or("").to_string();
 
         // Check source.type first, then fallback to sourceType at top level
         let st = part_val["source"]["type"]
@@ -223,13 +199,13 @@ fn parse_partitions(table_val: &serde_json::Value) -> Vec<PartitionInfo> {
         let mode = part_val["mode"].as_str().map(|s| s.to_string());
 
         // Warn about DirectQuery or dual mode
-        if let Some(ref mode_val) = mode {
-            if mode_val == "directQuery" || mode_val == "dual" {
-                eprintln!(
-                    "WARNING: partition '{}' has mode '{}' — cannot be loaded into DuckDB",
-                    name, mode_val
-                );
-            }
+        if let Some(ref mode_val) = mode
+            && (mode_val == "directQuery" || mode_val == "dual")
+        {
+            eprintln!(
+                "WARNING: partition '{}' has mode '{}' — cannot be loaded into DuckDB",
+                name, mode_val
+            );
         }
 
         parts.push(PartitionInfo {
@@ -266,22 +242,10 @@ fn parse_relationships(model: &serde_json::Value) -> Vec<RelInfo> {
     };
     for rel_val in arr {
         rels.push(RelInfo {
-            from_table: rel_val["fromTable"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            from_column: rel_val["fromColumn"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            to_table: rel_val["toTable"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            to_column: rel_val["toColumn"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            from_table: rel_val["fromTable"].as_str().unwrap_or("").to_string(),
+            from_column: rel_val["fromColumn"].as_str().unwrap_or("").to_string(),
+            to_table: rel_val["toTable"].as_str().unwrap_or("").to_string(),
+            to_column: rel_val["toColumn"].as_str().unwrap_or("").to_string(),
         });
     }
     rels.sort_by(|a, b| {
@@ -344,8 +308,8 @@ fn parse_roles(model: &serde_json::Value) -> Vec<RoleInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::parse_folder;
+    use super::*;
 
     #[test]
     fn test_parse_retailanalytics_bim() {
@@ -363,7 +327,15 @@ mod tests {
         let table_names: Vec<&str> = model.tables.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
             table_names,
-            vec!["Customers", "DAX", "Dates", "Products", "Promotions", "Sales", "Stores"]
+            vec![
+                "Customers",
+                "DAX",
+                "Dates",
+                "Products",
+                "Promotions",
+                "Sales",
+                "Stores"
+            ]
         );
 
         // Verify Sales table is a fact table with 22 columns, 0 measures, 1 partition
@@ -371,7 +343,11 @@ mod tests {
         assert_eq!(sales.columns.len(), 22, "Sales should have 22 columns");
         assert_eq!(sales.measures.len(), 0, "Sales should have 0 measures");
         assert_eq!(sales.partitions.len(), 1, "Sales should have 1 partition");
-        assert_eq!(sales.hierarchies.len(), 0, "Sales should have 0 hierarchies");
+        assert_eq!(
+            sales.hierarchies.len(),
+            0,
+            "Sales should have 0 hierarchies"
+        );
         assert_eq!(sales.ssas_name, "Sales");
         assert_eq!(sales.partitions[0].source_type, "query");
         assert!(!sales.partitions[0].is_m);
@@ -384,23 +360,50 @@ mod tests {
         let measure_names: Vec<&str> = dax.measures.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(
             measure_names,
-            vec!["Gross Margin %", "Gross Profit", "Total COGS", "Total Revenue"]
+            vec![
+                "Gross Margin %",
+                "Gross Profit",
+                "Total COGS",
+                "Total Revenue"
+            ]
         );
 
         // Verify measure expressions
-        let rev = dax.measures.iter().find(|m| m.name == "Total Revenue").unwrap();
-        assert!(rev.expression.contains("CALCULATE"), "Total Revenue should contain CALCULATE");
+        let rev = dax
+            .measures
+            .iter()
+            .find(|m| m.name == "Total Revenue")
+            .unwrap();
+        assert!(
+            rev.expression.contains("CALCULATE"),
+            "Total Revenue should contain CALCULATE"
+        );
         // CALCULATE(SUM(...), filter_without_FILTER) classifies as "simple"
         // (the converter will downgrade to sql_fallback when SQL hints are unavailable)
-        assert_eq!(rev.classification, "simple", "CALCULATE with simple filter classifies as simple");
+        assert_eq!(
+            rev.classification, "simple",
+            "CALCULATE with simple filter classifies as simple"
+        );
 
-        let cogs = dax.measures.iter().find(|m| m.name == "Total COGS").unwrap();
+        let cogs = dax
+            .measures
+            .iter()
+            .find(|m| m.name == "Total COGS")
+            .unwrap();
         assert_eq!(cogs.classification, "sql_fallback");
 
-        let gp = dax.measures.iter().find(|m| m.name == "Gross Profit").unwrap();
+        let gp = dax
+            .measures
+            .iter()
+            .find(|m| m.name == "Gross Profit")
+            .unwrap();
         assert_eq!(gp.classification, "sql_fallback");
 
-        let gm = dax.measures.iter().find(|m| m.name == "Gross Margin %").unwrap();
+        let gm = dax
+            .measures
+            .iter()
+            .find(|m| m.name == "Gross Margin %")
+            .unwrap();
         assert_eq!(gm.classification, "simple");
 
         // Verify Dates table
@@ -412,28 +415,59 @@ mod tests {
 
         // Verify Products table
         let products = model.tables.iter().find(|t| t.name == "Products").unwrap();
-        assert_eq!(products.columns.len(), 24, "Products should have 24 columns");
-        assert_eq!(products.partitions.len(), 1, "Products should have 1 partition");
+        assert_eq!(
+            products.columns.len(),
+            24,
+            "Products should have 24 columns"
+        );
+        assert_eq!(
+            products.partitions.len(),
+            1,
+            "Products should have 1 partition"
+        );
 
         // Verify Customers table
         let customers = model.tables.iter().find(|t| t.name == "Customers").unwrap();
-        assert_eq!(customers.columns.len(), 23, "Customers should have 23 columns");
+        assert_eq!(
+            customers.columns.len(),
+            23,
+            "Customers should have 23 columns"
+        );
 
         // Verify Stores table
         let stores = model.tables.iter().find(|t| t.name == "Stores").unwrap();
         assert_eq!(stores.columns.len(), 17, "Stores should have 17 columns");
 
         // Verify Promotions table
-        let promotions = model.tables.iter().find(|t| t.name == "Promotions").unwrap();
-        assert_eq!(promotions.columns.len(), 17, "Promotions should have 17 columns");
+        let promotions = model
+            .tables
+            .iter()
+            .find(|t| t.name == "Promotions")
+            .unwrap();
+        assert_eq!(
+            promotions.columns.len(),
+            17,
+            "Promotions should have 17 columns"
+        );
 
         // Check relationships
         assert_eq!(model.relationships.len(), 5, "expected 5 relationships");
         // All relationships are from Sales → dimension tables
-        let rel_from = model.relationships.iter().map(|r| r.from_table.as_str()).collect::<Vec<_>>();
-        assert!(rel_from.iter().all(|&r| r == "Sales"), "all relationships should originate from Sales");
+        let rel_from = model
+            .relationships
+            .iter()
+            .map(|r| r.from_table.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            rel_from.iter().all(|&r| r == "Sales"),
+            "all relationships should originate from Sales"
+        );
 
-        let rel_to: Vec<&str> = model.relationships.iter().map(|r| r.to_table.as_str()).collect();
+        let rel_to: Vec<&str> = model
+            .relationships
+            .iter()
+            .map(|r| r.to_table.as_str())
+            .collect();
         assert!(rel_to.contains(&"Customers"));
         assert!(rel_to.contains(&"Products"));
         assert!(rel_to.contains(&"Stores"));
@@ -497,7 +531,10 @@ mod tests {
     #[test]
     fn test_parse_bim_with_invalid_path() {
         let (model, warnings) = parse_model("data/nonexistent.bim");
-        assert!(!warnings.is_empty(), "should have warnings for missing file");
+        assert!(
+            !warnings.is_empty(),
+            "should have warnings for missing file"
+        );
         assert_eq!(model.name, ""); // empty default name on failure
     }
 
@@ -508,18 +545,28 @@ mod tests {
 
         // Same model name and compatibility level
         assert_eq!(folder_model.name, bim_model.name);
-        assert_eq!(folder_model.compatibility_level, bim_model.compatibility_level);
+        assert_eq!(
+            folder_model.compatibility_level,
+            bim_model.compatibility_level
+        );
 
         // Same number of tables
         assert_eq!(folder_model.tables.len(), bim_model.tables.len());
 
         // Same table names (both sorted alphabetically)
-        let folder_names: Vec<&str> = folder_model.tables.iter().map(|t| t.name.as_str()).collect();
+        let folder_names: Vec<&str> = folder_model
+            .tables
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
         let bim_names: Vec<&str> = bim_model.tables.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(folder_names, bim_names);
 
         // Same number of relationships
-        assert_eq!(folder_model.relationships.len(), bim_model.relationships.len());
+        assert_eq!(
+            folder_model.relationships.len(),
+            bim_model.relationships.len()
+        );
 
         // Same number of roles
         assert_eq!(folder_model.roles.len(), bim_model.roles.len());
@@ -527,9 +574,24 @@ mod tests {
         // Per-table structural checks
         for (ft, bt) in folder_model.tables.iter().zip(bim_model.tables.iter()) {
             assert_eq!(ft.name, bt.name, "table name mismatch");
-            assert_eq!(ft.columns.len(), bt.columns.len(), "column count mismatch for {}", ft.name);
-            assert_eq!(ft.measures.len(), bt.measures.len(), "measure count mismatch for {}", ft.name);
-            assert_eq!(ft.hierarchies.len(), bt.hierarchies.len(), "hierarchy count mismatch for {}", ft.name);
+            assert_eq!(
+                ft.columns.len(),
+                bt.columns.len(),
+                "column count mismatch for {}",
+                ft.name
+            );
+            assert_eq!(
+                ft.measures.len(),
+                bt.measures.len(),
+                "measure count mismatch for {}",
+                ft.name
+            );
+            assert_eq!(
+                ft.hierarchies.len(),
+                bt.hierarchies.len(),
+                "hierarchy count mismatch for {}",
+                ft.name
+            );
 
             // Check measure names match
             let fm_names: Vec<&str> = ft.measures.iter().map(|m| m.name.as_str()).collect();
@@ -538,8 +600,11 @@ mod tests {
 
             // Check measure classifications match
             for (fm, bm) in ft.measures.iter().zip(bt.measures.iter()) {
-                assert_eq!(fm.classification, bm.classification,
-                    "classification mismatch for measure {} in table {}", fm.name, ft.name);
+                assert_eq!(
+                    fm.classification, bm.classification,
+                    "classification mismatch for measure {} in table {}",
+                    fm.name, ft.name
+                );
             }
 
             // Check column names match
@@ -549,28 +614,55 @@ mod tests {
         }
 
         // Check relationship endpoints match (sorted)
-        let folder_rels: Vec<_> = folder_model.relationships.iter()
-            .map(|r| (r.from_table.as_str(), r.from_column.as_str(), r.to_table.as_str(), r.to_column.as_str()))
+        let folder_rels: Vec<_> = folder_model
+            .relationships
+            .iter()
+            .map(|r| {
+                (
+                    r.from_table.as_str(),
+                    r.from_column.as_str(),
+                    r.to_table.as_str(),
+                    r.to_column.as_str(),
+                )
+            })
             .collect();
-        let bim_rels: Vec<_> = bim_model.relationships.iter()
-            .map(|r| (r.from_table.as_str(), r.from_column.as_str(), r.to_table.as_str(), r.to_column.as_str()))
+        let bim_rels: Vec<_> = bim_model
+            .relationships
+            .iter()
+            .map(|r| {
+                (
+                    r.from_table.as_str(),
+                    r.from_column.as_str(),
+                    r.to_table.as_str(),
+                    r.to_column.as_str(),
+                )
+            })
             .collect();
         assert_eq!(folder_rels, bim_rels, "relationships mismatch");
     }
 
     #[test]
     fn test_format_detection() {
-        use super::super::tabular_model::{detect_format, TabularFormat};
+        use super::super::tabular_model::{TabularFormat, detect_format};
         use std::path::Path;
 
         // BIM file detection
-        assert_eq!(detect_format(Path::new("data/retailanalytics.bim")), Some(TabularFormat::Bim));
+        assert_eq!(
+            detect_format(Path::new("data/retailanalytics.bim")),
+            Some(TabularFormat::Bim)
+        );
 
         // TMDL directory detection
-        assert_eq!(detect_format(Path::new("data/retailanalytics_tmdl")), Some(TabularFormat::Tmdl));
+        assert_eq!(
+            detect_format(Path::new("data/retailanalytics_tmdl")),
+            Some(TabularFormat::Tmdl)
+        );
 
         // Folder format detection
-        assert_eq!(detect_format(Path::new("data/retailanalytics_tabular")), Some(TabularFormat::Folder));
+        assert_eq!(
+            detect_format(Path::new("data/retailanalytics_tabular")),
+            Some(TabularFormat::Folder)
+        );
 
         // Non-existent path
         assert_eq!(detect_format(Path::new("data/nonexistent_path")), None);

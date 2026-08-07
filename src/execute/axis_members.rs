@@ -1,12 +1,11 @@
+use crate::backend::QueryBackend;
 /// Dimension/member/cell/slicer helpers for cellset responses.
 ///
 /// Provides member constructors, hierarchy builders, axis assembly helpers,
-/// cell constructors, and the `full_slicer_axis` builder.
+/// and cell constructors.
 /// Consumed by `execute_builders` for all cellset response construction.
-
 use crate::cellset;
-use crate::backend::QueryBackend;
-use crate::mdx_semantic::{includes_prop, DimensionFilter, SemanticQuery};
+use crate::mdx_semantic::{DimensionFilter, SemanticQuery, includes_prop};
 use crate::proxy_project;
 
 const MEASURES_HIER: &str = "[Measures]";
@@ -188,17 +187,22 @@ fn leaf_members_from_dim(
     names: &[String],
     requested: &[String],
 ) -> Vec<cellset::MemberConfig> {
-    names.iter()
+    names
+        .iter()
         .map(|name| leaf_member_for_dim(dim, name, requested))
         .collect()
 }
 
 fn default_measure() -> &'static crate::engine::model::MeasureDef {
     let project = proxy_project::project();
-    let id = project
-        .model
-        .default_measure_id()
-        .unwrap_or_else(|| project.model.measures.first().map(|m| m.id.clone()).unwrap_or_default());
+    let id = project.model.default_measure_id().unwrap_or_else(|| {
+        project
+            .model
+            .measures
+            .first()
+            .map(|m| m.id.clone())
+            .unwrap_or_default()
+    });
     project.model.meas_def(&id)
 }
 
@@ -208,16 +212,23 @@ fn measure_by_id(measure_id: &str) -> &crate::engine::model::MeasureDef {
 
 pub(crate) fn measure_id_for_query(query: &SemanticQuery) -> String {
     let project = proxy_project::project();
-    query.measure.as_deref()
+    query
+        .measure
+        .as_deref()
         .and_then(|name| {
-            project.model.measures.iter().find(|m| {
-                m.id == name || m.caption == name || m.display_name == name
-            })
+            project
+                .model
+                .measures
+                .iter()
+                .find(|m| m.id == name || m.caption == name || m.display_name == name)
         })
         .map(|m| m.id.clone())
         .or_else(|| project.model.default_measure_id())
         .unwrap_or_else(|| {
-            project.model.measures.first()
+            project
+                .model
+                .measures
+                .first()
                 .map(|m| m.id.clone())
                 .unwrap_or_default()
         })
@@ -225,20 +236,28 @@ pub(crate) fn measure_id_for_query(query: &SemanticQuery) -> String {
 
 // ---- cell constructors ----
 
-pub(crate) fn measurement_cell(ordinal: u32, value: f64) -> cellset::CellConfig {
-    measurement_cell_for_measure(ordinal, value, default_measure())
-}
-
-pub(crate) fn measurement_cell_for(ordinal: u32, value: f64, measure_id: &str) -> cellset::CellConfig {
+pub(crate) fn measurement_cell_for(
+    ordinal: u32,
+    value: f64,
+    measure_id: &str,
+) -> cellset::CellConfig {
     measurement_cell_for_measure(ordinal, value, measure_by_id(measure_id))
 }
 
-pub(crate) fn measurement_cell_for_query(query: &SemanticQuery, ordinal: u32, value: f64) -> cellset::CellConfig {
+pub(crate) fn measurement_cell_for_query(
+    query: &SemanticQuery,
+    ordinal: u32,
+    value: f64,
+) -> cellset::CellConfig {
     let measure_id = measure_id_for_query(query);
     measurement_cell_for(ordinal, value, &measure_id)
 }
 
-fn measurement_cell_for_measure(ordinal: u32, value: f64, m: &crate::engine::model::MeasureDef) -> cellset::CellConfig {
+fn measurement_cell_for_measure(
+    ordinal: u32,
+    value: f64,
+    m: &crate::engine::model::MeasureDef,
+) -> cellset::CellConfig {
     let fmt = if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
@@ -299,10 +318,14 @@ pub(crate) fn cchildren_member() -> cellset::MemberConfig {
 
 // ---- axis helpers ----
 
-pub(crate) fn tuples_from_members(members: Vec<cellset::MemberConfig>) -> Vec<cellset::TupleConfig> {
+pub(crate) fn tuples_from_members(
+    members: Vec<cellset::MemberConfig>,
+) -> Vec<cellset::TupleConfig> {
     members
         .into_iter()
-        .map(|member| cellset::TupleConfig { members: vec![member] })
+        .map(|member| cellset::TupleConfig {
+            members: vec![member],
+        })
         .collect()
 }
 
@@ -345,16 +368,6 @@ pub(crate) fn empty_slicer_axis() -> cellset::AxisConfig {
     }
 }
 
-pub(crate) fn measures_axis() -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: "Axis0".into(),
-        hierarchies: vec![measures_hierarchy()],
-        tuples: vec![cellset::TupleConfig {
-            members: vec![measures_total_member()],
-        }],
-    }
-}
-
 pub(crate) fn measures_axis_for_query(query: &SemanticQuery) -> cellset::AxisConfig {
     cellset::AxisConfig {
         name: "Axis0".into(),
@@ -380,7 +393,9 @@ pub(crate) fn single_member_axis(
     cellset::AxisConfig {
         name: name.into(),
         hierarchies: vec![hierarchy],
-        tuples: vec![cellset::TupleConfig { members: vec![member] }],
+        tuples: vec![cellset::TupleConfig {
+            members: vec![member],
+        }],
     }
 }
 
@@ -396,7 +411,10 @@ pub(crate) fn member_list_axis(
     }
 }
 
-pub(crate) fn empty_member_list_axis(name: &str, hierarchy: cellset::HierarchyConfig) -> cellset::AxisConfig {
+pub(crate) fn empty_member_list_axis(
+    name: &str,
+    hierarchy: cellset::HierarchyConfig,
+) -> cellset::AxisConfig {
     cellset::AxisConfig {
         name: name.into(),
         hierarchies: vec![hierarchy],
@@ -416,7 +434,11 @@ pub(crate) fn row_dim(query: &SemanticQuery) -> &str {
     }
 }
 
-pub(crate) fn leaf_member_for(dim: &str, name: &str, requested: &[String]) -> cellset::MemberConfig {
+pub(crate) fn leaf_member_for(
+    dim: &str,
+    name: &str,
+    requested: &[String],
+) -> cellset::MemberConfig {
     match dim_def(dim) {
         Some(d) => leaf_member_for_dim(d, name, requested),
         None => unknown_dim_member(dim, name),
@@ -434,10 +456,6 @@ pub(crate) fn all_member_for_with_backend<B: QueryBackend + ?Sized>(
     }
 }
 
-pub(crate) fn all_member_for(dim: &str, requested: &[String]) -> cellset::MemberConfig {
-    all_member_for_with_backend(dim, requested, crate::backend::Backend::get())
-}
-
 pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::HierarchyConfig {
     match dim_def(dim) {
         Some(d) => hierarchy_for_dim(d, requested),
@@ -448,7 +466,11 @@ pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::Hierarc
     }
 }
 
-pub(crate) fn leaf_members_from(dim: &str, names: &[String], requested: &[String]) -> Vec<cellset::MemberConfig> {
+pub(crate) fn leaf_members_from(
+    dim: &str,
+    names: &[String],
+    requested: &[String],
+) -> Vec<cellset::MemberConfig> {
     match dim_def(dim) {
         Some(d) => leaf_members_from_dim(d, names, requested),
         None => names.iter().map(|n| unknown_dim_member(dim, n)).collect(),
@@ -475,10 +497,6 @@ pub(crate) fn filter_members_for(dim: &str, filters: &[DimensionFilter]) -> Vec<
         .find(|f| f.dimension == dim)
         .map(|f| f.members.clone())
         .unwrap_or_default()
-}
-
-pub(crate) fn full_slicer_axis(query: &SemanticQuery) -> cellset::AxisConfig {
-    full_slicer_axis_with_backend(query, crate::backend::Backend::get())
 }
 
 pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(

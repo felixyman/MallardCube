@@ -4,15 +4,13 @@
 /// and axis expressions from Excel MDX probe/query strings.
 ///
 /// Dimension names are dynamic — no hardcoded dimension vocabulary.
-
 use nom::{
     IResult,
+    branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::{char, multispace0},
-    sequence::delimited,
-    branch::alt,
     multi::separated_list0,
-    combinator::{value, map},
+    sequence::delimited,
 };
 
 // ---- whitespace ----
@@ -37,15 +35,19 @@ pub enum DimRef {
 
 fn dim_name(input: &str) -> IResult<&str, DimRef> {
     let (input, name) = take_while(|c: char| c != ']' && c != '.')(input)?;
-    Ok((input, if name == "Measures" {
-        DimRef::Measures
-    } else {
-        DimRef::Cube(name.to_string())
-    }))
+    Ok((
+        input,
+        if name == "Measures" {
+            DimRef::Measures
+        } else {
+            DimRef::Cube(name.to_string())
+        },
+    ))
 }
 
 fn bracket<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
-where F: FnMut(&'a str) -> IResult<&'a str, O>,
+where
+    F: FnMut(&'a str) -> IResult<&'a str, O>,
 {
     delimited(char('['), inner, char(']'))
 }
@@ -83,7 +85,13 @@ fn member_leaf(input: &str) -> IResult<&str, MemberRef> {
     let (input, (dim, _hier)) = dim_hierarchy(input)?;
     let (input, _) = tag(".&")(input)?;
     let (input, key) = bracket_str(input)?;
-    Ok((input, MemberRef::Leaf { dim, key: key.to_string() }))
+    Ok((
+        input,
+        MemberRef::Leaf {
+            dim,
+            key: key.to_string(),
+        },
+    ))
 }
 
 fn measure_member(input: &str) -> IResult<&str, MemberRef> {
@@ -97,46 +105,6 @@ fn member_ref(input: &str) -> IResult<&str, MemberRef> {
     alt((member_all, member_leaf, measure_member))(input)
 }
 
-// ---- property parsing ----
-
-fn dim_prop_name(input: &str) -> IResult<&str, &str> {
-    alt((
-        tag("PARENT_UNIQUE_NAME"),
-        tag("HIERARCHY_UNIQUE_NAME"),
-        tag("MEMBER_NAME"),
-        tag("MEMBER_KEY"),
-        tag("MEMBER_TYPE"),
-        tag("MEMBER_VALUE"),
-        tag("PARENT_LEVEL"),
-        tag("PARENT_COUNT"),
-        tag("CHILDREN_CARDINALITY"),
-        tag("MEMBER_CAPTION"),
-        tag("MEMBER_UNIQUE_NAME"),
-        tag("LEVEL_NUMBER"),
-        tag("LEVEL_UNIQUE_NAME"),
-    ))(input)
-}
-
-fn qualified_dim_prop(input: &str) -> IResult<&str, &str> {
-    let (input, _dim) = bracket(dim_name)(input)?;
-    let (input, _) = char('.')(input)?;
-    let (input, _hier) = bracket_str(input)?;
-    let (input, prop) = dim_prop_name(input)?;
-    Ok((input, prop))
-}
-
-fn dim_property_token(input: &str) -> IResult<&str, String> {
-    alt((
-        map(qualified_dim_prop, |s| s.to_string()),
-        map(dim_prop_name, |s| s.to_string()),
-    ))(input)
-}
-
-fn cell_property_token(input: &str) -> IResult<&str, String> {
-    let (input, tok) = take_while(|c: char| c != ',')(input)?;
-    Ok((input, tok.trim().to_uppercase()))
-}
-
 // ---- WHERE clause ----
 
 fn where_clause(input: &str) -> IResult<&str, Vec<MemberRef>> {
@@ -144,10 +112,7 @@ fn where_clause(input: &str) -> IResult<&str, Vec<MemberRef>> {
     let (input, _) = sp(input)?;
     let (input, _) = char('(')(input)?;
     let (input, _) = ws(input)?;
-    let (input, members) = separated_list0(
-        delimited(ws, char(','), ws),
-        member_ref,
-    )(input)?;
+    let (input, members) = separated_list0(delimited(ws, char(','), ws), member_ref)(input)?;
     let (input, _) = ws(input)?;
     let (input, _) = char(')')(input)?;
     Ok((input, members))
@@ -160,10 +125,7 @@ fn subquery_body(input: &str) -> IResult<&str, Vec<MemberRef>> {
     let (input, _) = ws(input)?;
     let (input, _) = tag("({")(input)?;
     let (input, _) = ws(input)?;
-    let (input, members) = separated_list0(
-        delimited(ws, char(','), ws),
-        member_ref,
-    )(input)?;
+    let (input, members) = separated_list0(delimited(ws, char(','), ws), member_ref)(input)?;
     let (input, _) = ws(input)?;
     let (input, _) = tag("})")(input)?;
     Ok((input, members))
@@ -226,9 +188,12 @@ fn has_with_member_cchildren(input: &str) -> bool {
 
 pub fn parse_dimension_properties(input: &str) -> Vec<String> {
     let up = input.to_uppercase();
-    let Some(pos) = up.find("DIMENSION PROPERTIES ") else { return vec![] };
+    let Some(pos) = up.find("DIMENSION PROPERTIES ") else {
+        return vec![];
+    };
     let after = &input[pos + "DIMENSION PROPERTIES ".len()..];
-    let end = after.find(" ON COLUMNS")
+    let end = after
+        .find(" ON COLUMNS")
         .or_else(|| after.find(" ON ROWS"))
         .or_else(|| after.find(" FROM "))
         .or_else(|| after.find(" CELL PROPERTIES"))
@@ -236,8 +201,15 @@ pub fn parse_dimension_properties(input: &str) -> Vec<String> {
     let raw = after[..end].trim();
 
     let known = &[
-        "PARENT_UNIQUE_NAME","HIERARCHY_UNIQUE_NAME","MEMBER_NAME","MEMBER_KEY",
-        "MEMBER_TYPE","MEMBER_VALUE","PARENT_LEVEL","PARENT_COUNT","CHILDREN_CARDINALITY",
+        "PARENT_UNIQUE_NAME",
+        "HIERARCHY_UNIQUE_NAME",
+        "MEMBER_NAME",
+        "MEMBER_KEY",
+        "MEMBER_TYPE",
+        "MEMBER_VALUE",
+        "PARENT_LEVEL",
+        "PARENT_COUNT",
+        "CHILDREN_CARDINALITY",
     ];
     let mut props = Vec::new();
     for token in raw.split(',') {
@@ -254,9 +226,12 @@ pub fn parse_dimension_properties(input: &str) -> Vec<String> {
 
 pub fn parse_cell_properties(input: &str) -> Vec<String> {
     let up = input.to_uppercase();
-    let Some(pos) = up.find("CELL PROPERTIES ") else { return vec![] };
+    let Some(pos) = up.find("CELL PROPERTIES ") else {
+        return vec![];
+    };
     let after = &input[pos + "CELL PROPERTIES ".len()..];
-    after.split(',')
+    after
+        .split(',')
         .map(|t| t.trim().to_uppercase())
         .filter(|t| !t.is_empty() && !t.contains(" "))
         .collect()
@@ -302,7 +277,7 @@ fn detect_cchildren_target(input: &str) -> CChildrenTarget {
     // Only measures mentioned, no cube dimension brackets at all
     if set.contains("[Measures]") && !set.contains("&[") && !set.contains("&amp;[") {
         // Check if the set references a specific leaf dimension member
-        let has_leaf_dim = set.find('[').map_or(false, |i| {
+        let has_leaf_dim = set.find('[').is_some_and(|i| {
             let rest = &set[i..];
             if let Some(close) = rest.find(']') {
                 let name = &rest[1..close];
@@ -378,10 +353,12 @@ fn is_slicer_all_measure(input: &str) -> bool {
         Some(m) => m,
         None => return false,
     };
-    let cube_count = members.iter()
+    let cube_count = members
+        .iter()
         .filter(|m| matches!(m, MemberRef::All(_) | MemberRef::Leaf { .. }))
         .count();
-    let meas_count = members.iter()
+    let meas_count = members
+        .iter()
         .filter(|m| matches!(m, MemberRef::Measure(_)))
         .count();
     cube_count == 1 && meas_count == 1 && members.len() == 2
@@ -433,7 +410,8 @@ pub struct ParsedMdx {
 /// deduplicated.
 fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
     let upper = before_from.to_uppercase();
-    let axis_end = upper.find("DIMENSION PROPERTIES")
+    let axis_end = upper
+        .find("DIMENSION PROPERTIES")
         .or_else(|| upper.find("ON COLUMNS"))
         .unwrap_or(before_from.len());
     let axis_expr = &before_from[..axis_end];
@@ -458,11 +436,15 @@ fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
 /// pick up later WHERE slicer members.
 fn parse_excluded_members_from_mdx(input: &str) -> Vec<(String, String)> {
     let mut result = Vec::new();
-    let Some(excl_start) = input.find("{-{") else { return result; };
+    let Some(excl_start) = input.find("{-{") else {
+        return result;
+    };
 
     // Bound to the closing }} of the exclusion set.
     let after_excl = &input[excl_start..];
-    let Some(close) = after_excl[2..].find("}}") else { return result; };
+    let Some(close) = after_excl[2..].find("}}") else {
+        return result;
+    };
     let excl_end = 2 + close + 2;
     let excl = &after_excl[..excl_end];
 
@@ -499,7 +481,9 @@ fn parse_drilldown_member_hierarchy_from_mdx(input: &str) -> Option<String> {
     let rest = &after_excl[2 + close + 2..];
     let trimmed = rest.trim_start();
     let trimmed = trimmed.strip_prefix(',').unwrap_or(trimmed).trim_start();
-    if !trimmed.starts_with('[') { return None; }
+    if !trimmed.starts_with('[') {
+        return None;
+    }
     let bracket_end = trimmed[1..].find(']')?;
     let hier = &trimmed[1..bracket_end + 1];
     let hier = hier.trim_matches(|c: char| c == '[' || c == ']');
@@ -510,14 +494,14 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let up = input.to_uppercase();
 
     // Find `FROM [` boundary generically (case-insensitive).
-    let before_from = up.find("FROM [")
-        .map(|i| &input[..i])
-        .unwrap_or(input);
+    let before_from = up.find("FROM [").map(|i| &input[..i]).unwrap_or(input);
 
     // Extract cube name from `FROM [cubeName]`.
     let cube_name: Option<String> = up.find("FROM [").and_then(|start| {
         let after_from = &input[start + "FROM [".len()..];
-        after_from.find(']').map(|end| after_from[..end].to_string())
+        after_from
+            .find(']')
+            .map(|end| after_from[..end].to_string())
     });
 
     // Parse axis dimension IDs from the select clause in positional order.
@@ -543,15 +527,15 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let all_subquery = find_all_subquery_members(input);
     let subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
 
-    let selected_measure = where_members.iter()
-        .find_map(|m| match m {
-            MemberRef::Measure(name) => Some(name.clone()),
-            _ => None,
-        });
+    let selected_measure = where_members.iter().find_map(|m| match m {
+        MemberRef::Measure(name) => Some(name.clone()),
+        _ => None,
+    });
     // Also check columns for explicit measure selection like
     // `{[Measures].[Revenue],[Measures].[Units]} ON COLUMNS`.
     let selected_measure = selected_measure.or_else(|| {
-        let col_start = input.find("ON COLUMNS")
+        let col_start = input
+            .find("ON COLUMNS")
             .or_else(|| input.find("on columns"))
             .unwrap_or(input.len());
         let before_cols = &input[..col_start];
@@ -602,21 +586,33 @@ mod tests {
     #[test]
     fn parse_member_leaf() {
         let (rest, m) = member_ref("[Produktkategori].[Produktkategori].&[Kategori A]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Produktkategori".into()), key: "Kategori A".into() });
+        assert_eq!(
+            m,
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Produktkategori".into()),
+                key: "Kategori A".into()
+            }
+        );
         assert!(rest.is_empty());
     }
 
     #[test]
     fn parse_member_region() {
         let (rest, m) = member_ref("[Region].[Region].&[North]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Region".into()), key: "North".into() });
+        assert_eq!(
+            m,
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Region".into()),
+                key: "North".into()
+            }
+        );
         assert!(rest.is_empty());
     }
 
     #[test]
     fn parse_where_multiple() {
         let input = "WHERE ([Region].[Region].[All],[Measures].[Total Försäljning])";
-        let (rest, members) = where_clause(input).unwrap();
+        let (_rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
         assert_eq!(members[0], MemberRef::All(DimRef::Cube("Region".into())));
         assert_eq!(members[1], MemberRef::Measure("Total Försäljning".into()));
@@ -625,18 +621,21 @@ mod tests {
     #[test]
     fn parse_where_leaf() {
         let input = "WHERE ([Produktkategori].[Produktkategori].&[Kategori B],[Measures].[Total Försäljning])";
-        let (rest, members) = where_clause(input).unwrap();
+        let (_rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
-        assert_eq!(members[0], MemberRef::Leaf {
-            dim: DimRef::Cube("Produktkategori".into()),
-            key: "Kategori B".into(),
-        });
+        assert_eq!(
+            members[0],
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Produktkategori".into()),
+                key: "Kategori B".into(),
+            }
+        );
     }
 
     #[test]
     fn parse_subquery() {
-        let input = "SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]}) ON COLUMNS FROM [Model]";
-        let (rest, m) = subquery_body("SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]})").unwrap();
+        let _input = "SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]}) ON COLUMNS FROM [Model]";
+        let (_rest, m) = subquery_body("SELECT ({[Produktkategori].[Produktkategori].&[Kategori A],[Produktkategori].[Produktkategori].&[Kategori C]})").unwrap();
         assert_eq!(m.len(), 2);
     }
 
@@ -652,14 +651,26 @@ mod tests {
     #[test]
     fn parse_territory_leaf() {
         let (rest, m) = member_ref("[Territory].[Territory].&[North]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Territory".into()), key: "North".into() });
+        assert_eq!(
+            m,
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Territory".into()),
+                key: "North".into()
+            }
+        );
         assert!(rest.is_empty());
     }
 
     #[test]
     fn parse_channel_leaf() {
         let (rest, m) = member_ref("[Channel].[Channel].&[Online]").unwrap();
-        assert_eq!(m, MemberRef::Leaf { dim: DimRef::Cube("Channel".into()), key: "Online".into() });
+        assert_eq!(
+            m,
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Channel".into()),
+                key: "Online".into()
+            }
+        );
         assert!(rest.is_empty());
     }
 
@@ -673,7 +684,7 @@ mod tests {
     #[test]
     fn parse_where_category_all_revenue() {
         let input = "WHERE ([Category].[Category].[All],[Measures].[Revenue])";
-        let (rest, members) = where_clause(input).unwrap();
+        let (_rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
         assert_eq!(members[0], MemberRef::All(DimRef::Cube("Category".into())));
         assert_eq!(members[1], MemberRef::Measure("Revenue".into()));
@@ -682,12 +693,15 @@ mod tests {
     #[test]
     fn parse_where_territory_leaf_revenue() {
         let input = "WHERE ([Territory].[Territory].&[North],[Measures].[Revenue])";
-        let (rest, members) = where_clause(input).unwrap();
+        let (_rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
-        assert_eq!(members[0], MemberRef::Leaf {
-            dim: DimRef::Cube("Territory".into()),
-            key: "North".into(),
-        });
+        assert_eq!(
+            members[0],
+            MemberRef::Leaf {
+                dim: DimRef::Cube("Territory".into()),
+                key: "North".into(),
+            }
+        );
         assert_eq!(members[1], MemberRef::Measure("Revenue".into()));
     }
 
@@ -704,20 +718,31 @@ mod tests {
     fn parse_cell_props() {
         let input = "SELECT ... CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
         let props = parse_cell_properties(input);
-        assert_eq!(props, vec!["VALUE", "FORMAT_STRING", "BACK_COLOR", "FORE_COLOR"]);
+        assert_eq!(
+            props,
+            vec!["VALUE", "FORMAT_STRING", "BACK_COLOR", "FORE_COLOR"]
+        );
     }
 
     #[test]
     fn parse_selected_measure_from_columns() {
         let mdx = "Select {[Measures].[Units]} on columns from [Sales]";
         let parsed = parse_mdx(mdx);
-        assert_eq!(parsed.selected_measure.as_deref(), Some("Units"), "expected Units from columns");
+        assert_eq!(
+            parsed.selected_measure.as_deref(),
+            Some("Units"),
+            "expected Units from columns"
+        );
     }
 
     #[test]
     fn parse_selected_measure_from_columns_bracketed_set() {
         let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]";
         let parsed = parse_mdx(mdx);
-        assert_eq!(parsed.selected_measure.as_deref(), Some("Revenue"), "expected Revenue from columns");
+        assert_eq!(
+            parsed.selected_measure.as_deref(),
+            Some("Revenue"),
+            "expected Revenue from columns"
+        );
     }
 }

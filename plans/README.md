@@ -30,12 +30,18 @@ honor its STOP conditions, and update your row when done.
 | 020  | Reconcile the public CLI and documentation contract | P2 | S | 016, 017, 018 | DONE |
 | 021  | Retire the two retail stub fallbacks through converter-owned SQL generation | P1 | M | 015, 016, 019 | DONE |
 | 022  | Genericize converter fallback SQL lowering | P1 | M | 021 | DONE |
-| 023  | Third real model intake proof | P1 | L | 022 | TODO |
-| 024  | Security-role decision gate | P1 | L | 022 | TODO |
+| 023  | Third real model intake proof (revised 2026-08-07: Contoso) | P1 | L | 022, 028, 027 | TODO |
+| 024  | Security-role decision gate | P1 | L | 022 | DONE |
 | 025  | Make direct-SQL XMLA execution concurrent across users | P1 | L | — | DONE |
-| 026  | Security roles and UserContext for the direct-SQL runtime | P1 | L | — | TODO |
+| 026  | Security roles and UserContext for the direct-SQL runtime | P1 | L | — | DONE |
+| 027  | Drop the Malloy runtime | P1 | M | 028 | TODO |
+| 028  | Hygiene foundation (green baseline, plan bookkeeping, lint bar, CI) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
+
+**Execution order for the open batch: 028 → 027 → 023.**
+(024/026 are believed implemented in code; plan 028 verifies their done
+criteria with file:line evidence before flipping them to DONE.)
 
 ## Reconcile Status
 
@@ -53,6 +59,87 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   - `cargo test --lib` -> `234 passed; 0 failed`
   - `cargo run --bin xmla_proxy -- qualify generated_retail_analytics/proxy-config.json` -> `READY`
   - `cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json` -> `PARTIAL` (unsupported security role)
+- 2026-08-07 strategy session (commit `f3837cd`): product direction locked
+  (see "Product direction" section). Fresh batch added: 027 (drop Malloy),
+  028 (hygiene foundation). Plan 023 revised: Contoso selected as the
+  third model (`data/contoso/`). Plans 024/026 believed implemented in
+  code; plan 028 verifies and flips them.
+  Snapshot at session time: `cargo test --lib` -> `344 passed; 1 failed`
+  (generated_project fixture DB empty — fixed by 028 Step 1).
+  - 028 done 2026-08-07: `cargo test --lib` -> 345/0; `cargo clippy --lib`
+    clean; `cargo fmt` clean; CI workflow at `.github/workflows/ci.yml`
+    (fmt+clippy+seed+test); fresh-clone simulation (delete db → seed →
+    green) passed. 024/026 statuses flipped with file:line evidence (see
+    reconcile note above). Doc drift fixed (README, CONTEXT.md,
+    DEVELOPER-GUIDE). Dead code removed (~14 fns + 27 doc-comment blanks
+    + misc clippy fixes).
+- 2026-08-07 plan 028 Step 2 verification — **024 and 026 flipped to DONE**
+  with evidence:
+  - 026: `RoleConfig{model_permission,members,table_permissions}`
+    (`src/project/config.rs:206-210`); `UserContext` + `resolve_user_context`
+    + `effective_table_filter` + `effective_model_permission`
+    (`src/engine/model.rs:71,111,191,153`); threading via `build_user_context`
+    (`src/main.rs:251,336`); RLS predicates in WHERE (`src/engine/sql.rs:228-239`);
+    OLS sentinel (`src/engine/model.rs:52`); 24 `role_` tests pass;
+    `qualify` distinguishes enforced vs informational roles
+    (`src/tools/qualify.rs:98-122`); converter emits `dax_filter`
+    (`src/tools/convert_tabular.rs:333,1487-1491`); README "Security and
+    roles" section documents the trusted-proxy boundary + SQL contract.
+  - 024: converter emits roles into `proxy-config.json`
+    (`generated_project/proxy-config.json` has role `fys_läsbehörighet`);
+    qualify reads roles from config not markdown; `generated_project` ->
+    PARTIAL with the specific gate message ("roles defined but no auth
+    config — roles will not be enforced at runtime");
+    `generated_retail_analytics` -> READY.
+
+## Product direction (locked 2026-08-07)
+
+Set in a strategy session at commit `f3837cd`. All plans should be read
+against these decisions.
+
+- **Product**: open-source SSAS **Tabular replacement** for departmental
+  Excel teams — the Excel-compatibility layer for migrating Microsoft BI
+  stacks (SSIS + Kimball + SSAS) onto the modern data stack (Airflow +
+  sqlmesh + DuckDB/files). *PivotTable culture survives, SSAS doesn't.*
+  Adoption sequence: (1) point MallardCube at the existing SQL Server
+  Kimball DW → retire SSAS with zero data movement; (2) migrate
+  SSIS → Airflow+sqlmesh underneath; (3) land on DuckDB/files.
+- **Audiences**: data engineers leading modernization migrations
+  (contributor pool) + SSAS/Tabular practitioners (user pool, the
+  Tabular-Editor-proven community).
+- **Backend strategy (locked)**: **DuckDB is the execution engine and the
+  target** — embedded in-process, zero-copy for local/file sources.
+  External data is reached through **DuckDB attach extensions, never a
+  second SQL dialect in the emitter**: parquet/CSV/S3 via `httpfs`,
+  Postgres/MySQL/SQLite via official scanners, **SQL Server via the
+  community `mssql` extension** (native TDS, filter/projection pushdown,
+  Kerberos/SSPI — verified viable 2026-08-07). `src/engine/sql.rs` stays
+  DuckDB-dialect only.
+- **Single runtime**: Malloy is dropped (plan 027). Direct SQL is the only
+  runtime; security roles are enforced on it uniformly.
+- **Scope wall**: Excel + Tabular semantics only. Non-goals: Power BI,
+  Multidimensional, write-back, aggregate awareness, multi-dialect SQL
+  emission. The singleton project (ARCH-01) stays deferred **by design**
+  for the departmental segment.
+- **Gate G1 (public validation)** between plan 023 and any Phase 4 epic:
+  publish the full-stack demo (sqlmesh → DuckDB → MallardCube → live
+  Excel) + README/video to HN, r/duckdb, DuckDB Discord, and SSAS
+  practitioner channels. Pre-committed success criteria: ≥500 stars in
+  4 weeks, ≥10 substantive issues from real-model owners, ≥2 strangers
+  asking "can I convert my model?". Pre-committed outcomes: signal →
+  Phase 4 + contributor onboarding; crickets → freeze scope at validated
+  Excel dialect; stars-without-usage → reposition once and re-test.
+- **Doc discipline**: docs and plan statuses are updated in the same
+  commit as the code change. (Repeated drift is what prompted plan 028.)
+
+## Phase 4 candidates (post-Gate G1, ranked at a fresh planning pass)
+
+1. Attached data sources via DuckDB (incl. MSSQL point-at-existing-DW)
+2. Multi-level/date hierarchies (Excel table stakes)
+3. DRILLTHROUGH + MDX breadth via deliberate trace-corpus growth
+4. Calculation-group strategy decision (Contoso finding expected)
+5. DAX coverage checkpoint: pattern library vs DAX-subset compiler,
+   decided with three models' pattern distribution in hand
 
 ## Dependency notes
 
@@ -119,6 +206,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   It depends on the direct-SQL path being the default (already true) but not
   on the concurrency refactor. Native Kerberos is explicitly out of scope;
   the plan defines a trusted-proxy auth boundary instead.
+- 028 is independent and executes first: the baseline must be green and CI
+  must exist before any further excision or intake work lands.
+- 027 depends on 028 because deleting a runtime without a CI gate is how
+  silent regressions ship; the bookkeeping in 028 also makes the plan index
+  truthful before 027 appends to it.
+- 023 depends on 027 (added 2026-08-07) so that `generated_contoso/` is
+  produced by the Malloy-free converter and never contains Malloy
+  artifacts; it keeps its original dependency on 022 (generic lowering).
 
 ## Findings considered and rejected
 
@@ -156,6 +251,10 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   from machine-readable project state.
 
 ## Deferred for later planning
+
+- Superseded by the **Phase 4 candidates** list above (2026-08-07). The
+  original deferral rationale for calendar hierarchies is preserved below
+  for history.
 
 - **Calendar hierarchies (Year -> Quarter -> Month -> Day)**: important for
   Excel browsing, but deferred until the date-role contract (006-008) and

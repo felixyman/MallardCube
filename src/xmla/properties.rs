@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{UUID_TYPE, discover_rowset_envelope};
 
 struct Property {
     name: &'static str,

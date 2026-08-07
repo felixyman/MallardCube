@@ -1,4 +1,4 @@
-use crate::backend::{generate_sales_fact_rows, generate_inventory_fact_rows};
+use crate::backend::{generate_inventory_fact_rows, generate_sales_fact_rows};
 
 pub fn run(_args: Vec<String>) -> i32 {
     println!("CREATE TABLE sales_fact (");
@@ -13,13 +13,15 @@ pub fn run(_args: Vec<String>) -> i32 {
     let rows = generate_sales_fact_rows();
     eprintln!("sales_fact: {} rows", rows.len());
     for chunk in rows.chunks(500) {
-        let values: Vec<String> = chunk.iter().map(|r| {
-            format!(
-                "('{}', '{}', '{}', '{}', {}, {})",
-                r.category, r.territory, r.channel, r.segment,
-                r.revenue, r.units
-            )
-        }).collect();
+        let values: Vec<String> = chunk
+            .iter()
+            .map(|r| {
+                format!(
+                    "('{}', '{}', '{}', '{}', {}, {})",
+                    r.category, r.territory, r.channel, r.segment, r.revenue, r.units
+                )
+            })
+            .collect();
         println!("INSERT INTO sales_fact VALUES");
         println!("{};", values.join(",\n"));
         println!();
@@ -36,13 +38,15 @@ pub fn run(_args: Vec<String>) -> i32 {
     let rows = generate_inventory_fact_rows();
     eprintln!("inventory_fact: {} rows", rows.len());
     for chunk in rows.chunks(500) {
-        let values: Vec<String> = chunk.iter().map(|r| {
-            format!(
-                "('{}', '{}', '{}', {}, {})",
-                r.category, r.territory, r.warehouse,
-                r.stock_qty, r.stock_cost
-            )
-        }).collect();
+        let values: Vec<String> = chunk
+            .iter()
+            .map(|r| {
+                format!(
+                    "('{}', '{}', '{}', {}, {})",
+                    r.category, r.territory, r.warehouse, r.stock_qty, r.stock_cost
+                )
+            })
+            .collect();
         println!("INSERT INTO inventory_fact VALUES");
         println!("{};", values.join(",\n"));
         println!();

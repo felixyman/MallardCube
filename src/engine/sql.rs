@@ -1,12 +1,11 @@
+use crate::engine::model::{SemanticModel, TableAccess, UserContext, effective_table_filter};
 /// SQL emitter — converts a `QueryPlan` into DuckDB SQL.
 ///
 /// Supports:
 /// - flat table access (direct physical_field)
 /// - star-schema joins via relationship metadata (dimension columns live in
 ///   separate dimension tables)
-
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
-use crate::engine::model::{SemanticModel, UserContext, effective_table_filter, TableAccess};
 use crate::project::config::ProxyConfig;
 use std::collections::{HashMap, HashSet};
 
@@ -37,23 +36,26 @@ pub fn sql_for_query_plan_with_context(
             let table = &model.fact_table(meas.fact_table_idx).table_name;
             let mut joined: HashSet<String> = HashSet::new();
             let (joins, wc) = joins_and_where(model, filters, &mut joined, user, config, table);
-            format!("SELECT {} FROM {} f{}{}",
-                meas.sql_expr, table, joins, wc)
+            format!("SELECT {} FROM {} f{}{}", meas.sql_expr, table, joins, wc)
         }
 
-        QueryPlan::GroupBy { measure, group_by, filters } => {
+        QueryPlan::GroupBy {
+            measure,
+            group_by,
+            filters,
+        } => {
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
 
             let mut joined: HashSet<String> = HashSet::new();
             let (col_map, joins) = resolve_group_cols(model, group_by, &mut joined, user, config);
-            let col_names: Vec<&str> = group_by.iter()
+            let col_names: Vec<&str> = group_by
+                .iter()
                 .map(|d| col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??"))
                 .collect();
 
             let wc = sql_where_with_cols(model, filters, &col_map, user, config, table);
-            let group_nums: Vec<String> = (1..=col_names.len())
-                .map(|i| i.to_string()).collect();
+            let group_nums: Vec<String> = (1..=col_names.len()).map(|i| i.to_string()).collect();
             format!(
                 "SELECT {}, {} FROM {} f{}{} GROUP BY {} ORDER BY {}",
                 col_names.join(", "),
@@ -69,9 +71,17 @@ pub fn sql_for_query_plan_with_context(
         QueryPlan::Count { dimension } => {
             let dim = model.dim_def(dimension);
             let mut joined: HashSet<String> = HashSet::new();
-            let (col_map, joins) = resolve_group_cols(model, &[dimension.clone()], &mut joined, user, config);
-            let col = col_map.get(dimension.as_str())
-                .map(|s| s.as_str()).unwrap_or(&dim.physical_field);
+            let (col_map, joins) = resolve_group_cols(
+                model,
+                std::slice::from_ref(dimension),
+                &mut joined,
+                user,
+                config,
+            );
+            let col = col_map
+                .get(dimension.as_str())
+                .map(|s| s.as_str())
+                .unwrap_or(&dim.physical_field);
             let from = if joins.is_empty() {
                 format!("FROM {}", model.dim_table(dimension))
             } else {
@@ -113,7 +123,9 @@ fn role_filter_join_clauses(
     for rel in &model.relationships {
         let access = effective_table_filter(config, user, &rel.dim_table);
         if let TableAccess::Filtered(_) = access {
-            let alias = format!("_{}", rel.dimension_id).replace(' ', "_").to_lowercase();
+            let alias = format!("_{}", rel.dimension_id)
+                .replace(' ', "_")
+                .to_lowercase();
             if joined.insert(alias.clone()) {
                 joins.push(format!(
                     " JOIN {} {alias} ON f.{fact_col} = {alias}.{dim_col}",
@@ -171,7 +183,11 @@ fn resolve_group_cols(
                     dim_col = rel.dim_column,
                 ));
             }
-            let col_name = dim.physical_field.split('.').last().unwrap_or(&dim.physical_field);
+            let col_name = dim
+                .physical_field
+                .split('.')
+                .next_back()
+                .unwrap_or(&dim.physical_field);
             col_map.insert(dim_id.clone(), format!("{alias}.{col_name}"));
         } else {
             col_map.insert(dim_id.clone(), dim.physical_field.clone());
@@ -200,13 +216,14 @@ fn sql_where_with_cols(
     for f in filters {
         // Time-flag filters: emit date_dim subquery
         if f.time_flag.is_some() {
-            let date_dim = model.date_dims.get(&f.dimension)
+            let date_dim = model
+                .date_dims
+                .get(&f.dimension)
                 .or(model.date_dim.as_ref());
             if let (Some(dd), Some(flag)) = (date_dim, &f.time_flag) {
                 parts.push(format!(
                     "f.{} IN (SELECT {} FROM {} WHERE {} = true)",
-                    dd.date_key_column, dd.date_key_column,
-                    dd.table_name, flag
+                    dd.date_key_column, dd.date_key_column, dd.table_name, flag
                 ));
             }
             continue;
@@ -215,10 +232,13 @@ fn sql_where_with_cols(
             continue;
         }
         if let Some(d) = model.dim_def_opt(&f.dimension) {
-            let col = col_map.get(f.dimension.as_str())
+            let col = col_map
+                .get(f.dimension.as_str())
                 .cloned()
                 .unwrap_or_else(|| d.physical_field.clone());
-            let vals: Vec<String> = f.members.iter()
+            let vals: Vec<String> = f
+                .members
+                .iter()
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
             parts.push(format!("{} IN ({})", col, vals.join(", ")));
@@ -258,21 +278,25 @@ fn joins_and_where(
     let mut col_map: HashMap<String, String> = HashMap::new();
 
     for f in filters {
-        if !f.members.is_empty() {
-            if let Some(rel) = model.rel_for_dimension(&f.dimension) {
-                let alias = format!("_{}", f.dimension).replace(' ', "_").to_lowercase();
-                if joined.insert(alias.clone()) {
-                    join_lines.push(format!(
-                        " JOIN {} {alias} ON f.{fact_col} = {alias}.{dim_col}",
-                        rel.dim_table,
-                        fact_col = rel.fact_column,
-                        dim_col = rel.dim_column,
-                    ));
-                }
-                let dim = model.dim_def(&f.dimension);
-                let col_name = dim.physical_field.split('.').last().unwrap_or(&dim.physical_field);
-                col_map.insert(f.dimension.clone(), format!("{alias}.{col_name}"));
+        if !f.members.is_empty()
+            && let Some(rel) = model.rel_for_dimension(&f.dimension)
+        {
+            let alias = format!("_{}", f.dimension).replace(' ', "_").to_lowercase();
+            if joined.insert(alias.clone()) {
+                join_lines.push(format!(
+                    " JOIN {} {alias} ON f.{fact_col} = {alias}.{dim_col}",
+                    rel.dim_table,
+                    fact_col = rel.fact_column,
+                    dim_col = rel.dim_column,
+                ));
             }
+            let dim = model.dim_def(&f.dimension);
+            let col_name = dim
+                .physical_field
+                .split('.')
+                .next_back()
+                .unwrap_or(&dim.physical_field);
+            col_map.insert(f.dimension.clone(), format!("{alias}.{col_name}"));
         }
     }
 
@@ -291,12 +315,15 @@ fn joins_and_where(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::plan::TypedDimensionFilter;
     use crate::engine::model::default_model;
+    use crate::engine::plan::TypedDimensionFilter;
 
     #[test]
     fn sql_total_no_filters() {
-        let plan = QueryPlan::Total { measure: "TotalSales".into(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".into(),
+            filters: vec![],
+        };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert_eq!(sql, "SELECT SUM(sales) FROM faktatabell f");
     }
@@ -362,9 +389,14 @@ mod tests {
 
     #[test]
     fn sql_count() {
-        let plan = QueryPlan::Count { dimension: "Produktkategori".into() };
+        let plan = QueryPlan::Count {
+            dimension: "Produktkategori".into(),
+        };
         let sql = sql_for_query_plan(&default_model(), &plan);
-        assert_eq!(sql, "SELECT COUNT(DISTINCT produktkategori) FROM faktatabell");
+        assert_eq!(
+            sql,
+            "SELECT COUNT(DISTINCT produktkategori) FROM faktatabell"
+        );
     }
 
     #[test]
@@ -391,48 +423,64 @@ mod tests {
 
     // ---- star-schema join ----
 
-    use crate::engine::model::{FactTable, MeasureDef, SemanticModel, Dialect, RelationshipDef, DimensionDef};
+    use crate::engine::model::{
+        Dialect, DimensionDef, FactTable, MeasureDef, RelationshipDef, SemanticModel,
+    };
 
     fn star_model() -> SemanticModel {
         SemanticModel {
-            fact_tables: vec![
-                FactTable { id: "default".into(), source_name: "fact".into(),
-                    table_name: "fact_table".into(), measure_group_name: "Fact".into() },
-            ],
+            fact_tables: vec![FactTable {
+                id: "default".into(),
+                source_name: "fact".into(),
+                table_name: "fact_table".into(),
+                measure_group_name: "Fact".into(),
+            }],
             dialect: Dialect::DuckDB,
-            dimensions: vec![
-                DimensionDef {
-                    id: "Product".into(), semantic_name: "product".into(),
-                    physical_field: "dim_product.product_name".into(),
-                    table_name: Some("dim_product".into()), shared: false,
-                    caption: "Product".into(), description: String::new(),
-                    visible: true, ordinal: 1,
-                    hierarchy_name: "Product".into(), all_level_name: "(All)".into(),
-                    leaf_level_name: "Product".into(), cardinality_hint: 100, is_date_role: false,
-                },
-            ],
-            measures: vec![
-                MeasureDef {
-                    id: "Revenue".into(), fact_table_idx: 0,
-                    semantic_name: "revenue".into(), physical_expr: "revenue.sum()".into(),
-                    sql_expr: "SUM(revenue)".into(), caption: "Revenue".into(),
-                    display_name: "Revenue".into(), description: String::new(),
-                    visible: true, aggregator: 1, units: String::new(),
-                    format_string: String::new(), measure_group_name: "Fact".into(),
-                    numeric_precision: 18, numeric_scale: 2, expression: String::new(),
-                    sql_fallback_sql: None,
-                    date_dimension_id: None,
-                    fallback_capability: None,
-                    time_flag: None,
-                },
-            ],
-            relationships: vec![
-                RelationshipDef {
-                    fact_table_id: "default".into(), fact_column: "product_id".into(),
-                    dimension_id: "Product".into(),
-                    dim_table: "dim_product".into(), dim_column: "product_id".into(),
-                },
-            ],
+            dimensions: vec![DimensionDef {
+                id: "Product".into(),
+                semantic_name: "product".into(),
+                physical_field: "dim_product.product_name".into(),
+                table_name: Some("dim_product".into()),
+                shared: false,
+                caption: "Product".into(),
+                description: String::new(),
+                visible: true,
+                ordinal: 1,
+                hierarchy_name: "Product".into(),
+                all_level_name: "(All)".into(),
+                leaf_level_name: "Product".into(),
+                cardinality_hint: 100,
+                is_date_role: false,
+            }],
+            measures: vec![MeasureDef {
+                id: "Revenue".into(),
+                fact_table_idx: 0,
+                semantic_name: "revenue".into(),
+                physical_expr: "revenue.sum()".into(),
+                sql_expr: "SUM(revenue)".into(),
+                caption: "Revenue".into(),
+                display_name: "Revenue".into(),
+                description: String::new(),
+                visible: true,
+                aggregator: 1,
+                units: String::new(),
+                format_string: String::new(),
+                measure_group_name: "Fact".into(),
+                numeric_precision: 18,
+                numeric_scale: 2,
+                expression: String::new(),
+                sql_fallback_sql: None,
+                date_dimension_id: None,
+                fallback_capability: None,
+                time_flag: None,
+            }],
+            relationships: vec![RelationshipDef {
+                fact_table_id: "default".into(),
+                fact_column: "product_id".into(),
+                dimension_id: "Product".into(),
+                dim_table: "dim_product".into(),
+                dim_column: "product_id".into(),
+            }],
             date_dim: None,
             date_dims: HashMap::new(),
         }
@@ -441,14 +489,17 @@ mod tests {
     #[test]
     fn total_with_relationship_join() {
         let m = star_model();
-        let sql = sql_for_query_plan(&m, &QueryPlan::Total {
-            measure: "Revenue".into(),
-            filters: vec![TypedDimensionFilter {
-                dimension: "Product".into(),
-                time_flag: None,
-                members: vec!["Widget".into()],
-            }],
-        });
+        let sql = sql_for_query_plan(
+            &m,
+            &QueryPlan::Total {
+                measure: "Revenue".into(),
+                filters: vec![TypedDimensionFilter {
+                    dimension: "Product".into(),
+                    time_flag: None,
+                    members: vec!["Widget".into()],
+                }],
+            },
+        );
         assert!(sql.contains("FROM fact_table f"));
         assert!(sql.contains("JOIN dim_product _product ON f.product_id = _product.product_id"));
         assert!(sql.contains("WHERE _product.product_name IN ('Widget')"));
@@ -457,11 +508,14 @@ mod tests {
     #[test]
     fn group_by_with_relationship_join() {
         let m = star_model();
-        let sql = sql_for_query_plan(&m, &QueryPlan::GroupBy {
-            measure: "Revenue".into(),
-            group_by: vec!["Product".into()],
-            filters: vec![],
-        });
+        let sql = sql_for_query_plan(
+            &m,
+            &QueryPlan::GroupBy {
+                measure: "Revenue".into(),
+                group_by: vec!["Product".into()],
+                filters: vec![],
+            },
+        );
         assert!(sql.contains("FROM fact_table f"));
         assert!(sql.contains("JOIN dim_product _product ON f.product_id = _product.product_id"));
         assert!(sql.contains("SELECT _product.product_name"));
@@ -472,35 +526,61 @@ mod tests {
     fn two_fact_model() -> SemanticModel {
         SemanticModel {
             fact_tables: vec![
-                FactTable { id: "sales".into(), source_name: "sales_data".into(),
-                    table_name: "sales_fact".into(), measure_group_name: "Sales".into() },
-                FactTable { id: "inventory".into(), source_name: "inv_data".into(),
-                    table_name: "inv_fact".into(), measure_group_name: "Inventory".into() },
+                FactTable {
+                    id: "sales".into(),
+                    source_name: "sales_data".into(),
+                    table_name: "sales_fact".into(),
+                    measure_group_name: "Sales".into(),
+                },
+                FactTable {
+                    id: "inventory".into(),
+                    source_name: "inv_data".into(),
+                    table_name: "inv_fact".into(),
+                    measure_group_name: "Inventory".into(),
+                },
             ],
             dialect: Dialect::DuckDB,
             dimensions: vec![],
             measures: vec![
                 MeasureDef {
-                    id: "Revenue".into(), fact_table_idx: 0,
-                    semantic_name: "revenue".into(), physical_expr: "revenue.sum()".into(),
-                    sql_expr: "SUM(revenue)".into(), caption: "Revenue".into(),
-                    display_name: "Revenue".into(), description: String::new(),
-                    visible: true, aggregator: 1, units: String::new(),
-                    format_string: String::new(), measure_group_name: "Sales".into(),
-                    numeric_precision: 18, numeric_scale: 2, expression: String::new(),
+                    id: "Revenue".into(),
+                    fact_table_idx: 0,
+                    semantic_name: "revenue".into(),
+                    physical_expr: "revenue.sum()".into(),
+                    sql_expr: "SUM(revenue)".into(),
+                    caption: "Revenue".into(),
+                    display_name: "Revenue".into(),
+                    description: String::new(),
+                    visible: true,
+                    aggregator: 1,
+                    units: String::new(),
+                    format_string: String::new(),
+                    measure_group_name: "Sales".into(),
+                    numeric_precision: 18,
+                    numeric_scale: 2,
+                    expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
                     fallback_capability: None,
                     time_flag: None,
                 },
                 MeasureDef {
-                    id: "Stock".into(), fact_table_idx: 1,
-                    semantic_name: "stock".into(), physical_expr: "stock.sum()".into(),
-                    sql_expr: "SUM(stock)".into(), caption: "Stock".into(),
-                    display_name: "Stock".into(), description: String::new(),
-                    visible: true, aggregator: 1, units: String::new(),
-                    format_string: String::new(), measure_group_name: "Inventory".into(),
-                    numeric_precision: 18, numeric_scale: 2, expression: String::new(),
+                    id: "Stock".into(),
+                    fact_table_idx: 1,
+                    semantic_name: "stock".into(),
+                    physical_expr: "stock.sum()".into(),
+                    sql_expr: "SUM(stock)".into(),
+                    caption: "Stock".into(),
+                    display_name: "Stock".into(),
+                    description: String::new(),
+                    visible: true,
+                    aggregator: 1,
+                    units: String::new(),
+                    format_string: String::new(),
+                    measure_group_name: "Inventory".into(),
+                    numeric_precision: 18,
+                    numeric_scale: 2,
+                    expression: String::new(),
                     sql_fallback_sql: None,
                     date_dimension_id: None,
                     fallback_capability: None,
@@ -516,49 +596,96 @@ mod tests {
     #[test]
     fn total_uses_measure_fact_table() {
         let m = two_fact_model();
-        let sql = sql_for_query_plan(&m, &QueryPlan::Total { measure: "Revenue".into(), filters: vec![] });
-        assert!(sql.contains("FROM sales_fact"), "Revenue should use sales_fact, got: {sql}");
-        let sql = sql_for_query_plan(&m, &QueryPlan::Total { measure: "Stock".into(), filters: vec![] });
-        assert!(sql.contains("FROM inv_fact"), "Stock should use inv_fact, got: {sql}");
+        let sql = sql_for_query_plan(
+            &m,
+            &QueryPlan::Total {
+                measure: "Revenue".into(),
+                filters: vec![],
+            },
+        );
+        assert!(
+            sql.contains("FROM sales_fact"),
+            "Revenue should use sales_fact, got: {sql}"
+        );
+        let sql = sql_for_query_plan(
+            &m,
+            &QueryPlan::Total {
+                measure: "Stock".into(),
+                filters: vec![],
+            },
+        );
+        assert!(
+            sql.contains("FROM inv_fact"),
+            "Stock should use inv_fact, got: {sql}"
+        );
     }
 
     #[test]
     fn group_by_uses_measure_fact_table() {
         let m = two_fact_model();
         let m2 = SemanticModel {
-            dimensions: vec![
-                DimensionDef {
-                    id: "Category".into(), semantic_name: "cat".into(),
-                    physical_field: "cat".into(), caption: "Category".into(),
-                    description: String::new(), visible: true, ordinal: 1,
-                    hierarchy_name: "Category".into(), all_level_name: "(All)".into(),
-                    leaf_level_name: "Category".into(), cardinality_hint: 20, is_date_role: false,
-                    table_name: None, shared: false,
-                },
-            ],
+            dimensions: vec![DimensionDef {
+                id: "Category".into(),
+                semantic_name: "cat".into(),
+                physical_field: "cat".into(),
+                caption: "Category".into(),
+                description: String::new(),
+                visible: true,
+                ordinal: 1,
+                hierarchy_name: "Category".into(),
+                all_level_name: "(All)".into(),
+                leaf_level_name: "Category".into(),
+                cardinality_hint: 20,
+                is_date_role: false,
+                table_name: None,
+                shared: false,
+            }],
             ..m
         };
-        let sql = sql_for_query_plan(&m2, &QueryPlan::GroupBy { measure: "Stock".into(), group_by: vec!["Category".into()], filters: vec![] });
-        assert!(sql.contains("FROM inv_fact"), "Stock should use inv_fact, got: {sql}");
+        let sql = sql_for_query_plan(
+            &m2,
+            &QueryPlan::GroupBy {
+                measure: "Stock".into(),
+                group_by: vec!["Category".into()],
+                filters: vec![],
+            },
+        );
+        assert!(
+            sql.contains("FROM inv_fact"),
+            "Stock should use inv_fact, got: {sql}"
+        );
     }
 
     #[test]
     fn count_uses_dimension_table() {
         let m = SemanticModel {
-            dimensions: vec![
-                DimensionDef {
-                    id: "Category".into(), semantic_name: "cat".into(),
-                    physical_field: "cat".into(), table_name: Some("inventory_dim".into()),
-                    shared: false, caption: "Category".into(), description: String::new(),
-                    visible: true, ordinal: 1, hierarchy_name: "Category".into(),
-                    all_level_name: "(All)".into(), leaf_level_name: "Category".into(),
-                    cardinality_hint: 20,
-                    is_date_role: false,
-                },
-            ],
+            dimensions: vec![DimensionDef {
+                id: "Category".into(),
+                semantic_name: "cat".into(),
+                physical_field: "cat".into(),
+                table_name: Some("inventory_dim".into()),
+                shared: false,
+                caption: "Category".into(),
+                description: String::new(),
+                visible: true,
+                ordinal: 1,
+                hierarchy_name: "Category".into(),
+                all_level_name: "(All)".into(),
+                leaf_level_name: "Category".into(),
+                cardinality_hint: 20,
+                is_date_role: false,
+            }],
             ..two_fact_model()
         };
-        let sql = sql_for_query_plan(&m, &QueryPlan::Count { dimension: "Category".into() });
-        assert!(sql.contains("FROM inventory_dim"), "Count should use dimension's table: {sql}");
+        let sql = sql_for_query_plan(
+            &m,
+            &QueryPlan::Count {
+                dimension: "Category".into(),
+            },
+        );
+        assert!(
+            sql.contains("FROM inventory_dim"),
+            "Count should use dimension's table: {sql}"
+        );
     }
 }

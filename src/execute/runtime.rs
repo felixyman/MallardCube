@@ -3,17 +3,20 @@
 /// Contains the long-lived Node.js worker, compile cache, timing
 /// instrumentation, and the two execution paths (direct SQL and Malloy).
 /// Used by `builders.rs` and `main.rs`.
-
 use crate::backend::QueryBackend;
-use crate::engine::plan::{execute_plan_with_backend, execute_plan_with_backend_and_context, execute_plan_sql_with_backend, plan_from_semantic, plan_from_semantic_with_model_and_context};
-use crate::engine::model::UserContext;
-use crate::engine::normalize::plan_key;
-use crate::engine::timing::{Timings, RuntimePath};
+use crate::engine::cache::PlanCache;
 use crate::engine::malloy_compiler::MalloyCompiler;
 use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
-use crate::engine::cache::PlanCache;
-use crate::mdx_semantic::{SemanticQueryKind};
+use crate::engine::model::UserContext;
+use crate::engine::normalize::plan_key;
+use crate::engine::plan::{
+    execute_plan_sql_with_backend, execute_plan_with_backend,
+    execute_plan_with_backend_and_context, plan_from_semantic,
+    plan_from_semantic_with_model_and_context,
+};
+use crate::engine::timing::{RuntimePath, Timings};
 use crate::execute::render::dispatch_with_backend;
+use crate::mdx_semantic::SemanticQueryKind;
 use crate::project::config::ProxyConfig;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,9 +42,7 @@ static COMPILER: OnceLock<LongLivedNodeMalloyCompiler> = OnceLock::new();
 static CACHE: OnceLock<PlanCache> = OnceLock::new();
 
 fn malloy_compiler() -> &'static LongLivedNodeMalloyCompiler {
-    COMPILER.get_or_init(|| {
-        LongLivedNodeMalloyCompiler::new().expect("start Malloy compiler")
-    })
+    COMPILER.get_or_init(|| LongLivedNodeMalloyCompiler::new().expect("start Malloy compiler"))
 }
 
 fn malloy_cache() -> &'static PlanCache {
@@ -52,17 +53,18 @@ fn malloy_cache() -> &'static PlanCache {
 /// caches so the first Excel request doesn't pay the startup cost.
 /// Call once at server startup when MALLOY_RUNTIME=1.
 pub fn warm_malloy_worker() {
-    use std::time::Instant;
     use crate::engine::malloy_compiler::MalloyCompiler;
     use crate::engine::plan::QueryPlan;
+    use std::time::Instant;
     let model = &crate::proxy_project::project().model;
     let plan = QueryPlan::Total {
-        measure: model.default_measure_id()
+        measure: model
+            .default_measure_id()
             .unwrap_or_else(|| "Revenue".into()),
         filters: vec![],
     };
     let t1 = Instant::now();
-    match malloy_compiler().compile_query(&model, &plan) {
+    match malloy_compiler().compile_query(model, &plan) {
         Ok(r) => {
             let warm_ms = t1.elapsed().as_millis();
             eprintln!(
@@ -131,22 +133,33 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
     // not inject role filters).
     let use_malloy = USE_MALLOY_RUNTIME.load(Ordering::Relaxed)
         && user.is_administrator
-        && matches!(query.kind, SemanticQueryKind::SlicerAllAndMeasure
-            | SemanticQueryKind::SlicerOnly
-            | SemanticQueryKind::DrilldownCategories
-            | SemanticQueryKind::LeafLevelMembers
-            | SemanticQueryKind::MeasureByCategory
-            | SemanticQueryKind::DrilldownMemberProbe);
+        && matches!(
+            query.kind,
+            SemanticQueryKind::SlicerAllAndMeasure
+                | SemanticQueryKind::SlicerOnly
+                | SemanticQueryKind::DrilldownCategories
+                | SemanticQueryKind::LeafLevelMembers
+                | SemanticQueryKind::MeasureByCategory
+                | SemanticQueryKind::DrilldownMemberProbe
+        );
 
-    let (result, runtime_path, malloy_compile_us, compiled_cache_hit, js_compile_ms, sql_execute_us) = if use_malloy {
+    let (
+        result,
+        runtime_path,
+        malloy_compile_us,
+        compiled_cache_hit,
+        js_compile_ms,
+        sql_execute_us,
+    ) = if use_malloy {
         let compiler = malloy_compiler();
 
         let t0 = Instant::now();
         let project = crate::proxy_project::project();
         let source = project.malloy_source(&plan);
-        let (sql, was_hit, worker_compile_ms, compile_err) = if project.malloy_model_text.is_empty() {
+        let (sql, was_hit, worker_compile_ms, compile_err) = if project.malloy_model_text.is_empty()
+        {
             let cache = malloy_cache();
-            match cache.get_or_compile(&plan, &model, compiler) {
+            match cache.get_or_compile(&plan, model, compiler) {
                 Ok((s, h, ms)) => (s, h, ms, None),
                 Err(e) => (String::new(), false, 0.0, Some(e)),
             }
@@ -161,16 +174,30 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
         if let Some(ref err) = compile_err {
             eprintln!(
                 "Malloy compile FAILED plan_key={} kind={:?} measure={:?}: {err}",
-                plan_key(&plan), query.kind, query.measure,
+                plan_key(&plan),
+                query.kind,
+                query.measure,
             );
             eprintln!("  Malloy source:\n{source}");
 
             let t1 = Instant::now();
-            let fallback = execute_plan_with_backend_and_context(&plan, &model, backend, user, config);
+            let fallback =
+                execute_plan_with_backend_and_context(&plan, model, backend, user, config);
             let exec_us = (Instant::now() - t1).as_micros() as u64;
-            (fallback, RuntimePath::DirectSql, compile_us, false, 0.0, exec_us)
+            (
+                fallback,
+                RuntimePath::DirectSql,
+                compile_us,
+                false,
+                0.0,
+                exec_us,
+            )
         } else {
-            let path = if was_hit { RuntimePath::MalloyCached } else { RuntimePath::MalloyCompiled };
+            let path = if was_hit {
+                RuntimePath::MalloyCached
+            } else {
+                RuntimePath::MalloyCompiled
+            };
 
             let t0 = Instant::now();
             let r = execute_plan_sql_with_backend(&plan, &sql, backend);
@@ -180,7 +207,7 @@ pub fn get_execute_cellset_response_timed_malloy_with_backend<B: QueryBackend + 
         }
     } else {
         let t0 = Instant::now();
-        let r = execute_plan_with_backend_and_context(&plan, &model, backend, user, config);
+        let r = execute_plan_with_backend_and_context(&plan, model, backend, user, config);
         let exec_us = (Instant::now() - t0).as_micros() as u64;
         (r, RuntimePath::DirectSql, 0, false, 0.0, exec_us)
     };

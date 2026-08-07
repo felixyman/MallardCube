@@ -1,11 +1,11 @@
-pub mod plan;
-pub mod model;
+pub mod cache;
 pub mod malloy;
-pub mod sql;
-pub mod normalize;
 pub mod malloy_compiler;
 pub mod malloy_node;
 pub mod malloy_node_longlived;
-pub mod cache;
+pub mod model;
+pub mod normalize;
 pub mod parity;
+pub mod plan;
+pub mod sql;
 pub mod timing;

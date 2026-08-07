@@ -1,13 +1,17 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use xmla_proxy::backend::{Backend, BenchmarkDataConfig, QueryBackend};
-use xmla_proxy::engine::model::default_model;
-use xmla_proxy::engine::plan::{plan_from_semantic, execute_plan_with_backend, execute_plan_sql_with_backend};
-use xmla_proxy::engine::malloy::{malloy_query, malloy_for_query_plan, malloy_source_for_query_plan};
-use xmla_proxy::engine::malloy_compiler::{CompileResult, NullCompiler, MalloyCompiler};
-use xmla_proxy::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
-use xmla_proxy::engine::sql::sql_for_query_plan;
-use xmla_proxy::engine::normalize::plan_key;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use xmla_proxy::backend::{Backend, BenchmarkDataConfig};
 use xmla_proxy::engine::cache::PlanCache;
+use xmla_proxy::engine::malloy::{
+    malloy_for_query_plan, malloy_query, malloy_source_for_query_plan,
+};
+use xmla_proxy::engine::malloy_compiler::{CompileResult, MalloyCompiler, NullCompiler};
+use xmla_proxy::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
+use xmla_proxy::engine::model::default_model;
+use xmla_proxy::engine::normalize::plan_key;
+use xmla_proxy::engine::plan::{
+    execute_plan_sql_with_backend, execute_plan_with_backend, plan_from_semantic,
+};
+use xmla_proxy::engine::sql::sql_for_query_plan;
 use xmla_proxy::execute_builders::get_execute_cellset_response_with_backend;
 use xmla_proxy::mdx_parser::parse_mdx;
 use xmla_proxy::mdx_semantic::semantic_query_from_mdx;
@@ -114,26 +118,44 @@ struct BenchCase {
 }
 
 const BENCH_CASES: &[BenchCase] = &[
-    BenchCase { name: "total", mdx: MDX_SLICER },
-    BenchCase { name: "group1d", mdx: MDX_DRILLDOWN },
-    BenchCase { name: "group1d_filtered", mdx: MDX_KAT_ROWS_REGION_FILTER },
-    BenchCase { name: "group2d", mdx: MDX_CROSSJOIN_PROBE },
-    BenchCase { name: "group2d_nested_filters", mdx: MDX_NESTED_BOTH_FILTERS },
-    BenchCase { name: "collapse", mdx: MDX_DRILLDOWN_MEMBER_COLLAPSE },
+    BenchCase {
+        name: "total",
+        mdx: MDX_SLICER,
+    },
+    BenchCase {
+        name: "group1d",
+        mdx: MDX_DRILLDOWN,
+    },
+    BenchCase {
+        name: "group1d_filtered",
+        mdx: MDX_KAT_ROWS_REGION_FILTER,
+    },
+    BenchCase {
+        name: "group2d",
+        mdx: MDX_CROSSJOIN_PROBE,
+    },
+    BenchCase {
+        name: "group2d_nested_filters",
+        mdx: MDX_NESTED_BOTH_FILTERS,
+    },
+    BenchCase {
+        name: "collapse",
+        mdx: MDX_DRILLDOWN_MEMBER_COLLAPSE,
+    },
 ];
 
 const DATA_CONFIGS: &[(&str, fn() -> BenchmarkDataConfig)] = &[
-    ("small",  BenchmarkDataConfig::small),
+    ("small", BenchmarkDataConfig::small),
     ("medium", BenchmarkDataConfig::medium),
-    ("large",  BenchmarkDataConfig::large),
+    ("large", BenchmarkDataConfig::large),
 ];
 
 fn bench_execute_scale(c: &mut Criterion) {
     let model = default_model();
 
     for (size_label, config_fn) in DATA_CONFIGS {
-        let backend = Backend::new_with_config(&config_fn())
-            .expect("failed to create benchmark backend");
+        let backend =
+            Backend::new_with_config(&config_fn()).expect("failed to create benchmark backend");
 
         let mut group = c.benchmark_group(format!("execute_{}", size_label));
 
@@ -159,8 +181,8 @@ fn bench_e2e_scale(c: &mut Criterion) {
     let model = default_model();
 
     for (size_label, config_fn) in DATA_CONFIGS {
-        let backend = Backend::new_with_config(&config_fn())
-            .expect("failed to create benchmark backend");
+        let backend =
+            Backend::new_with_config(&config_fn()).expect("failed to create benchmark backend");
 
         let mut group = c.benchmark_group(format!("e2e_{}", size_label));
 
@@ -188,11 +210,7 @@ criterion_group!(
     bench_emit,
 );
 
-criterion_group!(
-    scale,
-    bench_execute_scale,
-    bench_e2e_scale,
-);
+criterion_group!(scale, bench_execute_scale, bench_e2e_scale,);
 
 fn bench_comparison(c: &mut Criterion) {
     let model = default_model();
@@ -246,9 +264,7 @@ fn bench_comparison(c: &mut Criterion) {
     for (name, mdx) in cases {
         let query = semantic_query_from_mdx(mdx);
         let plan = plan_from_semantic(&query);
-        group.bench_function(*name, |b| {
-            b.iter(|| plan_key(black_box(&plan)))
-        });
+        group.bench_function(*name, |b| b.iter(|| plan_key(black_box(&plan))));
     }
     group.finish();
 
@@ -278,15 +294,12 @@ fn bench_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    comparison,
-    bench_comparison,
-);
+criterion_group!(comparison, bench_comparison,);
 
 fn bench_malloy_runtime(c: &mut Criterion) {
     let model = default_model();
-    let compiler = LongLivedNodeMalloyCompiler::new()
-        .expect("failed to start long-lived Malloy compiler");
+    let compiler =
+        LongLivedNodeMalloyCompiler::new().expect("failed to start long-lived Malloy compiler");
     let cache = PlanCache::new();
 
     let cases: &[(&str, &str)] = &[
@@ -339,15 +352,16 @@ fn bench_malloy_runtime(c: &mut Criterion) {
         let _ = cache.get_or_compile(&plan, &model, &compiler).unwrap();
         group.bench_function(*name, |b| {
             b.iter(|| {
-                let _ = cache.get_or_compile(black_box(&plan), black_box(&model), black_box(&compiler));
+                let _ =
+                    cache.get_or_compile(black_box(&plan), black_box(&model), black_box(&compiler));
             })
         });
     }
     group.finish();
 
     // Benchmark: direct SQL vs Malloy compile + execute
-    let backend = Backend::new_with_config(&BenchmarkDataConfig::small())
-        .expect("benchmark backend");
+    let backend =
+        Backend::new_with_config(&BenchmarkDataConfig::small()).expect("benchmark backend");
     for (name, mdx) in cases {
         let query = semantic_query_from_mdx(mdx);
         let plan = plan_from_semantic(&query);
@@ -355,27 +369,31 @@ fn bench_malloy_runtime(c: &mut Criterion) {
         // Direct SQL path
         let mut group = c.benchmark_group(format!("execute_direct_{}", name));
         group.bench_function("direct", |b| {
-            b.iter(|| execute_plan_with_backend(black_box(&plan), black_box(&model), black_box(&backend)))
+            b.iter(|| {
+                execute_plan_with_backend(black_box(&plan), black_box(&model), black_box(&backend))
+            })
         });
         group.finish();
 
         // Malloy compile + execute path (execute the compiled SQL)
         let mut group = c.benchmark_group(format!("execute_malloy_{}", name));
-        let cr: CompileResult = compiler.compile_query(&model, &plan)
+        let cr: CompileResult = compiler
+            .compile_query(&model, &plan)
             .expect("compile for benchmark");
         let compiled_sql = cr.sql;
         group.bench_function("malloy", |b| {
             b.iter(|| {
-                execute_plan_sql_with_backend(black_box(&plan), black_box(&compiled_sql), black_box(&backend))
+                execute_plan_sql_with_backend(
+                    black_box(&plan),
+                    black_box(&compiled_sql),
+                    black_box(&backend),
+                )
             })
         });
         group.finish();
     }
 }
 
-criterion_group!(
-    malloy_runtime,
-    bench_malloy_runtime,
-);
+criterion_group!(malloy_runtime, bench_malloy_runtime,);
 
 criterion_main!(pipeline, scale, comparison, malloy_runtime);

@@ -1,18 +1,20 @@
+use crate::engine::model::{
+    Dialect, DimensionDef, FactTable, FallbackCapability, MeasureDef, RelationshipDef,
+    SemanticModel,
+};
+use crate::engine::plan::QueryPlan;
+use crate::proxy_config::ProxyConfig;
+#[cfg(test)]
+use std::cell::RefCell;
 /// Proxy project — loads a developer's Malloy files and proxy config
 /// at startup, producing the runtime `SemanticModel` and the Malloy
 /// source text that will be compiled.
 ///
 /// This is the single entry-point that replaces `default_model()` when
 /// a config is supplied.
-
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
-#[cfg(test)]
-use std::cell::RefCell;
-use crate::engine::model::{SemanticModel, DimensionDef, MeasureDef, Dialect, FactTable, RelationshipDef, FallbackCapability};
-use crate::engine::plan::QueryPlan;
-use crate::proxy_config::ProxyConfig;
 
 fn parse_fallback_capability(s: &str) -> FallbackCapability {
     match s {
@@ -35,7 +37,7 @@ pub fn project() -> &'static ProxyProject {
     if let Some(project) = TEST_PROJECT.with(|slot| *slot.borrow()) {
         return project;
     }
-    PROJECT.get_or_init(|| ProxyProject::default_())
+    PROJECT.get_or_init(ProxyProject::default_)
 }
 
 #[cfg(test)]
@@ -62,7 +64,9 @@ pub fn init_project(config_path: Option<&str>) -> Result<(), String> {
         Some(path) => ProxyProject::load(path)?,
         None => ProxyProject::default_(),
     };
-    PROJECT.set(p).map_err(|_| "project already initialised".into())
+    PROJECT
+        .set(p)
+        .map_err(|_| "project already initialised".into())
 }
 
 /// Resolve `db_path` relative to the directory containing the config file.
@@ -95,22 +99,26 @@ impl ProxyProject {
         let config: ProxyConfig = {
             let text = fs::read_to_string(config_path)
                 .map_err(|e| format!("read config {config_path}: {e}"))?;
-            serde_json::from_str(&text)
-                .map_err(|e| format!("parse config {config_path}: {e}"))?
+            serde_json::from_str(&text).map_err(|e| format!("parse config {config_path}: {e}"))?
         };
 
-        let malloy_path = Path::new(config_path).parent()
+        let malloy_path = Path::new(config_path)
+            .parent()
             .unwrap_or(Path::new("."))
             .join(&config.malloy_model_file);
         let malloy_model_text = fs::read_to_string(&malloy_path)
-            .map_err(|e| format!(
-                "read model {}: {e}",
-                malloy_path.display(),
-            ))?;
+            .map_err(|e| format!("read model {}: {e}", malloy_path.display(),))?;
 
-        let model = build_semantic_model(&config, Path::new(config_path).parent().unwrap_or(Path::new(".")));
+        let model = build_semantic_model(
+            &config,
+            Path::new(config_path).parent().unwrap_or(Path::new(".")),
+        );
 
-        Ok(Self { config, model, malloy_model_text })
+        Ok(Self {
+            config,
+            model,
+            malloy_model_text,
+        })
     }
 
     /// Return Malloy source to compile: either loaded model text +
@@ -120,7 +128,9 @@ impl ProxyProject {
             crate::engine::malloy::malloy_source_for_query_plan(&self.model, plan)
         } else {
             crate::engine::malloy::malloy_source_with_model_text(
-                &self.malloy_model_text, &self.model, plan,
+                &self.malloy_model_text,
+                &self.model,
+                plan,
             )
         }
     }
@@ -178,30 +188,28 @@ impl ProxyProject {
                         is_date_role: false,
                     },
                 ],
-                measures: vec![
-                    crate::proxy_config::MeasureConfig {
-                        id: "TotalSales".into(),
-                        malloy_name: "total_forsaljning".into(),
-                        physical_expr: "sales.sum()".into(),
-                        sql_expr: "SUM(sales)".into(),
-                        caption: "Total Försäljning".into(),
-                        display_name: "Total Försäljning (SEK)".into(),
-                        description: "Vår totala försäljning".into(),
-                        format_string: "#,##0.00 SEK".into(),
-                        units: "SEK".into(),
-                        ordinal: 1,
-                        visible: true,
-                        fact_table: None,
-                        aggregator: 1,
-                        measure_group_name: "Faktatabell".into(),
-                        numeric_precision: 18,
-                        numeric_scale: 2,
-                        expression: "SUM('Faktatabell'[Sales])".into(),
-                        sql_fallback_file: None,
-                        time_intelligence: None,
-                        fallback_capability: None,
-                    },
-                ],
+                measures: vec![crate::proxy_config::MeasureConfig {
+                    id: "TotalSales".into(),
+                    malloy_name: "total_forsaljning".into(),
+                    physical_expr: "sales.sum()".into(),
+                    sql_expr: "SUM(sales)".into(),
+                    caption: "Total Försäljning".into(),
+                    display_name: "Total Försäljning (SEK)".into(),
+                    description: "Vår totala försäljning".into(),
+                    format_string: "#,##0.00 SEK".into(),
+                    units: "SEK".into(),
+                    ordinal: 1,
+                    visible: true,
+                    fact_table: None,
+                    aggregator: 1,
+                    measure_group_name: "Faktatabell".into(),
+                    numeric_precision: 18,
+                    numeric_scale: 2,
+                    expression: "SUM('Faktatabell'[Sales])".into(),
+                    sql_fallback_file: None,
+                    time_intelligence: None,
+                    fallback_capability: None,
+                }],
             },
             model: crate::engine::model::default_model(),
             malloy_model_text: String::new(),
@@ -217,7 +225,9 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
 
     let fact_tables: Vec<FactTable> = if config.fact_tables.is_empty() {
         // Old single-table config: synthesize one fact table
-        let mg = config.measures.first()
+        let mg = config
+            .measures
+            .first()
             .map(|m| m.measure_group_name.clone())
             .unwrap_or_else(|| config.cube.clone());
         vec![FactTable {
@@ -227,93 +237,137 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             measure_group_name: mg,
         }]
     } else {
-        config.fact_tables.iter().map(|ft| FactTable {
-            id: ft.id.clone(),
-            source_name: ft.source_name.clone(),
-            table_name: ft.table_name.clone(),
-            measure_group_name: ft.measure_group_name.clone(),
-        }).collect()
+        config
+            .fact_tables
+            .iter()
+            .map(|ft| FactTable {
+                id: ft.id.clone(),
+                source_name: ft.source_name.clone(),
+                table_name: ft.table_name.clone(),
+                measure_group_name: ft.measure_group_name.clone(),
+            })
+            .collect()
     };
 
-    let dimensions: Vec<DimensionDef> = config.dimensions.iter().map(|dc| {
-        let id = dc.id.clone();
-        let table_name = dc.fact_table.as_ref().map(|ft_id| {
-            fact_tables.iter().find(|ft| ft.id == *ft_id)
-                .unwrap_or_else(|| panic!("config: dimension '{}' references unknown fact_table '{}'", id, ft_id))
-                .table_name.clone()
-        });
-        DimensionDef {
-            id,
-            semantic_name: dc.malloy_name.clone(),
-            physical_field: dc.physical_field.clone(),
-            table_name,
-            shared: dc.shared,
-            caption: dc.caption.clone(),
-            description: dc.description.clone(),
-            visible: dc.visible,
-            ordinal: dc.ordinal,
-            hierarchy_name: dc.hierarchy_name.clone(),
-            all_level_name: dc.all_level_name.clone(),
-            leaf_level_name: dc.leaf_level_name.clone(),
-            cardinality_hint: dc.cardinality_hint,
-            is_date_role: dc.is_date_role,
-        }
-    }).collect();
+    let dimensions: Vec<DimensionDef> = config
+        .dimensions
+        .iter()
+        .map(|dc| {
+            let id = dc.id.clone();
+            let table_name = dc.fact_table.as_ref().map(|ft_id| {
+                fact_tables
+                    .iter()
+                    .find(|ft| ft.id == *ft_id)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "config: dimension '{}' references unknown fact_table '{}'",
+                            id, ft_id
+                        )
+                    })
+                    .table_name
+                    .clone()
+            });
+            DimensionDef {
+                id,
+                semantic_name: dc.malloy_name.clone(),
+                physical_field: dc.physical_field.clone(),
+                table_name,
+                shared: dc.shared,
+                caption: dc.caption.clone(),
+                description: dc.description.clone(),
+                visible: dc.visible,
+                ordinal: dc.ordinal,
+                hierarchy_name: dc.hierarchy_name.clone(),
+                all_level_name: dc.all_level_name.clone(),
+                leaf_level_name: dc.leaf_level_name.clone(),
+                cardinality_hint: dc.cardinality_hint,
+                is_date_role: dc.is_date_role,
+            }
+        })
+        .collect();
 
-    let measures: Vec<MeasureDef> = config.measures.iter().map(|mc| {
-        let id = mc.id.clone();
-        let ft_idx = if config.fact_tables.is_empty() {
-            0
-        } else {
-            let ft_id = mc.fact_table.as_deref().unwrap_or_else(|| {
+    let measures: Vec<MeasureDef> =
+        config
+            .measures
+            .iter()
+            .map(|mc| {
+                let id = mc.id.clone();
+                let ft_idx =
+                    if config.fact_tables.is_empty() {
+                        0
+                    } else {
+                        let ft_id = mc.fact_table.as_deref().unwrap_or_else(|| {
                 panic!("config: multi-fact-table config requires measure.fact_table for '{}'", id)
             });
-            fact_tables.iter().position(|ft| ft.id == ft_id).unwrap_or_else(|| {
-                panic!("config: measure '{}' references unknown fact_table '{}'", id, ft_id)
+                        fact_tables
+                            .iter()
+                            .position(|ft| ft.id == ft_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "config: measure '{}' references unknown fact_table '{}'",
+                                    id, ft_id
+                                )
+                            })
+                    };
+
+                let fallback_sql = mc.sql_fallback_file.as_ref().and_then(|f| {
+                    let path = config_dir.join(f);
+                    fs::read_to_string(&path).ok().or_else(|| {
+                        eprintln!(
+                            "config: measure '{}' sql_fallback_file '{}' not found at {}",
+                            id,
+                            f,
+                            path.display()
+                        );
+                        None
+                    })
+                });
+
+                MeasureDef {
+                    id,
+                    fact_table_idx: ft_idx,
+                    semantic_name: mc.malloy_name.clone(),
+                    physical_expr: mc.physical_expr.clone(),
+                    sql_expr: mc.sql_expr.clone(),
+                    caption: mc.caption.clone(),
+                    display_name: mc.display_name.clone(),
+                    description: mc.description.clone(),
+                    visible: mc.visible,
+                    aggregator: mc.aggregator,
+                    units: mc.units.clone(),
+                    format_string: mc.format_string.clone(),
+                    measure_group_name: mc.measure_group_name.clone(),
+                    numeric_precision: mc.numeric_precision,
+                    numeric_scale: mc.numeric_scale,
+                    expression: mc.expression.clone(),
+                    sql_fallback_sql: fallback_sql,
+                    time_flag: mc
+                        .time_intelligence
+                        .as_ref()
+                        .map(|ti| ti.flag_column.clone()),
+                    date_dimension_id: mc
+                        .time_intelligence
+                        .as_ref()
+                        .and_then(|ti| ti.dimension_id.clone()),
+                    fallback_capability: mc
+                        .fallback_capability
+                        .as_deref()
+                        .map(parse_fallback_capability),
+                }
             })
-        };
+            .collect();
 
-        let fallback_sql = mc.sql_fallback_file.as_ref().and_then(|f| {
-            let path = config_dir.join(f);
-            fs::read_to_string(&path).ok().or_else(|| {
-                eprintln!("config: measure '{}' sql_fallback_file '{}' not found at {}", id, f, path.display());
-                None
-            })
-        });
-
-        MeasureDef {
-            id,
-            fact_table_idx: ft_idx,
-            semantic_name: mc.malloy_name.clone(),
-            physical_expr: mc.physical_expr.clone(),
-            sql_expr: mc.sql_expr.clone(),
-            caption: mc.caption.clone(),
-            display_name: mc.display_name.clone(),
-            description: mc.description.clone(),
-            visible: mc.visible,
-            aggregator: mc.aggregator,
-            units: mc.units.clone(),
-            format_string: mc.format_string.clone(),
-            measure_group_name: mc.measure_group_name.clone(),
-            numeric_precision: mc.numeric_precision,
-            numeric_scale: mc.numeric_scale,
-            expression: mc.expression.clone(),
-            sql_fallback_sql: fallback_sql,
-            time_flag: mc.time_intelligence.as_ref().map(|ti| ti.flag_column.clone()),
-            date_dimension_id: mc.time_intelligence.as_ref().and_then(|ti| ti.dimension_id.clone()),
-            fallback_capability: mc.fallback_capability.as_deref().map(parse_fallback_capability),
-        }
-    }).collect();
-
-    let relationships: Vec<RelationshipDef> = config.relationships.iter().map(|rc| {
-        crate::engine::model::RelationshipDef {
+    let relationships: Vec<RelationshipDef> = config
+        .relationships
+        .iter()
+        .map(|rc| crate::engine::model::RelationshipDef {
             fact_table_id: rc.fact_table.clone(),
             fact_column: rc.fact_column.clone(),
             dimension_id: rc.dimension_id.clone(),
             dim_table: rc.dim_table.clone(),
             dim_column: rc.dim_column.clone(),
-        }
-    }).collect();
+        })
+        .collect();
 
     let date_dim = config.time_intelligence.as_ref().map(|ti| {
         let dd = &ti.date_dimension;
@@ -355,38 +409,60 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
     for dim in &dimensions {
         if dim.is_date_role {
             let rel = relationships.iter().find(|r| r.dimension_id == dim.id);
-            let table_name = rel.map(|r| r.dim_table.clone())
+            let table_name = rel
+                .map(|r| r.dim_table.clone())
                 .or_else(|| date_dim.as_ref().map(|d| d.table_name.clone()))
                 .unwrap_or_else(|| "date_dim".into());
-            let date_key_column = rel.map(|r| r.dim_column.clone())
+            let date_key_column = rel
+                .map(|r| r.dim_column.clone())
                 .or_else(|| date_dim.as_ref().map(|d| d.date_key_column.clone()))
                 .unwrap_or_else(|| "date_key".into());
-            let fc = date_dim.as_ref()
-                .map(|d| (d.year_column.clone(), d.quarter_column.clone(), d.month_column.clone(),
-                           d.ytd_flag_column.clone(), d.prior_year_ytd_flag_column.clone(),
-                           d.current_year_flag_column.clone(), d.qtd_flag_column.clone(),
-                           d.mtd_flag_column.clone()))
+            let fc = date_dim
+                .as_ref()
+                .map(|d| {
+                    (
+                        d.year_column.clone(),
+                        d.quarter_column.clone(),
+                        d.month_column.clone(),
+                        d.ytd_flag_column.clone(),
+                        d.prior_year_ytd_flag_column.clone(),
+                        d.current_year_flag_column.clone(),
+                        d.qtd_flag_column.clone(),
+                        d.mtd_flag_column.clone(),
+                    )
+                })
                 .unwrap_or_else(|| {
-                    ("year".into(), "quarter".into(), "month".into(),
-                     "ytd_flag".into(), "prior_year_ytd_flag".into(),
-                     "current_year_flag".into(), "qtd_flag".into(), "mtd_flag".into())
+                    (
+                        "year".into(),
+                        "quarter".into(),
+                        "month".into(),
+                        "ytd_flag".into(),
+                        "prior_year_ytd_flag".into(),
+                        "current_year_flag".into(),
+                        "qtd_flag".into(),
+                        "mtd_flag".into(),
+                    )
                 });
-            date_dims.insert(dim.id.clone(), crate::engine::model::DateDimDef {
-                dimension_id: dim.id.clone(),
-                table_name,
-                date_key_column,
-                full_date_column: date_dim.as_ref()
-                    .map(|d| d.full_date_column.clone())
-                    .unwrap_or_else(|| "full_date".into()),
-                year_column: fc.0,
-                quarter_column: fc.1,
-                month_column: fc.2,
-                ytd_flag_column: fc.3,
-                prior_year_ytd_flag_column: fc.4,
-                current_year_flag_column: fc.5,
-                qtd_flag_column: fc.6,
-                mtd_flag_column: fc.7,
-            });
+            date_dims.insert(
+                dim.id.clone(),
+                crate::engine::model::DateDimDef {
+                    dimension_id: dim.id.clone(),
+                    table_name,
+                    date_key_column,
+                    full_date_column: date_dim
+                        .as_ref()
+                        .map(|d| d.full_date_column.clone())
+                        .unwrap_or_else(|| "full_date".into()),
+                    year_column: fc.0,
+                    quarter_column: fc.1,
+                    month_column: fc.2,
+                    ytd_flag_column: fc.3,
+                    prior_year_ytd_flag_column: fc.4,
+                    current_year_flag_column: fc.5,
+                    qtd_flag_column: fc.6,
+                    mtd_flag_column: fc.7,
+                },
+            );
         }
     }
 
@@ -431,8 +507,7 @@ mod tests {
 
     #[test]
     fn second_project_loads() {
-        let p = ProxyProject::load("project2/proxy-config.json")
-            .expect("load project2");
+        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
         assert_eq!(p.config.catalog, "MY_CATALOG");
         assert_eq!(p.config.cube, "SalesCube");
         // Two differently-named dimensions
@@ -453,9 +528,11 @@ mod tests {
 
     #[test]
     fn second_project_malloy_source() {
-        let p = ProxyProject::load("project2/proxy-config.json")
-            .expect("load project2");
-        let plan = QueryPlan::Total { measure: "Revenue".into(), filters: vec![] };
+        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
+        let plan = QueryPlan::Total {
+            measure: "Revenue".into(),
+            filters: vec![],
+        };
         let src = p.malloy_source(&plan);
         // Should use the loaded model text, not generated model
         assert!(src.contains("source: sales_data is duckdb.table('faktatabell')"));
@@ -465,8 +542,7 @@ mod tests {
 
     #[test]
     fn second_project_group_by() {
-        let p = ProxyProject::load("project2/proxy-config.json")
-            .expect("load project2");
+        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
         let plan = QueryPlan::GroupBy {
             measure: "Revenue".into(),
             group_by: vec!["Category".into(), "Territory".into()],
@@ -479,8 +555,7 @@ mod tests {
 
     #[test]
     fn second_project_defaults_differ() {
-        let p = ProxyProject::load("project2/proxy-config.json")
-            .expect("load project2");
+        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
         assert_eq!(p.model.default_dimension_id().as_deref(), Some("Category"));
         assert_eq!(p.model.default_measure_id().as_deref(), Some("Revenue"));
     }
@@ -489,8 +564,7 @@ mod tests {
 
     #[test]
     fn third_project_loads() {
-        let p = ProxyProject::load("project3/proxy-config.json")
-            .expect("load project3");
+        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
         assert_eq!(p.config.catalog, "SALES_ANALYTICS");
         assert_eq!(p.config.cube, "Sales");
         assert_eq!(p.model.dimensions.len(), 5);
@@ -502,7 +576,10 @@ mod tests {
         assert_eq!(p.model.meas_def("Revenue").caption, "Revenue");
         assert_eq!(p.model.meas_def("Units").caption, "Units");
         // Explicit date-dimension contract
-        assert!(p.model.date_dim.is_some(), "date_dim should load from explicit config");
+        assert!(
+            p.model.date_dim.is_some(),
+            "date_dim should load from explicit config"
+        );
         let dd = p.model.date_dim.as_ref().unwrap();
         assert_eq!(dd.dimension_id, "Date");
         assert_eq!(dd.table_name, "date_dim");
@@ -511,20 +588,37 @@ mod tests {
         assert_eq!(dd.prior_year_ytd_flag_column, "prior_year_ytd_flag");
         // Date dimension exists and has is_date_role
         let date_dim = p.model.dim_def("Date");
-        assert!(date_dim.is_date_role, "Date dimension should be marked as date role");
+        assert!(
+            date_dim.is_date_role,
+            "Date dimension should be marked as date role"
+        );
         assert_eq!(date_dim.caption, "Date");
         // Date has a relationship
-        assert!(p.model.rel_for_dimension("Date").is_some(), "Date should have a relationship");
+        assert!(
+            p.model.rel_for_dimension("Date").is_some(),
+            "Date should have a relationship"
+        );
         // New period measures exist with correct time flags
-        assert_eq!(p.model.meas_def("RevenueYTD").time_flag.as_deref(), Some("ytd_flag"));
-        assert_eq!(p.model.meas_def("RevenuePriorYearYTD").time_flag.as_deref(), Some("prior_year_ytd_flag"));
-        assert_eq!(p.model.meas_def("RevenueQTD").time_flag.as_deref(), Some("qtd_flag"));
-        assert_eq!(p.model.meas_def("RevenueMTD").time_flag.as_deref(), Some("mtd_flag"));
+        assert_eq!(
+            p.model.meas_def("RevenueYTD").time_flag.as_deref(),
+            Some("ytd_flag")
+        );
+        assert_eq!(
+            p.model.meas_def("RevenuePriorYearYTD").time_flag.as_deref(),
+            Some("prior_year_ytd_flag")
+        );
+        assert_eq!(
+            p.model.meas_def("RevenueQTD").time_flag.as_deref(),
+            Some("qtd_flag")
+        );
+        assert_eq!(
+            p.model.meas_def("RevenueMTD").time_flag.as_deref(),
+            Some("mtd_flag")
+        );
     }
 
     #[test]
     fn multi_date_role_model_resolves_per_measure() {
-        use std::collections::HashMap;
         let json = r##"{
             "catalog": "TEST", "cube": "Ops",
             "source_name": "sales_data", "table_name": "sales_fact",
@@ -573,7 +667,11 @@ mod tests {
         let model = build_semantic_model(&cfg, Path::new("."));
 
         // Two date-role dimensions in date_dims
-        assert_eq!(model.date_dims.len(), 2, "should have two date-role entries");
+        assert_eq!(
+            model.date_dims.len(),
+            2,
+            "should have two date-role entries"
+        );
         assert!(model.date_dims.contains_key("Order Date"));
         assert!(model.date_dims.contains_key("Ship Date"));
         // Order Date picked up order_calendar table from relationship
@@ -581,25 +679,44 @@ mod tests {
         assert_eq!(model.date_dims["Ship Date"].table_name, "ship_calendar");
 
         // date_dim_for_measure resolves correctly
-        let order_dd = model.date_dim_for_measure("OrdersYTD")
+        let order_dd = model
+            .date_dim_for_measure("OrdersYTD")
             .expect("OrdersYTD should resolve date dim");
         assert_eq!(order_dd.dimension_id, "Order Date");
-        let ship_dd = model.date_dim_for_measure("SalesPriorYear")
+        let ship_dd = model
+            .date_dim_for_measure("SalesPriorYear")
             .expect("SalesPriorYear should resolve date dim");
         assert_eq!(ship_dd.dimension_id, "Ship Date");
 
         // Measure date_dimension_id and time_flag are correct
-        assert_eq!(model.meas_def("OrdersYTD").date_dimension_id.as_deref(), Some("Order Date"));
-        assert_eq!(model.meas_def("OrdersYTD").time_flag.as_deref(), Some("ytd_flag"));
-        assert_eq!(model.meas_def("SalesPriorYear").date_dimension_id.as_deref(), Some("Ship Date"));
-        assert_eq!(model.meas_def("SalesPriorYear").time_flag.as_deref(), Some("prior_year_ytd_flag"));
+        assert_eq!(
+            model.meas_def("OrdersYTD").date_dimension_id.as_deref(),
+            Some("Order Date")
+        );
+        assert_eq!(
+            model.meas_def("OrdersYTD").time_flag.as_deref(),
+            Some("ytd_flag")
+        );
+        assert_eq!(
+            model
+                .meas_def("SalesPriorYear")
+                .date_dimension_id
+                .as_deref(),
+            Some("Ship Date")
+        );
+        assert_eq!(
+            model.meas_def("SalesPriorYear").time_flag.as_deref(),
+            Some("prior_year_ytd_flag")
+        );
     }
 
     #[test]
     fn third_project_malloy_source() {
-        let p = ProxyProject::load("project3/proxy-config.json")
-            .expect("load project3");
-        let plan = QueryPlan::Total { measure: "Revenue".into(), filters: vec![] };
+        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let plan = QueryPlan::Total {
+            measure: "Revenue".into(),
+            filters: vec![],
+        };
         let src = p.malloy_source(&plan);
         assert!(src.contains("measure: total_revenue is revenue.sum()"));
         assert!(src.contains("measure: total_units is units.sum()"));
@@ -608,8 +725,7 @@ mod tests {
 
     #[test]
     fn third_project_group_by_2d() {
-        let p = ProxyProject::load("project3/proxy-config.json")
-            .expect("load project3");
+        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
         let plan = QueryPlan::GroupBy {
             measure: "Revenue".into(),
             group_by: vec!["Category".into(), "Territory".into()],
@@ -754,8 +870,11 @@ mod tests {
         ).unwrap();
         let m = build_semantic_model(&cfg, Path::new("."));
         let dim = m.dim_def("Cat");
-        assert_eq!(dim.table_name.as_deref(), Some("if"),
-            "dimension Cat should resolve to inv fact table 'if'");
+        assert_eq!(
+            dim.table_name.as_deref(),
+            Some("if"),
+            "dimension Cat should resolve to inv fact table 'if'"
+        );
         assert_eq!(m.dim_table("Cat"), "if");
     }
 
@@ -779,8 +898,11 @@ mod tests {
             }"##,
         ).unwrap();
         let m = build_semantic_model(&cfg, Path::new("."));
-        assert_eq!(m.dim_table("Cat"), "t",
-            "dimension without fact_table should use primary table");
+        assert_eq!(
+            m.dim_table("Cat"),
+            "t",
+            "dimension without fact_table should use primary table"
+        );
     }
 
     #[test]
@@ -813,8 +935,7 @@ mod tests {
 
     #[test]
     fn fourth_project_loads() {
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         assert_eq!(p.config.catalog, "OPERATIONS_ANALYTICS");
         assert_eq!(p.config.cube, "Operations");
         assert_eq!(p.model.fact_tables.len(), 2);
@@ -824,8 +945,7 @@ mod tests {
 
     #[test]
     fn fourth_project_fact_table_assignments() {
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         // Measures scoped correctly
         assert_eq!(m.meas_def("Revenue").fact_table_idx, 0, "Revenue -> sales");
@@ -839,24 +959,31 @@ mod tests {
 
     #[test]
     fn fourth_project_dimension_tables() {
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         // Shared dimensions fall back to primary
-        assert_eq!(m.dim_table("Category"), "sales_fact",
-            "undecorated shared dim uses primary");
+        assert_eq!(
+            m.dim_table("Category"),
+            "sales_fact",
+            "undecorated shared dim uses primary"
+        );
         assert_eq!(m.dim_table("Territory"), "sales_fact");
         // Scoped dimensions use their fact table
-        assert_eq!(m.dim_table("Channel"), "sales_fact",
-            "Channel is scoped to sales");
-        assert_eq!(m.dim_table("Warehouse"), "inventory_fact",
-            "Warehouse is scoped to inventory");
+        assert_eq!(
+            m.dim_table("Channel"),
+            "sales_fact",
+            "Channel is scoped to sales"
+        );
+        assert_eq!(
+            m.dim_table("Warehouse"),
+            "inventory_fact",
+            "Warehouse is scoped to inventory"
+        );
     }
 
     #[test]
     fn fourth_project_measure_groups() {
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         assert_eq!(m.fact_tables[0].measure_group_name, "Sales");
         assert_eq!(m.fact_tables[1].measure_group_name, "Inventory");
@@ -868,24 +995,40 @@ mod tests {
     #[test]
     fn fourth_project_sql_uses_correct_table() {
         use crate::engine::sql::sql_for_query_plan;
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let m = &p.model;
-        let sql = sql_for_query_plan(m, &QueryPlan::Total { measure: "Revenue".into(), filters: vec![] });
+        let sql = sql_for_query_plan(
+            m,
+            &QueryPlan::Total {
+                measure: "Revenue".into(),
+                filters: vec![],
+            },
+        );
         assert!(sql.contains("FROM sales_fact"), "Revenue: {sql}");
-        let sql = sql_for_query_plan(m, &QueryPlan::Total { measure: "Stock".into(), filters: vec![] });
+        let sql = sql_for_query_plan(
+            m,
+            &QueryPlan::Total {
+                measure: "Stock".into(),
+                filters: vec![],
+            },
+        );
         assert!(sql.contains("FROM inventory_fact"), "Stock: {sql}");
     }
 
     #[test]
     fn fourth_project_malloy_multi_source() {
         use crate::engine::malloy::malloy_model;
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         let out = malloy_model(m);
-        assert!(out.contains("source: sales_data"), "should have sales source");
-        assert!(out.contains("source: inventory_data"), "should have inventory source");
+        assert!(
+            out.contains("source: sales_data"),
+            "should have sales source"
+        );
+        assert!(
+            out.contains("source: inventory_data"),
+            "should have inventory source"
+        );
         assert!(out.contains("total_revenue"), "should have Revenue measure");
         assert!(out.contains("total_stock"), "should have Stock measure");
     }
@@ -894,8 +1037,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
@@ -911,7 +1053,11 @@ mod tests {
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
-            QueryPlan::GroupBy { ref measure, ref group_by, .. } => {
+            QueryPlan::GroupBy {
+                ref measure,
+                ref group_by,
+                ..
+            } => {
                 assert_eq!(group_by[0], "Warehouse", "should group by Warehouse");
                 assert!(
                     measure == "Stock" || measure == "Cost",
@@ -926,8 +1072,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure_sales_dim() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
@@ -956,9 +1101,8 @@ mod tests {
     #[test]
     fn unrelated_filter_ignored() {
         use crate::engine::plan::plan_from_semantic_with_model;
-        use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, DimensionFilter};
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         // Cost (inventory) with Channel filter (sales-only dimension).
         // Channel should be ignored because it's unrelated.
         let query = SemanticQuery {
@@ -980,8 +1124,10 @@ mod tests {
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
             QueryPlan::Total { ref filters, .. } => {
-                assert!(filters.is_empty(),
-                    "Channel filter should be ignored for Cost measure: {filters:?}");
+                assert!(
+                    filters.is_empty(),
+                    "Channel filter should be ignored for Cost measure: {filters:?}"
+                );
             }
             other => panic!("expected Total plan, got {other:?}"),
         }
@@ -990,9 +1136,8 @@ mod tests {
     #[test]
     fn shared_filter_passes_through() {
         use crate::engine::plan::plan_from_semantic_with_model;
-        use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, DimensionFilter};
-        let p = ProxyProject::load("project4/proxy-config.json")
-            .expect("load project4");
+        use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
+        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
         // Category is shared — it should pass through for any measure.
         let query = SemanticQuery {
             kind: SemanticQueryKind::SlicerAllAndMeasure,
@@ -1013,8 +1158,11 @@ mod tests {
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
             QueryPlan::Total { ref filters, .. } => {
-                assert_eq!(filters.len(), 1,
-                    "Category filter should pass through (shared dimension)");
+                assert_eq!(
+                    filters.len(),
+                    1,
+                    "Category filter should pass through (shared dimension)"
+                );
                 assert_eq!(filters[0].dimension, "Category");
             }
             other => panic!("expected Total plan, got {other:?}"),
@@ -1030,16 +1178,25 @@ mod tests {
         assert_eq!(p.config.catalog, "SEMANTICMODEL");
         assert_eq!(p.config.cube, "DW_FYS_F_UNDERSÖKNING");
         assert!(!p.model.fact_tables.is_empty());
-        assert!(p.model.dimensions.len() >= 10, "should have many dimensions");
+        assert!(
+            p.model.dimensions.len() >= 10,
+            "should have many dimensions"
+        );
         assert!(p.model.measures.len() >= 20, "should have many measures");
-        assert!(!p.model.relationships.is_empty(), "should have relationships");
+        assert!(
+            !p.model.relationships.is_empty(),
+            "should have relationships"
+        );
     }
 
     #[test]
     fn generated_project_picks_one_non_fallback_measure() {
         let p = ProxyProject::load("generated_project/proxy-config.json")
             .expect("load generated_project");
-        let simple = p.model.measures.iter()
+        let simple = p
+            .model
+            .measures
+            .iter()
             .find(|m| m.sql_fallback_sql.is_none())
             .expect("at least one non-fallback measure exists");
         assert!(!simple.semantic_name.is_empty());
@@ -1050,13 +1207,18 @@ mod tests {
     fn generated_project_relationship_backed_dimension_has_correct_table() {
         let p = ProxyProject::load("generated_project/proxy-config.json")
             .expect("load generated_project");
-        let rel_dim = p.model.dimensions.iter().find(|d| {
-            d.table_name.is_none() && p.model.rel_for_dimension(&d.id).is_some()
-        }).expect("at least one relationship-backed dimension exists");
+        let rel_dim = p
+            .model
+            .dimensions
+            .iter()
+            .find(|d| d.table_name.is_none() && p.model.rel_for_dimension(&d.id).is_some())
+            .expect("at least one relationship-backed dimension exists");
         let resolved = p.model.dim_table_for_discovery(&rel_dim.id);
         let rel = p.model.rel_for_dimension(&rel_dim.id).unwrap();
-        assert_eq!(resolved, rel.dim_table,
-            "dim_table_for_discovery should return the relationship's dim_table");
+        assert_eq!(
+            resolved, rel.dim_table,
+            "dim_table_for_discovery should return the relationship's dim_table"
+        );
     }
 
     // ---- generated_retail_analytics smoke ----
@@ -1065,16 +1227,33 @@ mod tests {
     fn retail_analytics_project_loads() {
         let p = ProxyProject::load("generated_retail_analytics/proxy-config.json")
             .expect("load generated_retail_analytics");
-        assert!(p.model.dimensions.len() >= 4, "should have several dimensions");
+        assert!(
+            p.model.dimensions.len() >= 4,
+            "should have several dimensions"
+        );
         assert!(!p.model.measures.is_empty(), "should have measures");
-        assert!(!p.model.relationships.is_empty(), "should have relationships");
+        assert!(
+            !p.model.relationships.is_empty(),
+            "should have relationships"
+        );
         // Has a date-role dimension
-        let date_dims: Vec<_> = p.model.dimensions.iter()
-            .filter(|d| d.is_date_role).collect();
-        assert_eq!(date_dims.len(), 1, "should have exactly one date-role dimension");
+        let date_dims: Vec<_> = p
+            .model
+            .dimensions
+            .iter()
+            .filter(|d| d.is_date_role)
+            .collect();
+        assert_eq!(
+            date_dims.len(),
+            1,
+            "should have exactly one date-role dimension"
+        );
         assert_eq!(date_dims[0].id, "Dates");
         // time_intelligence.date_dimension is present
-        assert!(p.model.date_dim.is_some(), "global date_dim should be present");
+        assert!(
+            p.model.date_dim.is_some(),
+            "global date_dim should be present"
+        );
         assert_eq!(p.model.date_dim.as_ref().unwrap().dimension_id, "Dates");
         // date_dims contains the Dates entry
         assert!(p.model.date_dims.contains_key("Dates"));
@@ -1088,15 +1267,15 @@ mod tests {
             "generated_retail_analytics/proxy-config.json",
             Some("data/sales.db"),
         );
-        assert_eq!(resolved, Some("generated_retail_analytics/data/sales.db".into()));
+        assert_eq!(
+            resolved,
+            Some("generated_retail_analytics/data/sales.db".into())
+        );
     }
 
     #[test]
     fn resolve_db_path_absolute_is_passthrough() {
-        let resolved = resolve_db_path(
-            "any/proxy-config.json",
-            Some("/abs/path/db.db"),
-        );
+        let resolved = resolve_db_path("any/proxy-config.json", Some("/abs/path/db.db"));
         assert_eq!(resolved, Some("/abs/path/db.db".into()));
     }
 

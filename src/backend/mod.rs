@@ -84,16 +84,36 @@ impl Default for BenchmarkDataConfig {
 
 impl BenchmarkDataConfig {
     pub fn tiny() -> Self {
-        Self { row_count: 10, category_count: 4, region_count: 2, seed: 1 }
+        Self {
+            row_count: 10,
+            category_count: 4,
+            region_count: 2,
+            seed: 1,
+        }
     }
     pub fn small() -> Self {
-        Self { row_count: 10_000, category_count: 20, region_count: 8, seed: 42 }
+        Self {
+            row_count: 10_000,
+            category_count: 20,
+            region_count: 8,
+            seed: 42,
+        }
     }
     pub fn medium() -> Self {
-        Self { row_count: 100_000, category_count: 100, region_count: 16, seed: 43 }
+        Self {
+            row_count: 100_000,
+            category_count: 100,
+            region_count: 16,
+            seed: 43,
+        }
     }
     pub fn large() -> Self {
-        Self { row_count: 1_000_000, category_count: 500, region_count: 32, seed: 44 }
+        Self {
+            row_count: 1_000_000,
+            category_count: 500,
+            region_count: 32,
+            seed: 44,
+        }
     }
 }
 
@@ -109,7 +129,9 @@ impl SeededRng {
     }
 
     fn next(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(6_364_136_223_846_793_005)
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         self.state
     }
@@ -125,10 +147,12 @@ pub struct FactRow {
 
 pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
     let mut rng = SeededRng::new(config.seed);
-    let categories: Vec<String> =
-        (1..=config.category_count).map(|i| format!("Kategori {:03}", i)).collect();
-    let regions: Vec<String> =
-        (1..=config.region_count).map(|i| format!("Region {:02}", i)).collect();
+    let categories: Vec<String> = (1..=config.category_count)
+        .map(|i| format!("Kategori {:03}", i))
+        .collect();
+    let regions: Vec<String> = (1..=config.region_count)
+        .map(|i| format!("Region {:02}", i))
+        .collect();
 
     let mut rows = Vec::with_capacity(config.row_count + 1);
     for _ in 0..config.row_count {
@@ -162,24 +186,49 @@ pub struct SalesFactRow {
 }
 
 pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
-    let categories: Vec<&str> = (1..=20).map(|i| {
-        match i {
-            1 => "Electronics", 2 => "Clothing", 3 => "Food",
-            4 => "Furniture", 5 => "Sports", 6 => "Books",
-            7 => "Toys", 8 => "Automotive", 9 => "Health",
-            10 => "Music", 11 => "Garden", 12 => "Office",
-            13 => "Pet Supplies", 14 => "Jewelry", 15 => "Home",
-            16 => "Baby", 17 => "Tools", 18 => "Beauty",
-            19 => "Shoes", 20 => "Outdoors",
+    let categories: Vec<&str> = (1..=20)
+        .map(|i| match i {
+            1 => "Electronics",
+            2 => "Clothing",
+            3 => "Food",
+            4 => "Furniture",
+            5 => "Sports",
+            6 => "Books",
+            7 => "Toys",
+            8 => "Automotive",
+            9 => "Health",
+            10 => "Music",
+            11 => "Garden",
+            12 => "Office",
+            13 => "Pet Supplies",
+            14 => "Jewelry",
+            15 => "Home",
+            16 => "Baby",
+            17 => "Tools",
+            18 => "Beauty",
+            19 => "Shoes",
+            20 => "Outdoors",
             _ => "Other",
-        }
-    }).collect();
+        })
+        .collect();
     let territories: &[&str] = &[
-        "North", "South", "East", "West", "Central",
-        "Northeast", "Southeast", "Northwest",
+        "North",
+        "South",
+        "East",
+        "West",
+        "Central",
+        "Northeast",
+        "Southeast",
+        "Northwest",
     ];
     let channels: &[&str] = &["Online", "Retail", "Wholesale", "Direct"];
-    let segments: &[&str] = &["Consumer", "Business", "Government", "Education", "Non-Profit"];
+    let segments: &[&str] = &[
+        "Consumer",
+        "Business",
+        "Government",
+        "Education",
+        "Non-Profit",
+    ];
 
     let mut rng = SeededRng::new(99);
     let row_count = 20_000;
@@ -219,21 +268,40 @@ pub struct InventoryFactRow {
 }
 
 pub fn generate_inventory_fact_rows() -> Vec<InventoryFactRow> {
-    let categories: Vec<&str> = (1..=20).map(|i| {
-        match i {
-            1 => "Electronics", 2 => "Clothing", 3 => "Food",
-            4 => "Furniture", 5 => "Sports", 6 => "Books",
-            7 => "Toys", 8 => "Automotive", 9 => "Health",
-            10 => "Music", 11 => "Garden", 12 => "Office",
-            13 => "Pet Supplies", 14 => "Jewelry", 15 => "Home",
-            16 => "Baby", 17 => "Tools", 18 => "Beauty",
-            19 => "Shoes", 20 => "Outdoors",
+    let categories: Vec<&str> = (1..=20)
+        .map(|i| match i {
+            1 => "Electronics",
+            2 => "Clothing",
+            3 => "Food",
+            4 => "Furniture",
+            5 => "Sports",
+            6 => "Books",
+            7 => "Toys",
+            8 => "Automotive",
+            9 => "Health",
+            10 => "Music",
+            11 => "Garden",
+            12 => "Office",
+            13 => "Pet Supplies",
+            14 => "Jewelry",
+            15 => "Home",
+            16 => "Baby",
+            17 => "Tools",
+            18 => "Beauty",
+            19 => "Shoes",
+            20 => "Outdoors",
             _ => "Other",
-        }
-    }).collect();
+        })
+        .collect();
     let territories: &[&str] = &[
-        "North", "South", "East", "West", "Central",
-        "Northeast", "Southeast", "Northwest",
+        "North",
+        "South",
+        "East",
+        "West",
+        "Central",
+        "Northeast",
+        "Southeast",
+        "Northwest",
     ];
     let warehouses: &[&str] = &["WH-1", "WH-2", "WH-3", "WH-4", "WH-5", "WH-6"];
 
@@ -271,9 +339,9 @@ pub fn init_backend(db_path: Option<&str>) -> Result<(), duckdb::Error> {
         Some(path) => Backend::open(Path::new(path))?,
         None => Backend::new()?,
     };
-    BACKEND.set(backend).map_err(|_| {
-        duckdb::Error::InvalidParameterName("Backend already initialised".into())
-    })?;
+    BACKEND
+        .set(backend)
+        .map_err(|_| duckdb::Error::InvalidParameterName("Backend already initialised".into()))?;
     Ok(())
 }
 
@@ -321,9 +389,10 @@ impl Backend {
             None => Backend::new()?,
         };
         static BACKEND: OnceLock<Backend> = OnceLock::new();
-        BACKEND.set(backend).map_err(|_| {
-            duckdb::Error::InvalidParameterName("Backend already initialised".into())
-        }).ok();
+        BACKEND
+            .set(backend)
+            .map_err(|_| duckdb::Error::InvalidParameterName("Backend already initialised".into()))
+            .ok();
         Ok(())
     }
 
@@ -492,7 +561,9 @@ impl Backend {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(sql).expect("prepare query_grouped_1d");
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
             .expect("query_map query_grouped_1d");
         rows.filter_map(|r| r.ok()).collect()
     }
@@ -502,7 +573,11 @@ impl Backend {
         let mut stmt = conn.prepare(sql).expect("prepare query_pairs");
         let rows = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
             })
             .expect("query_map query_pairs");
         rows.filter_map(|r| r.ok()).collect()
@@ -586,10 +661,13 @@ mod tests {
             ("mtd_flag", 31),
             ("prior_year_ytd_flag", 366),
         ] {
-            let count = db.query_count(
-                &format!("SELECT COUNT(*) FROM date_dim WHERE {flag} = true"),
+            let count = db.query_count(&format!(
+                "SELECT COUNT(*) FROM date_dim WHERE {flag} = true"
+            ));
+            assert!(
+                count > 0,
+                "should have at least one {flag} = true row today"
             );
-            assert!(count > 0, "should have at least one {flag} = true row today");
             assert!(count <= max, "{flag} should not exceed {max} rows");
         }
     }
@@ -630,8 +708,7 @@ mod tests {
             let source = source.clone();
             handles.push(std::thread::spawn(move || {
                 let backend = source.checkout().expect("checkout backend");
-                backend.query_count("SELECT COUNT(*) FROM sales_fact")
-                    as u64
+                backend.query_count("SELECT COUNT(*) FROM sales_fact") as u64
                     + backend.query_scalar("SELECT SUM(revenue) FROM sales_fact") as u64
             }));
         }

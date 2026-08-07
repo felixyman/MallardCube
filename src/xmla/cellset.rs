@@ -3,7 +3,6 @@
 /// Builds the complete `<root xmlns="...mddataset">` response including
 /// schema, OlapInfo, Axes, and CellData — driven entirely by the struct
 /// fields below.  No hard‑coded hierarchy or member names.
-
 use crate::response::wrap_in_soap_envelope;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +43,7 @@ pub struct CellConfig {
 
 /// An axis description — name, hierarchy identity, and the member list.
 pub struct AxisConfig {
-    pub name: String,               // "Axis0" | "SlicerAxis"
+    pub name: String, // "Axis0" | "SlicerAxis"
     pub hierarchies: Vec<HierarchyConfig>,
     pub tuples: Vec<TupleConfig>,
 }
@@ -74,11 +73,27 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
     let p = &hier.name; // qualified-name prefix
 
     let standard: &[(&str, &str, &str)] = &[
-        ("UName",      &hier_qualified(p, "[MEMBER_UNIQUE_NAME]"),  "xsd:string"),
-        ("Caption",    &hier_qualified(p, "[MEMBER_CAPTION]"),      "xsd:string"),
-        ("LName",      &hier_qualified(p, "[LEVEL_UNIQUE_NAME]"),   "xsd:string"),
-        ("LNum",       &hier_qualified(p, "[LEVEL_NUMBER]"),        "xsd:int"),
-        ("DisplayInfo",&hier_qualified(p, "[DISPLAY_INFO]"),        "xsd:unsignedInt"),
+        (
+            "UName",
+            &hier_qualified(p, "[MEMBER_UNIQUE_NAME]"),
+            "xsd:string",
+        ),
+        (
+            "Caption",
+            &hier_qualified(p, "[MEMBER_CAPTION]"),
+            "xsd:string",
+        ),
+        (
+            "LName",
+            &hier_qualified(p, "[LEVEL_UNIQUE_NAME]"),
+            "xsd:string",
+        ),
+        ("LNum", &hier_qualified(p, "[LEVEL_NUMBER]"), "xsd:int"),
+        (
+            "DisplayInfo",
+            &hier_qualified(p, "[DISPLAY_INFO]"),
+            "xsd:unsignedInt",
+        ),
     ];
     for (tag, qname, typ) in standard {
         out.push_str(&format!(
@@ -149,8 +164,11 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
     let mut out = String::new();
     out.push_str("          <CellData>\n");
     for cell in cells {
-        out.push_str(&format!(r#"            <Cell CellOrdinal="{ord}">
-"#, ord = cell.ordinal));
+        out.push_str(&format!(
+            r#"            <Cell CellOrdinal="{ord}">
+"#,
+            ord = cell.ordinal
+        ));
         if resp.include_value {
             out.push_str(&format!(
                 r#"              <Value xsi:type="xsd:double">{val}</Value>
@@ -159,16 +177,28 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
             ));
         }
         if resp.include_fmt_value {
-            out.push_str(&format!("              <FmtValue>{}</FmtValue>\n", cell.fmt_value));
+            out.push_str(&format!(
+                "              <FmtValue>{}</FmtValue>\n",
+                cell.fmt_value
+            ));
         }
         if resp.include_format_string {
-            out.push_str(&format!("              <FormatString>{}</FormatString>\n", cell.format_string));
+            out.push_str(&format!(
+                "              <FormatString>{}</FormatString>\n",
+                cell.format_string
+            ));
         }
         if resp.include_back_color {
-            out.push_str(&format!("              <BackColor>{}</BackColor>\n", cell.back_color));
+            out.push_str(&format!(
+                "              <BackColor>{}</BackColor>\n",
+                cell.back_color
+            ));
         }
         if resp.include_fore_color {
-            out.push_str(&format!("              <ForeColor>{}</ForeColor>\n", cell.fore_color));
+            out.push_str(&format!(
+                "              <ForeColor>{}</ForeColor>\n",
+                cell.fore_color
+            ));
         }
         out.push_str("            </Cell>\n");
     }
@@ -218,7 +248,10 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
                 name = axis.name,
             ));
         } else {
-            olap_info.push_str(&format!("              <AxisInfo name=\"{}\">\n", axis.name));
+            olap_info.push_str(&format!(
+                "              <AxisInfo name=\"{}\">\n",
+                axis.name
+            ));
             for hier in &axis.hierarchies {
                 olap_info.push_str(&format!(
                     "                <HierarchyInfo name=\"{}\">\n",
@@ -237,10 +270,12 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
         olap_info.push_str("              <Value name=\"VALUE\"/>\n");
     }
     if r.include_fmt_value {
-        olap_info.push_str("              <FmtValue name=\"FORMATTED_VALUE\" type=\"xsd:string\"/>\n");
+        olap_info
+            .push_str("              <FmtValue name=\"FORMATTED_VALUE\" type=\"xsd:string\"/>\n");
     }
     if r.include_format_string {
-        olap_info.push_str("              <FormatString name=\"FORMAT_STRING\" type=\"xsd:string\"/>\n");
+        olap_info
+            .push_str("              <FormatString name=\"FORMAT_STRING\" type=\"xsd:string\"/>\n");
     }
     if r.include_back_color {
         olap_info.push_str("              <BackColor name=\"BACK_COLOR\" type=\"xsd:string\"/>\n");

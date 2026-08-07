@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (lib)
+        run: cargo clippy --lib -- -D warnings
+
+      - name: Seed test fixture
+        run: cargo run --bin xmla_proxy -- seed-generated-db
+
+      - name: Test
+        run: cargo test --lib

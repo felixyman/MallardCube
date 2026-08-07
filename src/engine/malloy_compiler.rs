@@ -1,3 +1,6 @@
+use crate::engine::malloy::malloy_source_for_query_plan;
+use crate::engine::model::SemanticModel;
+use crate::engine::plan::QueryPlan;
 /// Malloy compiler abstraction.
 ///
 /// Defines a trait for compiling Malloy source text into executable SQL.
@@ -6,11 +9,7 @@
 /// Implementations:
 /// - `NullCompiler` — returns the Malloy source as-is (for testing).
 /// - `DenoCoreCompiler` — embedded V8-based compiler (future).
-
 use std::fmt;
-use crate::engine::model::SemanticModel;
-use crate::engine::plan::QueryPlan;
-use crate::engine::malloy::malloy_source_for_query_plan;
 
 #[derive(Debug)]
 pub enum MalloyCompileError {

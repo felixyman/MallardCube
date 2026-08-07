@@ -8,7 +8,6 @@
 /// - READY: no known blockers, project loads cleanly.
 /// - PARTIAL: usable but needs manual follow-up (roles, manual measures, etc.).
 /// - BLOCKED: not honestly Excel-safe (stub fallbacks, broken config, etc.).
-
 use crate::project::config::ModelPermission;
 use std::path::Path;
 
@@ -59,12 +58,16 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
 
     // --- check db_path ---
     if p.config.db_path.is_none() {
-        partial.push("db_path is null: proxy will use in-memory demo data, not real converted data".into());
+        partial.push(
+            "db_path is null: proxy will use in-memory demo data, not real converted data".into(),
+        );
     } else {
         let db = p.config.db_path.as_deref().unwrap();
         let resolved = crate::proxy_project::resolve_db_path(config_path, Some(db));
-        if resolved.as_ref().map_or(true, |r| !Path::new(r).exists()) {
-            partial.push(format!("db_path '{db}' does not resolve to an existing file (from config dir)"));
+        if resolved.as_ref().is_none_or(|r| !Path::new(r).exists()) {
+            partial.push(format!(
+                "db_path '{db}' does not resolve to an existing file (from config dir)"
+            ));
         }
     }
 
@@ -84,7 +87,10 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                 || sql.contains("SELECT 1 AS DUMMY")
                 || sql.contains("SELECT 1 AS dummy");
             if is_stub {
-                blocked.push(format!("measure '{}' has a TODO/stub fallback SQL file", m.caption));
+                blocked.push(format!(
+                    "measure '{}' has a TODO/stub fallback SQL file",
+                    m.caption
+                ));
                 continue;
             }
             scalar_fallback_count += 1;
@@ -161,7 +167,8 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                 config_path.to_string(),
             ]);
             if replay_ok != 0 {
-                partial.push("trace replay reported failures — see output above for details".into());
+                partial
+                    .push("trace replay reported failures — see output above for details".into());
             }
         } else {
             partial.push(format!("trace path '{tp}' not found — skipping replay"));
@@ -196,7 +203,10 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
 
 pub fn run(args: Vec<String>) -> i32 {
     // args: ["qualify", "<config-path>", "<optional-trace-path>"])
-    let config_path = args.get(1).map(|s| s.as_str()).unwrap_or("project3/proxy-config.json");
+    let config_path = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("project3/proxy-config.json");
     let trace_path = args.get(2).map(|s| s.as_str());
 
     let verdict = qualify(config_path, trace_path);
@@ -224,40 +234,57 @@ mod tests {
         let v = qualify("generated_retail_analytics/proxy-config.json", None);
         // Plan 021 retired all retail fallback stubs. All 4 measures have real SQL.
         // Plan 017 makes db_path resolve relative to config, so data/sales.db exists.
-        assert_eq!(v.label(), "READY",
-            "expected READY after Plan 021, got {}: {:?}", v.label(), v.reasons());
+        assert_eq!(
+            v.label(),
+            "READY",
+            "expected READY after Plan 021, got {}: {:?}",
+            v.label(),
+            v.reasons()
+        );
     }
 
     #[test]
     fn generated_project_is_partial_with_unsupported_roles() {
         let v = qualify("generated_project/proxy-config.json", None);
         // Plan 014 retired both stub fallbacks. No auth config + roles defined.
-        assert_eq!(v.label(), "PARTIAL",
-            "expected PARTIAL, got {}: {:?}", v.label(), v.reasons());
+        assert_eq!(
+            v.label(),
+            "PARTIAL",
+            "expected PARTIAL, got {}: {:?}",
+            v.label(),
+            v.reasons()
+        );
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
-        assert!(reasons.iter().any(|r| r.contains("no auth config")),
-            "should report missing auth config: {:?}", reasons);
+        assert!(
+            reasons.iter().any(|r| r.contains("no auth config")),
+            "should report missing auth config: {:?}",
+            reasons
+        );
     }
 
     #[test]
     fn generated_project_has_no_stub_fallbacks() {
         let p = crate::proxy_project::ProxyProject::load("generated_project/proxy-config.json")
             .expect("load generated_project");
-        let stubs: Vec<_> = p.model.measures.iter()
-            .filter(|m| {
-                match &m.sql_fallback_sql {
-                    Some(sql) => {
-                        sql.to_uppercase().contains("TODO")
-                            || sql.contains("SELECT 1 AS DUMMY")
-                            || sql.contains("SELECT 1 AS dummy")
-                    }
-                    None => false,
+        let stubs: Vec<_> = p
+            .model
+            .measures
+            .iter()
+            .filter(|m| match &m.sql_fallback_sql {
+                Some(sql) => {
+                    sql.to_uppercase().contains("TODO")
+                        || sql.contains("SELECT 1 AS DUMMY")
+                        || sql.contains("SELECT 1 AS dummy")
                 }
+                None => false,
             })
             .collect();
-        assert_eq!(stubs.len(), 0,
+        assert_eq!(
+            stubs.len(),
+            0,
             "Plan 014 retired all stub fallback measures: {:?}",
-            stubs.iter().map(|m| &m.caption).collect::<Vec<_>>());
+            stubs.iter().map(|m| &m.caption).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -267,24 +294,37 @@ mod tests {
         // project3 has a null db_path so it should be PARTIAL
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
         // Has null db_path but that's by design for demo
-        assert!(v.label() == "PARTIAL" || v.label() == "READY",
+        assert!(
+            v.label() == "PARTIAL" || v.label() == "READY",
             "project3 should be READY or PARTIAL (null db_path is expected for demo), got {}: {:?}",
-            v.label(), reasons);
+            v.label(),
+            reasons
+        );
     }
 
     #[test]
     fn broken_config_path_returns_blocked() {
         let v = qualify("nonexistent/proxy-config.json", None);
         assert_eq!(v.label(), "BLOCKED");
-        assert!(v.reasons().iter().any(|r| r.contains("cannot load project")),
-            "blocked reason should mention load failure: {:?}", v.reasons());
+        assert!(
+            v.reasons()
+                .iter()
+                .any(|r| r.contains("cannot load project")),
+            "blocked reason should mention load failure: {:?}",
+            v.reasons()
+        );
     }
 
     #[test]
     fn generated_retail_from_report_counts_manual_measures() {
-        let p = crate::proxy_project::ProxyProject::load("generated_retail_analytics/proxy-config.json")
-            .expect("load retail analytics");
-        let manual: Vec<_> = p.model.measures.iter()
+        let p = crate::proxy_project::ProxyProject::load(
+            "generated_retail_analytics/proxy-config.json",
+        )
+        .expect("load retail analytics");
+        let manual: Vec<_> = p
+            .model
+            .measures
+            .iter()
             .filter(|m| {
                 let has_sql = !m.sql_expr.is_empty() && m.sql_expr != "null";
                 let has_malloy = !m.physical_expr.is_empty();
@@ -295,30 +335,37 @@ mod tests {
             .collect();
         // After Plan 012 regeneration: Gross Profit + Total COGS are sql_fallback (stubs),
         // Gross Margin % + Total Revenue are simple. So 0 manual in current state.
-        assert_eq!(manual.len(), 0,
+        assert_eq!(
+            manual.len(),
+            0,
             "retail analytics should have 0 manual measures after fallback wiring: {:?}",
-            manual.iter().map(|m| &m.caption).collect::<Vec<_>>());
+            manual.iter().map(|m| &m.caption).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn generated_project_has_known_stub_count() {
         let p = crate::proxy_project::ProxyProject::load("generated_project/proxy-config.json")
             .expect("load generated_project");
-        let stubs: Vec<_> = p.model.measures.iter()
-            .filter(|m| {
-                match &m.sql_fallback_sql {
-                    Some(sql) => {
-                        sql.to_uppercase().contains("TODO")
-                            || sql.contains("SELECT 1 AS DUMMY")
-                            || sql.contains("SELECT 1 AS dummy")
-                    }
-                    None => false,
+        let stubs: Vec<_> = p
+            .model
+            .measures
+            .iter()
+            .filter(|m| match &m.sql_fallback_sql {
+                Some(sql) => {
+                    sql.to_uppercase().contains("TODO")
+                        || sql.contains("SELECT 1 AS DUMMY")
+                        || sql.contains("SELECT 1 AS dummy")
                 }
+                None => false,
             })
             .collect();
-        assert_eq!(stubs.len(), 0,
+        assert_eq!(
+            stubs.len(),
+            0,
             "Plan 014 retired all stub fallback measures: {:?}",
-            stubs.iter().map(|m| &m.caption).collect::<Vec<_>>());
+            stubs.iter().map(|m| &m.caption).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -327,10 +374,16 @@ mod tests {
         // instead of panicking on singleton init order.  When the trace file
         // is missing, replay is still skipped gracefully without touching the
         // global project singleton before trace_replay would need it.
-        let v = qualify("project3/proxy-config.json", Some("nonexistent-trace.jsonl"));
+        let v = qualify(
+            "project3/proxy-config.json",
+            Some("nonexistent-trace.jsonl"),
+        );
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
-        assert!(reasons.iter().any(|r| r.contains("not found")),
-            "should mention trace not found: {:?}", reasons);
+        assert!(
+            reasons.iter().any(|r| r.contains("not found")),
+            "should mention trace not found: {:?}",
+            reasons
+        );
         let label = v.label();
         assert!(
             label == "READY" || label == "PARTIAL" || label == "BLOCKED",
