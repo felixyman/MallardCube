@@ -1,9 +1,11 @@
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum XmlaRequest {
-    DiscoverProperties { property_names: Vec<String> },
+    DiscoverProperties {
+        property_names: Vec<String>,
+    },
     DiscoverSchemaRowsets,
     DiscoverLiterals,
     DbSchemaCatalogs,
@@ -13,8 +15,13 @@ pub enum XmlaRequest {
     MdschemaMeasures,
     MdschemaHierarchies,
     MdschemaLevels,
-    MdschemaProperties { property_type: Option<i32> },
-    MdschemaMembers { member_unique_name: Option<String>, tree_op: Option<i32> },
+    MdschemaProperties {
+        property_type: Option<i32>,
+    },
+    MdschemaMembers {
+        member_unique_name: Option<String>,
+        tree_op: Option<i32>,
+    },
     MdschemaSets,
     MdschemaKpis,
     MdschemaMeasureGroups,
@@ -56,24 +63,19 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) => {
-                match e.local_name().as_ref() {
-                    b"RequestType" => in_request_type = true,
-                    b"PropertyName" => in_property_name = true,
-                    b"Statement" => in_statement = true,
-                    b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
-                    b"Execute" => is_execute = true,
-                    b"PROPERTY_TYPE" => in_property_type = true,
-                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
-                    b"TREE_OP" => in_tree_op = true,
-                    _ => (),
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                match e.local_name().as_ref() {
-                    b"Execute" => is_execute = true,
-                    _ => (),
-                }
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                b"RequestType" => in_request_type = true,
+                b"PropertyName" => in_property_name = true,
+                b"Statement" => in_statement = true,
+                b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
+                b"Execute" => is_execute = true,
+                b"PROPERTY_TYPE" => in_property_type = true,
+                b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
+                b"TREE_OP" => in_tree_op = true,
+                _ => (),
+            },
+            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
+                is_execute = true;
             }
             Ok(Event::Text(e)) => {
                 let text = e.unescape().unwrap_or_default().trim().to_string();
@@ -91,24 +93,20 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         }
                     } else if in_member_unique_name {
                         member_unique_name = Some(text);
-                    } else if in_tree_op {
-                        if let Ok(v) = text.parse::<i32>() {
-                            tree_op = Some(v);
-                        }
+                    } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
+                        tree_op = Some(v);
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                match e.local_name().as_ref() {
-                    b"RequestType" => in_request_type = false,
-                    b"PropertyName" => in_property_name = false,
-                    b"Statement" => in_statement = false,
-                    b"PROPERTY_TYPE" => in_property_type = false,
-                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
-                    b"TREE_OP" => in_tree_op = false,
-                    _ => (),
-                }
-            }
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                b"RequestType" => in_request_type = false,
+                b"PropertyName" => in_property_name = false,
+                b"Statement" => in_statement = false,
+                b"PROPERTY_TYPE" => in_property_type = false,
+                b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
+                b"TREE_OP" => in_tree_op = false,
+                _ => (),
+            },
             Ok(Event::Eof) => break,
             Err(_) => break,
             _ => (),
@@ -119,7 +117,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "DISCOVER_PROPERTIES" => {
             return XmlaRequest::DiscoverProperties {
                 property_names: requested_properties,
-            }
+            };
         }
         "DISCOVER_SCHEMA_ROWSETS" => return XmlaRequest::DiscoverSchemaRowsets,
         "DISCOVER_LITERALS" => return XmlaRequest::DiscoverLiterals,
@@ -131,7 +129,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "MDSCHEMA_HIERARCHIES" => return XmlaRequest::MdschemaHierarchies,
         "MDSCHEMA_LEVELS" => return XmlaRequest::MdschemaLevels,
         "MDSCHEMA_PROPERTIES" => return XmlaRequest::MdschemaProperties { property_type },
-        "MDSCHEMA_MEMBERS" => return XmlaRequest::MdschemaMembers { member_unique_name, tree_op },
+        "MDSCHEMA_MEMBERS" => {
+            return XmlaRequest::MdschemaMembers {
+                member_unique_name,
+                tree_op,
+            };
+        }
         "MDSCHEMA_SETS" => return XmlaRequest::MdschemaSets,
         "MDSCHEMA_KPIS" => return XmlaRequest::MdschemaKpis,
         "MDSCHEMA_MEASUREGROUPS" => return XmlaRequest::MdschemaMeasureGroups,

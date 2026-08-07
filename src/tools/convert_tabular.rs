@@ -46,62 +46,82 @@ pub fn run(args: Vec<String>) -> i32 {
     let src_dir = match args.get(1) {
         Some(d) => d,
         None => {
-                eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
-                eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
-                return 1;
-            }
-        };
-        let out_dir = args.get(2).cloned().unwrap_or_else(|| "generated_project".into());
- 
-         let mut dummy_rows = 10000usize;
-         for arg in &args {
-             if let Some(val) = arg.strip_prefix("--dummy-rows=") {
-                 if let Ok(n) = val.parse::<usize>() {
-                     dummy_rows = n;
-                 }
-             }
-         }
- 
-         let src_path = Path::new(src_dir);
-        if !src_path.exists() {
-            eprintln!("Error: Path '{}' does not exist", src_dir);
+            eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
+            eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
             return 1;
         }
-        let detected = detect_format(src_path);
-        let format_name = match detected {
-            Some(TabularFormat::Bim) => "BIM",
-            Some(TabularFormat::Tmdl) => "TMDL",
-            Some(TabularFormat::Folder) => "folder",
-            None => "",
-        };
-        if !format_name.is_empty() {
-            eprintln!("Detected format: {}", format_name);
+    };
+    let out_dir = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "generated_project".into());
+
+    let mut dummy_rows = 10000usize;
+    for arg in &args {
+        if let Some(val) = arg.strip_prefix("--dummy-rows=")
+            && let Ok(n) = val.parse::<usize>()
+        {
+            dummy_rows = n;
         }
-        let (parsed, warnings) = match detected {
-            Some(TabularFormat::Bim) => parse_bim::parse_model(src_dir),
-            Some(TabularFormat::Tmdl) => parse_tmdl::parse_model(src_dir),
-            Some(TabularFormat::Folder) => parse_folder::parse_model(src_dir),
-            None => {
-                eprintln!("Error: '{}' is neither a .bim file nor a directory with Tabular Editor files", src_dir);
-                eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
-                return 1;
-            }
-        };
+    }
+
+    let src_path = Path::new(src_dir);
+    if !src_path.exists() {
+        eprintln!("Error: Path '{}' does not exist", src_dir);
+        return 1;
+    }
+    let detected = detect_format(src_path);
+    let format_name = match detected {
+        Some(TabularFormat::Bim) => "BIM",
+        Some(TabularFormat::Tmdl) => "TMDL",
+        Some(TabularFormat::Folder) => "folder",
+        None => "",
+    };
+    if !format_name.is_empty() {
+        eprintln!("Detected format: {}", format_name);
+    }
+    let (parsed, warnings) = match detected {
+        Some(TabularFormat::Bim) => parse_bim::parse_model(src_dir),
+        Some(TabularFormat::Tmdl) => parse_tmdl::parse_model(src_dir),
+        Some(TabularFormat::Folder) => parse_folder::parse_model(src_dir),
+        None => {
+            eprintln!(
+                "Error: '{}' is neither a .bim file nor a directory with Tabular Editor files",
+                src_dir
+            );
+            eprintln!("Usage: xmla_proxy convert-tabular <tabulareditor_src> [output_dir]");
+            return 1;
+        }
+    };
     for w in &warnings {
         eprintln!("WARNING: {}", w);
     }
     let mut model = classify_model(parsed);
 
-    let total = 1 + model.dimensions.len() + model.date_roles.len() + model.calculated_tables.len() + model.lookup_tables.len();
-    eprintln!("Classified {} tables ({} fact, {} dimension, {} date-role, {} calculated, {} lookup)",
-        total, 1, model.dimensions.len(), model.date_roles.len(), model.calculated_tables.len(), model.lookup_tables.len());
+    let total = 1
+        + model.dimensions.len()
+        + model.date_roles.len()
+        + model.calculated_tables.len()
+        + model.lookup_tables.len();
+    eprintln!(
+        "Classified {} tables ({} fact, {} dimension, {} date-role, {} calculated, {} lookup)",
+        total,
+        1,
+        model.dimensions.len(),
+        model.date_roles.len(),
+        model.calculated_tables.len(),
+        model.lookup_tables.len()
+    );
 
     fs::create_dir_all(&out_dir).expect("create output dir");
     fs::create_dir_all(format!("{out_dir}/sql_fallback")).ok();
 
     // Reclassify "simple" measures whose SQL hints return None (placeholder)
     // as "sql_fallback" so the runtime never executes placeholder SQL.
-    for meas in model.fact_table.measures.iter_mut()
+    for meas in model
+        .fact_table
+        .measures
+        .iter_mut()
         .chain(model.dimensions.iter_mut().flat_map(|t| &mut t.measures))
         .chain(model.date_roles.iter_mut().flat_map(|t| &mut t.measures))
     {
@@ -122,7 +142,11 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     }
 
-    fs::write(format!("{out_dir}/proxy-config.json"), render_proxy_config(&model)).expect("write config");
+    fs::write(
+        format!("{out_dir}/proxy-config.json"),
+        render_proxy_config(&model),
+    )
+    .expect("write config");
     fs::write(format!("{out_dir}/model.malloy"), render_malloy(&model)).expect("write malloy");
     fs::write(format!("{out_dir}/schema.sql"), render_schema(&model)).expect("write schema");
 
@@ -133,16 +157,30 @@ pub fn run(args: Vec<String>) -> i32 {
     // Reconstruct TabularModel for load script generators
     let tabular_model = model.to_tabular_model();
 
-    fs::write(format!("{out_dir}/load_data.sql"),
-        data_loader::render_load_script(&tabular_model, &fact_names, &date_role_names))
-        .expect("write load_data.sql");
+    fs::write(
+        format!("{out_dir}/load_data.sql"),
+        data_loader::render_load_script(&tabular_model, &fact_names, &date_role_names),
+    )
+    .expect("write load_data.sql");
 
     let dim_rows = (dummy_rows / 10).max(100);
-    fs::write(format!("{out_dir}/load_dummy_data.sql"),
-        data_loader::render_dummy_data_script(&tabular_model, &fact_names, &date_role_names, dummy_rows, dim_rows))
-        .expect("write load_dummy_data.sql");
+    fs::write(
+        format!("{out_dir}/load_dummy_data.sql"),
+        data_loader::render_dummy_data_script(
+            &tabular_model,
+            &fact_names,
+            &date_role_names,
+            dummy_rows,
+            dim_rows,
+        ),
+    )
+    .expect("write load_dummy_data.sql");
 
-    fs::write(format!("{out_dir}/conversion-report.md"), render_report(&model)).expect("write report");
+    fs::write(
+        format!("{out_dir}/conversion-report.md"),
+        render_report(&model),
+    )
+    .expect("write report");
 
     // Bootstrap script (always emitted)
     let cube_db = format!("{}.db", malloy_name(&model.cube));
@@ -170,7 +208,9 @@ pub fn run(args: Vec<String>) -> i32 {
     fs::write(format!("{out_dir}/bootstrap.sql"), bootstrap).expect("write bootstrap.sql");
 
     eprintln!("Generated project in {out_dir}/");
-    eprintln!("  Files: proxy-config.json, model.malloy, schema.sql, load_data.sql, load_dummy_data.sql, bootstrap.sql, conversion-report.md");
+    eprintln!(
+        "  Files: proxy-config.json, model.malloy, schema.sql, load_data.sql, load_dummy_data.sql, bootstrap.sql, conversion-report.md"
+    );
     0
 }
 
@@ -210,11 +250,13 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
     // Fallback: if no fact table detected by heuristics, use relationship fromTable
     // as a signal — the table referenced most as a relationship source is the fact.
     if fact.is_empty() {
-        let mut from_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut from_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for r in &rels {
             *from_counts.entry(r.from_table.clone()).or_insert(0) += 1;
         }
-        if let Some((best_name, _)) = from_counts.into_iter()
+        if let Some((best_name, _)) = from_counts
+            .into_iter()
             .max_by_key(|(_, c)| *c)
             .filter(|(_, c)| *c >= 2)
         {
@@ -238,14 +280,19 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
     } else {
         eprintln!("WARNING: no fact table detected");
         TableInfo {
-            name: "unknown".into(), ssas_name: "unknown".into(),
-            description: String::new(), columns: vec![], measures: vec![],
-            partitions: vec![], hierarchies: vec![],
+            name: "unknown".into(),
+            ssas_name: "unknown".into(),
+            description: String::new(),
+            columns: vec![],
+            measures: vec![],
+            partitions: vec![],
+            hierarchies: vec![],
         }
     };
 
     // Merge DAX calculated table measures into the fact table
-    let mut calc_measures: Vec<MeasureInfo> = calcs.iter()
+    let mut calc_measures: Vec<MeasureInfo> = calcs
+        .iter()
         .flat_map(|c| c.measures.iter().cloned())
         .collect();
     ft.measures.append(&mut calc_measures);
@@ -304,14 +351,20 @@ fn render_proxy_config(m: &ConversionModel) -> String {
         cube = m.cube,
         source = malloy_name(&ft.ssas_name),
         table = malloy_name(&ft.name),
-        db_path = if m.date_roles.is_empty() { "null".to_string() } else { format!("\"data/{}.db\"", malloy_name(&m.cube)) },
+        db_path = if m.date_roles.is_empty() {
+            "null".to_string()
+        } else {
+            format!("\"data/{}.db\"", malloy_name(&m.cube))
+        },
         facts = facts,
         rels = rels,
         roles = roles,
         ti = ti_block,
         dims = dims,
         meas = meas,
-    ).replace("{{", "{").replace("}}", "}")
+    )
+    .replace("{{", "{")
+    .replace("}}", "}")
 }
 
 fn render_roles(m: &ConversionModel) -> String {
@@ -343,8 +396,9 @@ fn render_roles(m: &ConversionModel) -> String {
             .collect::<Vec<_>>()
             .join(",\n");
 
-        out.push_str(&format!(
-            r##"    {{{{
+        out.push_str(
+            &format!(
+                r##"    {{{{
       "name": "{}",
       "description": "{}",
       "model_permission": "{}",
@@ -355,12 +409,15 @@ fn render_roles(m: &ConversionModel) -> String {
         {}
       ]
     }}}}"##,
-            json_escape(&r.name),
-            json_escape(&r.description),
-            r.model_permission,
-            members_json,
-            tp_json,
-        ).replace("{{", "{").replace("}}", "}"));
+                json_escape(&r.name),
+                json_escape(&r.description),
+                r.model_permission,
+                members_json,
+                tp_json,
+            )
+            .replace("{{", "{")
+            .replace("}}", "}"),
+        );
         if i + 1 < m.roles.len() {
             out.push_str(",\n");
         }
@@ -380,35 +437,48 @@ fn render_fact_table_configs(m: &ConversionModel) -> String {
         sn = malloy_name(&ft.ssas_name),
         tn = malloy_name(&ft.name),
         cube = m.cube,
-    ).replace("{{", "{").replace("}}", "}")
+    )
+    .replace("{{", "{")
+    .replace("}}", "}")
 }
 
 fn render_relationships(m: &ConversionModel) -> String {
     let mut out = String::new();
-    let dim_tables: Vec<&TableInfo> = m.dimensions.iter()
+    let dim_tables: Vec<&TableInfo> = m
+        .dimensions
+        .iter()
         .chain(&m.date_roles)
         .chain(&m.lookup_tables)
         .collect();
     let total = m.relationships.len();
     let mut emitted = 0usize;
     for rel in &m.relationships {
-        if let Some(t) = dim_tables.iter().find(|t| t.name == rel.to_table || t.ssas_name == rel.to_table) {
+        if let Some(t) = dim_tables
+            .iter()
+            .find(|t| t.name == rel.to_table || t.ssas_name == rel.to_table)
+        {
             let dim_id = t.ssas_name.clone();
-            out.push_str(&format!(
-                r##"    {{{{
+            out.push_str(
+                &format!(
+                    r##"    {{{{
       "fact_table": "default",
       "fact_column": "{fc}",
       "dimension_id": "{did}",
       "dim_table": "{dt}",
       "dim_column": "{dc}"
     }}}}"##,
-                fc = malloy_name(&rel.from_column),
-                did = dim_id,
-                dt = malloy_name(&rel.to_table),
-                dc = malloy_name(&rel.to_column),
-            ).replace("{{", "{").replace("}}", "}"));
+                    fc = malloy_name(&rel.from_column),
+                    did = dim_id,
+                    dt = malloy_name(&rel.to_table),
+                    dc = malloy_name(&rel.to_column),
+                )
+                .replace("{{", "{")
+                .replace("}}", "}"),
+            );
             emitted += 1;
-            if emitted < total { out.push_str(",\n"); }
+            if emitted < total {
+                out.push_str(",\n");
+            }
         }
     }
     out
@@ -429,34 +499,59 @@ fn render_time_intelligence_block(m: &ConversionModel) -> String {
 
 fn render_dimension_configs(m: &ConversionModel) -> String {
     let mut out = String::new();
-    let all_dims: Vec<&TableInfo> = m.dimensions.iter()
-        .chain(&m.date_roles)      // index-based since both are &TableInfo
+    let all_dims: Vec<&TableInfo> = m
+        .dimensions
+        .iter()
+        .chain(&m.date_roles) // index-based since both are &TableInfo
         .chain(&m.lookup_tables)
         .collect();
     for (i, t) in all_dims.iter().enumerate() {
         let dim_name = t.ssas_name.clone();
         // Pick a representative column for display
         // Use first non-hidden column, or first visible name column
-        let rep_col = t.columns.iter()
-            .find(|c| !c.is_hidden && (c.source_column.contains("Namn") || c.source_column.contains("Kod") || c.source_column == dim_name))
+        let rep_col = t
+            .columns
+            .iter()
+            .find(|c| {
+                !c.is_hidden
+                    && (c.source_column.contains("Namn")
+                        || c.source_column.contains("Kod")
+                        || c.source_column == dim_name)
+            })
             .or_else(|| t.columns.iter().find(|c| !c.is_hidden))
             .or_else(|| t.columns.first());
-        let physical = rep_col.map(|c| malloy_name(&c.source_column)).unwrap_or_else(|| malloy_name(&dim_name));
+        let physical = rep_col
+            .map(|c| malloy_name(&c.source_column))
+            .unwrap_or_else(|| malloy_name(&dim_name));
         let ft_ref = if m.date_roles.iter().any(|d| d.name == t.name) {
             "default".to_string()
-        } else if m.dimensions.iter().any(|d| d.name == t.name) {
-            String::new()
         } else {
             String::new()
         };
 
-        let ft_line = if ft_ref.is_empty() { String::new() } else { format!("\n      \"fact_table\": \"{}\",", ft_ref) };
-        let shared = if m.date_roles.iter().any(|d| d.name == t.name) || m.dimensions.iter().any(|d| d.name == t.name) { "" } else { ",\n      \"shared\": true" };
+        let ft_line = if ft_ref.is_empty() {
+            String::new()
+        } else {
+            format!("\n      \"fact_table\": \"{}\",", ft_ref)
+        };
+        let _shared = if m.date_roles.iter().any(|d| d.name == t.name)
+            || m.dimensions.iter().any(|d| d.name == t.name)
+        {
+            ""
+        } else {
+            ",\n      \"shared\": true"
+        };
         let is_date_role = m.date_roles.iter().any(|d| d.name == t.name);
-        let date_role_line = if is_date_role { ",\n      \"is_date_role\": true" } else { "" };
+        let date_role_line = if is_date_role {
+            ",\n      \"is_date_role\": true"
+        } else {
+            ""
+        };
 
-        out.push_str(&format!(
-            r##"    {{{{
+        let pf = format!("{}.{}", malloy_name(&t.name), physical);
+        out.push_str(
+            &format!(
+                r##"    {{{{
       "id": "{id}",
       "malloy_name": "{mn}",
       "physical_field": "{pf}",
@@ -470,24 +565,41 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
       "has_all": true,
           "cardinality_hint": 100{shared}{date_role_line}
     }}}}"##,
-            id = t.ssas_name,
-            mn = malloy_name(&t.ssas_name),
-            pf = format!("{}.{}", malloy_name(&t.name), physical),
-            caption = t.ssas_name,
-            desc = t.description.replace('\"', "\\\""),
-            ord = i + 1,
-            ft_line = ft_line,
-            date_role_line = date_role_line,
-            shared = if m.date_roles.iter().chain(&m.dimensions).any(|d| d.name == t.name) { "" } else { ",\n      \"shared\": true" },
-        ).replace("{{", "{").replace("}}", "}"));
-        if i < all_dims.len() - 1 { out.push_str(",\n"); }
+                id = t.ssas_name,
+                mn = malloy_name(&t.ssas_name),
+                pf = pf,
+                caption = t.ssas_name,
+                desc = t.description.replace('\"', "\\\""),
+                ord = i + 1,
+                ft_line = ft_line,
+                date_role_line = date_role_line,
+                shared = if m
+                    .date_roles
+                    .iter()
+                    .chain(&m.dimensions)
+                    .any(|d| d.name == t.name)
+                {
+                    ""
+                } else {
+                    ",\n      \"shared\": true"
+                },
+            )
+            .replace("{{", "{")
+            .replace("}}", "}"),
+        );
+        if i < all_dims.len() - 1 {
+            out.push_str(",\n");
+        }
     }
     out
 }
 
 fn render_measure_configs(m: &ConversionModel) -> String {
     let mut out = String::new();
-    let all_measures: Vec<&MeasureInfo> = m.fact_table.measures.iter()
+    let all_measures: Vec<&MeasureInfo> = m
+        .fact_table
+        .measures
+        .iter()
         .chain(m.dimensions.iter().flat_map(|t| &t.measures))
         .chain(m.date_roles.iter().flat_map(|t| &t.measures))
         .collect();
@@ -495,10 +607,22 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         let dax_expr = meas.expression.as_str();
         // For time measures, extract the inner aggregation for the sql_expr.
         let (time_class, flag_col, time_dim_id) = match meas.classification.as_str() {
-            "time_ytd" => ("time_ytd", "ytd_flag",
-                m.date_roles.first().map(|d| d.ssas_name.as_str()).unwrap_or("Date")),
-            "time_prior_year" => ("time_prior_year", "prior_year_ytd_flag",
-                m.date_roles.first().map(|d| d.ssas_name.as_str()).unwrap_or("Date")),
+            "time_ytd" => (
+                "time_ytd",
+                "ytd_flag",
+                m.date_roles
+                    .first()
+                    .map(|d| d.ssas_name.as_str())
+                    .unwrap_or("Date"),
+            ),
+            "time_prior_year" => (
+                "time_prior_year",
+                "prior_year_ytd_flag",
+                m.date_roles
+                    .first()
+                    .map(|d| d.ssas_name.as_str())
+                    .unwrap_or("Date"),
+            ),
             _ => ("", "", ""),
         };
         let sql = if !time_class.is_empty() {
@@ -510,12 +634,17 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         };
         // When the converter cannot produce real SQL for a "simple" measure,
         // downgrade it to sql_fallback so the runtime never executes a placeholder.
-        let effective_class = if meas.classification == "simple" && dax_to_sql_hint(dax_expr, &meas.classification).is_none() {
+        let effective_class = if meas.classification == "simple"
+            && dax_to_sql_hint(dax_expr, &meas.classification).is_none()
+        {
             "sql_fallback"
         } else {
             meas.classification.as_str()
         };
-        let pe = if effective_class == "simple" || effective_class == "time_ytd" || effective_class == "time_prior_year" {
+        let pe = if effective_class == "simple"
+            || effective_class == "time_ytd"
+            || effective_class == "time_prior_year"
+        {
             if !time_class.is_empty() {
                 dax_to_malloy_expr(&extract_ti_inner(dax_expr))
             } else {
@@ -525,15 +654,22 @@ fn render_measure_configs(m: &ConversionModel) -> String {
             String::new()
         };
         let fb_line = if effective_class == "sql_fallback" {
-            format!(",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"", malloy_name(&meas.name))
+            format!(
+                ",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"",
+                malloy_name(&meas.name)
+            )
         } else if !time_class.is_empty() {
-            format!(",\n      \"time_intelligence\": {{ \"dimension_id\": \"{did}\", \"flag_column\": \"{fc}\" }}",
-                did = time_dim_id, fc = flag_col)
+            format!(
+                ",\n      \"time_intelligence\": {{ \"dimension_id\": \"{did}\", \"flag_column\": \"{fc}\" }}",
+                did = time_dim_id,
+                fc = flag_col
+            )
         } else {
             String::new()
         };
-        out.push_str(&format!(
-            r##"    {{{{
+        out.push_str(
+            &format!(
+                r##"    {{{{
       "id": "{id}",
       "fact_table": "default",
       "malloy_name": "{mn}",
@@ -548,18 +684,23 @@ fn render_measure_configs(m: &ConversionModel) -> String {
       "visible": true,
       "measure_group_name": "{cube}"{fb}
     }}}}"##,
-            id = meas.name,
-            mn = malloy_name(&meas.name),
-            pe = json_escape(&pe),
-            sql = sql,
-            caption = meas.name,
-            dn = meas.name,
-            desc = json_escape(&format!("[{}] {}", meas.classification, dax_expr)),
-            ord = i + 1,
-            cube = m.cube,
-            fb = fb_line,
-        ).replace("{{", "{").replace("}}", "}"));
-        if i < all_measures.len() - 1 { out.push_str(",\n"); }
+                id = meas.name,
+                mn = malloy_name(&meas.name),
+                pe = json_escape(&pe),
+                sql = sql,
+                caption = meas.name,
+                dn = meas.name,
+                desc = json_escape(&format!("[{}] {}", meas.classification, dax_expr)),
+                ord = i + 1,
+                cube = m.cube,
+                fb = fb_line,
+            )
+            .replace("{{", "{")
+            .replace("}}", "}"),
+        );
+        if i < all_measures.len() - 1 {
+            out.push_str(",\n");
+        }
     }
     out
 }
@@ -594,41 +735,40 @@ fn dax_to_malloy_expr(dax: &str) -> String {
     let upper = dax.to_uppercase();
 
     // Constant value (e.g. "0.8")
-    if let Ok(_) = dax.trim().parse::<f64>() {
+    if dax.trim().parse::<f64>().is_ok() {
         return dax.trim().to_string();
     }
 
     // DISTINCTCOUNT('table'[col]) → col.count(distinct true)
-    if let Some(inner) = extract_dax_unary(&upper, "DISTINCTCOUNT(") {
-        if let Some(col) = extract_col(&inner) {
-            return format!("{}.count(distinct true)", malloy_name(&col));
-        }
+    if let Some(inner) = extract_dax_unary(&upper, "DISTINCTCOUNT(")
+        && let Some(col) = extract_col(&inner)
+    {
+        return format!("{}.count(distinct true)", malloy_name(&col));
     }
 
     // COUNT('table'[col]) → col.count()
-    if let Some(inner) = extract_dax_unary(&upper, "COUNT(") {
-        if let Some(col) = extract_col(&inner) {
-            return format!("{}.count()", malloy_name(&col));
-        }
+    if let Some(inner) = extract_dax_unary(&upper, "COUNT(")
+        && let Some(col) = extract_col(&inner)
+    {
+        return format!("{}.count()", malloy_name(&col));
     }
 
     // AVERAGE('table'[col]) → col.avg()
-    if let Some(inner) = extract_dax_unary(&upper, "AVERAGE(") {
-        if let Some(col) = extract_col(&inner) {
-            return format!("{}.avg()", malloy_name(&col));
-        }
+    if let Some(inner) = extract_dax_unary(&upper, "AVERAGE(")
+        && let Some(col) = extract_col(&inner)
+    {
+        return format!("{}.avg()", malloy_name(&col));
     }
 
     // SUM('table'[col]) → col.sum()
-    if let Some(inner) = extract_dax_unary(&upper, "SUM(") {
-        if let Some(col) = extract_col(&inner) {
-            return format!("{}.sum()", malloy_name(&col));
-        }
+    if let Some(inner) = extract_dax_unary(&upper, "SUM(")
+        && let Some(col) = extract_col(&inner)
+    {
+        return format!("{}.sum()", malloy_name(&col));
     }
 
     // DIVIDE(a, b) → a / b
-    if upper.starts_with("DIVIDE(") {
-        let inner = &upper["DIVIDE(".len()..];
+    if let Some(inner) = upper.strip_prefix("DIVIDE(") {
         // Use the original (non-upper) string for splitting to preserve
         let orig_inner = &dax["DIVIDE(".len()..];
         let upper_parts = split_args(inner);
@@ -641,8 +781,7 @@ fn dax_to_malloy_expr(dax: &str) -> String {
     }
 
     // CALCULATE([measure], 'dim'[col]="value") → measure { where: col = 'value' }
-    if upper.starts_with("CALCULATE(") {
-        let inner = &upper["CALCULATE(".len()..];
+    if let Some(inner) = upper.strip_prefix("CALCULATE(") {
         let parts = split_args(inner);
         if parts.len() >= 2 {
             let base = dax_to_malloy_expr(&parts[0]);
@@ -669,7 +808,7 @@ fn dax_to_malloy_expr(dax: &str) -> String {
 
     // Reference to another measure: [Measure Name]
     if upper.starts_with('[') && upper.ends_with(']') {
-        let name = &upper[1..upper.len()-1];
+        let name = &upper[1..upper.len() - 1];
         return malloy_name(name);
     }
 
@@ -692,7 +831,7 @@ fn dax_to_malloy_expr(dax: &str) -> String {
 /// SAMEPERIODLASTYEAR(inner, dates) → inner
 fn extract_ti_inner(dax: &str) -> String {
     let upper = dax.to_uppercase();
-    let (func, dax) = if upper.starts_with("TOTALYTD(") {
+    let (_func, dax) = if upper.starts_with("TOTALYTD(") {
         ("TOTALYTD(", &dax["TOTALYTD(".len()..])
     } else if upper.starts_with("SAMEPERIODLASTYEAR(") {
         ("SAMEPERIODLASTYEAR(", &dax["SAMEPERIODLASTYEAR(".len()..])
@@ -707,17 +846,28 @@ fn extract_ti_inner(dax: &str) -> String {
     for (i, c) in dax.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { break; } }
-            ',' if depth == 1 => { comma_pos = Some(i); break; }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                comma_pos = Some(i);
+                break;
+            }
             _ => {}
         }
     }
-    comma_pos.map(|pos| dax[..pos].trim().to_string())
+    comma_pos
+        .map(|pos| dax[..pos].trim().to_string())
         .unwrap_or_else(|| dax.to_string())
 }
 
 fn extract_dax_unary(dax: &str, func: &str) -> Option<String> {
-    if !dax.starts_with(func) { return None; }
+    if !dax.starts_with(func) {
+        return None;
+    }
     let inner = &dax[func.len()..];
     let inner = inner.trim_end_matches(')').trim();
     Some(inner.to_string())
@@ -726,7 +876,7 @@ fn extract_dax_unary(dax: &str, func: &str) -> Option<String> {
 fn extract_col(dax: &str) -> Option<String> {
     let trimmed = dax.trim().trim_matches('\'');
     if let Some(bracket) = trimmed.find('[') {
-        let after = &trimmed[bracket+1..];
+        let after = &trimmed[bracket + 1..];
         if let Some(close) = after.find(']') {
             return Some(after[..close].to_string());
         }
@@ -738,21 +888,28 @@ fn split_args(inner: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut depth = 0;
     let mut start = 0;
-    let mut last_byte = 0;
     for (byte_idx, c) in inner.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => if depth > 0 { depth -= 1 } else { parts.push(inner[start..byte_idx].trim().to_string()); return parts; },
+            ')' => {
+                if depth > 0 {
+                    depth -= 1
+                } else {
+                    parts.push(inner[start..byte_idx].trim().to_string());
+                    return parts;
+                }
+            }
             ',' if depth == 0 => {
                 parts.push(inner[start..byte_idx].trim().to_string());
                 start = byte_idx + 1;
             }
             _ => {}
         }
-        last_byte = byte_idx + c.len_utf8();
     }
     let last = inner[start..].trim().to_string();
-    if !last.is_empty() { parts.push(last); }
+    if !last.is_empty() {
+        parts.push(last);
+    }
     parts
 }
 
@@ -762,12 +919,15 @@ fn extract_calculate_filter(dax: &str) -> Option<String> {
     if let Some((op, pos)) = find_comparison_op(trimmed) {
         let col = trimmed[..pos].trim();
         let col = extract_col(col)?;
-        let val = trimmed[pos + op.len()..].trim().trim_matches('"').trim_matches('\'');
+        let val = trimmed[pos + op.len()..]
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'');
         let val = val.trim_end_matches(')');
         return Some(format!("{} {op} '{val}'", malloy_name(&col)));
     }
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        return Some(malloy_name(&trimmed[1..trimmed.len()-1]));
+        return Some(malloy_name(&trimmed[1..trimmed.len() - 1]));
     }
     None
 }
@@ -780,23 +940,24 @@ fn find_comparison_op(s: &str) -> Option<(&'static str, usize)> {
         }
     }
     // Handle standalone = (not part of <=, >=, <>)
-    if let Some(pos) = s.find('=') {
-        if pos == 0 || (bytes[pos-1] != b'<' && bytes[pos-1] != b'>' && bytes[pos-1] != b'!') {
-            return Some(("=", pos));
-        }
+    if let Some(pos) = s.find('=')
+        && (pos == 0
+            || (bytes[pos - 1] != b'<' && bytes[pos - 1] != b'>' && bytes[pos - 1] != b'!'))
+    {
+        return Some(("=", pos));
     }
     // Regular < and >
-    if let Some(pos) = s.find('>') {
-        if pos + 1 >= bytes.len() || bytes[pos+1] != b'=' { return Some((">", pos)); }
+    if let Some(pos) = s.find('>')
+        && (pos + 1 >= bytes.len() || bytes[pos + 1] != b'=')
+    {
+        return Some((">", pos));
     }
-    if let Some(pos) = s.find('<') {
-        if pos + 1 >= bytes.len() || (bytes[pos+1] != b'=' && bytes[pos+1] != b'>') { return Some(("<", pos)); }
+    if let Some(pos) = s.find('<')
+        && (pos + 1 >= bytes.len() || (bytes[pos + 1] != b'=' && bytes[pos + 1] != b'>'))
+    {
+        return Some(("<", pos));
     }
     None
-}
-
-fn find_standalone_eq(s: &str) -> Option<usize> {
-    find_comparison_op(s).map(|(_, pos)| pos)
 }
 
 fn render_malloy(m: &ConversionModel) -> String {
@@ -804,11 +965,24 @@ fn render_malloy(m: &ConversionModel) -> String {
     let mut out = String::new();
 
     // Build a lookup: SSAS table name → malloy source name
-    let table_source: std::collections::HashMap<String, String> = std::iter::once((ft.name.clone(), malloy_name(&ft.ssas_name)))
-        .chain(m.dimensions.iter().map(|t| (t.name.clone(), malloy_name(&t.ssas_name))))
-        .chain(m.date_roles.iter().map(|t| (t.name.clone(), malloy_name(&t.ssas_name))))
-        .chain(m.lookup_tables.iter().map(|t| (t.name.clone(), malloy_name(&t.ssas_name))))
-        .collect();
+    let table_source: std::collections::HashMap<String, String> =
+        std::iter::once((ft.name.clone(), malloy_name(&ft.ssas_name)))
+            .chain(
+                m.dimensions
+                    .iter()
+                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
+            )
+            .chain(
+                m.date_roles
+                    .iter()
+                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
+            )
+            .chain(
+                m.lookup_tables
+                    .iter()
+                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
+            )
+            .collect();
 
     // Fact source with joins and measures
     out.push_str(&format!(
@@ -819,11 +993,11 @@ fn render_malloy(m: &ConversionModel) -> String {
 
     // Emit joins: find relationships where from_table == fact table
     for rel in &m.relationships {
-        if rel.from_table == ft.name {
-            if let Some(to_src) = table_source.get(&rel.to_table) {
-                let join_col = malloy_name(&rel.from_column);
-                out.push_str(&format!("  join_one: {to_src} with {join_col}\n"));
-            }
+        if rel.from_table == ft.name
+            && let Some(to_src) = table_source.get(&rel.to_table)
+        {
+            let join_col = malloy_name(&rel.from_column);
+            out.push_str(&format!("  join_one: {to_src} with {join_col}\n"));
         }
     }
 
@@ -834,8 +1008,11 @@ fn render_malloy(m: &ConversionModel) -> String {
         if meas.classification == "simple" {
             let expr = meas.expression.as_str();
             let malloy_expr = dax_to_malloy_expr(expr);
-            out.push_str(&format!("  measure: {} is {malloy_expr}  -- {}\n",
-                malloy_name(&meas.name), meas.name));
+            out.push_str(&format!(
+                "  measure: {} is {malloy_expr}  -- {}\n",
+                malloy_name(&meas.name),
+                meas.name
+            ));
         }
     }
 
@@ -863,15 +1040,35 @@ fn render_malloy(m: &ConversionModel) -> String {
 fn render_fallback_stub(name: &str, dax: &str) -> String {
     let upper = dax.to_uppercase();
     let mut notes = Vec::new();
-    if upper.contains("ALLSELECTED") { notes.push("ALLSELECTED — requires window function"); }
-    if upper.contains("ISONORAFTER") { notes.push("ISONORAFTER — cumulative window ordering"); }
-    if upper.contains("FILTER(") { notes.push("FILTER — context manipulation"); }
-    if upper.contains("YEAR(TODAY())") { notes.push("YEAR(TODAY()) — dynamic current year filter"); }
-    if upper.contains("YEAR(TODAY())-1") { notes.push("Previous year comparison"); }
-    if upper.contains("MEDIAN(") { notes.push("MEDIAN — DuckDB supports MEDIAN() natively"); }
-    if upper.contains("AVERAGEX(") { notes.push("AVERAGEX — row-level iteration"); }
-    if upper.contains("KEEPFILTERS") { notes.push("KEEPFILTERS — filter context preservation"); }
-    let note_str = if notes.is_empty() { "Complex DAX pattern — requires SQL fallback".to_string() } else { notes.join("\n--   ") };
+    if upper.contains("ALLSELECTED") {
+        notes.push("ALLSELECTED — requires window function");
+    }
+    if upper.contains("ISONORAFTER") {
+        notes.push("ISONORAFTER — cumulative window ordering");
+    }
+    if upper.contains("FILTER(") {
+        notes.push("FILTER — context manipulation");
+    }
+    if upper.contains("YEAR(TODAY())") {
+        notes.push("YEAR(TODAY()) — dynamic current year filter");
+    }
+    if upper.contains("YEAR(TODAY())-1") {
+        notes.push("Previous year comparison");
+    }
+    if upper.contains("MEDIAN(") {
+        notes.push("MEDIAN — DuckDB supports MEDIAN() natively");
+    }
+    if upper.contains("AVERAGEX(") {
+        notes.push("AVERAGEX — row-level iteration");
+    }
+    if upper.contains("KEEPFILTERS") {
+        notes.push("KEEPFILTERS — filter context preservation");
+    }
+    let note_str = if notes.is_empty() {
+        "Complex DAX pattern — requires SQL fallback".to_string()
+    } else {
+        notes.join("\n--   ")
+    };
     format!(
         r#"-- SQL fallback for: {name}
 -- Original DAX: {dax}
@@ -884,7 +1081,9 @@ fn render_fallback_stub(name: &str, dax: &str) -> String {
 
 SELECT 1 AS dummy;
 "#,
-        name = name, dax = dax, notes = note_str,
+        name = name,
+        dax = dax,
+        notes = note_str,
     )
 }
 
@@ -894,23 +1093,32 @@ fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String 
     generate_fallback_sql_recursive(meas, model, &mut Vec::new())
 }
 
-fn generate_fallback_sql_recursive(meas: &MeasureInfo, model: &ConversionModel, visited: &mut Vec<String>) -> String {
+fn generate_fallback_sql_recursive(
+    meas: &MeasureInfo,
+    model: &ConversionModel,
+    visited: &mut [String],
+) -> String {
     let dax_raw = meas.expression.clone();
-    let dax = dax_raw.trim_start().trim_start_matches("=").trim().to_string();
+    let dax = dax_raw
+        .trim_start()
+        .trim_start_matches("=")
+        .trim()
+        .to_string();
     let dax_one_line = normalize_dax(&dax);
     let upper_one = dax_one_line.to_uppercase();
 
     // Pattern 1: MEDIAN(col) — DuckDB native
-    if upper_one.contains("MEDIAN(") {
-        if let Some(col_expr) = extract_dax_unary(&upper_one, "MEDIAN(") {
-            if let Some(col) = extract_col(&col_expr) {
-                let fact_table = malloy_name(&model.fact_table.name);
-                return format!(
-                    "-- Auto-generated from DAX: {dax}\n-- DuckDB supports MEDIAN() natively.\n\nSELECT MEDIAN({col}) FROM {fact_table};\n",
-                    dax = dax, col = malloy_name(&col), fact_table = fact_table,
-                );
-            }
-        }
+    if upper_one.contains("MEDIAN(")
+        && let Some(col_expr) = extract_dax_unary(&upper_one, "MEDIAN(")
+        && let Some(col) = extract_col(&col_expr)
+    {
+        let fact_table = malloy_name(&model.fact_table.name);
+        return format!(
+            "-- Auto-generated from DAX: {dax}\n-- DuckDB supports MEDIAN() natively.\n\nSELECT MEDIAN({col}) FROM {fact_table};\n",
+            dax = dax,
+            col = malloy_name(&col),
+            fact_table = fact_table,
+        );
     }
 
     // Pattern 2: Cumulative YTD (FILTER + ALLSELECTED + ISONORAFTER)
@@ -919,56 +1127,84 @@ fn generate_fallback_sql_recursive(meas: &MeasureInfo, model: &ConversionModel, 
     }
 
     // Pattern 3: SUMX(FILTER(table, col=val), qty_col * RELATED(dim.dimcol))
-    if upper_one.contains("SUMX(") && upper_one.contains("FILTER(") && upper_one.contains("RELATED(") {
-        if let Some(sql) = generate_sumx_filter_related(&dax_one_line, &upper_one, model) {
-            return sql;
-        }
+    if upper_one.contains("SUMX(")
+        && upper_one.contains("FILTER(")
+        && upper_one.contains("RELATED(")
+        && let Some(sql) = generate_sumx_filter_related(&dax_one_line, &upper_one, model)
+    {
+        return sql;
     }
 
     // Pattern 4: CALCULATE(SUM(col), filter) — simple filtered SUM
-    if upper_one.contains("CALCULATE(") && upper_one.contains("SUM(") {
-        if let Some(sql) = generate_calculate_sum(&dax_one_line, &upper_one, model) {
-            return sql;
-        }
+    if upper_one.contains("CALCULATE(")
+        && upper_one.contains("SUM(")
+        && let Some(sql) = generate_calculate_sum(&dax_one_line, &upper_one, model)
+    {
+        return sql;
     }
 
     // Pattern 5: [MeasureA] - [MeasureB] — arithmetic between two measures
-    if dax_one_line.trim().starts_with("[") && (dax_one_line.contains("- [") || dax_one_line.contains("-[")) {
-        if let Some(sql) = generate_measure_arithmetic(&dax_one_line, model, visited) {
-            return sql;
-        }
+    if dax_one_line.trim().starts_with("[")
+        && (dax_one_line.contains("- [") || dax_one_line.contains("-["))
+        && let Some(sql) = generate_measure_arithmetic(&dax_one_line, model, visited)
+    {
+        return sql;
     }
 
     // Pattern 6: DIVIDE([MeasureA], [MeasureB], ...) — safe division
-    if upper_one.starts_with("DIVIDE(") && dax_one_line.contains('[') {
-        if let Some(sql) = generate_divide_measure_recursive(&dax_one_line, model, visited) {
-            return sql;
-        }
+    if upper_one.starts_with("DIVIDE(")
+        && dax_one_line.contains('[')
+        && let Some(sql) = generate_divide_measure_recursive(&dax_one_line, model, visited)
+    {
+        return sql;
     }
 
     // Unsupported: keep annotated stub
     render_fallback_stub(&meas.name, &dax_one_line)
 }
 
-fn generate_cumulative_sql(dax: &str, upper: &str, meas: &MeasureInfo, model: &ConversionModel) -> String {
+fn generate_cumulative_sql(
+    dax: &str,
+    upper: &str,
+    meas: &MeasureInfo,
+    model: &ConversionModel,
+) -> String {
     let cal_table = extract_calendar_table(dax);
     let period_col = extract_period_column(dax);
     let year_col = extract_year_column(dax);
     let is_prior_year = upper.contains("YEAR(TODAY())-1") || upper.contains("YEAR(TODAY()) - 1");
     let base_meas = extract_base_measure(dax);
 
-    let cal_malloy = cal_table.as_deref().map(malloy_name).unwrap_or_else(|| "calendar".into());
-    let period_col_name = period_col.as_deref().map(malloy_name).unwrap_or_else(|| "period".into());
-    let year_col_name = year_col.as_deref().map(malloy_name).unwrap_or_else(|| "year".into());
+    let cal_malloy = cal_table
+        .as_deref()
+        .map(malloy_name)
+        .unwrap_or_else(|| "calendar".into());
+    let period_col_name = period_col
+        .as_deref()
+        .map(malloy_name)
+        .unwrap_or_else(|| "period".into());
+    let year_col_name = year_col
+        .as_deref()
+        .map(malloy_name)
+        .unwrap_or_else(|| "year".into());
 
-    let join_col = cal_table.as_ref().and_then(|ct| {
-        model.relationships.iter()
-            .find(|r| r.to_table == *ct)
-            .map(|r| r.from_column.clone())
-    }).unwrap_or_default();
+    let join_col = cal_table
+        .as_ref()
+        .and_then(|ct| {
+            model
+                .relationships
+                .iter()
+                .find(|r| r.to_table == *ct)
+                .map(|r| r.from_column.clone())
+        })
+        .unwrap_or_default();
     let join_col_name = malloy_name(&join_col);
     let fact_table = malloy_name(&model.fact_table.name);
-    let year_expr = if is_prior_year { "EXTRACT(YEAR FROM CURRENT_DATE) - 1" } else { "EXTRACT(YEAR FROM CURRENT_DATE)" };
+    let year_expr = if is_prior_year {
+        "EXTRACT(YEAR FROM CURRENT_DATE) - 1"
+    } else {
+        "EXTRACT(YEAR FROM CURRENT_DATE)"
+    };
 
     format!(
         r#"-- Cumulative YTD for: {name}
@@ -996,11 +1232,15 @@ FROM (
   GROUP BY c.{period}, c.{year}
 );
 "#,
-        name = meas.name, dax = dax,
+        name = meas.name,
+        dax = dax,
         cal_malloy = cal_malloy,
-        period = period_col_name, year = year_col_name,
-        base_meas = base_meas, join_col = join_col_name,
-        fact_table = fact_table, year_expr = year_expr,
+        period = period_col_name,
+        year = year_col_name,
+        base_meas = base_meas,
+        join_col = join_col_name,
+        fact_table = fact_table,
+        year_expr = year_expr,
     )
 }
 
@@ -1019,10 +1259,10 @@ fn extract_period_column(dax: &str) -> Option<String> {
         let after = &dax[start + "ALLSELECTED('".len()..];
         if let Some(table_end) = after.find('\'') {
             let after_table = &after[table_end + 1..];
-            if after_table.starts_with('[') {
-                if let Some(close) = after_table.find(']') {
-                    return Some(after_table[1..close].to_string());
-                }
+            if after_table.starts_with('[')
+                && let Some(close) = after_table.find(']')
+            {
+                return Some(after_table[1..close].to_string());
             }
         }
     }
@@ -1046,16 +1286,20 @@ fn extract_base_measure(dax: &str) -> String {
     if let Some(calc_start) = dax.find("CALCULATE(") {
         let after = &dax[calc_start + "CALCULATE(".len()..];
         let trimmed = after.trim_start();
-        if trimmed.starts_with('[') {
-            if let Some(close) = trimmed.find(']') {
-                return trimmed[1..close].to_string();
-            }
+        if trimmed.starts_with('[')
+            && let Some(close) = trimmed.find(']')
+        {
+            return trimmed[1..close].to_string();
         }
     }
     String::new()
 }
 
-fn generate_sumx_filter_related(dax: &str, upper: &str, model: &ConversionModel) -> Option<String> {
+fn generate_sumx_filter_related(
+    dax: &str,
+    _upper: &str,
+    model: &ConversionModel,
+) -> Option<String> {
     let fact = malloy_name(&model.fact_table.name);
     let filter_parts = extract_filter_eq(dax)?;
     let filter_col_raw = &filter_parts.0;
@@ -1067,12 +1311,14 @@ fn generate_sumx_filter_related(dax: &str, upper: &str, model: &ConversionModel)
     let dim_table = malloy_name(&related.0);
     let dim_col_raw = &related.1;
     let dim_col = resolve_source_column(dim_col_raw, model);
-    let join_col = model.relationships.iter()
+    let join_col = model
+        .relationships
+        .iter()
         .find(|r| malloy_name(&r.to_table) == dim_table)
-        .and_then(|r| {
+        .map(|r| {
             // Resolve SSAS column ref to actual sourceColumn
             let raw = r.from_column.clone();
-            Some(resolve_source_column(&raw, model))
+            resolve_source_column(&raw, model)
         })
         .unwrap_or_else(|| "id".into());
 
@@ -1083,9 +1329,14 @@ fn generate_sumx_filter_related(dax: &str, upper: &str, model: &ConversionModel)
          FROM {fact} f\n\
          JOIN {dim_table} d ON f.{join_col} = d.{join_col}\n\
          WHERE f.{filter_col} = {filter_val};\n",
-        dax = dax, qty_col = qty_col, dim_col = dim_col,
-        fact = fact, dim_table = dim_table, join_col = join_col,
-        filter_col = filter_col, filter_val = filter_val,
+        dax = dax,
+        qty_col = qty_col,
+        dim_col = dim_col,
+        fact = fact,
+        dim_table = dim_table,
+        join_col = join_col,
+        filter_col = filter_col,
+        filter_val = filter_val,
     );
     Some(sql)
 }
@@ -1104,7 +1355,7 @@ fn extract_filter_eq(dax: &str) -> Option<(String, String)> {
     let eq_pos = after_eq.find('=')?;
     let val = after_eq[eq_pos + 1..].trim();
     // Stop at space, comma, or paren
-    let val_end = val.find(|c: char| c == ' ' || c == ',' || c == ')').unwrap_or(val.len());
+    let val_end = val.find([' ', ',', ')']).unwrap_or(val.len());
     let val = &val[..val_end];
     Some((col_name.trim().to_string(), val.trim().to_string()))
 }
@@ -1120,11 +1371,20 @@ fn extract_first_mul_col(dax: &str) -> Option<String> {
     for (i, c) in inner.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { filter_end = i; break; } }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    filter_end = i;
+                    break;
+                }
+            }
             _ => {}
         }
     }
-    let after_filter_end = &inner[filter_end + 1..].trim().trim_start_matches(',').trim();
+    let after_filter_end = &inner[filter_end + 1..]
+        .trim()
+        .trim_start_matches(',')
+        .trim();
     // Now find the first bracketed column reference (e.g., 'Sales'[Qty])
     let bracket_start = after_filter_end.find('[')?;
     let bracket_end = after_filter_end[bracket_start..].find(']')? + bracket_start;
@@ -1178,7 +1438,7 @@ fn parse_dax_col_ref(s: &str) -> Option<(String, String)> {
     }
 }
 
-fn generate_calculate_sum(dax: &str, upper: &str, model: &ConversionModel) -> Option<String> {
+fn generate_calculate_sum(dax: &str, _upper: &str, model: &ConversionModel) -> Option<String> {
     let fact = malloy_name(&model.fact_table.name);
     let sum_col_raw = extract_aggregate_col(dax, "SUM")?;
     let sum_col_name = resolve_source_column(&sum_col_raw, model);
@@ -1192,8 +1452,11 @@ fn generate_calculate_sum(dax: &str, upper: &str, model: &ConversionModel) -> Op
          SELECT COALESCE(SUM(CAST({sum_col_name} AS DOUBLE)), 0) AS value\n\
          FROM {fact}\n\
          WHERE {filter_col} = {filter_val};\n",
-        dax = dax, sum_col_name = sum_col_name, fact = fact,
-        filter_col = filter_col, filter_val = filter_val,
+        dax = dax,
+        sum_col_name = sum_col_name,
+        fact = fact,
+        filter_col = filter_col,
+        filter_val = filter_val,
     );
     Some(sql)
 }
@@ -1219,34 +1482,60 @@ fn extract_calculate_filter_eq(dax: &str) -> Option<(String, String)> {
     for (i, c) in inner.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { break; } }
-            ',' if depth == 1 => { comma_pos = Some(i); break; }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                comma_pos = Some(i);
+                break;
+            }
             _ => {}
         }
     }
     let rest = &inner[comma_pos? + 1..].trim();
     // Now parse 'Table'[Col] = val
-    let (table, col) = parse_dax_col_ref(rest)?;
+    let (_table, col) = parse_dax_col_ref(rest)?;
     let after_col = rest[rest.find(']')? + 1..].trim();
     let eq_pos = after_col.find('=')?;
     let val = after_col[eq_pos + 1..].trim();
-    let val_end = val.find(|c: char| c == ' ' || c == ',' || c == ')').unwrap_or(val.len());
+    let val_end = val.find([' ', ',', ')']).unwrap_or(val.len());
     Some((col, val[..val_end].to_string()))
 }
 
-fn generate_measure_arithmetic(dax: &str, model: &ConversionModel, visited: &mut Vec<String>) -> Option<String> {
-    let parts: Vec<&str> = dax.split(|c: char| c == '-' || c == '+' || c == '*' || c == '/')
+fn generate_measure_arithmetic(
+    dax: &str,
+    model: &ConversionModel,
+    visited: &mut [String],
+) -> Option<String> {
+    let parts: Vec<&str> = dax
+        .split(['-', '+', '*', '/'])
         .filter(|p| !p.trim().is_empty())
         .collect();
-    if parts.len() < 2 { return None; }
-    let op = if dax.contains(" - [") || dax.contains("- [") { " - " }
-             else if dax.contains(" + [") || dax.contains("+ [") { " + " }
-             else if dax.contains(" * [") || dax.contains("* [") { " * " }
-             else if dax.contains(" / [") || dax.contains("/ [") { " / " }
-             else { return None; };
+    if parts.len() < 2 {
+        return None;
+    }
+    let op = if dax.contains(" - [") || dax.contains("- [") {
+        " - "
+    } else if dax.contains(" + [") || dax.contains("+ [") {
+        " + "
+    } else if dax.contains(" * [") || dax.contains("* [") {
+        " * "
+    } else if dax.contains(" / [") || dax.contains("/ [") {
+        " / "
+    } else {
+        return None;
+    };
 
-    let measure_names: Vec<String> = parts.iter()
-        .map(|p| p.trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string())
+    let measure_names: Vec<String> = parts
+        .iter()
+        .map(|p| {
+            p.trim()
+                .trim_matches(|c: char| c == '[' || c == ']' || c == ' ')
+                .to_string()
+        })
         .collect();
 
     let mut subqueries = Vec::new();
@@ -1260,19 +1549,31 @@ fn generate_measure_arithmetic(dax: &str, model: &ConversionModel, visited: &mut
          -- Arithmetic between measures\n\n\
          SELECT COALESCE({subq_a}, 0) {op} COALESCE({subq_b}, 0) AS value;\n",
         dax = dax,
-        subq_a = subqueries.get(0)?,
+        subq_a = subqueries.first()?,
         subq_b = subqueries.get(1)?,
         op = op.trim(),
     );
     Some(sql)
 }
 
-fn generate_divide_measure_recursive(dax: &str, model: &ConversionModel, visited: &mut Vec<String>) -> Option<String> {
+fn generate_divide_measure_recursive(
+    dax: &str,
+    model: &ConversionModel,
+    visited: &mut [String],
+) -> Option<String> {
     let rest = dax.trim_start_matches("DIVIDE(").trim();
     let args = split_args(rest);
-    if args.len() < 2 { return None; }
-    let meas_a = args[0].trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string();
-    let meas_b = args[1].trim().trim_matches(|c: char| c == '[' || c == ']' || c == ' ').to_string();
+    if args.len() < 2 {
+        return None;
+    }
+    let meas_a = args[0]
+        .trim()
+        .trim_matches(|c: char| c == '[' || c == ']' || c == ' ')
+        .to_string();
+    let meas_b = args[1]
+        .trim()
+        .trim_matches(|c: char| c == '[' || c == ']' || c == ' ')
+        .to_string();
     let subq_a = generate_sql_for_measure(&meas_a, model, visited)?;
     let subq_b = generate_sql_for_measure(&meas_b, model, visited)?;
 
@@ -1286,24 +1587,35 @@ fn generate_divide_measure_recursive(dax: &str, model: &ConversionModel, visited
     ))
 }
 
-fn generate_sql_for_measure(name: &str, model: &ConversionModel, visited: &[String]) -> Option<String> {
+fn generate_sql_for_measure(
+    name: &str,
+    model: &ConversionModel,
+    visited: &[String],
+) -> Option<String> {
     let target = name.trim().to_lowercase();
 
     if visited.iter().any(|v| v == &target) {
         return None;
     }
 
-    let meas = model.fact_table.measures.iter()
+    let meas = model
+        .fact_table
+        .measures
+        .iter()
         .find(|m| m.name.trim().to_lowercase() == target)?;
 
     let mut new_visited = visited.to_vec();
     new_visited.push(target.clone());
 
-    let all_measures: Vec<&MeasureInfo> = model.fact_table.measures.iter()
+    let all_measures: Vec<&MeasureInfo> = model
+        .fact_table
+        .measures
+        .iter()
         .chain(model.dimensions.iter().flat_map(|t| &t.measures))
         .chain(model.date_roles.iter().flat_map(|t| &t.measures))
         .collect();
-    let meas_ref = all_measures.iter()
+    let meas_ref = all_measures
+        .iter()
         .find(|m| m.name.trim().to_lowercase() == target)
         .copied()
         .unwrap_or(meas);
@@ -1374,17 +1686,40 @@ fn render_report(m: &ConversionModel) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Conversion Report — {}\n\n", m.catalog));
 
-    let simple: Vec<_> = m.fact_table.measures.iter().filter(|m| m.classification == "simple").collect();
-    let fallback: Vec<_> = m.fact_table.measures.iter().filter(|m| m.classification == "sql_fallback").collect();
-    let manual: Vec<_> = m.fact_table.measures.iter().filter(|m| m.classification == "manual").collect();
+    let simple: Vec<_> = m
+        .fact_table
+        .measures
+        .iter()
+        .filter(|m| m.classification == "simple")
+        .collect();
+    let fallback: Vec<_> = m
+        .fact_table
+        .measures
+        .iter()
+        .filter(|m| m.classification == "sql_fallback")
+        .collect();
+    let manual: Vec<_> = m
+        .fact_table
+        .measures
+        .iter()
+        .filter(|m| m.classification == "manual")
+        .collect();
 
     out.push_str("## Summary\n\n");
     out.push_str(&format!("- Fact table: {}\n", m.fact_table.ssas_name));
-    out.push_str(&format!("- Dimensions: {}\n", m.dimensions.len() + m.date_roles.len() + m.lookup_tables.len()));
+    out.push_str(&format!(
+        "- Dimensions: {}\n",
+        m.dimensions.len() + m.date_roles.len() + m.lookup_tables.len()
+    ));
     out.push_str(&format!("- Date-role tables: {}\n", m.date_roles.len()));
     out.push_str(&format!("- Relationships: {}\n", m.relationships.len()));
-    out.push_str(&format!("- Measures: {} (simple: {}, sql_fallback: {}, manual: {})\n",
-        m.fact_table.measures.len(), simple.len(), fallback.len(), manual.len()));
+    out.push_str(&format!(
+        "- Measures: {} (simple: {}, sql_fallback: {}, manual: {})\n",
+        m.fact_table.measures.len(),
+        simple.len(),
+        fallback.len(),
+        manual.len()
+    ));
     out.push_str(&format!("- M-partition tables: {} (load_data.sql attempts automated loading, see load_data.sql for details)\n\n",
         if m.fact_table.is_m_partition() { 1usize } else { 0 }
         + m.dimensions.iter().filter(|t| t.is_m_partition()).count()
@@ -1395,7 +1730,10 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("| Fact Column | Dimension Table | Join Column |\n|---|---|---|\n");
     for rel in &m.relationships {
         if rel.from_table == m.fact_table.name {
-            out.push_str(&format!("| {} | {} | {} |\n", rel.from_column, rel.to_table, rel.to_column));
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                rel.from_column, rel.to_table, rel.to_column
+            ));
         }
     }
     out.push('\n');
@@ -1412,8 +1750,12 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("| Measure | DAX pattern | Fallback file |\n|---|---|---|\n");
     for m in &fallback {
         let dax = m.expression.as_str();
-        out.push_str(&format!("| {} | {} | sql_fallback/{}.sql |\n",
-            m.name, dax, malloy_name(&m.name)));
+        out.push_str(&format!(
+            "| {} | {} | sql_fallback/{}.sql |\n",
+            m.name,
+            dax,
+            malloy_name(&m.name)
+        ));
     }
 
     if !manual.is_empty() {
@@ -1428,13 +1770,18 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("The converter generates three SQL files for data loading:\n\n");
     out.push_str("- `schema.sql` — CREATE TABLE statements (run first)\n");
     out.push_str("- `load_data.sql` — loads real data from source databases (requires DuckDB extensions or CSV files)\n");
-    out.push_str("- `load_dummy_data.sql` — generates synthetic data for testing (always works)\n\n");
+    out.push_str(
+        "- `load_dummy_data.sql` — generates synthetic data for testing (always works)\n\n",
+    );
 
     if !m.data_sources.is_empty() {
         out.push_str("### Data sources detected\n\n");
         out.push_str("| Name | Provider | Server | Database |\n|---|---|---|---|\n");
         for ds in &m.data_sources {
-            out.push_str(&format!("| {} | {} | {} | {} |\n", ds.name, ds.provider, ds.server, ds.database));
+            out.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                ds.name, ds.provider, ds.server, ds.database
+            ));
         }
         out.push('\n');
     }
@@ -1449,12 +1796,18 @@ fn render_report(m: &ConversionModel) -> String {
     ));
 
     out.push_str("### Tables to load\n\n");
-    out.push_str(&format!("- [ ] `{}` (fact)\n", malloy_name(&m.fact_table.name)));
+    out.push_str(&format!(
+        "- [ ] `{}` (fact)\n",
+        malloy_name(&m.fact_table.name)
+    ));
     for t in &m.dimensions {
         out.push_str(&format!("- [ ] `{}` (dimension)\n", malloy_name(&t.name)));
     }
     for t in &m.date_roles {
-        out.push_str(&format!("- [ ] `{}` (date-role, seeded by seed_date_dim.sql)\n", malloy_name(&t.name)));
+        out.push_str(&format!(
+            "- [ ] `{}` (date-role, seeded by seed_date_dim.sql)\n",
+            malloy_name(&t.name)
+        ));
     }
     for t in &m.lookup_tables {
         out.push_str(&format!("- [ ] `{}` (lookup)\n", malloy_name(&t.name)));
@@ -1485,7 +1838,11 @@ fn render_report(m: &ConversionModel) -> String {
                 out.push_str("| Table | SQL filter | DAX filter | Metadata permission | Status |\n|---|---|---|---|---|\n");
                 for tp in &r.table_permissions {
                     let dax_str = tp.dax_filter.as_deref().unwrap_or("-");
-                    let sql_str = if tp.filter_expression.is_empty() { "(empty)" } else { &tp.filter_expression };
+                    let sql_str = if tp.filter_expression.is_empty() {
+                        "(empty)"
+                    } else {
+                        &tp.filter_expression
+                    };
                     let status = if tp.metadata_permission == "none" {
                         "OLS — table hidden"
                     } else if tp.dax_filter.is_some() && tp.filter_expression.is_empty() {
@@ -1495,7 +1852,10 @@ fn render_report(m: &ConversionModel) -> String {
                     } else {
                         "No filter — full access"
                     };
-                    out.push_str(&format!("| {} | {} | {} | {} | {} |\n", tp.table, sql_str, dax_str, tp.metadata_permission, status));
+                    out.push_str(&format!(
+                        "| {} | {} | {} | {} | {} |\n",
+                        tp.table, sql_str, dax_str, tp.metadata_permission, status
+                    ));
                 }
                 out.push('\n');
             }
@@ -1555,8 +1915,18 @@ mod tests {
             ssas_name: "Items".into(),
             description: String::new(),
             columns: vec![
-                ColumnInfo { name: "itemid".into(), data_type: "int64".into(), source_column: "itemid".into(), is_hidden: false },
-                ColumnInfo { name: "unitcost".into(), data_type: "double".into(), source_column: "unitcost".into(), is_hidden: false },
+                ColumnInfo {
+                    name: "itemid".into(),
+                    data_type: "int64".into(),
+                    source_column: "itemid".into(),
+                    is_hidden: false,
+                },
+                ColumnInfo {
+                    name: "unitcost".into(),
+                    data_type: "double".into(),
+                    source_column: "unitcost".into(),
+                    is_hidden: false,
+                },
             ],
             measures: vec![],
             partitions: vec![],
@@ -1585,8 +1955,12 @@ mod tests {
     #[test]
     fn generic_calculate_sum_produces_real_sql() {
         let model = make_generic_model();
-        let meas = model.fact_table.measures.iter()
-            .find(|m| m.name == "Total Sales").unwrap();
+        let meas = model
+            .fact_table
+            .measures
+            .iter()
+            .find(|m| m.name == "Total Sales")
+            .unwrap();
         let sql = generate_fallback_sql(meas, &model);
         assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
         assert!(sql.contains("amount"), "should resolve amount column");
@@ -1597,8 +1971,12 @@ mod tests {
     #[test]
     fn generic_sumx_filter_related_produces_real_sql() {
         let model = make_generic_model();
-        let meas = model.fact_table.measures.iter()
-            .find(|m| m.name == "Total Cost").unwrap();
+        let meas = model
+            .fact_table
+            .measures
+            .iter()
+            .find(|m| m.name == "Total Cost")
+            .unwrap();
         let sql = generate_fallback_sql(meas, &model);
         assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
         assert!(sql.contains("qty"), "should resolve qty column");
@@ -1609,31 +1987,54 @@ mod tests {
     #[test]
     fn generic_measure_arithmetic_produces_real_sql() {
         let model = make_generic_model();
-        let meas = model.fact_table.measures.iter()
-            .find(|m| m.name == "Net Profit").unwrap();
+        let meas = model
+            .fact_table
+            .measures
+            .iter()
+            .find(|m| m.name == "Net Profit")
+            .unwrap();
         let sql = generate_fallback_sql(meas, &model);
         assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
-        assert!(sql.contains("amount"), "should contain Total Sales subquery");
+        assert!(
+            sql.contains("amount"),
+            "should contain Total Sales subquery"
+        );
         assert!(sql.contains("qty"), "should contain Total Cost subquery");
     }
 
     #[test]
     fn generic_divide_measure_produces_real_sql() {
         let model = make_generic_model();
-        let meas = model.fact_table.measures.iter()
-            .find(|m| m.name == "Margin Pct").unwrap();
+        let meas = model
+            .fact_table
+            .measures
+            .iter()
+            .find(|m| m.name == "Margin Pct")
+            .unwrap();
         let sql = generate_fallback_sql(meas, &model);
         assert!(!sql.contains("SELECT 1 AS dummy"), "should not be a stub");
         assert!(sql.contains("CASE WHEN"), "should be safe division");
-        assert!(sql.contains("amount"), "should contain Total Sales subquery");
+        assert!(
+            sql.contains("amount"),
+            "should contain Total Sales subquery"
+        );
     }
 
     #[test]
     fn generate_sql_for_measure_no_hardcoded_retail_names() {
         let source = include_str!("convert_tabular.rs");
-        assert!(!source.contains("\"TOTAL REVENUE\""), "no hardcoded TOTAL REVENUE");
-        assert!(!source.contains("\"TOTAL COGS\""), "no hardcoded TOTAL COGS");
-        assert!(!source.contains("\"GROSS PROFIT\""), "no hardcoded GROSS PROFIT");
+        assert!(
+            !source.contains("\"TOTAL REVENUE\""),
+            "no hardcoded TOTAL REVENUE"
+        );
+        assert!(
+            !source.contains("\"TOTAL COGS\""),
+            "no hardcoded TOTAL COGS"
+        );
+        assert!(
+            !source.contains("\"GROSS PROFIT\""),
+            "no hardcoded GROSS PROFIT"
+        );
     }
 
     #[test]
@@ -1688,15 +2089,33 @@ mod tests {
         ]);
         assert_eq!(code, 0);
 
-        assert!(out_dir.join("load_data.sql").exists(), "load_data.sql should exist");
-        assert!(out_dir.join("load_dummy_data.sql").exists(), "load_dummy_data.sql should exist");
-        assert!(out_dir.join("bootstrap.sql").exists(), "bootstrap.sql should exist");
-        assert!(out_dir.join("proxy-config.json").exists(), "proxy-config.json should exist");
+        assert!(
+            out_dir.join("load_data.sql").exists(),
+            "load_data.sql should exist"
+        );
+        assert!(
+            out_dir.join("load_dummy_data.sql").exists(),
+            "load_dummy_data.sql should exist"
+        );
+        assert!(
+            out_dir.join("bootstrap.sql").exists(),
+            "bootstrap.sql should exist"
+        );
+        assert!(
+            out_dir.join("proxy-config.json").exists(),
+            "proxy-config.json should exist"
+        );
 
         // Verify dummy data uses the flag value
         let dummy = fs::read_to_string(out_dir.join("load_dummy_data.sql")).unwrap();
-        assert!(dummy.contains("generate_series(1, 5000)"), "should use --dummy-rows=5000 for fact table");
-        assert!(dummy.contains("generate_series(1, 500)"), "dimension table rows should be dummy_rows/10");
+        assert!(
+            dummy.contains("generate_series(1, 5000)"),
+            "should use --dummy-rows=5000 for fact table"
+        );
+        assert!(
+            dummy.contains("generate_series(1, 500)"),
+            "dimension table rows should be dummy_rows/10"
+        );
 
         // Cleanup
         let _ = fs::remove_dir_all(&out_dir);
@@ -1762,8 +2181,14 @@ mod tests {
         assert_eq!(code, 0);
 
         // bootstrap.sql must always be emitted
-        assert!(out_dir.join("bootstrap.sql").exists(), "bootstrap.sql should always exist");
-        assert!(!out_dir.join("seed_date_dim.sql").exists(), "seed_date_dim.sql should NOT exist (no date roles)");
+        assert!(
+            out_dir.join("bootstrap.sql").exists(),
+            "bootstrap.sql should always exist"
+        );
+        assert!(
+            !out_dir.join("seed_date_dim.sql").exists(),
+            "seed_date_dim.sql should NOT exist (no date roles)"
+        );
 
         // Cleanup
         let _ = fs::remove_dir_all(&src_dir);
@@ -1778,20 +2203,28 @@ mod tests {
         let _ = fs::remove_dir_all(&out_dir);
         let out_str = out_dir.to_string_lossy().to_string();
 
-        let code = run(vec![
-            "convert-tabular".into(),
-            src.into(),
-            out_str,
-        ]);
+        let code = run(vec!["convert-tabular".into(), src.into(), out_str]);
         assert_eq!(code, 0);
 
         let bootstrap = fs::read_to_string(out_dir.join("bootstrap.sql")).unwrap();
-        assert!(bootstrap.contains(".read load_dummy_data.sql"), "bootstrap should reference load_dummy_data.sql");
-        assert!(bootstrap.contains(".read schema.sql"), "bootstrap should reference schema.sql");
-        assert!(bootstrap.contains("-- .read load_data.sql"), "bootstrap should have load_data.sql commented out");
+        assert!(
+            bootstrap.contains(".read load_dummy_data.sql"),
+            "bootstrap should reference load_dummy_data.sql"
+        );
+        assert!(
+            bootstrap.contains(".read schema.sql"),
+            "bootstrap should reference schema.sql"
+        );
+        assert!(
+            bootstrap.contains("-- .read load_data.sql"),
+            "bootstrap should have load_data.sql commented out"
+        );
 
         // With date roles, should also reference seed_date_dim.sql
-        assert!(bootstrap.contains(".read seed_date_dim.sql"), "should reference seed_date_dim.sql when date roles present");
+        assert!(
+            bootstrap.contains(".read seed_date_dim.sql"),
+            "should reference seed_date_dim.sql when date roles present"
+        );
 
         // Cleanup
         let _ = fs::remove_dir_all(&out_dir);
@@ -1809,12 +2242,33 @@ mod tests {
         });
 
         let report = render_report(&model);
-        assert!(report.contains("Data sources detected"), "report should mention data sources");
-        assert!(report.contains("TestSource"), "report should include data source name");
-        assert!(report.contains("MY-SERVER"), "report should include data source server");
-        assert!(report.contains("load_data.sql"), "report should reference load_data.sql");
-        assert!(report.contains("load_dummy_data.sql"), "report should reference load_dummy_data.sql");
-        assert!(report.contains("bootstrap.sql"), "report should reference bootstrap.sql");
-        assert!(report.contains("Quick start"), "report should have quick start section");
+        assert!(
+            report.contains("Data sources detected"),
+            "report should mention data sources"
+        );
+        assert!(
+            report.contains("TestSource"),
+            "report should include data source name"
+        );
+        assert!(
+            report.contains("MY-SERVER"),
+            "report should include data source server"
+        );
+        assert!(
+            report.contains("load_data.sql"),
+            "report should reference load_data.sql"
+        );
+        assert!(
+            report.contains("load_dummy_data.sql"),
+            "report should reference load_dummy_data.sql"
+        );
+        assert!(
+            report.contains("bootstrap.sql"),
+            "report should reference bootstrap.sql"
+        );
+        assert!(
+            report.contains("Quick start"),
+            "report should have quick start section"
+        );
     }
 }

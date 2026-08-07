@@ -5,13 +5,15 @@
 ///
 /// The output goes to stdout in a format suitable for appending to
 /// `EXCEL_TRACE_PROJECT3_EXECUTES` and/or adding new named constants.
-
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 pub fn run(args: Vec<String>) -> i32 {
-    let path = args.get(1).cloned().unwrap_or_else(|| "xmla-trace.jsonl".into());
+    let path = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "xmla-trace.jsonl".into());
     let file = match File::open(&path) {
         Ok(f) => f,
         Err(e) => {
@@ -33,25 +35,21 @@ pub fn run(args: Vec<String>) -> i32 {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if v.get("request_kind").and_then(|k| k.as_str()) == Some("ExecuteStatement") {
-            if let Some(mdx) = v.get("mdx").and_then(|m| m.as_str()) {
-                unique.insert(mdx.to_string());
-            }
+        if v.get("request_kind").and_then(|k| k.as_str()) == Some("ExecuteStatement")
+            && let Some(mdx) = v.get("mdx").and_then(|m| m.as_str())
+        {
+            unique.insert(mdx.to_string());
         }
     }
 
-    let mut idx = 0usize;
-    for mdx in &unique {
+    for (idx, mdx) in unique.iter().enumerate() {
         let annotation = detect_shape(mdx);
         let name = if annotation.is_empty() {
             format!("EXCEL_TRACE_{idx:03}")
         } else {
             format!("EXCEL_TRACE_{idx:03}__{annotation}")
         };
-        println!(
-            "// {annotation}\npub const {name}: &str = r#####\"{mdx}\"#####;\n",
-        );
-        idx += 1;
+        println!("// {annotation}\npub const {name}: &str = r#####\"{mdx}\"#####;\n",);
     }
 
     if unique.is_empty() {
@@ -59,7 +57,10 @@ pub fn run(args: Vec<String>) -> i32 {
         return 1;
     }
 
-    eprintln!("{} unique ExecuteStatement MDX strings extracted from {path}", unique.len());
+    eprintln!(
+        "{} unique ExecuteStatement MDX strings extracted from {path}",
+        unique.len()
+    );
     0
 }
 

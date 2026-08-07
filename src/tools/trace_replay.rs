@@ -11,7 +11,6 @@
 /// - BeginSession / ExecuteEmpty: validates response is non-empty XML
 ///
 /// Exit code is non-zero if any replay fails.
-
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -19,17 +18,18 @@ use std::io::{BufRead, BufReader};
 use crate::execute_builders::get_execute_cellset_response;
 
 pub fn run(args: Vec<String>) -> i32 {
-    let trace_path = args.iter()
+    let trace_path = args
+        .iter()
         .find(|a| a.ends_with(".jsonl"))
         .map(|s| s.as_str())
         .unwrap_or("xmla-trace.jsonl");
-    let config_path = args.iter()
+    let config_path = args
+        .iter()
         .find(|a| a.ends_with(".json"))
         .map(|s| s.as_str());
 
     // Init project
-    crate::proxy_project::init_project(config_path)
-        .expect("init project");
+    crate::proxy_project::init_project(config_path).expect("init project");
     let p = crate::proxy_project::project();
 
     // Init backend from config — resolve db_path relative to config dir
@@ -37,8 +37,7 @@ pub fn run(args: Vec<String>) -> i32 {
         config_path.unwrap_or("."),
         p.config.db_path.as_deref(),
     );
-    crate::backend::init_backend(db_path.as_deref())
-        .expect("init backend");
+    crate::backend::init_backend(db_path.as_deref()).expect("init backend");
 
     eprintln!("Project: {} | Cube: {}", p.config.catalog, p.config.cube);
     eprintln!("Trace file: {trace_path}");
@@ -112,7 +111,10 @@ pub fn run(args: Vec<String>) -> i32 {
                 }
             }
 
-            _ if kind.starts_with("Discover") || kind.starts_with("DBSCHEMA") || kind.starts_with("MDSCHEMA") => {
+            _ if kind.starts_with("Discover")
+                || kind.starts_with("DBSCHEMA")
+                || kind.starts_with("MDSCHEMA") =>
+            {
                 let captured = v.get("response_xml").and_then(|r| r.as_str()).unwrap_or("");
                 discover_total += 1;
                 seen_rowsets.insert(kind.to_string());
@@ -122,7 +124,8 @@ pub fn run(args: Vec<String>) -> i32 {
                 // 1. Response is non-empty XML
                 // 2. Response contains <row> elements (i.e. real data)
                 // 3. Response has the expected cube/catalog name if applicable
-                let diffs = validate_discover_response(kind, captured, &p.config.cube, &p.config.catalog);
+                let diffs =
+                    validate_discover_response(kind, captured, &p.config.cube, &p.config.catalog);
 
                 if diffs.is_empty() {
                     discover_passed += 1;
@@ -213,25 +216,22 @@ fn validate_discover_response(kind: &str, xml: &str, cube: &str, catalog: &str) 
 
     // Rowset-specific structural checks
     match kind {
-        "DBSCHEMA_CATALOGS" => {
-            if !xml.contains(catalog) {
+        "DBSCHEMA_CATALOGS"
+            if !xml.contains(catalog) => {
                 diffs.push(format!("missing catalog '{catalog}' in CATALOGS response"));
             }
-        }
-        "MDSCHEMA_CUBES" => {
-            if !xml.contains(cube) {
+        "MDSCHEMA_CUBES"
+            if !xml.contains(cube) => {
                 diffs.push(format!("missing cube '{cube}' in CUBES response"));
             }
-        }
         "MDSCHEMA_DIMENSIONS" | "MDSCHEMA_HIERARCHIES" | "MDSCHEMA_LEVELS"
         | "MDSCHEMA_MEASURES" | "MDSCHEMA_MEMBERS" | "MDSCHEMA_PROPERTIES"
         | "MDSCHEMA_MEASUREGROUPS" | "MDSCHEMA_MEASUREGROUP_DIMENSIONS"
-        | "DISCOVER_SCHEMA_ROWSETS" | "DISCOVER_PROPERTIES" => {
+        | "DISCOVER_SCHEMA_ROWSETS" | "DISCOVER_PROPERTIES"
             // Generic: must have rows
-            if row_count == 0 {
+            if row_count == 0 => {
                 diffs.push(format!("{kind} returned zero rows"));
             }
-        }
         _ => {}
     }
 
@@ -285,7 +285,9 @@ fn structural_diff(captured: &str, current: &str) -> Vec<String> {
             cur_axes.len()
         ));
     } else {
-        for (axis_idx, (cap_members, cur_members)) in cap_axes.iter().zip(cur_axes.iter()).enumerate() {
+        for (axis_idx, (cap_members, cur_members)) in
+            cap_axes.iter().zip(cur_axes.iter()).enumerate()
+        {
             if cap_members.len() != cur_members.len() {
                 diffs.push(format!(
                     "axis[{axis_idx}] member count: captured {} vs current {}",

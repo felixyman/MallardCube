@@ -95,11 +95,11 @@ fn init_debug_log() {
 }
 
 fn debug_write(text: &str) {
-    if let Ok(mut guard) = DEBUG_LOG.lock() {
-        if let Some(ref mut file) = *guard {
-            let _ = writeln!(file, "{}", text);
-            let _ = file.flush();
-        }
+    if let Ok(mut guard) = DEBUG_LOG.lock()
+        && let Some(ref mut file) = *guard
+    {
+        let _ = writeln!(file, "{}", text);
+        let _ = file.flush();
     }
 }
 
@@ -193,7 +193,7 @@ async fn run_server() {
         let backend_source = match db_path {
             Some(path) => {
                 let source = backend::init_backend_source(Some(&path))
-                    .expect(&format!("failed to configure DuckDB: {path}"));
+                    .unwrap_or_else(|_| panic!("failed to configure DuckDB: {path}"));
                 println!("🗄️  DuckDB: {path}");
                 debug_write(&format!("DuckDB: {path}"));
                 source
@@ -213,12 +213,18 @@ async fn run_server() {
     {
         let p = proxy_project::project();
         if !p.config.roles.is_empty() && p.config.auth.is_none() {
-            println!("⚠️  WARNING: {} role(s) defined but no auth config — security is NOT enforced", p.config.roles.len());
-            debug_write(&format!("WARNING: {} role(s) without auth config", p.config.roles.len()));
+            println!(
+                "⚠️  WARNING: {} role(s) defined but no auth config — security is NOT enforced",
+                p.config.roles.len()
+            );
+            debug_write(&format!(
+                "WARNING: {} role(s) without auth config",
+                p.config.roles.len()
+            ));
         }
     }
 
-    if std::env::var("MALLOY_RUNTIME").map_or(false, |v| v == "1") {
+    if std::env::var("MALLOY_RUNTIME").is_ok_and(|v| v == "1") {
         execute_builders::enable_malloy_runtime();
         println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");
         debug_write("Malloy runtime: ENABLED");
@@ -255,10 +261,7 @@ fn build_user_context(headers: &HeaderMap, config: &ProxyConfig) -> UserContext 
     if auth.trusted_proxy {
         let header_name = HeaderName::from_bytes(auth.trusted_header.as_bytes())
             .unwrap_or_else(|_| HeaderName::from_static("x-user"));
-        if let Some(user_id) = headers
-            .get(&header_name)
-            .and_then(|v| v.to_str().ok())
-        {
+        if let Some(user_id) = headers.get(&header_name).and_then(|v| v.to_str().ok()) {
             resolve_user_context(config, user_id, &[])
         } else {
             // Missing trusted header: deny all (fail closed).
@@ -335,7 +338,10 @@ async fn handle_xmla(
     let config = proxy_project::project().config.clone();
     let user_context = build_user_context(&http_headers, &config);
     if !user_context.is_administrator && !user_context.roles.is_empty() {
-        println!("🔐 User '{}' authenticated as roles: {:?}", user_context.user_id, user_context.roles);
+        println!(
+            "🔐 User '{}' authenticated as roles: {:?}",
+            user_context.user_id, user_context.roles
+        );
     }
 
     let headers = default_headers();
@@ -357,7 +363,13 @@ async fn handle_xmla(
         let backend = backend_source
             .checkout()
             .expect("failed to checkout DuckDB backend");
-        route_request(&request_for_worker, &body_for_worker, &backend, &user_ctx, &cfg)
+        route_request(
+            &request_for_worker,
+            &body_for_worker,
+            &backend,
+            &user_ctx,
+            &cfg,
+        )
     })
     .await
     .expect("XMLA worker task panicked");
@@ -622,7 +634,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
         XmlaRequest::Unknown => {
             eprintln!("Unknown request: {}", body);
             xmla_proxy::xmla_trace::trace_request("Unknown", body, "", None, None);
-            return String::new();
+            String::new()
         }
     }
 }

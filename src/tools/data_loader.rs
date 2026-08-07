@@ -13,7 +13,7 @@
 //! - Hidden columns are excluded.
 //! - Tables with no visible columns are skipped with a comment.
 
-use super::m_query::{extract_source, is_complex_m, SourceConnection, SourceKind};
+use super::m_query::{SourceConnection, SourceKind, extract_source, is_complex_m};
 use super::tabular_model::*;
 use std::collections::{HashMap, HashSet};
 
@@ -54,7 +54,10 @@ pub fn render_dummy_data_script(
 
     // ── Header ──
     out.push_str("-- Dummy data generation script\n");
-    out.push_str(&format!("-- Generated from Tabular Editor model: {}\n", model.name));
+    out.push_str(&format!(
+        "-- Generated from Tabular Editor model: {}\n",
+        model.name
+    ));
     out.push_str(&format!(
         "-- Fact tables: {} rows, Dimension tables: {} rows\n",
         fact_rows, dim_rows
@@ -72,7 +75,8 @@ pub fn render_dummy_data_script(
     let mut fk_map: HashMap<(String, String), (String, String)> = HashMap::new();
     for rel in &model.relationships {
         let from_table_malloy = malloy_name(&rel.from_table);
-        let from_col_malloy = resolve_source_column(&model.tables, &rel.from_table, &rel.from_column);
+        let from_col_malloy =
+            resolve_source_column(&model.tables, &rel.from_table, &rel.from_column);
         let to_table_malloy = malloy_name(&rel.to_table);
         let to_col_malloy = resolve_source_column(&model.tables, &rel.to_table, &rel.to_column);
         fk_map.insert(
@@ -150,7 +154,10 @@ pub fn render_dummy_data_script(
         ));
 
         // Column name list (malloy-normalised, matches schema.sql identifiers)
-        let col_names: Vec<String> = columns.iter().map(|c| malloy_name(&c.source_column)).collect();
+        let col_names: Vec<String> = columns
+            .iter()
+            .map(|c| malloy_name(&c.source_column))
+            .collect();
         out.push_str(&format!(
             "INSERT INTO {} ({})\nSELECT\n",
             table_name_malloy,
@@ -169,12 +176,9 @@ pub fn render_dummy_data_script(
                 let db_type = duckdb_type(&col.data_type);
                 let val = match db_type {
                     "TIMESTAMP" => {
-                        "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day'"
-                            .to_string()
+                        "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day'".to_string()
                     }
-                    "DATE" => {
-                        "DATE '2020-01-01' + (i % 365) * INTERVAL '1 day'".to_string()
-                    }
+                    "DATE" => "DATE '2020-01-01' + (i % 365) * INTERVAL '1 day'".to_string(),
                     _ if date_names.contains(to_table) => {
                         // ── FK to date table: generate date_key-style values ──
                         "strftime(DATE '2020-01-01' + (i % 4018) * INTERVAL '1 day', '%Y%m%d')::INTEGER"
@@ -182,7 +186,10 @@ pub fn render_dummy_data_script(
                     }
                     _ => {
                         // ── FK column: modulo parent row count ──
-                        let parent_count = row_counts.get(to_table.as_str()).copied().unwrap_or(dim_rows);
+                        let parent_count = row_counts
+                            .get(to_table.as_str())
+                            .copied()
+                            .unwrap_or(dim_rows);
                         format!("(i % {}) + 1", parent_count)
                     }
                 };
@@ -192,15 +199,10 @@ pub fn render_dummy_data_script(
                 let db_type = duckdb_type(&col.data_type);
                 let val = match db_type {
                     "BIGINT" => "i".to_string(),
-                    "DOUBLE" => {
-                        "round((random() * 1000)::DECIMAL(10,2), 2)".to_string()
-                    }
-                    "VARCHAR" => {
-                        "'Item_' || lpad(i::VARCHAR, 4, '0')".to_string()
-                    }
+                    "DOUBLE" => "round((random() * 1000)::DECIMAL(10,2), 2)".to_string(),
+                    "VARCHAR" => "'Item_' || lpad(i::VARCHAR, 4, '0')".to_string(),
                     "TIMESTAMP" => {
-                        "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day'"
-                            .to_string()
+                        "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day'".to_string()
                     }
                     "BOOLEAN" => "i % 2 = 0".to_string(),
                     // DuckDB does not have a native DATE mapping from duckdb_type()
@@ -214,7 +216,10 @@ pub fn render_dummy_data_script(
         }
 
         out.push_str(&exprs.join(",\n"));
-        out.push_str(&format!("\nFROM generate_series(1, {}) t(i);\n\n", row_count));
+        out.push_str(&format!(
+            "\nFROM generate_series(1, {}) t(i);\n\n",
+            row_count
+        ));
     }
 
     out
@@ -236,14 +241,17 @@ pub fn render_dummy_data_script(
 /// Always fails safe — never generates potentially wrong SQL.
 pub fn render_load_script(
     model: &TabularModel,
-    fact_table_names: &[String],
+    _fact_table_names: &[String],
     date_role_names: &[String],
 ) -> String {
     let mut out = String::new();
 
     // ── Header ──
     out.push_str("-- Data loading script\n");
-    out.push_str(&format!("-- Generated from Tabular Editor model: {}\n", model.name));
+    out.push_str(&format!(
+        "-- Generated from Tabular Editor model: {}\n",
+        model.name
+    ));
     out.push_str("-- Requires DuckDB extensions for external database sources\n");
     out.push('\n');
 
@@ -251,8 +259,11 @@ pub fn render_load_script(
     let date_names: Vec<String> = date_role_names.iter().map(|n| malloy_name(n)).collect();
 
     // Data source lookup by name.
-    let data_source_map: HashMap<&str, &DataSourceInfo> =
-        model.data_sources.iter().map(|ds| (ds.name.as_str(), ds)).collect();
+    let data_source_map: HashMap<&str, &DataSourceInfo> = model
+        .data_sources
+        .iter()
+        .map(|ds| (ds.name.as_str(), ds))
+        .collect();
 
     // Track ATTACH statements already emitted (deduplication).
     let mut attach_emitted: HashSet<String> = HashSet::new();
@@ -260,9 +271,10 @@ pub fn render_load_script(
     let mut alias_map: HashMap<String, String> = HashMap::new();
 
     // Emit ATTACH header once if there's at least one SQL Server source.
-    let needs_sqlserver_header = model.data_sources.iter().any(|ds| {
-        ds.provider.contains("SqlClient") || ds.provider.contains("OLEDB")
-    });
+    let needs_sqlserver_header = model
+        .data_sources
+        .iter()
+        .any(|ds| ds.provider.contains("SqlClient") || ds.provider.contains("OLEDB"));
     if needs_sqlserver_header {
         out.push_str("-- SQL Server sources detected\n");
         out.push_str("-- Requires: INSTALL sqlserver_scanner; LOAD sqlserver_scanner;\n");
@@ -344,8 +356,7 @@ pub fn render_load_script(
             other => {
                 out.push_str(&format!(
                     "-- Unrecognized partition type '{}' for table '{}', manual load required\n",
-                    other,
-                    table.name
+                    other, table.name
                 ));
             }
         }
@@ -359,7 +370,10 @@ pub fn render_load_script(
 
 /// Check if a table is a calculation group.
 fn is_calc_group(table: &TableInfo) -> bool {
-    table.partitions.iter().any(|p| p.source_type == "calculationGroup")
+    table
+        .partitions
+        .iter()
+        .any(|p| p.source_type == "calculationGroup")
 }
 
 /// Render SQL for a "query" type partition (direct SQL from the BIM source).
@@ -406,7 +420,9 @@ fn render_query_partition(
         // Bug 7: warn about missing credentials (Windows Auth not supported by DuckDB mssql scanner)
         if !attach_str.contains("User=") {
             out.push_str("-- WARNING: No credentials in connection string. Windows Auth (Integrated Security) may not work with DuckDB's mssql scanner.\n");
-            out.push_str("-- Consider using SQL auth: add User= and Password= to the connection string.\n");
+            out.push_str(
+                "-- Consider using SQL auth: add User= and Password= to the connection string.\n",
+            );
         }
 
         out.push_str(&format!(
@@ -473,7 +489,17 @@ fn render_m_partition(
     let conn = extract_source(m_expr);
 
     match conn {
-        Some(sc) => render_m_connection(out, table_name_malloy, &sc, m_expr, partition, data_source_map, attach_emitted, attach_counter, alias_map),
+        Some(sc) => render_m_connection(
+            out,
+            table_name_malloy,
+            &sc,
+            m_expr,
+            partition,
+            data_source_map,
+            attach_emitted,
+            attach_counter,
+            alias_map,
+        ),
         None => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, unrecognized)\n",
@@ -493,6 +519,7 @@ fn render_m_partition(
 }
 
 /// Map a resolved `SourceConnection` to DuckDB SQL / instructions.
+#[allow(clippy::too_many_arguments)] // render context threads the loader's shared state; bundling into a struct is a later refactor
 fn render_m_connection(
     out: &mut String,
     table_name_malloy: String,
@@ -545,7 +572,10 @@ fn render_m_connection(
                 attach_emitted.insert(dedup_key.clone());
                 alias_map.insert(dedup_key.clone(), alias);
             }
-            let alias = alias_map.get(&dedup_key).map(|s| s.as_str()).unwrap_or("src_?");
+            let alias = alias_map
+                .get(&dedup_key)
+                .map(|s| s.as_str())
+                .unwrap_or("src_?");
 
             // Bug 7: warn about missing credentials (Windows Auth not supported by DuckDB mssql scanner)
             if !attach_str.contains("User=") {
@@ -947,13 +977,8 @@ mod tests {
     #[test]
     fn test_date_table_skipped() {
         let model = model_with_dates();
-        let result = render_dummy_data_script(
-            &model,
-            &["Sales".into()],
-            &["Dates".into()],
-            10000,
-            1000,
-        );
+        let result =
+            render_dummy_data_script(&model, &["Sales".into()], &["Dates".into()], 10000, 1000);
 
         // Dates table should be skipped with a comment
         assert!(result.contains("is populated by seed_date_dim.sql"));
@@ -988,19 +1013,17 @@ mod tests {
         assert!(result.contains("i AS bigintcol"));
 
         // DOUBLE
-        assert!(result.contains(
-            "round((random() * 1000)::DECIMAL(10,2), 2) AS doublecol"
-        ));
+        assert!(result.contains("round((random() * 1000)::DECIMAL(10,2), 2) AS doublecol"));
 
         // VARCHAR
-        assert!(result.contains(
-            "'Item_' || lpad(i::VARCHAR, 4, '0') AS varcharcol"
-        ));
+        assert!(result.contains("'Item_' || lpad(i::VARCHAR, 4, '0') AS varcharcol"));
 
         // TIMESTAMP
-        assert!(result.contains(
-            "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day' AS tscol"
-        ));
+        assert!(
+            result.contains(
+                "TIMESTAMP '2020-01-01 00:00:00' + (i % 365) * INTERVAL '1 day' AS tscol"
+            )
+        );
 
         // BOOLEAN
         assert!(result.contains("i % 2 = 0 AS boolcol"));
@@ -1153,13 +1176,8 @@ mod tests {
     fn test_retail_fixture_dummy_data() {
         let (model, _warnings) = parse_folder::parse_model("data/retailanalytics_tabular");
 
-        let result = render_dummy_data_script(
-            &model,
-            &["Sales".into()],
-            &["Dates".into()],
-            10000,
-            1000,
-        );
+        let result =
+            render_dummy_data_script(&model, &["Sales".into()], &["Dates".into()], 10000, 1000);
 
         // Must contain INSERT INTO for all non-date, non-calculated tables
         assert!(result.contains("INSERT INTO sales"));
@@ -1209,7 +1227,8 @@ mod tests {
             provider: "System.Data.SqlClient".into(),
             server: "DESKTOP-SRV\\MSSQLSERVER".into(),
             database: "retaildb".into(),
-            connection_string: "data source=DESKTOP-SRV\\MSSQLSERVER;initial catalog=retaildb;user id=sa".into(),
+            connection_string:
+                "data source=DESKTOP-SRV\\MSSQLSERVER;initial catalog=retaildb;user id=sa".into(),
         });
         // Wire up Sales partition to use the data source
         model.tables[0].partitions[0].data_source_name = Some("MySource".into());
@@ -1265,11 +1284,14 @@ mod tests {
                     name: "m_part".into(),
                     source_type: "m".into(),
                     is_m: true,
-                    query: Some(r#"let
+                    query: Some(
+                        r#"let
     Source = Sql.Database("pg01", "sales_db"),
     Table = Source{[Schema="public",Item="orders"]}[Data]
 in
-    Table"#.into()),
+    Table"#
+                            .into(),
+                    ),
                     data_source_name: None,
                     mode: None,
                     schema: None,
@@ -1402,7 +1424,10 @@ in
 
         // Count ATTACH statements (not word occurrences in comments)
         let attach_count = result.matches("ATTACH '").count();
-        assert_eq!(attach_count, 1, "Two tables sharing one data source should emit one ATTACH");
+        assert_eq!(
+            attach_count, 1,
+            "Two tables sharing one data source should emit one ATTACH"
+        );
 
         // Both tables should have INSERT
         assert!(result.contains("INSERT INTO sales"));
@@ -1416,7 +1441,8 @@ in
             provider: "System.Data.SqlClient".into(),
             server: "MY-SERVER".into(),
             database: "MyDB".into(),
-            connection_string: "data source=MY-SERVER;initial catalog=MyDB;user id=admin;password=secret123".into(),
+            connection_string:
+                "data source=MY-SERVER;initial catalog=MyDB;user id=admin;password=secret123".into(),
         };
 
         let attach = translate_to_duckdb_attach(&ds);
@@ -1552,11 +1578,14 @@ in
                         name: "m_orders".into(),
                         source_type: "m".into(),
                         is_m: true,
-                        query: Some(r#"let
+                        query: Some(
+                            r#"let
     Source = Sql.Database("pg01", "sales_db"),
     Table = Source{[Schema="public",Item="orders"]}[Data]
 in
-    Table"#.into()),
+    Table"#
+                                .into(),
+                        ),
                         data_source_name: None,
                         mode: None,
                         schema: None,
@@ -1579,11 +1608,14 @@ in
                         name: "m_customers".into(),
                         source_type: "m".into(),
                         is_m: true,
-                        query: Some(r#"let
+                        query: Some(
+                            r#"let
     Source = Sql.Database("pg01", "sales_db"),
     Table = Source{[Schema="public",Item="customers"]}[Data]
 in
-    Table"#.into()),
+    Table"#
+                                .into(),
+                        ),
                         data_source_name: None,
                         mode: None,
                         schema: None,
@@ -1600,7 +1632,10 @@ in
         let result = render_load_script(&model, &[], &[]);
         // Both tables share the same server:database → only one ATTACH
         let attach_count = result.matches("ATTACH").count();
-        assert_eq!(attach_count, 1, "Two M tables sharing one SQL Server should emit one ATTACH");
+        assert_eq!(
+            attach_count, 1,
+            "Two M tables sharing one SQL Server should emit one ATTACH"
+        );
         // Both should use src_1 alias
         assert!(result.contains("src_1.public.\"orders\""));
         assert!(result.contains("src_1.public.\"customers\""));
@@ -1648,14 +1683,12 @@ in
             name: "Dates".into(),
             ssas_name: "Dates".into(),
             description: String::new(),
-            columns: vec![
-                ColumnInfo {
-                    name: "Date Key".into(),
-                    data_type: "int64".into(),
-                    source_column: "datekey".into(),
-                    is_hidden: false,
-                },
-            ],
+            columns: vec![ColumnInfo {
+                name: "Date Key".into(),
+                data_type: "int64".into(),
+                source_column: "datekey".into(),
+                is_hidden: false,
+            }],
             measures: vec![],
             partitions: vec![],
             hierarchies: vec![],
@@ -1668,7 +1701,8 @@ in
             to_column: "Date Key".into(),
         });
 
-        let result = render_dummy_data_script(&model, &["Sales".into()], &["Dates".into()], 10000, 1000);
+        let result =
+            render_dummy_data_script(&model, &["Sales".into()], &["Dates".into()], 10000, 1000);
         // FK to date table should use strftime, not modulo
         assert!(!result.contains("(i % 1000) + 1 AS datekey"));
         assert!(result.contains("strftime(DATE '2020-01-01' + (i % 4018) * INTERVAL '1 day', '%Y%m%d')::INTEGER AS datekey"));
@@ -1718,13 +1752,8 @@ in
             to_column: "Full Date".into(),
         });
 
-        let result = render_dummy_data_script(
-            &model,
-            &["Sales".into()],
-            &["Dates".into()],
-            10000,
-            1000,
-        );
+        let result =
+            render_dummy_data_script(&model, &["Sales".into()], &["Dates".into()], 10000, 1000);
 
         // TIMESTAMP FK should generate a date expression, NOT a modulo
         assert!(

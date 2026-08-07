@@ -5,7 +5,8 @@ fn tm_envelope(row_fields: &str, rows: &str) -> String {
     discover_rowset_envelope("", row_fields, rows)
 }
 
-const ID_ONLY_FIELDS: &str = r#"                <xsd:element sql:field="ID" name="ID" type="xsd:long" minOccurs="0"/>"#;
+const ID_ONLY_FIELDS: &str =
+    r#"                <xsd:element sql:field="ID" name="ID" type="xsd:long" minOccurs="0"/>"#;
 
 // -------- TMSCHEMA_MODEL: 1 row --------
 pub fn get_tmschema_model_response() -> String {

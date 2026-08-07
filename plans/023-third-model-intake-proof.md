@@ -16,9 +16,70 @@
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: MED
-- **Depends on**: `plans/022-genericize-converter-fallback-lowering.md`
+- **Depends on**: `plans/022-genericize-converter-fallback-lowering.md`,
+  `plans/028-hygiene-foundation.md`, `plans/027-drop-malloy-runtime.md`
 - **Category**: direction
 - **Planned at**: commit `c89764f`, 2026-06-17
+- **Revised**: 2026-08-07 (commit `f3837cd`) — Contoso selected as the
+  third model; dependencies extended; pre-flight predictions added;
+  Excel smoke made mandatory. See the revision section below.
+
+## Revision 2026-08-07 — Contoso selected
+
+The third model is **Contoso**, already checked in:
+
+- Source: `data/contoso/Contoso.bim` (single-file `.bim`, compatibility
+  level 1604 — supported directly via `src/tools/parse_bim.rs`; the
+  folder-export requirement in Step 1 does not apply).
+- Data: `data/contoso/data/*.csv` — 8 CSVs (currencyexchange, customer,
+  date, orderrows, orders, product, sales, store; ~26 MB).
+- Shape: 12 tables, 39 measures, 6 relationships, 1 role
+  (`Role 1`, 3 table permissions), 2 calculation groups (`Metric`,
+  `Time Intelligence`).
+
+This is the first intake where **both source and data are checked in**,
+making the whole loop reproducible (unlike `generated_project`, whose
+source export is lost).
+
+### Pre-flight predictions (write actuals against these during Step 2)
+
+| Table | Measure pattern | Count | Predicted converter class |
+|---|---|---|---|
+| `Info` | `LOOKUPVALUE(Info[...], Info[Label], "...")` | ~8 | manual / stub (unsupported pattern) |
+| `Sales` | `SUM(Sales[Quantity])` | 1 | simple |
+| `Sales` | `SUMX(Sales, Qty * Net Price)` / `SUMX(Sales, Qty * Unit Cost)` | 2 | sql_fallback — plain SUMX **without** RELATED; pattern 3 covers SUMX+FILTER+RELATED, so these may miss → cheap generic lowering authorized |
+| `Sales` | `Margin = [Sales Amount] - [Cost]` | 1 | sql_fallback — measure arithmetic (pattern 5, recursive) |
+| `State` | `SELECTEDVALUE(State[State])` | 27 | stub — visual-helper/field-parameter noise. If these force BLOCKED, see "qualify refinement" below |
+| `Metric`, `Time Intelligence` | calculation groups | 2 tables | **unsupported — documented gap** (STOP condition: new DAX pattern family; do not improvise) |
+
+Date table present (`Date`, 26 cols) — expect date-role detection and
+`date_dim` seeding to engage; verify against the CSV.
+
+### Qualify refinement (authorized)
+
+If helper-measure stubs (`State.*`) would force BLOCKED, teach `qualify`
+to distinguish **blocking stubs** (measures a PivotTable user would
+plausibly place on values) from **informational stubs** (visual-helper /
+field-parameter tables), and report informational stubs as PARTIAL with a
+caveat instead of BLOCKED. Keep the distinction conservative and
+documented in the qualify output.
+
+### Mandatory Excel smoke (Step 6 is no longer optional)
+
+Excel is available. Capture with `XMLA_TRACE=1
+PROXY_CONFIG=generated_contoso/proxy-config.json cargo run`, connect
+Excel, verify: cube visible, ≥1 measure returns data, ≥1 dimension
+browses. Then lock the session with
+`cargo run --bin xmla_proxy -- trace-replay xmla-trace.jsonl generated_contoso/proxy-config.json`
+and check the trace in as a regression artifact.
+
+### Findings report (required)
+
+Append to this plan's completion note (or `generated_contoso/conversion-report.md`):
+actual vs predicted classification, what Contoso teaches (calculation
+groups as the industry's TI mechanism vs our flag-based TI; helper-measure
+noise in real models; plain-SUMX coverage; role emission against a real
+role), and recommended Phase 4 candidates.
 
 ## Why this matters
 
@@ -172,10 +233,15 @@ third model works end-to-end.
 ## Done criteria
 
 - [ ] A third real Tabular model source export exists under `data/<name>_tabular/`
-- [ ] `cargo run --bin xmla_proxy -- convert-tabular data/<name>_tabular generated_<name>/` exits 0
+      (satisfied by `data/contoso/Contoso.bim` per the 2026-08-07 revision)
+- [ ] `cargo run --bin xmla_proxy -- convert-tabular data/contoso/Contoso.bim generated_contoso/` exits 0
 - [ ] The converted model qualifies as `READY` or `PARTIAL` (not `BLOCKED` by
       stubs that the generic lowering from Plan 022 should have handled)
+- [ ] Actual measure classification reconciled against the pre-flight
+      prediction table in the 2026-08-07 revision
 - [ ] `cargo test --lib` exits 0 with at least one new test for the third model
+- [ ] Excel smoke completed and locked via trace-replay (trace checked in)
+- [ ] Findings report written (see revision section)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions

@@ -530,11 +530,11 @@ fn print_summary(samples: &[Sample], config: &Config, elapsed: Duration) -> i32 
         );
         return 1;
     }
-    if let Some(limit) = config.p95_ms {
-        if p95 > limit {
-            eprintln!("FAIL: p95 {p95} ms exceeds --p95-ms {limit}");
-            return 1;
-        }
+    if let Some(limit) = config.p95_ms
+        && p95 > limit
+    {
+        eprintln!("FAIL: p95 {p95} ms exceeds --p95-ms {limit}");
+        return 1;
     }
     0
 }

@@ -18,7 +18,8 @@ impl Row {
     }
 
     pub fn value(&self, field: &str) -> Option<&str> {
-        self.cols.iter()
+        self.cols
+            .iter()
             .find(|(f, _)| f == field)
             .map(|(_, v)| v.as_str())
     }
@@ -42,11 +43,18 @@ impl Rowset {
     pub fn to_xml(&self) -> String {
         let mut fields = String::new();
         for col in self.columns {
-            let min = if col.min_occurs { r#" minOccurs="0""# } else { "" };
+            let min = if col.min_occurs {
+                r#" minOccurs="0""#
+            } else {
+                ""
+            };
             fields.push_str(&format!(
                 r#"                <xsd:element sql:field="{f}" name="{n}" type="{t}"{m}/>
 "#,
-                f = col.field, n = col.name, t = col.type_, m = min,
+                f = col.field,
+                n = col.name,
+                t = col.type_,
+                m = min,
             ));
         }
 
@@ -55,7 +63,9 @@ impl Rowset {
             rows_xml.push_str("          <row>\n");
             for (field, val) in row.iter() {
                 // Omit optional columns that have empty values.
-                let is_optional_empty = self.columns.iter()
+                let is_optional_empty = self
+                    .columns
+                    .iter()
                     .any(|c| c.field == *field && c.min_occurs && val.is_empty());
                 if is_optional_empty {
                     continue;
@@ -63,7 +73,8 @@ impl Rowset {
                 if let Some(col) = self.columns.iter().find(|c| c.field == *field) {
                     rows_xml.push_str(&format!(
                         "            <{n}>{v}</{n}>\n",
-                        n = col.name, v = xml_escape(val)
+                        n = col.name,
+                        v = xml_escape(val)
                     ));
                 }
             }

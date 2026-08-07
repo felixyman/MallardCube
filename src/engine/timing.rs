@@ -1,7 +1,6 @@
 /// Request timing spans for analytic query performance measurement.
 ///
 /// Collected per-request to compare direct-SQL vs Malloy-runtime paths.
-
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

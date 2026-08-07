@@ -32,7 +32,9 @@ impl TableInfo {
     }
 
     pub fn is_calculated(&self) -> bool {
-        self.partitions.iter().any(|p| p.source_type == "calculated")
+        self.partitions
+            .iter()
+            .any(|p| p.source_type == "calculated")
     }
 }
 
@@ -47,7 +49,7 @@ pub struct ColumnInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct MeasureInfo {
     pub name: String,
-    pub expression: String,    // flattened DAX expression (NOT Vec<String>)
+    pub expression: String, // flattened DAX expression (NOT Vec<String>)
     pub display_folder: String,
     pub classification: String,
 }
@@ -95,28 +97,18 @@ pub struct TablePermissionInfo {
     pub filter_expression: String,
     #[serde(default)]
     pub dax_filter: Option<String>,
-    #[serde(default = "default_metadata_permission")]
     pub metadata_permission: String,
-}
-
-fn default_metadata_permission() -> String {
-    "read".into()
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RoleInfo {
     pub name: String,
     pub description: String,
-    #[serde(default = "default_model_permission")]
     pub model_permission: String,
     #[serde(default)]
     pub members: Vec<RoleMemberInfo>,
     #[serde(default)]
     pub table_permissions: Vec<TablePermissionInfo>,
-}
-
-fn default_model_permission() -> String {
-    "read".into()
 }
 
 // ---- Shared utility functions ----
@@ -126,7 +118,11 @@ fn default_model_permission() -> String {
 /// and expression lowerlers don't expect.
 pub fn normalize_dax(s: &str) -> String {
     let s = s.trim();
-    let s = if let Some(idx) = s.find("//") { &s[..idx] } else { s };
+    let s = if let Some(idx) = s.find("//") {
+        &s[..idx]
+    } else {
+        s
+    };
     s.trim()
         .trim_start_matches('=')
         .trim()
@@ -141,31 +137,80 @@ pub fn classify_dax(expr: &str) -> String {
     let expr = normalize_dax(expr);
     let upper = expr.to_uppercase();
     // Time intelligence: emit structured date-flag measures instead of sql_fallback
-    if upper.contains("TOTALYTD") || upper.contains("DATESYTD") { return "time_ytd".into(); }
-    if upper.contains("SAMEPERIODLASTYEAR") { return "time_prior_year".into(); }
-    if upper.contains("ALLSELECTED") || upper.contains("ISONORAFTER") || (upper.contains("CALCULATE(") && upper.contains("FILTER(")) { return "sql_fallback".into(); }
-    if upper.contains("ALL(") || upper.contains("ALLEXCEPT") || upper.contains("KEEPFILTERS") { return "sql_fallback".into(); }
-    if upper.contains("SUMX(") || upper.contains("AVERAGEX(") || upper.contains("MAXX(") || upper.contains("RANKX(") { return "sql_fallback".into(); }
-    if upper.contains("TODAY()") || upper.contains("NOW()") || upper.contains("UTCNOW()") || upper.contains("SAMEPERIODLASTYEAR") { return "sql_fallback".into(); }
-    if upper.contains("CALCULATE(") {
-        if !upper.contains("ALL(") && !upper.contains("FILTER(") && !upper.contains("KEEPFILTERS") { return "simple".into(); }
+    if upper.contains("TOTALYTD") || upper.contains("DATESYTD") {
+        return "time_ytd".into();
+    }
+    if upper.contains("SAMEPERIODLASTYEAR") {
+        return "time_prior_year".into();
+    }
+    if upper.contains("ALLSELECTED")
+        || upper.contains("ISONORAFTER")
+        || (upper.contains("CALCULATE(") && upper.contains("FILTER("))
+    {
         return "sql_fallback".into();
     }
-    if upper.contains("MEDIAN(") || upper.contains("PERCENTILE(") { return "sql_fallback".into(); }
+    if upper.contains("ALL(") || upper.contains("ALLEXCEPT") || upper.contains("KEEPFILTERS") {
+        return "sql_fallback".into();
+    }
+    if upper.contains("SUMX(")
+        || upper.contains("AVERAGEX(")
+        || upper.contains("MAXX(")
+        || upper.contains("RANKX(")
+    {
+        return "sql_fallback".into();
+    }
+    if upper.contains("TODAY()")
+        || upper.contains("NOW()")
+        || upper.contains("UTCNOW()")
+        || upper.contains("SAMEPERIODLASTYEAR")
+    {
+        return "sql_fallback".into();
+    }
+    if upper.contains("CALCULATE(") {
+        if !upper.contains("ALL(") && !upper.contains("FILTER(") && !upper.contains("KEEPFILTERS") {
+            return "simple".into();
+        }
+        return "sql_fallback".into();
+    }
+    if upper.contains("MEDIAN(") || upper.contains("PERCENTILE(") {
+        return "sql_fallback".into();
+    }
     let trimmed = expr.trim();
-    if trimmed.parse::<f64>().is_ok() || trimmed.starts_with('"') { return "simple".into(); }
-    if upper.contains("SUM(") || upper.contains("COUNT(") || upper.contains("COUNTA(") || upper.contains("COUNTROWS(") || upper.contains("DISTINCTCOUNT(") || upper.contains("MIN(") || upper.contains("MAX(") || upper.contains("AVERAGE(") { return "simple".into(); }
+    if trimmed.parse::<f64>().is_ok() || trimmed.starts_with('"') {
+        return "simple".into();
+    }
+    if upper.contains("SUM(")
+        || upper.contains("COUNT(")
+        || upper.contains("COUNTA(")
+        || upper.contains("COUNTROWS(")
+        || upper.contains("DISTINCTCOUNT(")
+        || upper.contains("MIN(")
+        || upper.contains("MAX(")
+        || upper.contains("AVERAGE(")
+    {
+        return "simple".into();
+    }
     if upper.contains("DIVIDE(") {
-        if upper.contains("CALCULATE(") && !upper.contains("ALLSELECTED") && !upper.contains("ISONORAFTER")
-            && !upper.contains("ALL(") && !upper.contains("FILTER(") {
+        if upper.contains("CALCULATE(")
+            && !upper.contains("ALLSELECTED")
+            && !upper.contains("ISONORAFTER")
+            && !upper.contains("ALL(")
+            && !upper.contains("FILTER(")
+        {
             return "simple".into();
         }
         return "simple".into();
     }
-    if upper.contains("DATATABLE(") { return "calculated_table".into(); }
+    if upper.contains("DATATABLE(") {
+        return "calculated_table".into();
+    }
     // Arithmetic between measure/column references: [A] - [B], [A] * [B], etc.
-    if expr.contains('[') && expr.contains(']')
-        && (expr.contains("- [") || expr.contains("+ [") || expr.contains("* [") || expr.contains("/ ["))
+    if expr.contains('[')
+        && expr.contains(']')
+        && (expr.contains("- [")
+            || expr.contains("+ [")
+            || expr.contains("* [")
+            || expr.contains("/ ["))
     {
         return "sql_fallback".into();
     }
@@ -175,7 +220,8 @@ pub fn classify_dax(expr: &str) -> String {
 /// Flatten a JSON array of string fragments into a single DAX expression string.
 pub fn flatten_json_array(arr: &serde_json::Value) -> String {
     match arr {
-        serde_json::Value::Array(vals) => vals.iter()
+        serde_json::Value::Array(vals) => vals
+            .iter()
             .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
             .collect::<Vec<_>>()
             .join(" "),
@@ -186,12 +232,12 @@ pub fn flatten_json_array(arr: &serde_json::Value) -> String {
 
 /// Convert SSAS name to identifier: replace spaces and dashes with underscores, uppercase.
 pub fn ssas_name_to_id(name: &str) -> String {
-    name.replace(' ', "_").replace('-', "_").to_uppercase()
+    name.replace([' ', '-'], "_").to_uppercase()
 }
 
 /// Convert name to Malloy-style lowercase identifier.
 pub fn malloy_name(name: &str) -> String {
-    name.to_lowercase().replace(' ', "_").replace('-', "_")
+    name.to_lowercase().replace([' ', '-'], "_")
 }
 
 /// Map BIM/SSAS data types to DuckDB types.
@@ -221,10 +267,9 @@ pub enum TabularFormat {
 /// - Directory (any) → `Folder`
 /// - Otherwise → `None`
 pub fn detect_format(path: &std::path::Path) -> Option<TabularFormat> {
-    if path.is_file() && path.extension().map_or(false, |e| e == "bim") {
+    if path.is_file() && path.extension().is_some_and(|e| e == "bim") {
         Some(TabularFormat::Bim)
-    } else if path.is_dir() && path.join("database.tmdl").exists() && path.join("tables").is_dir()
-    {
+    } else if path.is_dir() && path.join("database.tmdl").exists() && path.join("tables").is_dir() {
         Some(TabularFormat::Tmdl)
     } else if path.is_dir() {
         Some(TabularFormat::Folder)

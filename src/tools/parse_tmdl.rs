@@ -56,13 +56,27 @@ fn tmdl_unquote(s: &str) -> String {
 
 /// Known TMDL boolean property keywords (no colon/value, just the key).
 const TMDL_BOOLEAN_PROPERTIES: &[&str] = &[
-    "isKey", "isHidden", "isNullable", "isUnique", "isDefaultLabel",
-    "isDefaultImage", "isAvailableInMDX", "isDataTypeInferred", "isNameInferred",
-    "isPrivate", "isSimpleMeasure", "isActive", "keepUniqueRows",
-    "discourageImplicitMeasures", "discourageReportMeasures",
-    "discourageCompositeModels", "excludeFromModelRefresh",
-    "excludeFromAutomaticAggregations", "systemManaged",
-    "forceUniqueNames", "relyOnReferentialIntegrity",
+    "isKey",
+    "isHidden",
+    "isNullable",
+    "isUnique",
+    "isDefaultLabel",
+    "isDefaultImage",
+    "isAvailableInMDX",
+    "isDataTypeInferred",
+    "isNameInferred",
+    "isPrivate",
+    "isSimpleMeasure",
+    "isActive",
+    "keepUniqueRows",
+    "discourageImplicitMeasures",
+    "discourageReportMeasures",
+    "discourageCompositeModels",
+    "excludeFromModelRefresh",
+    "excludeFromAutomaticAggregations",
+    "systemManaged",
+    "forceUniqueNames",
+    "relyOnReferentialIntegrity",
     "returnErrorValuesAsNull",
 ];
 
@@ -204,9 +218,7 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
                 // If the line starts with spaces (not tab) and is not a top-level /// description
                 let leading_spaces = raw_line.len() - raw_line.trim_start().len();
                 if leading_spaces > 0 && !raw_line.starts_with('\t') {
-                    warnings.push(
-                        "TMDL uses tab indentation; found space indentation".to_string(),
-                    );
+                    warnings.push("TMDL uses tab indentation; found space indentation".to_string());
                     // Continue parsing — be lenient
                 }
             }
@@ -265,17 +277,17 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
             if tab_count > expr_base_indent {
                 // Deeper indent — could be continuation or a property/object
                 // Check if it's a known property or object
-                let is_obj = parse_object_declaration(&raw_line).is_some();
+                let is_obj = parse_object_declaration(raw_line).is_some();
                 let is_colon = has_top_level_colon(trimmed);
                 // Boolean shortcut must be a known keyword
                 let is_boolean = !is_obj && TMDL_BOOLEAN_PROPERTIES.contains(&trimmed);
 
                 if is_obj || is_colon || is_boolean {
                     // End expression and fall through to process this line
-                    if let Some((_, obj)) = stack.last_mut() {
-                        if !expr_parts.is_empty() {
-                            obj.expression = expr_parts.join(" ");
-                        }
+                    if let Some((_, obj)) = stack.last_mut()
+                        && !expr_parts.is_empty()
+                    {
+                        obj.expression = expr_parts.join(" ");
                     }
                     expr_active = false;
                     expr_parts.clear();
@@ -288,10 +300,10 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
                 }
             } else {
                 // Same or lesser indent — end expression
-                if let Some((_, obj)) = stack.last_mut() {
-                    if !expr_parts.is_empty() {
-                        obj.expression = expr_parts.join(" ");
-                    }
+                if let Some((_, obj)) = stack.last_mut()
+                    && !expr_parts.is_empty()
+                {
+                    obj.expression = expr_parts.join(" ");
                 }
                 expr_active = false;
                 expr_parts.clear();
@@ -317,7 +329,7 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
         // ── Classify the line ──
 
         // Object type declaration?
-        if let Some((obj_type, rest)) = parse_object_declaration(&raw_line) {
+        if let Some((obj_type, rest)) = parse_object_declaration(raw_line) {
             let (name, expr_opt) = parse_name_and_expression(rest);
             let expr = expr_opt.clone().unwrap_or_default();
 
@@ -333,7 +345,7 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
 
             // If expression was present but empty, and the line had = at the end,
             // enter continuation mode.
-            if expr_opt.as_ref().map_or(false, String::is_empty) {
+            if expr_opt.as_ref().is_some_and(String::is_empty) {
                 expr_active = true;
                 expr_base_indent = tab_count;
                 expr_parts.clear();
@@ -356,7 +368,8 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
         // Boolean shortcut (no colon, no equals)?
         if !trimmed.contains(':') && !trimmed.contains('=') {
             if let Some((_, obj)) = stack.last_mut() {
-                obj.properties.push((trimmed.to_string(), "true".to_string()));
+                obj.properties
+                    .push((trimmed.to_string(), "true".to_string()));
             }
             line_idx += 1;
             continue;
@@ -368,12 +381,11 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
     }
 
     // ── Flush remaining expression continuation ──
-    if expr_active {
-        if let Some((_, obj)) = stack.last_mut() {
-            if !expr_parts.is_empty() {
-                obj.expression = expr_parts.join(" ");
-            }
-        }
+    if expr_active
+        && let Some((_, obj)) = stack.last_mut()
+        && !expr_parts.is_empty()
+    {
+        obj.expression = expr_parts.join(" ");
     }
 
     // ── Flush remaining backtick mode ──
@@ -396,11 +408,7 @@ fn parse_tmdl_file_text(text: &str, warnings: &mut Vec<String>) -> Vec<TmdlObjec
 // ── Phase 2: TmdlDocument → TabularModel ────────────────────────────────────
 
 /// Walk the AST and build the shared `TabularModel`.
-fn build_model(
-    doc: TmdlDocument,
-    warnings: &mut Vec<String>,
-    model_dir: &str,
-) -> TabularModel {
+fn build_model(doc: TmdlDocument, warnings: &mut Vec<String>, model_dir: &str) -> TabularModel {
     let mut name = String::from("SemanticModel");
     let mut compatibility_level: i64 = 0;
     let mut tables: Vec<TableInfo> = Vec::new();
@@ -410,9 +418,7 @@ fn build_model(
     // ── Check for expressions.tmdl ──
     let expressions_path = Path::new(model_dir).join("expressions.tmdl");
     if expressions_path.exists() {
-        warnings.push(
-            "expressions.tmdl found — shared expressions are not supported".to_string(),
-        );
+        warnings.push("expressions.tmdl found — shared expressions are not supported".to_string());
     }
 
     for obj in &doc.objects {
@@ -632,13 +638,12 @@ fn parse_dot_notation(value: &str) -> Option<(String, String)> {
     if value.is_empty() {
         return None;
     }
-    if value.starts_with('\'') {
+    if let Some(quoted) = value.strip_prefix('\'') {
         // Quoted table name: 'Date'.DateKey
-        let close_rel = value[1..].find('\'')?;
-        let close_abs = 1 + close_rel; // absolute index of closing quote
-        let table = value[1..close_abs].to_string();
+        let close_rel = quoted.find('\'')?;
+        let table = quoted[..close_rel].to_string();
         // After closing quote and dot
-        let rest = value[close_abs + 2..].trim();
+        let rest = quoted[close_rel + 2..].trim();
         let column = rest.to_string();
         Some((table, column))
     } else {
@@ -663,10 +668,7 @@ fn build_relationship(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<Re
                     from_table = t;
                     from_column = c;
                 } else {
-                    warnings.push(format!(
-                        "Could not parse fromColumn: '{}'",
-                        val
-                    ));
+                    warnings.push(format!("Could not parse fromColumn: '{}'", val));
                 }
             }
             "toColumn" => {
@@ -674,10 +676,7 @@ fn build_relationship(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<Re
                     to_table = t;
                     to_column = c;
                 } else {
-                    warnings.push(format!(
-                        "Could not parse toColumn: '{}'",
-                        val
-                    ));
+                    warnings.push(format!("Could not parse toColumn: '{}'", val));
                 }
             }
             _ => {}
@@ -700,7 +699,7 @@ fn build_relationship(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<Re
     })
 }
 
-fn build_role(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<RoleInfo> {
+fn build_role(obj: &TmdlObject, _warnings: &mut Vec<String>) -> Option<RoleInfo> {
     let name = obj.name.clone();
     let description = obj.description.clone();
 
@@ -772,10 +771,10 @@ fn read_tmdl_dir(dir: &Path, warnings: &mut Vec<String>) -> Vec<TmdlObject> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "tmdl") {
-                if let Ok(text) = fs::read_to_string(&path) {
-                    objects.extend(parse_tmdl_file_text(&text, warnings));
-                }
+            if path.extension().is_some_and(|e| e == "tmdl")
+                && let Ok(text) = fs::read_to_string(&path)
+            {
+                objects.extend(parse_tmdl_file_text(&text, warnings));
             }
         }
     }
@@ -812,7 +811,8 @@ pub fn parse_model(src_dir: &str) -> (TabularModel, Vec<String>) {
     // ── tables/*.tmdl ──
     let tables_dir = Path::new(src_dir).join("tables");
     if tables_dir.is_dir() {
-        doc.objects.extend(read_tmdl_dir(&tables_dir, &mut warnings));
+        doc.objects
+            .extend(read_tmdl_dir(&tables_dir, &mut warnings));
     } else {
         warnings.push("tables/ directory not found".to_string());
     }
@@ -872,16 +872,28 @@ mod tests {
         assert_eq!(sales.partitions.len(), 1, "Sales should have 1 partition");
         assert_eq!(sales.partitions[0].source_type, "m");
         assert!(sales.partitions[0].is_m);
-        assert_eq!(sales.hierarchies.len(), 0, "Sales should have 0 hierarchies");
+        assert_eq!(
+            sales.hierarchies.len(),
+            0,
+            "Sales should have 0 hierarchies"
+        );
 
         // Verify Product table
         let product = model.tables.iter().find(|t| t.name == "Product").unwrap();
         assert_eq!(product.columns.len(), 2, "Product should have 2 columns");
         // Column with isKey
-        let pk = product.columns.iter().find(|c| c.name == "ProductKey").unwrap();
+        let pk = product
+            .columns
+            .iter()
+            .find(|c| c.name == "ProductKey")
+            .unwrap();
         assert_eq!(pk.data_type, "int64");
         // Column with isHidden
-        let pn = product.columns.iter().find(|c| c.name == "ProductName").unwrap();
+        let pn = product
+            .columns
+            .iter()
+            .find(|c| c.name == "ProductName")
+            .unwrap();
         assert_eq!(pn.data_type, "string");
         assert!(pn.is_hidden, "ProductName should be hidden");
 
@@ -912,9 +924,16 @@ mod tests {
         assert_eq!(rev.classification, "simple");
         assert_eq!(rev.display_folder, "Financial Metrics");
 
-        let total_rev = sales.measures.iter().find(|m| m.name == "Total Revenue").unwrap();
+        let total_rev = sales
+            .measures
+            .iter()
+            .find(|m| m.name == "Total Revenue")
+            .unwrap();
         assert!(total_rev.expression.contains("SUM"));
-        assert!(total_rev.display_folder.is_empty(), "Total Revenue has no displayFolder");
+        assert!(
+            total_rev.display_folder.is_empty(),
+            "Total Revenue has no displayFolder"
+        );
         assert_eq!(total_rev.classification, "simple");
     }
 
@@ -925,7 +944,10 @@ mod tests {
         let (model, _warnings) = parse_model(path);
         let sales = model.tables.iter().find(|t| t.name == "Sales").unwrap();
         let has_quoted = sales.measures.iter().any(|m| m.name == "Total Revenue");
-        assert!(has_quoted, "Should find 'Total Revenue' measure by unquoted name");
+        assert!(
+            has_quoted,
+            "Should find 'Total Revenue' measure by unquoted name"
+        );
     }
 
     #[test]
@@ -948,7 +970,11 @@ mod tests {
         let (model, _warnings) = parse_model(path);
         let product = model.tables.iter().find(|t| t.name == "Product").unwrap();
         // ProductKey should parse correctly with isKey shortcut (no crash, column exists)
-        let pk = product.columns.iter().find(|c| c.name == "ProductKey").unwrap();
+        let pk = product
+            .columns
+            .iter()
+            .find(|c| c.name == "ProductKey")
+            .unwrap();
         assert_eq!(pk.name, "ProductKey");
         assert_eq!(pk.data_type, "int64");
         // isHidden should be false for ProductKey (isKey is not isHidden)
@@ -1023,6 +1049,10 @@ mod tests {
         assert_eq!(objs[0].properties.len(), 1);
         assert_eq!(objs[0].properties[0].0, "formatString");
         assert_eq!(objs[0].properties[0].1, "0.00%");
-        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings
+        );
     }
 }

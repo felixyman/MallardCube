@@ -1,5 +1,5 @@
-use crate::response::discover_rowset_envelope;
 use crate::proxy_project;
+use crate::response::discover_rowset_envelope;
 use std::collections::BTreeSet;
 
 const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>

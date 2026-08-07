@@ -4,23 +4,15 @@
 /// Malloy model to Excel.  Malloy owns the semantics; this owns the
 /// Excel/XMLA-facing presentation details (captions, order, formatting,
 /// whether a dimension has an All member, etc.).
-
 use serde::Deserialize;
 
 // ---- new time-intelligence config types ----
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TimeIntelligenceConfig {
     pub date_dimension: DateDimensionConfig,
-}
-
-impl Default for TimeIntelligenceConfig {
-    fn default() -> Self {
-        Self {
-            date_dimension: DateDimensionConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -81,21 +73,13 @@ impl Default for DateFlagColumns {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct MeasureTimeIntelligenceConfig {
     pub flag_column: String,
     /// Which dimension serves as the date role for this measure.
     /// When absent, the global time_intelligence.date_dimension is used.
     #[serde(default)]
     pub dimension_id: Option<String>,
-}
-
-impl Default for MeasureTimeIntelligenceConfig {
-    fn default() -> Self {
-        Self {
-            flag_column: String::new(),
-            dimension_id: None,
-        }
-    }
 }
 
 // ---- main config types ----
@@ -289,9 +273,15 @@ pub struct MeasureConfig {
     pub fallback_capability: Option<String>,
 }
 
-fn default_aggregator() -> u32 { 1 }
-fn default_precision() -> u16 { 18 }
-fn default_scale() -> i16 { 2 }
+fn default_aggregator() -> u32 {
+    1
+}
+fn default_precision() -> u16 {
+    18
+}
+fn default_scale() -> i16 {
+    2
+}
 
 #[cfg(test)]
 mod tests {
@@ -364,7 +354,7 @@ mod tests {
         assert_eq!(dd.dimension_id, "Date");
         assert_eq!(dd.date_key_column, "date_key");
         assert_eq!(dd.full_date_column, "full_date");
-        assert_eq!(dd.table_name, "date_dim");          // default
+        assert_eq!(dd.table_name, "date_dim"); // default
         assert_eq!(dd.flag_columns.year_column, "year"); // default
         assert_eq!(dd.flag_columns.ytd_flag_column, "ytd_flag"); // default
     }
@@ -382,8 +372,10 @@ mod tests {
             "measures": []
         }"#;
         let cfg: ProxyConfig = serde_json::from_str(json).expect("parse");
-        assert!(cfg.time_intelligence.is_none(),
-            "omitting time_intelligence should default to None");
+        assert!(
+            cfg.time_intelligence.is_none(),
+            "omitting time_intelligence should default to None"
+        );
     }
 
     #[test]

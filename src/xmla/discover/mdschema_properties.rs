@@ -1,5 +1,5 @@
-use crate::response::discover_rowset_envelope;
 use crate::proxy_project;
+use crate::response::discover_rowset_envelope;
 
 const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -64,7 +64,9 @@ fn member_property_rows() -> String {
         let hier = &d.hierarchy_unique_name();
         for level in &[d.all_level_unique_name(), d.leaf_level_unique_name()] {
             for (name, content) in PROPS {
-                out.push_str(&member_property_row(catalog, cube, dim, hier, level, name, *content));
+                out.push_str(&member_property_row(
+                    catalog, cube, dim, hier, level, name, *content,
+                ));
                 out.push('\n');
             }
         }
@@ -79,9 +81,13 @@ fn member_property_rows() -> String {
     ];
     for (name, content) in M_PROPS {
         out.push_str(&member_property_row(
-            catalog, cube,
-            "[Measures]", "[Measures]", "[Measures].[MeasuresLevel]",
-            name, *content,
+            catalog,
+            cube,
+            "[Measures]",
+            "[Measures]",
+            "[Measures].[MeasuresLevel]",
+            name,
+            *content,
         ));
         out.push('\n');
     }

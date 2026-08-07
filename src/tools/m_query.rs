@@ -13,7 +13,6 @@
 /// - PostgreSQL.Database("server", "db") + table reference → PostgreSQL
 /// - MySQL.Database("server", "db") + table reference → MySQL
 /// - Named source reference (#"provider;name") + table reference → Unknown kind
-
 use regex::Regex;
 use serde::Serialize;
 use std::sync::OnceLock;
@@ -31,7 +30,7 @@ pub struct SourceConnection {
     pub schema: Option<String>,
     pub table: Option<String>,
     pub native_query: Option<String>,
-    pub file_path: Option<String>,    // for CSV/Excel sources
+    pub file_path: Option<String>,     // for CSV/Excel sources
     pub url: Option<String>,           // for Web.Contents sources
     pub relative_path: Option<String>, // for Web.Contents with RelativePath
 }
@@ -54,12 +53,16 @@ pub enum SourceKind {
 
 fn sql_db_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"Sql\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)""#).expect("sql_db_re"))
+    RE.get_or_init(|| {
+        Regex::new(r#"Sql\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)""#).expect("sql_db_re")
+    })
 }
 
 fn native_query_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"\[Query\s*=\s*"((?:[^"\\]|\\.)*)"\]"#).expect("native_query_re"))
+    RE.get_or_init(|| {
+        Regex::new(r#"\[Query\s*=\s*"((?:[^"\\]|\\.)*)"\]"#).expect("native_query_re")
+    })
 }
 
 fn table_ref_re() -> &'static Regex {
@@ -83,16 +86,13 @@ fn web_contents_re() -> &'static Regex {
 
 fn file_contents_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"File\.Contents\s*\(\s*"([^"]+)""#).expect("file_contents_re")
-    })
+    RE.get_or_init(|| Regex::new(r#"File\.Contents\s*\(\s*"([^"]+)""#).expect("file_contents_re"))
 }
 
 fn pg_db_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"PostgreSQL\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)""#)
-            .expect("pg_db_re")
+        Regex::new(r#"PostgreSQL\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)""#).expect("pg_db_re")
     })
 }
 
@@ -156,9 +156,7 @@ fn try_sql_server(expr: &str) -> Option<SourceConnection> {
     let database = caps[2].to_string();
 
     // Check for native query: [Query="SELECT ..."]
-    let native_query = native_query_re()
-        .captures(expr)
-        .map(|c| c[1].to_string());
+    let native_query = native_query_re().captures(expr).map(|c| c[1].to_string());
 
     // Extract schema + table from {[Schema="...",Item="..."]}[Data]
     let (schema, table) = extract_table_ref(expr);
@@ -185,20 +183,20 @@ fn try_csv(expr: &str) -> Option<SourceConnection> {
 
     // Pattern 3: Web.Contents(url, [RelativePath = "..."])
     if let Some(caps) = web_contents_re().captures(expr) {
-            let url_str = caps[1].trim();
-            // Strip surrounding quotes if present
-            let url_clean = url_str
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .unwrap_or(url_str)
-                .to_string();
-            let relative_path = caps[2].to_string();
-            // If url looks like a parameter reference (#"[...]") we can't resolve it
-            let url = if url_str.starts_with('#') {
-                None
-            } else {
-                Some(url_clean)
-            };
+        let url_str = caps[1].trim();
+        // Strip surrounding quotes if present
+        let url_clean = url_str
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(url_str)
+            .to_string();
+        let relative_path = caps[2].to_string();
+        // If url looks like a parameter reference (#"[...]") we can't resolve it
+        let url = if url_str.starts_with('#') {
+            None
+        } else {
+            Some(url_clean)
+        };
         return Some(SourceConnection {
             kind: SourceKind::CSV,
             server: None,
@@ -275,9 +273,7 @@ fn try_named_source(expr: &str) -> Option<SourceConnection> {
         return None;
     }
     let (schema, table) = extract_table_ref(expr);
-    if table.is_none() {
-        return None;
-    }
+    table.as_ref()?;
     Some(SourceConnection {
         kind: SourceKind::Unknown,
         server: None,
@@ -385,10 +381,7 @@ in
         assert_eq!(conn.kind, SourceKind::SqlServer);
         assert_eq!(conn.server.as_deref(), Some("server01"));
         assert_eq!(conn.database.as_deref(), Some("AdventureWorksDW"));
-        assert_eq!(
-            conn.native_query.as_deref(),
-            Some("SELECT * FROM DimDate")
-        );
+        assert_eq!(conn.native_query.as_deref(), Some("SELECT * FROM DimDate"));
     }
 
     #[test]
@@ -539,10 +532,7 @@ in
     #[test]
     fn test_unrecognized_expression() {
         assert_eq!(extract_source("this is not an m expression"), None);
-        assert_eq!(
-            extract_source("just some random text with Sql."),
-            None
-        );
+        assert_eq!(extract_source("just some random text with Sql."), None);
     }
 
     #[test]

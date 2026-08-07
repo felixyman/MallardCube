@@ -1,3 +1,8 @@
+use crate::backend::{Backend, QueryBackend};
+use crate::engine::model::SemanticModel;
+use crate::engine::plan::{execute_plan, execute_plan_with_backend, plan_from_semantic};
+use crate::execute::render::{dispatch, dispatch_with_backend};
+use crate::mdx_semantic::SemanticQuery;
 /// Execute and cellset response layer.
 ///
 /// Public API for statement execution — the entry point that `dispatch.rs`
@@ -5,22 +10,13 @@
 /// Malloy runtime machinery lives in `runtime.rs`.
 ///
 /// Legacy MDX/DAX flat-rowset helpers also live here as transitional code.
-
 use crate::response::wrap_in_soap_envelope;
-use crate::backend::{Backend, QueryBackend};
-use crate::engine::plan::{execute_plan, execute_plan_with_backend, plan_from_semantic};
-use crate::engine::model::SemanticModel;
-use crate::mdx_semantic::SemanticQuery;
-use crate::execute::render::{dispatch, dispatch_with_backend};
 
 // Re-export Malloy runtime machinery at the same path callers expect.
 pub use crate::execute::runtime::{
-    USE_MALLOY_RUNTIME,
-    enable_malloy_runtime,
-    disable_malloy_runtime,
-    warm_malloy_worker,
-    get_execute_cellset_response_timed_with_backend,
+    USE_MALLOY_RUNTIME, disable_malloy_runtime, enable_malloy_runtime,
     get_execute_cellset_response_timed_malloy_with_backend,
+    get_execute_cellset_response_timed_with_backend, warm_malloy_worker,
 };
 
 // ---- public API consumed by execute.rs dispatch ----
@@ -61,7 +57,11 @@ pub fn get_execute_cellset_response_with_backend<B: QueryBackend>(
 pub fn get_execute_mdx_response(mdx: &str) -> String {
     let has_measures = mdx.contains("Measures") || mdx.contains("measures");
     let measure_name = "Total_Forsaljning";
-    let measure_value = if has_measures { Backend::get().total_sales() } else { 0.0 };
+    let measure_value = if has_measures {
+        Backend::get().total_sales()
+    } else {
+        0.0
+    };
 
     let inner = format!(
         r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">

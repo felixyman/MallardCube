@@ -226,10 +226,10 @@ Both produce identical results (verified by parity tests).
 cargo test --lib
 ```
 
-234 tests covering MDX parsing, semantic classification, plan generation, SQL
+345 tests covering MDX parsing, semantic classification, plan generation, SQL
 and Malloy emission, compile path, result parity, metadata rowsets, multi-fact
 routing, end-to-end cellset rendering, Excel replay/oracle verification, time
-intelligence, and compatibility-gate assertions.
+intelligence, security roles, and compatibility-gate assertions.
 
 ## Compatibility gate
 
