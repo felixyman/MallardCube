@@ -34,14 +34,13 @@ honor its STOP conditions, and update your row when done.
 | 024  | Security-role decision gate | P1 | L | 022 | DONE |
 | 025  | Make direct-SQL XMLA execution concurrent across users | P1 | L | — | DONE |
 | 026  | Security roles and UserContext for the direct-SQL runtime | P1 | L | — | DONE |
-| 027  | Drop the Malloy runtime | P1 | M | 028 | TODO |
+| 027  | Drop the Malloy runtime | P1 | M | 028 | DONE |
 | 028  | Hygiene foundation (green baseline, plan bookkeeping, lint bar, CI) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
 **Execution order for the open batch: 028 → 027 → 023.**
-(024/026 are believed implemented in code; plan 028 verifies their done
-criteria with file:line evidence before flipping them to DONE.)
+(028 and 027 are DONE; 023 is the only remaining open plan.)
 
 ## Reconcile Status
 
@@ -73,6 +72,16 @@ criteria with file:line evidence before flipping them to DONE.)
     reconcile note above). Doc drift fixed (README, CONTEXT.md,
     DEVELOPER-GUIDE). Dead code removed (~14 fns + 27 doc-comment blanks
     + misc clippy fixes).
+  - 027 done 2026-08-07: Malloy runtime removed — `js/`, `package.json`,
+    `engine/malloy*.rs`, `engine/parity.rs`, `engine/cache.rs` deleted;
+    `runtime.rs` collapsed to direct-SQL-only (renamed entry point
+    `get_execute_cellset_response_with_backend_and_context`);
+    `config.rs` `malloy_model_file`/`malloy_name` deprecated but parseable;
+    `ProxyProject::load` no longer reads `model.malloy`; converter stopped
+    emitting `model.malloy`; timing/trace Malloy fields removed;
+    `model.malloy` deleted from sample project dirs. `cargo test --lib` ->
+    293/0. Node.js dependency eliminated — true single binary.
+    Qualify verdicts unchanged (retail READY, generated_project PARTIAL).
 - 2026-08-07 plan 028 Step 2 verification — **024 and 026 flipped to DONE**
   with evidence:
   - 026: `RoleConfig{model_permission,members,table_permissions}`

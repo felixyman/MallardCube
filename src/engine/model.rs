@@ -34,14 +34,6 @@ pub enum FallbackCapability {
     Stub,
 }
 
-impl Dialect {
-    pub fn as_malloy_source_prefix(&self) -> &str {
-        match self {
-            Dialect::DuckDB => "duckdb.table",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // User context and role resolution
 // ---------------------------------------------------------------------------

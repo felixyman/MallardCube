@@ -224,16 +224,6 @@ async fn run_server() {
         }
     }
 
-    if std::env::var("MALLOY_RUNTIME").is_ok_and(|v| v == "1") {
-        execute_builders::enable_malloy_runtime();
-        println!("🧪 Malloy runtime ENABLED (MALLOY_RUNTIME=1)");
-        debug_write("Malloy runtime: ENABLED");
-        execute_builders::warm_malloy_worker();
-    } else {
-        println!("📊 Malloy runtime disabled (set MALLOY_RUNTIME=1 to enable)");
-        debug_write("Malloy runtime: disabled");
-    }
-
     let bind_addr = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let app = Router::new()
         .route("/xmla", post(handle_xmla))
@@ -479,7 +469,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             debug_write("REQUEST XML:");
             debug_write(body);
             let (resp, timings) =
-                execute_builders::get_execute_cellset_response_timed_malloy_with_backend(
+                execute_builders::get_execute_cellset_response_with_backend_and_context(
                     mdx, backend, user, config,
                 );
             debug_write("RESPONSE XML:");

@@ -2,7 +2,6 @@ use crate::engine::model::{
     Dialect, DimensionDef, FactTable, FallbackCapability, MeasureDef, RelationshipDef,
     SemanticModel,
 };
-use crate::engine::plan::QueryPlan;
 use crate::proxy_config::ProxyConfig;
 #[cfg(test)]
 use std::cell::RefCell;
@@ -91,7 +90,6 @@ pub fn resolve_db_path(config_path: &str, db_path: Option<&str>) -> Option<Strin
 pub struct ProxyProject {
     pub config: ProxyConfig,
     pub model: SemanticModel,
-    pub malloy_model_text: String,
 }
 
 impl ProxyProject {
@@ -102,37 +100,12 @@ impl ProxyProject {
             serde_json::from_str(&text).map_err(|e| format!("parse config {config_path}: {e}"))?
         };
 
-        let malloy_path = Path::new(config_path)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&config.malloy_model_file);
-        let malloy_model_text = fs::read_to_string(&malloy_path)
-            .map_err(|e| format!("read model {}: {e}", malloy_path.display(),))?;
-
         let model = build_semantic_model(
             &config,
             Path::new(config_path).parent().unwrap_or(Path::new(".")),
         );
 
-        Ok(Self {
-            config,
-            model,
-            malloy_model_text,
-        })
-    }
-
-    /// Return Malloy source to compile: either loaded model text +
-    /// generated query fragment, or fully generated model+query.
-    pub fn malloy_source(&self, plan: &QueryPlan) -> String {
-        if self.malloy_model_text.is_empty() {
-            crate::engine::malloy::malloy_source_for_query_plan(&self.model, plan)
-        } else {
-            crate::engine::malloy::malloy_source_with_model_text(
-                &self.malloy_model_text,
-                &self.model,
-                plan,
-            )
-        }
+        Ok(Self { config, model })
     }
 
     /// Convenience: use the hardcoded defaults (equivalent to the old
@@ -212,7 +185,6 @@ impl ProxyProject {
                 }],
             },
             model: crate::engine::model::default_model(),
-            malloy_model_text: String::new(),
         }
     }
 }
@@ -527,33 +499,6 @@ mod tests {
     }
 
     #[test]
-    fn second_project_malloy_source() {
-        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
-        let plan = QueryPlan::Total {
-            measure: "Revenue".into(),
-            filters: vec![],
-        };
-        let src = p.malloy_source(&plan);
-        // Should use the loaded model text, not generated model
-        assert!(src.contains("source: sales_data is duckdb.table('faktatabell')"));
-        assert!(src.contains("measure: revenue is sales.sum()"));
-        assert!(src.contains("aggregate: revenue"));
-    }
-
-    #[test]
-    fn second_project_group_by() {
-        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
-        let plan = QueryPlan::GroupBy {
-            measure: "Revenue".into(),
-            group_by: vec!["Category".into(), "Territory".into()],
-            filters: vec![],
-        };
-        let src = p.malloy_source(&plan);
-        assert!(src.contains("group_by: produktkategori, region"));
-        assert!(src.contains("aggregate: revenue"));
-    }
-
-    #[test]
     fn second_project_defaults_differ() {
         let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
         assert_eq!(p.model.default_dimension_id().as_deref(), Some("Category"));
@@ -708,31 +653,6 @@ mod tests {
             model.meas_def("SalesPriorYear").time_flag.as_deref(),
             Some("prior_year_ytd_flag")
         );
-    }
-
-    #[test]
-    fn third_project_malloy_source() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
-        let plan = QueryPlan::Total {
-            measure: "Revenue".into(),
-            filters: vec![],
-        };
-        let src = p.malloy_source(&plan);
-        assert!(src.contains("measure: total_revenue is revenue.sum()"));
-        assert!(src.contains("measure: total_units is units.sum()"));
-        assert!(src.contains("aggregate: total_revenue"));
-    }
-
-    #[test]
-    fn third_project_group_by_2d() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
-        let plan = QueryPlan::GroupBy {
-            measure: "Revenue".into(),
-            group_by: vec!["Category".into(), "Territory".into()],
-            filters: vec![],
-        };
-        let src = p.malloy_source(&plan);
-        assert!(src.contains("group_by: category, territory"));
     }
 
     // ---- multi-fact-table (Phase A) ----
@@ -1013,24 +933,6 @@ mod tests {
             },
         );
         assert!(sql.contains("FROM inventory_fact"), "Stock: {sql}");
-    }
-
-    #[test]
-    fn fourth_project_malloy_multi_source() {
-        use crate::engine::malloy::malloy_model;
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
-        let m = &p.model;
-        let out = malloy_model(m);
-        assert!(
-            out.contains("source: sales_data"),
-            "should have sales source"
-        );
-        assert!(
-            out.contains("source: inventory_data"),
-            "should have inventory source"
-        );
-        assert!(out.contains("total_revenue"), "should have Revenue measure");
-        assert!(out.contains("total_stock"), "should have Stock measure");
     }
 
     #[test]

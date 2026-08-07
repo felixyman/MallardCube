@@ -1,12 +1,11 @@
 # SSAS Proxy
 
-Excel/XMLA frontend for DuckDB-backed Malloy analytics. Runs as a local HTTP
+Excel/XMLA frontend for DuckDB. Runs as a local HTTP
 server. Excel connects to it as a SSAS data source and gets PivotTable
 compatibility — filtering, drilldown, crossjoin, collapse — against your
 DuckDB data.
 
-Direct SQL is the default runtime path. Malloy is optional
-(`MALLOY_RUNTIME=1`) and verified by parity tests.
+Direct SQL is the only runtime path.
 
 ## Quick start
 
@@ -26,15 +25,6 @@ limit is always enforced.
 ```bash
 PROXY_CONFIG=/path/to/my-project/proxy-config.json cargo run
 ```
-
-### With Malloy runtime
-
-```bash
-MALLOY_RUNTIME=1 cargo run
-```
-
-When Malloy compilation fails, the request falls back to direct SQL
-automatically so Excel stays functional.
 
 ## Connecting Excel
 
@@ -75,7 +65,6 @@ Each project is a directory containing two files:
 | File | Purpose |
 |------|---------|
 | `proxy-config.json` | Maps your data to Excel/XMLA: dimensions, measures, captions, formatting |
-| `model.malloy` | Malloy semantic model: DuckDB table source, measure expressions |
 
 ### Config walkthrough (`proxy-config.json`)
 
@@ -155,18 +144,6 @@ bind dimensions and measures to specific fact tables:
 - `fact_table` on a dimension or measure scopes it to that fact table.
 - Unrelated dimension filters are silently ignored (SSAS-compatible).
 
-### Model walkthrough (`model.malloy`)
-
-```malloy
-source: sales_data is duckdb.table('sales_fact') extend {
-  measure: total_revenue is revenue.sum()
-  measure: total_units is units.sum()
-}
-```
-
-- The source name (`sales_data`) must match `source_name` in config.
-- Dimension columns come from the DuckDB table schema.
-- Declare measures with aggregation expressions.
 
 ## Demo vs Real Data
 
@@ -195,8 +172,8 @@ Sample projects live at the repo root.
 
 ## Converting SSAS Tabular models
 
-The converter turns a Tabular Editor folder (`.bim`, tables) into a Malloy +
-DuckDB project:
+The converter turns a Tabular Editor folder (`.bim`, tables) into a DuckDB
+project:
 
 ```bash
 cargo run --bin xmla_proxy -- convert-tabular path/to/tabulareditor_src output_dir
@@ -204,21 +181,11 @@ cargo run --bin xmla_proxy -- convert-tabular path/to/tabulareditor_src output_d
 
 Output:
 - `proxy-config.json` - project config with dimensions and measures
-- `model.malloy` - Malloy source with fact source and dimension joins
 - `schema.sql` - DuckDB `CREATE TABLE` statements
 - `sql_fallback/` - DuckDB SQL for complex measures (MEDIAN, cumulative, etc.)
 - `conversion-report.md` - summary and data-loading checklist
 
 See `docs/ssas-to-malloy-conversion.md` for details.
-
-## Malloy runtime vs Direct SQL
-
-| Path | Trigger | Role |
-|------|---------|------|
-| **Direct SQL** | Always active | Rust emits SQL from `QueryPlan`. Default runtime path. |
-| **Malloy** | `MALLOY_RUNTIME=1` | Long-lived Node.js worker compiles Malloy to SQL, executes via DuckDB. |
-
-Both produce identical results (verified by parity tests).
 
 ## Running tests
 
@@ -226,10 +193,10 @@ Both produce identical results (verified by parity tests).
 cargo test --lib
 ```
 
-345 tests covering MDX parsing, semantic classification, plan generation, SQL
-and Malloy emission, compile path, result parity, metadata rowsets, multi-fact
-routing, end-to-end cellset rendering, Excel replay/oracle verification, time
-intelligence, security roles, and compatibility-gate assertions.
+293 tests covering MDX parsing, semantic classification, plan generation, SQL
+emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
+Excel replay/oracle verification, time intelligence, security roles, and
+compatibility-gate assertions.
 
 ## Compatibility gate
 
@@ -320,7 +287,7 @@ For detailed documentation:
 - Single or multiple fact tables with shared/scoped dimensions
 - One hierarchy per dimension: `(All)` + one leaf level
 - Up to 2 visible row dimensions
-- Direct SQL execution with optional Malloy runtime path
+- Direct SQL execution
 - Tabular Editor `.bim` structural conversion
 - Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
 - Explicit date-role dimension (flag-based, not dynamic MDX function parsing)
@@ -444,7 +411,6 @@ translate DAX to SQL using the aliases above.
 | Model-level read/deny | Yes | Plan returns Empty when permission is `none` |
 | OLS (table-level hide) | Yes | Table hidden via Empty plan / empty member list |
 | MDSCHEMA_MEMBERS filtering | Yes | Dimension table RLS applied to member enumeration |
-| **Malloy runtime** | **No** | `MALLOY_RUNTIME=1` does not enforce roles — only direct SQL is secured |
 | DAX-to-SQL lowering | No | Converter emits DAX in `dax_filter`; `filter_expression` left empty for manual fill-in |
 | Column-level OLS | No | Only table-level `metadata_permission` is supported |
 | Dynamic `USERNAME()` | No | `USERNAME()` and `USERPRINCIPALNAME()` are not substituted at runtime |
