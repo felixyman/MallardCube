@@ -7,16 +7,14 @@
 #[cfg(test)]
 mod tests {
     use crate::backend::{Backend, BenchmarkDataConfig};
+    use crate::engine::malloy::{malloy_for_query_plan, malloy_query};
+    use crate::engine::malloy_compiler::{CompileResult, MalloyCompiler, NullCompiler};
+    use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
     use crate::engine::model::default_model;
     use crate::engine::plan::{
-        QueryPlan, TypedDimensionFilter,
-        execute_plan_sql_with_backend,
-        plan_from_semantic,
+        QueryPlan, TypedDimensionFilter, execute_plan_sql_with_backend, plan_from_semantic,
     };
     use crate::engine::sql::sql_for_query_plan;
-    use crate::engine::malloy::{malloy_for_query_plan, malloy_query};
-    use crate::engine::malloy_compiler::{CompileResult, NullCompiler, MalloyCompiler};
-    use crate::engine::malloy_node_longlived::LongLivedNodeMalloyCompiler;
     use crate::mdx_semantic::semantic_query_from_mdx;
     use crate::test_fixtures::*;
     use std::sync::OnceLock;
@@ -25,8 +23,9 @@ mod tests {
 
     fn parity_backend() -> &'static Backend {
         static B: OnceLock<Backend> = OnceLock::new();
-        B.get_or_init(|| Backend::new_with_config(&BenchmarkDataConfig::small())
-            .expect("parity backend"))
+        B.get_or_init(|| {
+            Backend::new_with_config(&BenchmarkDataConfig::small()).expect("parity backend")
+        })
     }
 
     fn parity_compiler() -> &'static LongLivedNodeMalloyCompiler {
@@ -35,15 +34,19 @@ mod tests {
     }
 
     /// Returns (direct_result, malloy_result) using the same backend.
-    fn parity_results(plan: &QueryPlan) -> (crate::engine::plan::QueryResult, crate::engine::plan::QueryResult) {
+    fn parity_results(
+        plan: &QueryPlan,
+    ) -> (
+        crate::engine::plan::QueryResult,
+        crate::engine::plan::QueryResult,
+    ) {
         let m = default_model();
         let backend = parity_backend();
 
         let direct = execute_plan_sql_with_backend(plan, &sql_for_query_plan(&m, plan), backend);
 
         let compiler = parity_compiler();
-        let cr: CompileResult = compiler.compile_query(&m, plan)
-            .expect("parity compile");
+        let cr: CompileResult = compiler.compile_query(&m, plan).expect("parity compile");
         let malloy = execute_plan_sql_with_backend(plan, &cr.sql, backend);
 
         (direct, malloy)
@@ -64,7 +67,10 @@ mod tests {
     #[test]
     fn total_compiler_accepts_supported_plan() {
         let model = default_model();
-        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".to_string(),
+            filters: vec![],
+        };
         let compiler = NullCompiler;
         let result = compiler.compile_query(&model, &plan);
         assert!(result.is_ok());
@@ -97,7 +103,9 @@ mod tests {
     #[test]
     fn compiler_rejects_count_plan() {
         let model = default_model();
-        let plan = QueryPlan::Count { dimension: "Produktkategori".to_string() };
+        let plan = QueryPlan::Count {
+            dimension: "Produktkategori".to_string(),
+        };
         let compiler = NullCompiler;
         assert!(compiler.compile_query(&model, &plan).is_err());
     }
@@ -133,11 +141,23 @@ mod tests {
 
     #[test]
     fn parity_total_matches() {
-        let plan = QueryPlan::Total { measure: "TotalSales".to_string(), filters: vec![] };
+        let plan = QueryPlan::Total {
+            measure: "TotalSales".to_string(),
+            filters: vec![],
+        };
         let (direct, malloy) = parity_results(&plan);
-        let dv = match direct { crate::engine::plan::QueryResult::Scalar(v) => v, _ => panic!() };
-        let mv = match malloy { crate::engine::plan::QueryResult::Scalar(v) => v, _ => panic!() };
-        assert!((dv - mv).abs() < 0.001, "total mismatch: direct={dv}, malloy={mv}");
+        let dv = match direct {
+            crate::engine::plan::QueryResult::Scalar(v) => v,
+            _ => panic!(),
+        };
+        let mv = match malloy {
+            crate::engine::plan::QueryResult::Scalar(v) => v,
+            _ => panic!(),
+        };
+        assert!(
+            (dv - mv).abs() < 0.001,
+            "total mismatch: direct={dv}, malloy={mv}"
+        );
     }
 
     #[test]
@@ -148,14 +168,23 @@ mod tests {
             filters: vec![],
         };
         let (direct, malloy) = parity_results(&plan);
-        let mut dg = match direct { crate::engine::plan::QueryResult::Grouped(v) => v, _ => panic!() };
-        let mut mg = match malloy { crate::engine::plan::QueryResult::Grouped(v) => v, _ => panic!() };
+        let mut dg = match direct {
+            crate::engine::plan::QueryResult::Grouped(v) => v,
+            _ => panic!(),
+        };
+        let mut mg = match malloy {
+            crate::engine::plan::QueryResult::Grouped(v) => v,
+            _ => panic!(),
+        };
         dg.sort_by(|a, b| a.0.cmp(&b.0));
         mg.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(dg.len(), mg.len(), "group count mismatch");
         for ((dk, dv), (mk, mv)) in dg.iter().zip(mg.iter()) {
             assert_eq!(dk, mk, "key mismatch");
-            assert!((dv - mv).abs() < 0.001, "value mismatch for {dk}: direct={dv}, malloy={mv}");
+            assert!(
+                (dv - mv).abs() < 0.001,
+                "value mismatch for {dk}: direct={dv}, malloy={mv}"
+            );
         }
     }
 
@@ -167,15 +196,24 @@ mod tests {
             filters: vec![],
         };
         let (direct, malloy) = parity_results(&plan);
-        let mut dp = match direct { crate::engine::plan::QueryResult::Pairs(v) => v, _ => panic!() };
-        let mut mp = match malloy { crate::engine::plan::QueryResult::Pairs(v) => v, _ => panic!() };
+        let mut dp = match direct {
+            crate::engine::plan::QueryResult::Pairs(v) => v,
+            _ => panic!(),
+        };
+        let mut mp = match malloy {
+            crate::engine::plan::QueryResult::Pairs(v) => v,
+            _ => panic!(),
+        };
         dp.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         mp.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         assert_eq!(dp.len(), mp.len(), "pair count mismatch");
         for ((d0, d1, dv), (m0, m1, mv)) in dp.iter().zip(mp.iter()) {
             assert_eq!(d0, m0, "key0 mismatch");
             assert_eq!(d1, m1, "key1 mismatch");
-            assert!((dv - mv).abs() < 0.001, "value mismatch for ({d0},{d1}): direct={dv}, malloy={mv}");
+            assert!(
+                (dv - mv).abs() < 0.001,
+                "value mismatch for ({d0},{d1}): direct={dv}, malloy={mv}"
+            );
         }
     }
 
@@ -191,14 +229,23 @@ mod tests {
             }],
         };
         let (direct, malloy) = parity_results(&plan);
-        let mut dg = match direct { crate::engine::plan::QueryResult::Grouped(v) => v, _ => panic!() };
-        let mut mg = match malloy { crate::engine::plan::QueryResult::Grouped(v) => v, _ => panic!() };
+        let mut dg = match direct {
+            crate::engine::plan::QueryResult::Grouped(v) => v,
+            _ => panic!(),
+        };
+        let mut mg = match malloy {
+            crate::engine::plan::QueryResult::Grouped(v) => v,
+            _ => panic!(),
+        };
         dg.sort_by(|a, b| a.0.cmp(&b.0));
         mg.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(dg.len(), mg.len(), "filtered group count mismatch");
         for ((dk, dv), (mk, mv)) in dg.iter().zip(mg.iter()) {
             assert_eq!(dk, mk, "key mismatch");
-            assert!((dv - mv).abs() < 0.001, "value mismatch for {dk}: direct={dv}, malloy={mv}");
+            assert!(
+                (dv - mv).abs() < 0.001,
+                "value mismatch for {dk}: direct={dv}, malloy={mv}"
+            );
         }
     }
 }

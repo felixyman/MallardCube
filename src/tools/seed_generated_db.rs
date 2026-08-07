@@ -3,7 +3,6 @@
 /// Usage: cargo run --bin seed_generated_db
 ///
 /// Creates data/generated.db from data/seed_generated.sql.
-
 use std::path::Path;
 
 pub fn run(_args: Vec<String>) -> i32 {
@@ -25,18 +24,23 @@ pub fn run(_args: Vec<String>) -> i32 {
             continue;
         }
         db.execute_batch(stmt).unwrap_or_else(|e| {
-            eprintln!("SQL error: {e}\nStatement: {}...", &stmt[..stmt.len().min(200)]);
+            eprintln!(
+                "SQL error: {e}\nStatement: {}...",
+                &stmt[..stmt.len().min(200)]
+            );
             panic!("seed failed");
         });
     }
 
     // Verify
-    let count: i64 = db.query_row(
-        "SELECT COUNT(*) FROM dw_fys_f_undersökning", [], |r| r.get(0)
-    ).unwrap();
-    let dims: i64 = db.query_row(
-        "SELECT COUNT(*) FROM dw_fys_d_produkt", [], |r| r.get(0)
-    ).unwrap();
+    let count: i64 = db
+        .query_row("SELECT COUNT(*) FROM dw_fys_f_undersökning", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let dims: i64 = db
+        .query_row("SELECT COUNT(*) FROM dw_fys_d_produkt", [], |r| r.get(0))
+        .unwrap();
 
     eprintln!("Created {db_path}: {count} fact rows, {dims} product dims");
     0

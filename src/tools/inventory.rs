@@ -33,11 +33,11 @@ pub fn run(args: Vec<String>) -> i32 {
     let src_dir = match args.get(1) {
         Some(d) => d,
         None => {
-                eprintln!("Usage: xmla_proxy inventory <tabulareditor_src>");
-                eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
-                return 1;
-            }
-        };
+            eprintln!("Usage: xmla_proxy inventory <tabulareditor_src>");
+            eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
+            return 1;
+        }
+    };
     let src_path = Path::new(&src_dir);
     if !src_path.exists() {
         eprintln!("Error: Path '{}' does not exist", src_dir);
@@ -54,11 +54,14 @@ pub fn run(args: Vec<String>) -> i32 {
         eprintln!("Detected format: {}", format_name);
     }
     let (parsed, warnings) = match detected {
-        Some(TabularFormat::Bim) => parse_bim::parse_model(&src_dir),
-        Some(TabularFormat::Tmdl) => parse_tmdl::parse_model(&src_dir),
-        Some(TabularFormat::Folder) => parse_folder::parse_model(&src_dir),
+        Some(TabularFormat::Bim) => parse_bim::parse_model(src_dir),
+        Some(TabularFormat::Tmdl) => parse_tmdl::parse_model(src_dir),
+        Some(TabularFormat::Folder) => parse_folder::parse_model(src_dir),
         None => {
-            eprintln!("Error: '{}' is neither a .bim file nor a directory with Tabular Editor files", src_dir);
+            eprintln!(
+                "Error: '{}' is neither a .bim file nor a directory with Tabular Editor files",
+                src_dir
+            );
             eprintln!("Usage: xmla_proxy inventory <tabulareditor_src>");
             return 1;
         }
@@ -70,7 +73,7 @@ pub fn run(args: Vec<String>) -> i32 {
 
     let json = serde_json::to_string_pretty(&inventory).unwrap();
     fs::write("conversion-inventory.json", &json).expect("write json");
-    fs::write("conversion-inventory.md", &render_markdown(&inventory)).expect("write md");
+    fs::write("conversion-inventory.md", render_markdown(&inventory)).expect("write md");
 
     println!("{}", render_markdown(&inventory));
     0
@@ -155,20 +158,39 @@ fn render_markdown(inv: &Inventory) -> String {
     out.push_str("# Conversion Inventory\n\n");
     out.push_str("## Summary\n\n");
     out.push_str(&format!("- **Tables**: {}\n", s.table_count));
-    out.push_str(&format!("- **Fact tables**: {}\n", comma_list(&s.fact_tables)));
-    out.push_str(&format!("- **Dimension tables**: {}\n", comma_list(&s.dimension_tables)));
-    out.push_str(&format!("- **Date-role tables**: {}\n", comma_list(&s.date_role_tables)));
-    out.push_str(&format!("- **Calculated tables**: {}\n", comma_list(&s.calculated_tables)));
-    out.push_str(&format!("- **M-partition tables**: {}\n", comma_list(&s.m_partition_tables)));
+    out.push_str(&format!(
+        "- **Fact tables**: {}\n",
+        comma_list(&s.fact_tables)
+    ));
+    out.push_str(&format!(
+        "- **Dimension tables**: {}\n",
+        comma_list(&s.dimension_tables)
+    ));
+    out.push_str(&format!(
+        "- **Date-role tables**: {}\n",
+        comma_list(&s.date_role_tables)
+    ));
+    out.push_str(&format!(
+        "- **Calculated tables**: {}\n",
+        comma_list(&s.calculated_tables)
+    ));
+    out.push_str(&format!(
+        "- **M-partition tables**: {}\n",
+        comma_list(&s.m_partition_tables)
+    ));
     out.push_str(&format!("- **Relationships**: {}\n", s.relationship_count));
-    out.push_str(&format!("- **Measures**: {} (simple: {}, sql_fallback: {}, manual: {})\n\n",
-        s.measure_count, s.simple_measures, s.sql_fallback_measures, s.manual_measures));
+    out.push_str(&format!(
+        "- **Measures**: {} (simple: {}, sql_fallback: {}, manual: {})\n\n",
+        s.measure_count, s.simple_measures, s.sql_fallback_measures, s.manual_measures
+    ));
 
     out.push_str("## Relationships\n\n");
     out.push_str("| From | From Col | To | To Col |\n|---|---|---|---|\n");
     for r in &inv.relationships {
-        out.push_str(&format!("| {} | {} | {} | {} |\n",
-            r.from_table, r.from_column, r.to_table, r.to_column));
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            r.from_table, r.from_column, r.to_table, r.to_column
+        ));
     }
 
     out.push_str("\n## Tables\n\n");
@@ -179,20 +201,27 @@ fn render_markdown(inv: &Inventory) -> String {
         }
         if !t.partitions.is_empty() {
             out.push_str("**Partitions**: ");
-            let pts: Vec<String> = t.partitions.iter()
+            let pts: Vec<String> = t
+                .partitions
+                .iter()
                 .map(|p| format!("{} ({})", p.name, p.source_type))
                 .collect();
             out.push_str(&pts.join(", "));
             out.push_str("\n\n");
         }
         if !t.hierarchies.is_empty() {
-            out.push_str(&format!("**Hierarchies**: {}\n\n", t.hierarchies.join(", ")));
+            out.push_str(&format!(
+                "**Hierarchies**: {}\n\n",
+                t.hierarchies.join(", ")
+            ));
         }
         if !t.columns.is_empty() {
             out.push_str("| Column | Type | Source | Hidden |\n|---|---|---|---|\n");
             for c in &t.columns {
-                out.push_str(&format!("| {} | {} | {} | {} |\n",
-                    c.name, c.data_type, c.source_column, c.is_hidden));
+                out.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    c.name, c.data_type, c.source_column, c.is_hidden
+                ));
             }
             out.push('\n');
         }
@@ -215,6 +244,11 @@ fn render_markdown(inv: &Inventory) -> String {
 }
 
 fn comma_list(v: &[String]) -> String {
-    if v.is_empty() { return "\u{2014}".into(); }
-    v.iter().map(|s| format!("`{}`", s)).collect::<Vec<_>>().join(", ")
+    if v.is_empty() {
+        return "\u{2014}".into();
+    }
+    v.iter()
+        .map(|s| format!("`{}`", s))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

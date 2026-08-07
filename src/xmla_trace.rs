@@ -4,7 +4,6 @@
 /// Output: `xmla-trace.jsonl` in the working directory.
 ///
 /// Each line is a self-contained JSON record suitable for replay testing.
-
 use std::fs::File;
 use std::io::Write;
 use std::sync::Mutex;
@@ -14,9 +13,8 @@ static TRACE_FILE: Mutex<Option<File>> = Mutex::new(None);
 static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn init_trace() {
-    if std::env::var("XMLA_TRACE").map_or(false, |v| v == "1") {
-        let file = File::create("xmla-trace.jsonl")
-            .expect("failed to create xmla-trace.jsonl");
+    if std::env::var("XMLA_TRACE").is_ok_and(|v| v == "1") {
+        let file = File::create("xmla-trace.jsonl").expect("failed to create xmla-trace.jsonl");
         *TRACE_FILE.lock().unwrap() = Some(file);
         eprintln!("[trace] XMLA trace enabled -> xmla-trace.jsonl");
     }

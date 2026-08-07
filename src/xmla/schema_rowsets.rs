@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{UUID_TYPE, discover_rowset_envelope};
 
 const SCHEMA_ROW_FIELDS: &str = r#"                <xsd:element sql:field="SchemaName" name="SchemaName" type="xsd:string"/>
                 <xsd:element sql:field="SchemaGuid" name="SchemaGuid" type="uuid" minOccurs="0"/>

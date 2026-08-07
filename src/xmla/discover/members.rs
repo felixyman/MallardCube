@@ -3,9 +3,8 @@
 /// Member rows are generated from actual DuckDB data (distinct dimension
 /// values) plus synthetic `All` members from the semantic model.
 /// No hardcoded business values remain.
-
 use crate::backend::{Backend, QueryBackend};
-use crate::engine::model::{effective_table_filter, TableAccess, UserContext};
+use crate::engine::model::{TableAccess, UserContext, effective_table_filter};
 use crate::project::config::ProxyConfig;
 use crate::proxy_project;
 use crate::response::xml_escape;
@@ -39,10 +38,10 @@ const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
 
 struct MemberRow {
     xml: String,
+    #[allow(dead_code)] // read by tests only
     dimension_id: String,
     member_unique_name: String,
     parent_unique_name: Option<String>,
-    children_cardinality: u32,
 }
 
 fn build_all_member_rows<B: QueryBackend + ?Sized>(
@@ -78,8 +77,7 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
             _ => {
                 let sql = format!(
                     "SELECT COUNT(DISTINCT {}) FROM {}",
-                    dim.physical_field,
-                    dim_table,
+                    dim.physical_field, dim_table,
                 );
                 backend.query_count(&sql)
             }
@@ -88,17 +86,25 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
         rows.push(MemberRow {
             xml: xml_member_row(
                 project,
-                &dim_u, &hier_u, &all_level_u,
-                0, 0,
-                "All", &all_member_u,
-                2, &guid,
-                "All", cardinality, 0, None, 0,
+                &dim_u,
+                &hier_u,
+                &all_level_u,
+                0,
+                0,
+                "All",
+                &all_member_u,
+                2,
+                &guid,
+                "All",
+                cardinality,
+                0,
+                None,
+                0,
                 "All",
             ),
             dimension_id: dim.id.clone(),
             member_unique_name: all_member_u,
             parent_unique_name: None,
-            children_cardinality: cardinality,
         });
     }
     rows
@@ -133,9 +139,7 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
             ),
             _ => format!(
                 "SELECT DISTINCT {} FROM {} ORDER BY {}",
-                dim.physical_field,
-                dim_table,
-                dim.physical_field
+                dim.physical_field, dim_table, dim.physical_field
             ),
         };
         let values = backend.query_strings(&sql);
@@ -146,18 +150,25 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
             rows.push(MemberRow {
                 xml: xml_member_row(
                     project,
-                    &dim_u, &hier_u, &leaf_level_u,
-                    1, ordinal,
-                    val, &leaf_member_u,
-                    1, &member_guid,
-                    val, 0, 0,
-                    Some(&all_member_u), 1,
+                    &dim_u,
+                    &hier_u,
+                    &leaf_level_u,
+                    1,
+                    ordinal,
+                    val,
+                    &leaf_member_u,
+                    1,
+                    &member_guid,
+                    val,
+                    0,
+                    0,
+                    Some(&all_member_u),
+                    1,
                     val,
                 ),
                 dimension_id: dim.id.clone(),
                 member_unique_name: leaf_member_u,
                 parent_unique_name: Some(all_member_u.clone()),
-                children_cardinality: 0,
             });
         }
     }
@@ -167,8 +178,7 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
 /// Stable namespace for v5 UUIDs.  Derived from "ssas-proxy" so every
 /// member GUID is deterministic across runs but unique to this proxy.
 const NAMESPACE: Uuid = Uuid::from_bytes([
-    0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1,
-    0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+    0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
 ]);
 
 fn all_member_guid(dim_id: &str) -> String {
@@ -176,15 +186,25 @@ fn all_member_guid(dim_id: &str) -> String {
 }
 
 fn leaf_member_guid(dim_id: &str, member_value: &str) -> String {
-    Uuid::new_v5(&NAMESPACE, format!("leaf.{dim_id}.{member_value}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &NAMESPACE,
+        format!("leaf.{dim_id}.{member_value}").as_bytes(),
+    )
+    .to_string()
 }
 
+#[allow(clippy::too_many_arguments)] // XML row assembly mirrors the flat MDSCHEMA_MEMBERS column list
 fn xml_member_row(
     project: &crate::proxy_project::ProxyProject,
-    dim_u: &str, hier_u: &str, level_u: &str,
-    level_num: u32, member_ordinal: u32,
-    member_name: &str, member_unique_name: &str,
-    member_type: u32, member_guid: &str,
+    dim_u: &str,
+    hier_u: &str,
+    level_u: &str,
+    level_num: u32,
+    member_ordinal: u32,
+    member_name: &str,
+    member_unique_name: &str,
+    member_type: u32,
+    member_guid: &str,
     member_caption: &str,
     children_cardinality: u32,
     parent_level: u32,
@@ -193,7 +213,12 @@ fn xml_member_row(
     member_key: &str,
 ) -> String {
     let pun = parent_unique_name
-        .map(|p| format!("            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n", xml_escape(p)))
+        .map(|p| {
+            format!(
+                "            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n",
+                xml_escape(p)
+            )
+        })
         .unwrap_or_default();
     format!(
         r#"          <row>
@@ -256,26 +281,23 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
     rows
 }
 
-fn all_rows() -> Vec<MemberRow> {
-    let project = proxy_project::project();
-    all_rows_with_backend(Backend::get(), &UserContext::admin_default(), &project.config)
-}
-
 // ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
 
 fn find_member<'a>(rows: &'a [MemberRow], filter: &str) -> Option<&'a MemberRow> {
     let decoded = filter.replace("&amp;", "&");
-    rows.iter().find(|r| {
-        r.member_unique_name == filter || r.member_unique_name == decoded
-    })
+    rows.iter()
+        .find(|r| r.member_unique_name == filter || r.member_unique_name == decoded)
 }
 
 fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> {
     let decoded = parent.replace("&amp;", "&");
-    rows.iter().filter(|r| {
-        r.parent_unique_name.as_deref()
-            .map_or(false, |pun| pun == parent || pun == decoded)
-    }).collect()
+    rows.iter()
+        .filter(|r| {
+            r.parent_unique_name
+                .as_deref()
+                .is_some_and(|pun| pun == parent || pun == decoded)
+        })
+        .collect()
 }
 
 // ---- public API ----
@@ -283,8 +305,11 @@ fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> 
 pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -> String {
     let project = proxy_project::project();
     get_members_response_with_backend(
-        member_filter, tree_op, Backend::get(),
-        &UserContext::admin_default(), &project.config,
+        member_filter,
+        tree_op,
+        Backend::get(),
+        &UserContext::admin_default(),
+        &project.config,
     )
 }
 
@@ -352,7 +377,8 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
         }
     };
 
-    let xml_rows: String = selected.iter()
+    let xml_rows: String = selected
+        .iter()
         .map(|r| r.xml.as_str())
         .collect::<Vec<_>>()
         .join("\n");
@@ -364,12 +390,43 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
 mod tests {
     use super::*;
 
+    fn all_rows() -> Vec<MemberRow> {
+        let project = proxy_project::project();
+        all_rows_with_backend(
+            Backend::get(),
+            &UserContext::admin_default(),
+            &project.config,
+        )
+    }
+
+    fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+        let open = xml.find(&format!("<{tag}>"))? + tag.len() + 2;
+        let close = xml[open..].find(&format!("</{tag}>"))?;
+        Some(xml[open..open + close].to_string())
+    }
+
+    fn is_valid_uuid(s: &str) -> bool {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() != 5 {
+            return false;
+        }
+        let lens = [8usize, 4, 4, 4, 12];
+        for (i, p) in parts.iter().enumerate() {
+            if p.len() != lens[i] {
+                return false;
+            }
+            if !p.chars().all(|c| c.is_ascii_hexdigit()) {
+                return false;
+            }
+        }
+        true
+    }
+
     #[test]
     fn generates_rows_for_both_dims() {
         let rows = all_rows();
-        let dims: std::collections::HashSet<&str> = rows.iter()
-            .map(|r| r.dimension_id.as_str())
-            .collect();
+        let dims: std::collections::HashSet<&str> =
+            rows.iter().map(|r| r.dimension_id.as_str()).collect();
         assert!(dims.contains("Produktkategori"));
         assert!(dims.contains("Region"));
     }
@@ -388,7 +445,8 @@ mod tests {
     #[test]
     fn leaf_members_have_parent() {
         let rows = all_rows();
-        let leaf: Vec<_> = rows.iter()
+        let leaf: Vec<_> = rows
+            .iter()
             .filter(|r| r.member_unique_name.contains("&["))
             .collect();
         assert!(!leaf.is_empty(), "should have leaf members from DuckDB");
@@ -419,21 +477,4 @@ mod tests {
             );
         }
     }
-}
-
-fn extract_tag<'a>(xml: &'a str, tag: &str) -> Option<String> {
-    let open = xml.find(&format!("<{tag}>"))? + tag.len() + 2;
-    let close = xml[open..].find(&format!("</{tag}>"))?;
-    Some(xml[open..open + close].to_string())
-}
-
-fn is_valid_uuid(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 5 { return false; }
-    let lens = [8usize, 4, 4, 4, 12];
-    for (i, p) in parts.iter().enumerate() {
-        if p.len() != lens[i] { return false; }
-        if !p.chars().all(|c| c.is_ascii_hexdigit()) { return false; }
-    }
-    true
 }

@@ -1,3 +1,4 @@
+use crate::engine::malloy_compiler::{CompileResult, MalloyCompileError, MalloyCompiler};
 /// Malloy compiler that delegates to a Node.js subprocess.
 ///
 /// Reads Malloy source from the semantic model + query plan,
@@ -5,10 +6,8 @@
 ///
 /// For the feasibility spike. A long-lived process or rquickjs
 /// would be more efficient, but this proves the compilation path.
-
 use std::io::Write;
 use std::process::{Command, Stdio};
-use crate::engine::malloy_compiler::{CompileResult, MalloyCompiler, MalloyCompileError};
 
 pub struct NodeMalloyCompiler;
 
@@ -16,8 +15,7 @@ impl NodeMalloyCompiler {
     /// Full path to the malloy-cli.js script, relative to the project root
     /// or provided by an env var.
     fn script_path() -> String {
-        std::env::var("MALLOY_CLI_PATH")
-            .unwrap_or_else(|_| "js/malloy-cli.js".into())
+        std::env::var("MALLOY_CLI_PATH").unwrap_or_else(|_| "js/malloy-cli.js".into())
     }
 }
 
@@ -47,7 +45,10 @@ impl MalloyCompiler for NodeMalloyCompiler {
         }
 
         let sql = String::from_utf8_lossy(&output.stdout).into_owned();
-        Ok(CompileResult { sql: sql.trim().to_string(), compile_ms: 0.0 })
+        Ok(CompileResult {
+            sql: sql.trim().to_string(),
+            compile_ms: 0.0,
+        })
     }
 }
 
@@ -69,7 +70,9 @@ mod tests {
             filters: vec![],
         };
         let compiler = NodeMalloyCompiler;
-        let r = compiler.compile_query(&model, &plan).expect("compile total");
+        let r = compiler
+            .compile_query(&model, &plan)
+            .expect("compile total");
         assert!(!r.sql.is_empty());
         assert!(r.sql.to_uppercase().contains("SUM"));
     }
@@ -112,13 +115,11 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".to_string(),
             group_by: vec!["Produktkategori".to_string()],
-            filters: vec![
-                crate::engine::plan::TypedDimensionFilter {
-                    dimension: "Region".to_string(),
-                    time_flag: None,
-                    members: vec!["North".into()],
-                },
-            ],
+            filters: vec![crate::engine::plan::TypedDimensionFilter {
+                dimension: "Region".to_string(),
+                time_flag: None,
+                members: vec!["North".into()],
+            }],
         };
         let compiler = NodeMalloyCompiler;
         let r = compiler

@@ -1,19 +1,17 @@
+use crate::axis_members::{
+    all_member_for_with_backend, cchildren_member, count_cell, empty_member_list_axis,
+    full_slicer_axis_with_backend, hierarchy_for, leaf_member_for, leaf_members_from,
+    measurement_cell_for_query, measures_axis_for_query, measures_hierarchy, measures_total_member,
+    member_list_axis, render_response, row_dim, single_member_axis,
+};
+use crate::backend::QueryBackend;
+use crate::engine::plan::QueryResult;
 /// Cellset render functions.
 ///
 /// Converts a `SemanticQuery` + `QueryResult` into an XMLA cellset
 /// XML string.  Each `build_*` function handles one query shape.
 /// `dispatch()` routes by `SemanticQueryKind`.
-
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-use crate::backend::QueryBackend;
-use crate::engine::plan::QueryResult;
-use crate::axis_members::{
-    render_response, full_slicer_axis_with_backend, measures_axis_for_query,
-    single_member_axis, member_list_axis, empty_member_list_axis,
-    row_dim, leaf_member_for, all_member_for_with_backend, hierarchy_for, leaf_members_from,
-    measurement_cell_for_query, count_cell, measures_hierarchy, measures_total_member,
-    cchildren_member,
-};
 
 pub(crate) fn ordered_pair(
     dims: &[String],
@@ -24,9 +22,13 @@ pub(crate) fn ordered_pair(
 ) -> crate::cellset::TupleConfig {
     let first = dims.first().map(|s| s.as_str()).unwrap_or(d0);
     if first == d1 {
-        crate::cellset::TupleConfig { members: vec![m1, m0] }
+        crate::cellset::TupleConfig {
+            members: vec![m1, m0],
+        }
     } else {
-        crate::cellset::TupleConfig { members: vec![m0, m1] }
+        crate::cellset::TupleConfig {
+            members: vec![m0, m1],
+        }
     }
 }
 
@@ -56,19 +58,20 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         return build_drilldown_multi(query, result, backend);
     }
     let mut fallback_dim = String::new();
-    let dim = dims.first().map(|s| s.as_str())
-        .unwrap_or_else(|| {
-            fallback_dim = crate::proxy_project::project()
-                .model.default_dimension_id()
-                .unwrap_or_else(|| "Produktkategori".into());
-            &fallback_dim
-        });
+    let dim = dims.first().map(|s| s.as_str()).unwrap_or_else(|| {
+        fallback_dim = crate::proxy_project::project()
+            .model
+            .default_dimension_id()
+            .unwrap_or_else(|| "Produktkategori".into());
+        &fallback_dim
+    });
     let mut data = match result {
         QueryResult::Grouped(data) => data.clone(),
         _ => unreachable!(),
     };
     data.sort_by(|a, b| a.0.cmp(&b.0));
-    let members = leaf_members_from(dim,
+    let members = leaf_members_from(
+        dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
     );
@@ -113,7 +116,12 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
     for (first, second, value) in &all_data {
-        if has_exclusions && query.excluded_members.iter().any(|e| e.key == *first || e.key == *second) {
+        if has_exclusions
+            && query
+                .excluded_members
+                .iter()
+                .any(|e| e.key == *first || e.key == *second)
+        {
             continue;
         }
         let m0 = leaf_member_for(d0, first, &query.dim_props);
@@ -156,17 +164,23 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
         hierarchies.push(hierarchy_for(dim, &query.dim_props));
     }
 
-    let excluded_d0: std::collections::HashSet<&str> = query.excluded_members.iter()
+    let excluded_d0: std::collections::HashSet<&str> = query
+        .excluded_members
+        .iter()
         .filter(|e| e.dimension == *d0)
         .map(|e| e.key.as_str())
         .collect();
-    let excluded_d1: std::collections::HashSet<&str> = query.excluded_members.iter()
+    let excluded_d1: std::collections::HashSet<&str> = query
+        .excluded_members
+        .iter()
         .filter(|e| e.dimension == *d1)
         .map(|e| e.key.as_str())
         .collect();
 
-    let mut col_d0_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-    let mut col_d1_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut col_d0_totals: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
+    let mut col_d1_totals: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
     for (first, second, value) in &all_data {
         if excluded_d0.contains(first.as_str()) {
             *col_d0_totals.entry(first.clone()).or_insert(0.0) += value;
@@ -239,7 +253,8 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
         QueryResult::Grouped(data) => data,
         _ => unreachable!(),
     };
-    let axis1_members = leaf_members_from(dim,
+    let axis1_members = leaf_members_from(
+        dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
     );
@@ -287,7 +302,11 @@ pub(crate) fn build_all_level_members<B: QueryBackend + ?Sized>(
     };
     render_response(
         vec![
-            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for_with_backend(dim, &query.dim_props, backend)),
+            single_member_axis(
+                "Axis0",
+                hierarchy_for(dim, &query.dim_props),
+                all_member_for_with_backend(dim, &query.dim_props, backend),
+            ),
             full_slicer_axis_with_backend(query, backend),
         ],
         vec![measurement_cell_for_query(query, 0, total)],
@@ -305,7 +324,8 @@ pub(crate) fn build_leaf_level_members<B: QueryBackend + ?Sized>(
         QueryResult::Grouped(data) => data,
         _ => unreachable!(),
     };
-    let members = leaf_members_from(dim,
+    let members = leaf_members_from(
+        dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
     );
@@ -367,7 +387,11 @@ pub(crate) fn build_cchildren_for_all<B: QueryBackend + ?Sized>(
     };
     render_response(
         vec![
-            single_member_axis("Axis0", hierarchy_for(dim, &query.dim_props), all_member_for_with_backend(dim, &query.dim_props, backend)),
+            single_member_axis(
+                "Axis0",
+                hierarchy_for(dim, &query.dim_props),
+                all_member_for_with_backend(dim, &query.dim_props, backend),
+            ),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             full_slicer_axis_with_backend(query, backend),
         ],
@@ -391,7 +415,11 @@ pub(crate) fn build_cchildren_for_leaf_product<B: QueryBackend + ?Sized>(
     };
     render_response(
         vec![
-            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), vec![all, leaf]),
+            member_list_axis(
+                "Axis0",
+                hierarchy_for(dim, &query.dim_props),
+                vec![all, leaf],
+            ),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             full_slicer_axis_with_backend(query, backend),
         ],
@@ -438,20 +466,26 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         return empty_cellset(query, backend);
     }
     match query.kind {
-        SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, &result, backend),
+        SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, result, backend),
         SemanticQueryKind::ChildrenCountLeafProduct => {
             let name = query.cchildren_leaf_name.as_deref().unwrap_or("");
-            build_cchildren_for_leaf_product(query, name, &result, backend)
+            build_cchildren_for_leaf_product(query, name, result, backend)
         }
-        SemanticQueryKind::ChildrenCountMeasures => build_cchildren_for_measures(query, &result, backend),
-        SemanticQueryKind::SlicerAllAndMeasure => build_slicer_all_and_measure(query, &result, backend),
-        SemanticQueryKind::MeasureChildrenEmpty => build_measure_children_empty(query, &result, backend),
-        SemanticQueryKind::LeafChildrenEmpty => build_leaf_children_empty(query, &result, backend),
-        SemanticQueryKind::AllLevelMembers => build_all_level_members(query, &result, backend),
-        SemanticQueryKind::LeafLevelMembers => build_leaf_level_members(query, &result, backend),
-        SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, &result, backend),
-        SemanticQueryKind::DrilldownCategories => build_drilldown(query, &result, backend),
-        SemanticQueryKind::SlicerOnly => build_slicer_only(query, &result, backend),
-        SemanticQueryKind::DrilldownMemberProbe => build_drilldown_member(query, &result, backend),
+        SemanticQueryKind::ChildrenCountMeasures => {
+            build_cchildren_for_measures(query, result, backend)
+        }
+        SemanticQueryKind::SlicerAllAndMeasure => {
+            build_slicer_all_and_measure(query, result, backend)
+        }
+        SemanticQueryKind::MeasureChildrenEmpty => {
+            build_measure_children_empty(query, result, backend)
+        }
+        SemanticQueryKind::LeafChildrenEmpty => build_leaf_children_empty(query, result, backend),
+        SemanticQueryKind::AllLevelMembers => build_all_level_members(query, result, backend),
+        SemanticQueryKind::LeafLevelMembers => build_leaf_level_members(query, result, backend),
+        SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, result, backend),
+        SemanticQueryKind::DrilldownCategories => build_drilldown(query, result, backend),
+        SemanticQueryKind::SlicerOnly => build_slicer_only(query, result, backend),
+        SemanticQueryKind::DrilldownMemberProbe => build_drilldown_member(query, result, backend),
     }
 }

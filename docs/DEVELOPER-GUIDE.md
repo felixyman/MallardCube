@@ -81,9 +81,16 @@ src/
     timing.rs                    Timings struct, RuntimePath enum
 
   execute/                       Query execution and XML rendering
-    dispatch.rs                  Statement routing: DAX, MDX SELECT, MDX probes
-    builders.rs                  Cellset rendering (11 query kind handlers),
-                                 Malloy runtime toggles, compiler/cache integration
+    dispatch.rs                  Statement routing (DAX, MDX SELECT, MDX probes) —
+                                 production path routes via main.rs; this module's
+                                 get_execute_statement_response is the test seam,
+                                 plus most end-to-end tests
+    runtime.rs                   Execution entry: backend injection, runtime-path
+                                 selection (direct SQL default; Malloy if enabled),
+                                 timing instrumentation
+    render.rs                    Cellset XML rendering: dispatch_with_backend,
+                                 11 query-kind handlers
+    builders.rs                  Thin public entry points / re-exports over runtime
     axis_members.rs              XML helpers: members, axes, slicer, measurement cells
 
   xmla/                          XMLA protocol layer
@@ -110,13 +117,21 @@ src/
   test_support/                  Shared test code
     fixtures.rs                  MDX test fixture constants
 
-  bin/                           Standalone tools
-    convert_tabular.rs           Tabular Editor .bim to Malloy + DuckDB converter
+  bin/                           Thin wrappers over tools/ (one file per tool)
+
+  tools/                         Tool implementations (single source of truth)
+    convert_tabular.rs           Tabular .bim/TMDL/folder to proxy project converter
+    tabular_model.rs             Shared conversion types, classify_dax
+    parse_tmdl.rs, parse_bim.rs, parse_folder.rs  Tabular source parsers
+    m_query.rs                   Power Query M partition parsing
+    data_loader.rs               Load-script rendering from M partitions
     inventory.rs                 Model inventory extractor
-    seed_sql.rs                  Synthetic data SQL generator
+    qualify.rs                   Readiness gate: READY / PARTIAL / BLOCKED
     trace_replay.rs              XMLA trace replay/compatibility validator
+    load_replay.rs               Concurrent replay against a live endpoint
     extract_trace_mdx.rs         Extract unique ExecuteStatement MDX from traces
     seed_generated_db.rs         Generate synthetic data for generated_project
+    seed_sql.rs                  Synthetic data SQL generator
 ```
 
 ## Request dispatch in detail
@@ -145,8 +160,13 @@ src/
 | Statement type | Detector | Dispatcher | Builder |
 |---|---|---|---|
 | DAX (`EVALUATE`) | `is_dax()` | `get_execute_dax_response()` | Direct rowset |
-| MDX SELECT | `is_mdx_select()` | `get_execute_cellset_response_timed_malloy()` | Cellset via semantic pipeline |
+| MDX SELECT | `is_mdx_select()` | `get_execute_cellset_response_timed_malloy_with_backend()` (main.rs -> `execute/runtime.rs`) | Cellset via semantic pipeline |
 | MDX probe (WITH MEMBER etc.) | Fallthrough | `get_execute_mdx_response()` | Direct rowset or cellset per kind |
+
+Note: `execute/dispatch.rs::get_execute_statement_response` is the test-only
+seam used by the end-to-end test suite; production routing lives in
+`main.rs::route_request`. (The `_malloy` infix in the entry-point name is a
+legacy of the Malloy-first era; plan 027 renames it.)
 
 ## Naming conventions
 
@@ -201,13 +221,15 @@ See `docs/naming-contract.md` for full rules.
 | `backend/mod.rs` | Stable | DuckDB backend, date_dim seeding |
 | `mdx/parser.rs` | Stable | Nom parser, cube-agnostic, structural axis dimension detection |
 | `mdx/semantic.rs` | Stable | Classification driven by ParsedMdx structural fields |
-| `execute/dispatch.rs` | Stable | Statement routing, compatibility gate tests |
-| `execute/builders.rs` | Needs cleanup | Too large, mixed responsibilities |
+| `execute/dispatch.rs` | Stable | Statement routing test seam, compatibility gate tests |
+| `execute/runtime.rs` | Stable | Execution entry, runtime-path selection, timing |
+| `execute/render.rs` | Stable | Cellset rendering, 11 query-kind handlers |
+| `execute/builders.rs` | Stable | Thin shim over runtime/render |
 | `execute/axis_members.rs` | Needs cleanup | Heavy, some model-agnostic gaps |
 | `src/main.rs` | Needs cleanup | Mixed concerns, large match statement |
 | `src/lib.rs` | Transitional | Legacy flat re-exports should be phased out |
-| `engine/malloy_node.rs` | Legacy | One-shot compiler (replaced by long-lived) |
-| `bin/convert_tabular.rs` | Active | Tabular converter: fact detection, date-role detection, time metadata, DAX classification |
+| `engine/malloy_node.rs` | Legacy | One-shot compiler (replaced by long-lived); all Malloy modules die in plan 027 |
+| `tools/convert_tabular.rs` | Active | Tabular converter: fact detection, date-role detection, time metadata, DAX classification |
 
 ## Multi-fact semantics
 
@@ -228,10 +250,11 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 234 tests covering MDX parsing, semantic classification, plan generation,
+- 345 tests covering MDX parsing, semantic classification, plan generation,
   SQL and Malloy emission, compile path, result parity, metadata rowsets,
   multi-fact routing, end-to-end cellset rendering, Excel replay/oracle
-  verification, time intelligence, and compatibility-gate assertions.
+  verification, time intelligence, security roles, and compatibility-gate
+  assertions.
 - `engine/parity.rs` - Direct SQL vs Malloy result parity.
 - Shared test fixtures: `src/test_support/fixtures.rs`.
 - `project/project.rs` - Config parsing and model building.
@@ -258,7 +281,9 @@ cargo test --lib
 | `cargo run --bin xmla_proxy -- qualify <config> [trace]` | Emit READY/PARTIAL/BLOCKED readiness verdict |
 | `cargo run --bin xmla_proxy -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
 | `cargo run --bin xmla_proxy -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
+| `cargo run --bin xmla_proxy -- load-replay [args...]` | Concurrently replay captured requests against a live /xmla endpoint |
 | `cargo run --bin xmla_proxy -- seed-generated-db` | Seed generated_project DuckDB file with synthetic data |
+| `cargo run --bin xmla_proxy -- seed-sql` | Emit SQL to create demo fact tables |
 
 ## Appendix: Config reference
 

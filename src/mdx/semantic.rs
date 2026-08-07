@@ -5,11 +5,7 @@
 ///
 /// Classification is now driven by `ParsedMdx` — structural flags
 /// set by the nom parser — instead of bare `contains(...)` chains.
-
-use crate::mdx_parser::{
-    ParsedMdx, MemberRef, DimRef,
-    CChildrenTarget, CalculatedMembersPat,
-};
+use crate::mdx_parser::{CChildrenTarget, CalculatedMembersPat, DimRef, MemberRef, ParsedMdx};
 
 pub fn is_dax(statement: &str) -> bool {
     let trimmed = statement.trim_start();
@@ -20,8 +16,7 @@ pub fn is_dax(statement: &str) -> bool {
 pub fn is_mdx_select(mdx: &str) -> bool {
     let trimmed = mdx.trim_start();
     let upper = trimmed.to_uppercase();
-    upper.starts_with("SELECT")
-        || (upper.starts_with("WITH") && upper.contains("SELECT "))
+    upper.starts_with("SELECT") || (upper.starts_with("WITH") && upper.contains("SELECT "))
 }
 
 // ---- property parsing (delegates to nom parser) ----
@@ -58,11 +53,16 @@ fn dim_ref_str(dim: &DimRef) -> String {
 fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
     let mut result: Vec<DimensionFilter> = Vec::new();
 
-    let mut add_leaf = |result: &mut Vec<DimensionFilter>, dim_str: String, key: &str| {
+    let add_leaf = |result: &mut Vec<DimensionFilter>, dim_str: String, key: &str| {
         if let Some(df) = result.iter_mut().find(|f| f.dimension == dim_str) {
-            if !df.members.contains(&key.to_string()) { df.members.push(key.to_string()); }
+            if !df.members.contains(&key.to_string()) {
+                df.members.push(key.to_string());
+            }
         } else {
-            result.push(DimensionFilter { dimension: dim_str, members: vec![key.to_string()] });
+            result.push(DimensionFilter {
+                dimension: dim_str,
+                members: vec![key.to_string()],
+            });
         }
     };
 
@@ -86,12 +86,21 @@ fn slicers_from_parsed(parsed: &ParsedMdx) -> Vec<SlicerSelection> {
     for mref in &parsed.where_members {
         match mref {
             MemberRef::All(dim) => {
-                result.push(SlicerSelection { dimension: dim_ref_str(dim), is_all: true });
+                result.push(SlicerSelection {
+                    dimension: dim_ref_str(dim),
+                    is_all: true,
+                });
             }
             MemberRef::Leaf { dim, .. } => {
                 let dim_str = dim_ref_str(dim);
-                if !result.iter().any(|s: &SlicerSelection| s.dimension == dim_str) {
-                    result.push(SlicerSelection { dimension: dim_str, is_all: false });
+                if !result
+                    .iter()
+                    .any(|s: &SlicerSelection| s.dimension == dim_str)
+                {
+                    result.push(SlicerSelection {
+                        dimension: dim_str,
+                        is_all: false,
+                    });
                 }
             }
             _ => {}
@@ -179,7 +188,6 @@ pub struct SemanticQuery {
     pub measure: Option<String>,
 }
 
-
 // ---- main classification entry point ----
 
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
@@ -202,7 +210,11 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                     SemanticQueryKind::DrilldownMemberProbe
                 } else if parsed.has_drilldown || parsed.has_dot_members {
                     SemanticQueryKind::DrilldownCategories
-                } else if parsed.has_rows && parsed.has_cols && parsed.main_dim != DimRef::Measures && parsed.has_measures {
+                } else if parsed.has_rows
+                    && parsed.has_cols
+                    && parsed.main_dim != DimRef::Measures
+                    && parsed.has_measures
+                {
                     SemanticQueryKind::MeasureByCategory
                 } else if !parsed.has_rows && !parsed.has_cols {
                     if parsed.has_where_all_measure {
@@ -230,17 +242,26 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         cell_props: parsed.cell_props.clone(),
         filters: filters_from_parsed(&parsed),
         cchildren_leaf_name,
-        row_dimension: parsed.axis_dimension_ids.iter()
+        row_dimension: parsed
+            .axis_dimension_ids
+            .iter()
             .find(|id| project.model.dim_def_opt(id).is_some())
             .cloned(),
-        axis_dimensions: parsed.axis_dimension_ids.iter()
+        axis_dimensions: parsed
+            .axis_dimension_ids
+            .iter()
             .filter(|id| project.model.dim_def_opt(id).is_some())
             .cloned()
             .collect(),
         slicers: slicers_from_parsed(&parsed),
-        excluded_members: parsed.excluded_members.iter().map(|(dim, key)| {
-            ExcludedMember { dimension: dim.clone(), key: key.clone() }
-        }).collect(),
+        excluded_members: parsed
+            .excluded_members
+            .iter()
+            .map(|(dim, key)| ExcludedMember {
+                dimension: dim.clone(),
+                key: key.clone(),
+            })
+            .collect(),
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
     }

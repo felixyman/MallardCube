@@ -7,7 +7,6 @@
 ///
 /// Configured from `ProxyConfig` at startup or built from hardcoded
 /// defaults via `default_model()`.
-
 use crate::engine::plan::{DimId, MeasId};
 use std::collections::HashMap;
 
@@ -123,9 +122,10 @@ pub fn resolve_user_context(
     let mut is_admin = false;
 
     for role in &config.roles {
-        let member_match = role.members.iter().any(|m| {
-            m.member_name == user_id || groups.iter().any(|g| g == &m.member_name)
-        });
+        let member_match = role
+            .members
+            .iter()
+            .any(|m| m.member_name == user_id || groups.iter().any(|g| g == &m.member_name));
         if member_match {
             matched_roles.push(role.name.clone());
             if role.model_permission == ModelPermission::Administrator {
@@ -329,11 +329,17 @@ impl DimensionDef {
     }
 
     pub fn all_level_unique_name(&self) -> String {
-        format!("[{}].[{}].[{}]", self.caption, self.hierarchy_name, self.all_level_name)
+        format!(
+            "[{}].[{}].[{}]",
+            self.caption, self.hierarchy_name, self.all_level_name
+        )
     }
 
     pub fn leaf_level_unique_name(&self) -> String {
-        format!("[{}].[{}].[{}]", self.caption, self.hierarchy_name, self.leaf_level_name)
+        format!(
+            "[{}].[{}].[{}]",
+            self.caption, self.hierarchy_name, self.leaf_level_name
+        )
     }
 }
 
@@ -457,7 +463,9 @@ impl SemanticModel {
     /// Falls back to the primary fact table if no explicit binding.
     pub fn dim_table(&self, dim_id: &str) -> &str {
         let dim = self.dim_def(dim_id);
-        dim.table_name.as_deref().unwrap_or(self.primary_table_name())
+        dim.table_name
+            .as_deref()
+            .unwrap_or(self.primary_table_name())
     }
 
     /// The physical table for member/distinct-value discovery.
@@ -500,10 +508,10 @@ impl SemanticModel {
     /// measure has no explicit date-role dimension.
     pub fn date_dim_for_measure(&self, meas_id: &str) -> Option<&DateDimDef> {
         let meas = self.meas_def_opt(meas_id)?;
-        if let Some(role_id) = &meas.date_dimension_id {
-            if let Some(dd) = self.date_dims.get(role_id) {
-                return Some(dd);
-            }
+        if let Some(role_id) = &meas.date_dimension_id
+            && let Some(dd) = self.date_dims.get(role_id)
+        {
+            return Some(dd);
         }
         self.date_dim.as_ref()
     }
@@ -514,7 +522,8 @@ impl SemanticModel {
 
     /// Return the ID of the first visible measure, or None.
     pub fn default_measure_id(&self) -> Option<MeasId> {
-        self.measures.iter()
+        self.measures
+            .iter()
             .find(|m| m.visible)
             .map(|m| m.id.clone())
     }
@@ -523,7 +532,8 @@ impl SemanticModel {
     /// specific fact table (by physical table name). Falls back to
     /// the global default if no matching measure exists.
     pub fn default_measure_for_table(&self, table_name: &str) -> Option<MeasId> {
-        self.measures.iter()
+        self.measures
+            .iter()
             .find(|m| m.visible && self.fact_tables[m.fact_table_idx].table_name == table_name)
             .or_else(|| self.measures.iter().find(|m| m.visible))
             .map(|m| m.id.clone())
@@ -531,7 +541,8 @@ impl SemanticModel {
 
     /// Return the ID of the first visible dimension, or None.
     pub fn default_dimension_id(&self) -> Option<DimId> {
-        self.dimensions.iter()
+        self.dimensions
+            .iter()
             .filter(|d| d.visible)
             .min_by_key(|d| d.ordinal)
             .map(|d| d.id.clone())
@@ -583,14 +594,12 @@ impl SemanticModel {
 
 pub fn default_model() -> SemanticModel {
     SemanticModel {
-        fact_tables: vec![
-            FactTable {
-                id: "default".into(),
-                source_name: "faktatabell".into(),
-                table_name: "faktatabell".into(),
-                measure_group_name: "Faktatabell".into(),
-            },
-        ],
+        fact_tables: vec![FactTable {
+            id: "default".into(),
+            source_name: "faktatabell".into(),
+            table_name: "faktatabell".into(),
+            measure_group_name: "Faktatabell".into(),
+        }],
         dialect: Dialect::DuckDB,
         dimensions: vec![
             DimensionDef {
@@ -626,30 +635,28 @@ pub fn default_model() -> SemanticModel {
                 is_date_role: false,
             },
         ],
-        measures: vec![
-            MeasureDef {
-                id: "TotalSales".into(),
-                fact_table_idx: 0,
-                semantic_name: "total_forsaljning".into(),
-                physical_expr: "sales.sum()".into(),
-                sql_expr: "SUM(sales)".into(),
-                caption: "Total Försäljning".into(),
-                display_name: "Total Försäljning (SEK)".into(),
-                description: "Vår totala försäljning".into(),
-                visible: true,
-                aggregator: 1,
-                units: "SEK".into(),
-                format_string: "#,##0.00 SEK".into(),
-                measure_group_name: "Faktatabell".into(),
-                numeric_precision: 18,
-                numeric_scale: 2,
-                expression: "SUM('Faktatabell'[Sales])".into(),
-                sql_fallback_sql: None,
-                time_flag: None,
-                date_dimension_id: None,
-                fallback_capability: None,
-            },
-        ],
+        measures: vec![MeasureDef {
+            id: "TotalSales".into(),
+            fact_table_idx: 0,
+            semantic_name: "total_forsaljning".into(),
+            physical_expr: "sales.sum()".into(),
+            sql_expr: "SUM(sales)".into(),
+            caption: "Total Försäljning".into(),
+            display_name: "Total Försäljning (SEK)".into(),
+            description: "Vår totala försäljning".into(),
+            visible: true,
+            aggregator: 1,
+            units: "SEK".into(),
+            format_string: "#,##0.00 SEK".into(),
+            measure_group_name: "Faktatabell".into(),
+            numeric_precision: 18,
+            numeric_scale: 2,
+            expression: "SUM('Faktatabell'[Sales])".into(),
+            sql_fallback_sql: None,
+            time_flag: None,
+            date_dimension_id: None,
+            fallback_capability: None,
+        }],
         relationships: vec![],
         date_dim: None,
         date_dims: HashMap::new(),
@@ -659,8 +666,8 @@ pub fn default_model() -> SemanticModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::config::ProxyConfig;
     use crate::project::config::ModelPermission;
+    use crate::project::config::ProxyConfig;
 
     fn parse_config(json: &str) -> ProxyConfig {
         serde_json::from_str(json).expect("parse config")
@@ -670,11 +677,13 @@ mod tests {
 
     #[test]
     fn role_resolve_no_auth_is_admin() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": []
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &[]);
         assert!(ctx.is_administrator);
         assert!(ctx.roles.is_empty());
@@ -682,7 +691,8 @@ mod tests {
 
     #[test]
     fn role_resolve_admin_bypass() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -692,7 +702,8 @@ mod tests {
                 "model_permission": "administrator",
                 "members": [{"member_name": "DOMAIN\\admin", "member_type": "user"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\admin", &[]);
         assert!(ctx.is_administrator);
         assert_eq!(ctx.roles, vec!["Admins"]);
@@ -700,7 +711,8 @@ mod tests {
 
     #[test]
     fn role_resolve_single_role_single_table() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -714,7 +726,8 @@ mod tests {
                     "filter_expression": "region = 'EU'"
                 }]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\alice", &[]);
         assert!(!ctx.is_administrator);
         assert_eq!(ctx.roles, vec!["EU_Region"]);
@@ -725,7 +738,8 @@ mod tests {
 
     #[test]
     fn role_resolve_multiple_roles_union() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -750,7 +764,8 @@ mod tests {
                     }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\bob", &[]);
         assert_eq!(ctx.roles.len(), 2);
         assert!(ctx.roles.contains(&"EU_Region".into()));
@@ -769,7 +784,8 @@ mod tests {
 
     #[test]
     fn role_resolve_ols_hide() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -783,7 +799,8 @@ mod tests {
                     "metadata_permission": "none"
                 }]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &[]);
         assert!(!ctx.is_administrator);
 
@@ -793,7 +810,8 @@ mod tests {
 
     #[test]
     fn role_resolve_no_matching_role_deny_all() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -803,7 +821,8 @@ mod tests {
                 "model_permission": "read",
                 "members": [{"member_name": "DOMAIN\\specific_user", "member_type": "user"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\unknown", &[]);
         assert!(!ctx.is_administrator);
         assert!(ctx.roles.is_empty());
@@ -816,7 +835,8 @@ mod tests {
 
     #[test]
     fn role_effective_model_permission_admin() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -826,7 +846,8 @@ mod tests {
                 "model_permission": "administrator",
                 "members": [{"member_name": "DOMAIN\\admin", "member_type": "user"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\admin", &[]);
         let perm = effective_model_permission(&cfg, &ctx);
         assert_eq!(perm, ModelPermission::Administrator);
@@ -834,7 +855,8 @@ mod tests {
 
     #[test]
     fn role_effective_model_permission_read() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -844,7 +866,8 @@ mod tests {
                 "model_permission": "read",
                 "members": [{"member_name": "DOMAIN\\reader", "member_type": "user"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\reader", &[]);
         let perm = effective_model_permission(&cfg, &ctx);
         assert_eq!(perm, ModelPermission::Read);
@@ -852,7 +875,8 @@ mod tests {
 
     #[test]
     fn role_effective_model_permission_none() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -862,7 +886,8 @@ mod tests {
                 "model_permission": "none",
                 "members": [{"member_name": "DOMAIN\\denied_user", "member_type": "user"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\denied_user", &[]);
         let perm = effective_model_permission(&cfg, &ctx);
         assert_eq!(perm, ModelPermission::None);
@@ -872,7 +897,8 @@ mod tests {
 
     #[test]
     fn role_effective_table_filter_no_filter_full() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -886,7 +912,8 @@ mod tests {
                     "filter_expression": ""
                 }]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\viewer", &[]);
         let access = effective_table_filter(&cfg, &ctx, "some_table");
         assert_eq!(access, TableAccess::Full);
@@ -894,7 +921,8 @@ mod tests {
 
     #[test]
     fn role_effective_table_filter_admin_bypass() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -909,7 +937,8 @@ mod tests {
                     "metadata_permission": "none"
                 }]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\god", &[]);
         let access = effective_table_filter(&cfg, &ctx, "any_table");
         assert_eq!(access, TableAccess::Full);
@@ -917,7 +946,8 @@ mod tests {
 
     #[test]
     fn role_resolve_group_membership() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -927,7 +957,8 @@ mod tests {
                 "model_permission": "read",
                 "members": [{"member_name": "DOMAIN\\group1", "member_type": "group"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\user", &["DOMAIN\\group1".into()]);
         assert!(!ctx.is_administrator);
         assert_eq!(ctx.roles, vec!["GroupRole"]);
@@ -935,7 +966,8 @@ mod tests {
 
     #[test]
     fn role_effective_table_filter_no_table_permission_full() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -946,7 +978,8 @@ mod tests {
                 "members": [{"member_name": "DOMAIN\\u", "member_type": "user"}],
                 "table_permissions": [{"table": "table_a", "filter_expression": "col = 1"}]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\u", &[]);
         let access = effective_table_filter(&cfg, &ctx, "other_table");
         assert_eq!(access, TableAccess::Full);
@@ -954,7 +987,8 @@ mod tests {
 
     #[test]
     fn role_most_permissive_wins() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -971,7 +1005,8 @@ mod tests {
                     "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let perm = effective_model_permission(&cfg, &ctx);
         assert_eq!(perm, ModelPermission::Read);
@@ -981,7 +1016,8 @@ mod tests {
 
     #[test]
     fn role_multi_role_filter_plus_no_entry_is_full() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1002,7 +1038,8 @@ mod tests {
                     "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "sales_fact");
         assert_eq!(access, TableAccess::Full);
@@ -1010,7 +1047,8 @@ mod tests {
 
     #[test]
     fn role_multi_role_ols_hide_plus_no_entry_is_full() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1031,7 +1069,8 @@ mod tests {
                     "members": [{"member_name": "DOMAIN\\multi", "member_type": "user"}]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "secret_table");
         assert_eq!(access, TableAccess::Full);
@@ -1039,7 +1078,8 @@ mod tests {
 
     #[test]
     fn role_same_role_ols_hide_plus_filter_is_hidden() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1054,7 +1094,8 @@ mod tests {
                     "metadata_permission": "none"
                 }]
             }]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\u", &[]);
         let access = effective_table_filter(&cfg, &ctx, "mixed_table");
         assert_eq!(access, TableAccess::Hidden);
@@ -1062,7 +1103,8 @@ mod tests {
 
     #[test]
     fn role_multi_role_both_ols_hide_is_hidden() {
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1087,7 +1129,8 @@ mod tests {
                     }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "hidden_table");
         assert_eq!(access, TableAccess::Hidden);
@@ -1098,7 +1141,8 @@ mod tests {
         // SSAS union semantics: if one role hides a table (OLS) and another
         // role grants read access with a filter (RLS), the least restrictive
         // wins → Filtered (not Hidden). The user sees filtered rows.
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1124,7 +1168,8 @@ mod tests {
                     }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "mixed_table");
         assert_eq!(access, TableAccess::Filtered("region = 'EU'".to_string()));
@@ -1134,7 +1179,8 @@ mod tests {
     fn role_multi_role_ols_hide_plus_read_no_filter_is_full() {
         // SSAS union: one role hides (OLS), another grants Read with no filter
         // (full access). Least restrictive wins → Full.
-        let cfg = parse_config(r#"{
+        let cfg = parse_config(
+            r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
             "dialect": "duckdb", "malloy_model_file": "m.malloy",
             "dimensions": [], "measures": [],
@@ -1159,7 +1205,8 @@ mod tests {
                     }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "mixed_table");
         assert_eq!(access, TableAccess::Full);
