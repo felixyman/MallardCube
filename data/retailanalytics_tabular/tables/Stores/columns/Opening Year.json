@@ -1,0 +1,7 @@
+{
+  "name": "Opening Year",
+  "dataType": "int64",
+  "sourceColumn": "openingyear",
+  "sourceProviderType": "smallint",
+  "lineageTag": "978804eb-b349-4f8d-b405-93f751e9f392"
+}

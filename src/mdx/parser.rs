@@ -411,15 +411,132 @@ pub struct ParsedMdx {
     /// The explicitly requested measure name, extracted from
     /// WHERE/columns (e.g. "Units" from [Measures].[Units]).
     pub selected_measure: Option<String>,
+    /// The cube name extracted from `FROM [cubeName]` (e.g. "Sales").
+    pub cube_name: Option<String>,
+    /// Positionally-ordered dimension IDs from the select clause.
+    /// Extracted from CrossJoin / DrilldownLevel expressions, unfiltered
+    /// by the project model. e.g. ["Territory", "Category"].
+    pub axis_dimension_ids: Vec<String>,
+    /// Excluded members from a DrilldownMember collapse expression.
+    /// Each tuple is (dimension_id, member_key).
+    /// Empty when `has_drilldown_member` is false.
+    pub excluded_members: Vec<(String, String)>,
+    /// The dimension token following the DrilldownMember exclusion set.
+    pub drilldown_member_hierarchy: Option<String>,
+}
+
+/// Extract dimension IDs from the select clause in positional order.
+///
+/// Mirrors the `parse_axis_dimensions()` logic from semantic.rs: finds the
+/// axis expression (before `DIMENSION PROPERTIES` or `ON COLUMNS`), then
+/// collects all non-Measures bracketed identifiers in left-to-right order,
+/// deduplicated.
+fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
+    let upper = before_from.to_uppercase();
+    let axis_end = upper.find("DIMENSION PROPERTIES")
+        .or_else(|| upper.find("ON COLUMNS"))
+        .unwrap_or(before_from.len());
+    let axis_expr = &before_from[..axis_end];
+
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0;
+    while let Some(open) = axis_expr[pos..].find('[') {
+        let abs = pos + open + 1;
+        let close = axis_expr[abs..].find(']').unwrap_or(axis_expr.len() - abs);
+        let id = &axis_expr[abs..abs + close];
+        if id != "Measures" && !id.is_empty() && seen.insert(id.to_string()) {
+            ids.push(id.to_string());
+        }
+        pos = abs + close + 1;
+    }
+    ids
+}
+
+/// Parse excluded members from a DrilldownMember collapse expression.
+/// Only scans within the `{-{ ... }}` exclusion set boundary — does NOT
+/// pick up later WHERE slicer members.
+fn parse_excluded_members_from_mdx(input: &str) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    let Some(excl_start) = input.find("{-{") else { return result; };
+
+    // Bound to the closing }} of the exclusion set.
+    let after_excl = &input[excl_start..];
+    let Some(close) = after_excl[2..].find("}}") else { return result; };
+    let excl_end = 2 + close + 2;
+    let excl = &after_excl[..excl_end];
+
+    let mut search_from = 0;
+    while let Some(amp) = excl[search_from..].find("&[") {
+        let begin = search_from + amp + 2;
+        if let Some(end) = excl[begin..].find(']') {
+            let key = excl[begin..begin + end].to_string();
+            // Look backwards for the preceding [Dimension].
+            let before = &excl[..search_from + amp];
+            let dim = if let Some(last_dot) = before.rfind("].") {
+                if let Some(open) = before[..last_dot].rfind('[') {
+                    before[open + 1..last_dot].to_string()
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            };
+            result.push((dim, key));
+            search_from = begin + end;
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+/// Parse the hierarchy target following a DrilldownMember exclusion set.
+fn parse_drilldown_member_hierarchy_from_mdx(input: &str) -> Option<String> {
+    let excl_start = input.find("{-{")?;
+    let after_excl = &input[excl_start..];
+    let close = after_excl[2..].find("}}")?;
+    let rest = &after_excl[2 + close + 2..];
+    let trimmed = rest.trim_start();
+    let trimmed = trimmed.strip_prefix(',').unwrap_or(trimmed).trim_start();
+    if !trimmed.starts_with('[') { return None; }
+    let bracket_end = trimmed[1..].find(']')?;
+    let hier = &trimmed[1..bracket_end + 1];
+    let hier = hier.trim_matches(|c: char| c == '[' || c == ']');
+    Some(hier.to_string())
 }
 
 pub fn parse_mdx(input: &str) -> ParsedMdx {
     let up = input.to_uppercase();
-    let before_from = input.find("FROM [Model]")
-        .or_else(|| input.find("FROM [model]"))
-        .or_else(|| input.find("FROM [Sales]"))
-        .or_else(|| input.find("FROM [sales]"))
-        .map(|i| &input[..i]).unwrap_or(input);
+
+    // Find `FROM [` boundary generically (case-insensitive).
+    let before_from = up.find("FROM [")
+        .map(|i| &input[..i])
+        .unwrap_or(input);
+
+    // Extract cube name from `FROM [cubeName]`.
+    let cube_name: Option<String> = up.find("FROM [").and_then(|start| {
+        let after_from = &input[start + "FROM [".len()..];
+        after_from.find(']').map(|end| after_from[..end].to_string())
+    });
+
+    // Parse axis dimension IDs from the select clause in positional order.
+    // Strategy: split on CrossJoin( / DrilldownLevel( to find axis expressions,
+    // then extract the first non-Measures bracketed identifier in each.
+    let axis_dimension_ids = parse_axis_dimension_ids(before_from);
+
+    // Parse excluded members from DrilldownMember if present.
+    let excluded_members = if has_drilldown_member(input) {
+        parse_excluded_members_from_mdx(input)
+    } else {
+        Vec::new()
+    };
+
+    let drilldown_member_hierarchy = if has_drilldown_member(input) {
+        parse_drilldown_member_hierarchy_from_mdx(input)
+    } else {
+        None
+    };
 
     let where_members = find_where_clause(input).unwrap_or_default();
 
@@ -438,11 +555,11 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
             .or_else(|| input.find("on columns"))
             .unwrap_or(input.len());
         let before_cols = &input[..col_start];
-        let meas_start = before_cols.find("[Measures].");
-        meas_start.map(|s| {
-            let rest = &before_cols[s + "[Measures].".len()..];
-            rest.split(|c: char| c == ']').next().unwrap_or("").to_string()
-        })
+        let meas_start = before_cols.rfind("[Measures].[")?;
+        match member_ref(&input[meas_start..]) {
+            Ok((_, MemberRef::Measure(name))) => Some(name),
+            _ => None,
+        }
     });
 
     ParsedMdx {
@@ -464,6 +581,10 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         cchildren_target: detect_cchildren_target(input),
         calculated_members_pat: detect_calculated_members_pat(input),
         selected_measure,
+        cube_name,
+        axis_dimension_ids,
+        excluded_members,
+        drilldown_member_hierarchy,
     }
 }
 
@@ -584,5 +705,19 @@ mod tests {
         let input = "SELECT ... CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
         let props = parse_cell_properties(input);
         assert_eq!(props, vec!["VALUE", "FORMAT_STRING", "BACK_COLOR", "FORE_COLOR"]);
+    }
+
+    #[test]
+    fn parse_selected_measure_from_columns() {
+        let mdx = "Select {[Measures].[Units]} on columns from [Sales]";
+        let parsed = parse_mdx(mdx);
+        assert_eq!(parsed.selected_measure.as_deref(), Some("Units"), "expected Units from columns");
+    }
+
+    #[test]
+    fn parse_selected_measure_from_columns_bracketed_set() {
+        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]";
+        let parsed = parse_mdx(mdx);
+        assert_eq!(parsed.selected_measure.as_deref(), Some("Revenue"), "expected Revenue from columns");
     }
 }

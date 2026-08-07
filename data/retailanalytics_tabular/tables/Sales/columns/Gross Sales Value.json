@@ -1,0 +1,7 @@
+{
+  "name": "Gross Sales Value",
+  "dataType": "decimal",
+  "sourceColumn": "grossvalue",
+  "sourceProviderType": "decimal",
+  "lineageTag": "b6b214b7-a49f-4333-af16-b9b20bf333d2"
+}

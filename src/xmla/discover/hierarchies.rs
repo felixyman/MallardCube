@@ -1,4 +1,4 @@
-use crate::response::{discover_rowset_envelope, UUID_TYPE};
+use crate::response::{discover_rowset_envelope, UUID_TYPE, xml_escape};
 use crate::proxy_project;
 
 const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -69,20 +69,20 @@ pub fn get_hierarchies_response() -> String {
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_NAME>{}</HIERARCHY_NAME>
-            <HIERARCHY_UNIQUE_NAME>{}</HIERARCHY_UNIQUE_NAME>
-            <HIERARCHY_GUID>00000000-0000-0000-0000-{:012}</HIERARCHY_GUID>
-            <HIERARCHY_CAPTION>{}</HIERARCHY_CAPTION>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_NAME>{caption}</HIERARCHY_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <HIERARCHY_GUID>00000000-0000-0000-0000-{guid:012}</HIERARCHY_GUID>
+            <HIERARCHY_CAPTION>{caption}</HIERARCHY_CAPTION>
             <DIMENSION_TYPE>3</DIMENSION_TYPE>
-            <HIERARCHY_CARDINALITY>{}</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>{}</DEFAULT_MEMBER>
-            <ALL_MEMBER>{}</ALL_MEMBER>
+            <HIERARCHY_CARDINALITY>{cardinality}</HIERARCHY_CARDINALITY>
+            <DEFAULT_MEMBER>{all_member}</DEFAULT_MEMBER>
+            <ALL_MEMBER>{all_member}</ALL_MEMBER>
             <STRUCTURE>0</STRUCTURE>
-            <DIMENSION_IS_VISIBLE>{}</DIMENSION_IS_VISIBLE>
+            <DIMENSION_IS_VISIBLE>{visible}</DIMENSION_IS_VISIBLE>
             <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
-            <HIERARCHY_IS_VISIBLE>{}</HIERARCHY_IS_VISIBLE>
+            <HIERARCHY_IS_VISIBLE>{visible}</HIERARCHY_IS_VISIBLE>
             <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
             <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
             <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
@@ -91,16 +91,13 @@ pub fn get_hierarchies_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-            d.dimension_unique_name(),
-            d.caption,
-            d.hierarchy_unique_name(),
-            20 + i as u32,
-            d.hierarchy_name,
-            d.cardinality_hint,
-            d.all_member_unique_name(),
-            d.all_member_unique_name(),
-            d.visible,
-            d.visible,
+            dim_u = xml_escape(&d.dimension_unique_name()),
+            caption = xml_escape(&d.caption),
+            hier_u = xml_escape(&d.hierarchy_unique_name()),
+            guid = 20 + i as u32,
+            cardinality = d.cardinality_hint,
+            all_member = xml_escape(&d.all_member_unique_name()),
+            visible = d.visible,
             catalog = project.config.catalog,
             cube = project.config.cube,
         ));

@@ -1,0 +1,7 @@
+{
+  "name": "Children Count",
+  "dataType": "int64",
+  "sourceColumn": "childrencount",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "404f2013-3cd3-49cb-a236-8bccbdf464d5"
+}

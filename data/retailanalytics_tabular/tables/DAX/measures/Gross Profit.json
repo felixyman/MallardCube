@@ -1,0 +1,10 @@
+{
+  "name": "Gross Profit",
+  "expression": [
+    "",
+    "= [Total Revenue] - [Total COGS]",
+    "// Gross profit = revenue - COGS"
+  ],
+  "formatString": "$ #,##0.00",
+  "lineageTag": "dfde3e6e-2bbe-424a-a946-c7a6f7176fc9"
+}

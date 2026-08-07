@@ -1,0 +1,7 @@
+{
+  "name": "Eco Score",
+  "dataType": "int64",
+  "sourceColumn": "ecoscore",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "e60a5da0-52f7-43c8-bcc6-98cba32456b2"
+}

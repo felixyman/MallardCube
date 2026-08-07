@@ -1,0 +1,146 @@
+{
+  "catalog": "OPERATIONS_ANALYTICS",
+  "cube": "Operations",
+  "source_name": "sales_data",
+  "table_name": "sales_fact",
+  "dialect": "duckdb",
+  "malloy_model_file": "model.malloy",
+  "fact_tables": [
+    {
+      "id": "sales",
+      "source_name": "sales_data",
+      "table_name": "sales_fact",
+      "measure_group_name": "Sales"
+    },
+    {
+      "id": "inventory",
+      "source_name": "inventory_data",
+      "table_name": "inventory_fact",
+      "measure_group_name": "Inventory"
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "Category",
+      "malloy_name": "category",
+      "physical_field": "category",
+      "caption": "Category",
+      "description": "Product category",
+      "hierarchy_name": "Category",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Category",
+      "ordinal": 1,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50,
+      "shared": true
+    },
+    {
+      "id": "Territory",
+      "malloy_name": "territory",
+      "physical_field": "territory",
+      "caption": "Territory",
+      "description": "Sales territory",
+      "hierarchy_name": "Territory",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Territory",
+      "ordinal": 2,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50,
+      "shared": true
+    },
+    {
+      "id": "Channel",
+      "malloy_name": "channel",
+      "physical_field": "channel",
+      "caption": "Channel",
+      "description": "Sales channel",
+      "hierarchy_name": "Channel",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Channel",
+      "ordinal": 3,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 10,
+      "fact_table": "sales"
+    },
+    {
+      "id": "Warehouse",
+      "malloy_name": "warehouse",
+      "physical_field": "warehouse",
+      "caption": "Warehouse",
+      "description": "Inventory warehouse",
+      "hierarchy_name": "Warehouse",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Warehouse",
+      "ordinal": 4,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 10,
+      "fact_table": "inventory"
+    }
+  ],
+  "measures": [
+    {
+      "id": "Revenue",
+      "malloy_name": "total_revenue",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue",
+      "display_name": "Revenue",
+      "description": "Total sales revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 1,
+      "visible": true,
+      "fact_table": "sales",
+      "measure_group_name": "Sales"
+    },
+    {
+      "id": "Units",
+      "malloy_name": "total_units",
+      "physical_expr": "units.sum()",
+      "sql_expr": "SUM(units)",
+      "caption": "Units",
+      "display_name": "Units",
+      "description": "Total units sold",
+      "format_string": "#,##0",
+      "units": "",
+      "ordinal": 2,
+      "visible": true,
+      "fact_table": "sales",
+      "measure_group_name": "Sales"
+    },
+    {
+      "id": "Stock",
+      "malloy_name": "total_stock",
+      "physical_expr": "stock.sum()",
+      "sql_expr": "SUM(stock)",
+      "caption": "Stock",
+      "display_name": "Stock",
+      "description": "Units in stock",
+      "format_string": "#,##0",
+      "units": "",
+      "ordinal": 1,
+      "visible": true,
+      "fact_table": "inventory",
+      "measure_group_name": "Inventory"
+    },
+    {
+      "id": "Cost",
+      "malloy_name": "total_cost",
+      "physical_expr": "cost.sum()",
+      "sql_expr": "SUM(cost)",
+      "caption": "Cost",
+      "display_name": "Cost",
+      "description": "Inventory cost",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 2,
+      "visible": true,
+      "fact_table": "inventory",
+      "measure_group_name": "Inventory"
+    }
+  ]
+}

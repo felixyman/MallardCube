@@ -1,0 +1,7 @@
+{
+  "name": "Weekday Number",
+  "dataType": "int64",
+  "sourceColumn": "weekdaynumber",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "c12f8398-9108-4b9b-8af2-88407c99b772"
+}

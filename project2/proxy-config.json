@@ -11,7 +11,7 @@
       "malloy_name": "produktkategori",
       "physical_field": "produktkategori",
       "caption": "Category",
-      "description": "Product categories for analysis",
+      "description": "Product category",
       "hierarchy_name": "Category",
       "all_level_name": "(All)",
       "leaf_level_name": "Category",
@@ -25,14 +25,14 @@
       "malloy_name": "region",
       "physical_field": "region",
       "caption": "Territory",
-      "description": "Geographic sales territories",
+      "description": "Sales territory",
       "hierarchy_name": "Territory",
       "all_level_name": "(All)",
       "leaf_level_name": "Territory",
       "ordinal": 2,
       "visible": true,
       "has_all": true,
-      "cardinality_hint": 10
+      "cardinality_hint": 50
     }
   ],
   "measures": [
@@ -42,13 +42,13 @@
       "physical_expr": "sales.sum()",
       "sql_expr": "SUM(sales)",
       "caption": "Revenue",
-      "display_name": "Revenue (USD)",
+      "display_name": "Revenue",
       "description": "Total sales revenue",
-      "format_string": "#,##0.00",
-      "units": "USD",
+      "format_string": "0.00",
+      "units": "SEK",
       "ordinal": 1,
       "visible": true,
-      "measure_group_name": "Sales"
+      "measure_group_name": "SalesCube"
     }
   ]
 }

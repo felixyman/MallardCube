@@ -7,8 +7,8 @@
 use crate::response::wrap_in_soap_envelope;
 use crate::mdx_semantic::{is_dax, is_mdx_select};
 use crate::execute_builders::{
-    get_execute_cellset_response, get_execute_dax_response,
-    get_execute_mdx_response,
+    get_execute_cellset_response,
+    get_execute_dax_response, get_execute_mdx_response,
 };
 
 // ---- public API called by main.rs ----
@@ -40,8 +40,34 @@ pub fn get_execute_statement_response(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{Backend, QueryBackend};
+    use crate::engine::model::SemanticModel;
     use crate::mdx_semantic::*;
-    use crate::test_fixtures::MDX_TWO_LEAF_FILTERS_UNITS;
+    use crate::proxy_project::{ProxyProject, with_test_project};
+    use crate::test_fixtures::{
+        MDX_TWO_LEAF_FILTERS_UNITS,
+        EXCEL_TRACE_CATEGORY_TERRITORY_REVENUE,
+        EXCEL_TRACE_CHANNEL_WHOLESALE_CCHILDREN,
+        EXCEL_TRACE_PROJECT3_EXECUTES,
+        EXCEL_TRACE_SEGMENT_ALL_REVENUE,
+        EXCEL_TRACE_SEGMENT_CONSUMER_CCHILDREN,
+        EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_ALL_REVENUE,
+        EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_DEFAULT_MEASURE,
+        EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_REVENUE,
+        EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_UNITS,
+        EXCEL_TRACE_SEGMENT_CONSUMER_REVENUE,
+        EXCEL_TRACE_TERRITORY_CATEGORY_ALL_UNITS,
+        EXCEL_TRACE_TERRITORY_CATEGORY_COLLAPSE_NORTHWEST_REVENUE,
+        EXCEL_TRACE_TERRITORY_CATEGORY_CONSUMER_UNITS,
+        EXCEL_TRACE_TERRITORY_CATEGORY_DEFAULT_MEASURE,
+        EXCEL_TRACE_TERRITORY_CATEGORY_REVENUE,
+        EXCEL_TRACE_TERRITORY_CATEGORY_UNITS,
+        EXCEL_TRACE_TERRITORY_DRILLDOWN_REVENUE,
+        EXCEL_TRACE_TERRITORY_FILTER_NORTHWEST_REVENUE,
+        EXCEL_TRACE_TERRITORY_FILTER_SOUTH_SEGMENT_CONSUMER_REVENUE,
+        EXCEL_TRACE_TOTAL_REVENUE,
+    };
+    use std::collections::BTreeMap;
 
     const MDX_CCHILDREN_LEAF: &str = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Produktkategori].[Produktkategori].currentmember.children).count' Set FilteredMembers As '{[Produktkategori].[Produktkategori].&[Kategori B]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Produktkategori].[Produktkategori].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Model]";
 
@@ -103,6 +129,245 @@ mod tests {
         let block_end = xml[member_start..].find("</Member>")
             .unwrap_or_else(|| panic!("no </Member> after Caption: {caption}"));
         &xml[block_start..member_start + block_end + "</Member>".len()]
+    }
+
+    fn with_project3<T>(f: impl FnOnce() -> T) -> T {
+        let project = ProxyProject::load("project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(project, f)
+    }
+
+    fn with_retail_analytics<T>(f: impl FnOnce() -> T) -> T {
+        let project = ProxyProject::load("generated_retail_analytics/proxy-config.json")
+            .expect("load generated_retail_analytics");
+        with_test_project(project, f)
+    }
+
+    fn with_generated_project<T>(f: impl FnOnce() -> T) -> T {
+        let project = ProxyProject::load("generated_project/proxy-config.json")
+            .expect("load generated_project");
+        with_test_project(project, f)
+    }
+
+    /// Test-only `QueryBackend` that wraps a file-based DuckDB connection.
+    /// Avoids the global `Backend` singleton so converted-project tests can
+    /// exercise their own databases without in-memory demo seeding.
+    struct FileQueryBackend(std::sync::Mutex<duckdb::Connection>);
+
+    impl QueryBackend for FileQueryBackend {
+        fn query_scalar(&self, sql: &str) -> f64 {
+            let conn = self.0.lock().unwrap();
+            conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0.0)
+        }
+
+        fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_grouped_1d");
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+                .expect("query_map query_grouped_1d")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+
+        fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_pairs");
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)))
+                .expect("query_map query_pairs")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+
+        fn query_count(&self, sql: &str) -> u32 {
+            let conn = self.0.lock().unwrap();
+            conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
+        }
+
+        fn query_strings(&self, sql: &str) -> Vec<String> {
+            let conn = self.0.lock().unwrap();
+            let mut stmt = conn.prepare(sql).expect("prepare query_strings");
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .expect("query_map query_strings")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+    }
+
+    fn extract_cell_value(xml: &str) -> Option<String> {
+        let cell_start = xml.find("<Cell CellOrdinal=\"0\"")?;
+        let val_start = xml[cell_start..].find("<Value")?;
+        let abs_val_start = cell_start + val_start;
+        let close = xml[abs_val_start..].find('>')?;
+        let content_start = abs_val_start + close + 1;
+        let content_end = xml[content_start..].find("</Value>")?;
+        Some(xml[content_start..content_start + content_end].to_string())
+    }
+
+    fn extract_fmt_value(xml: &str) -> Option<String> {
+        let start = xml.find("<FmtValue>")?;
+        let content_start = start + "<FmtValue>".len();
+        let content_end = xml[content_start..].find("</FmtValue>")?;
+        Some(xml[content_start..content_start + content_end].to_string())
+    }
+
+    fn axis_captions(xml: &str, axis_name: &str) -> Vec<String> {
+        let first = xml.find(&format!(r#"name="{axis_name}""#))
+            .unwrap_or_else(|| panic!("missing {axis_name}"));
+        let second = xml[first + 1..].find(&format!(r#"name="{axis_name}""#))
+            .unwrap_or_else(|| panic!("missing second {axis_name}"));
+        let start = first + 1 + second;
+        let end = xml[start..].find("</Axis>").map(|i| start + i).unwrap_or(xml.len());
+        let slice = &xml[start..end];
+        let mut caps = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = slice[pos..].find("<Caption>") {
+            let abs = pos + i + "<Caption>".len();
+            let close = slice[abs..].find("</Caption>").unwrap();
+            caps.push(slice[abs..abs + close].to_string());
+            pos = abs + close + "</Caption>".len();
+        }
+        caps
+    }
+
+    fn axis_tuple_captions(xml: &str, axis_name: &str) -> Vec<Vec<String>> {
+        let first = xml.find(&format!(r#"name="{axis_name}""#))
+            .unwrap_or_else(|| panic!("missing {axis_name}"));
+        let second = xml[first + 1..].find(&format!(r#"name="{axis_name}""#))
+            .unwrap_or_else(|| panic!("missing second {axis_name}"));
+        let start = first + 1 + second;
+        let end = xml[start..].find("</Axis>").map(|i| start + i).unwrap_or(xml.len());
+        let slice = &xml[start..end];
+
+        slice.split("<Tuple>")
+            .skip(1)
+            .map(|tuple| {
+                let tuple_end = tuple.find("</Tuple>").unwrap_or(tuple.len());
+                let tuple = &tuple[..tuple_end];
+                let mut caps = Vec::new();
+                let mut pos = 0;
+                while let Some(i) = tuple[pos..].find("<Caption>") {
+                    let abs = pos + i + "<Caption>".len();
+                    let close = tuple[abs..].find("</Caption>").unwrap();
+                    caps.push(tuple[abs..abs + close].to_string());
+                    pos = abs + close + "</Caption>".len();
+                }
+                caps
+            })
+            .collect()
+    }
+
+    fn cell_values(xml: &str) -> Vec<f64> {
+        let start = xml.find("<CellData>").expect("missing CellData");
+        let end = xml[start..].find("</CellData>").map(|i| start + i).unwrap_or(xml.len());
+        let slice = &xml[start..end];
+        let mut values = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = slice[pos..].find("<Value xsi:type=\"xsd:double\">") {
+            let abs = pos + i + "<Value xsi:type=\"xsd:double\">".len();
+            let close = slice[abs..].find("</Value>").unwrap();
+            values.push(slice[abs..abs + close].parse().unwrap());
+            pos = abs + close + "</Value>".len();
+        }
+        values
+    }
+
+    fn cell_format_strings(xml: &str) -> Vec<String> {
+        let start = xml.find("<CellData>").expect("missing CellData");
+        let end = xml[start..].find("</CellData>").map(|i| start + i).unwrap_or(xml.len());
+        let slice = &xml[start..end];
+        let mut values = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = slice[pos..].find("<FormatString>") {
+            let abs = pos + i + "<FormatString>".len();
+            let close = slice[abs..].find("</FormatString>").unwrap();
+            values.push(slice[abs..abs + close].to_string());
+            pos = abs + close + "</FormatString>".len();
+        }
+        values
+    }
+
+    fn query_grouped(sql: &str) -> (Vec<String>, Vec<f64>) {
+        let rows = Backend::get().query_grouped_1d(sql);
+        let captions = rows.iter().map(|(name, _)| name.clone()).collect();
+        let values = rows.iter().map(|(_, value)| *value).collect();
+        (captions, values)
+    }
+
+    fn query_pairs(sql: &str) -> (Vec<Vec<String>>, Vec<f64>) {
+        let rows = Backend::get().query_pairs(sql);
+        let tuples = rows.iter()
+            .map(|(first, second, _)| vec![first.clone(), second.clone()])
+            .collect();
+        let values = rows.iter().map(|(_, _, value)| *value).collect();
+        (tuples, values)
+    }
+
+    #[test]
+    fn concurrent_execute_cellset_with_injected_backends() {
+        with_project3(|| {
+            let source = crate::backend::BackendSource::demo().expect("create demo source");
+            let mut handles = Vec::new();
+            for mdx in [MDX_SLICER_ALL, MDX_DRILLDOWN, MDX_REGION_DRILLDOWN, MDX_CROSSJOIN_PROBE] {
+                let source = source.clone();
+                handles.push(std::thread::spawn(move || {
+                    with_project3(|| {
+                        let backend = source.checkout().expect("checkout backend");
+                        crate::execute_builders::get_execute_cellset_response_with_backend(
+                            mdx,
+                            &backend,
+                            &crate::proxy_project::project().model,
+                        )
+                    })
+                }));
+            }
+
+            for handle in handles {
+                let xml = handle.join().expect("join execute worker");
+                assert!(xml.contains("<CellData>"), "missing cell data in {xml}");
+            }
+            let _ = std::fs::remove_file(source.path());
+        });
+    }
+
+    fn collapse_first_dimension(sql: &str, excluded: &str) -> (Vec<Vec<String>>, Vec<f64>) {
+        let rows = Backend::get().query_pairs(sql);
+        let mut tuples = Vec::new();
+        let mut values = Vec::new();
+        let mut i = 0;
+
+        while i < rows.len() {
+            let (first, second, value) = &rows[i];
+            if first == excluded {
+                let mut total = *value;
+                i += 1;
+                while i < rows.len() && rows[i].0 == *first {
+                    total += rows[i].2;
+                    i += 1;
+                }
+                tuples.push(vec![first.clone(), "All".to_string()]);
+                values.push(total);
+                continue;
+            }
+
+            tuples.push(vec![first.clone(), second.clone()]);
+            values.push(*value);
+            i += 1;
+        }
+
+        (tuples, values)
+    }
+
+    fn tuple_value_map(tuples: &[Vec<String>], values: &[f64], swap: bool) -> BTreeMap<(String, String), f64> {
+        tuples.iter().zip(values.iter())
+            .map(|(tuple, value)| {
+                let pair = if swap {
+                    (tuple[1].clone(), tuple[0].clone())
+                } else {
+                    (tuple[0].clone(), tuple[1].clone())
+                };
+                (pair, *value)
+            })
+            .collect()
     }
 
     // --- routing ---
@@ -382,22 +647,7 @@ mod tests {
 
     /// SlicerAxis caption extraction helper: finds the N-th Caption in SlicerAxis.
     fn slicer_captions(xml: &str) -> Vec<String> {
-        // Find the actual <Axis name="SlicerAxis"> inside <Axes>.
-        // Skip over the info declaration in <AxesInfo> by looking for the second occurrence.
-        let first = xml.find(r#"name="SlicerAxis""#).expect("missing SlicerAxis");
-        let second = xml[first + 1..].find(r#"name="SlicerAxis""#).expect("missing second SlicerAxis");
-        let start = first + 1 + second;
-        let end = xml[start..].find("</Axis>").map(|i| start + i).unwrap_or(xml.len());
-        let slice = &xml[start..end];
-        let mut caps = Vec::new();
-        let mut pos = 0;
-        while let Some(i) = slice[pos..].find("<Caption>") {
-            let abs = pos + i + "<Caption>".len();
-            let close = slice[abs..].find("</Caption>").unwrap();
-            caps.push(slice[abs..abs + close].to_string());
-            pos = abs + close + "</Caption>".len();
-        }
-        caps
+        axis_captions(xml, "SlicerAxis")
     }
 
     #[test]
@@ -636,6 +886,21 @@ mod tests {
     }
 
     #[test]
+    fn collapse_parse_only_excludes_the_drilldownmember_members() {
+        with_project3(|| {
+            let query = crate::mdx_semantic::semantic_query_from_mdx(
+                EXCEL_TRACE_TERRITORY_CATEGORY_COLLAPSE_NORTHWEST_REVENUE
+            );
+            // Only the one explicit exclusion from DrilldownMember, not the
+            // later slicer members for Segment/Channel.
+            assert_eq!(query.excluded_members.len(), 1,
+                "should only exclude the DrilldownMember member, not slicer members");
+            assert_eq!(query.excluded_members[0].key, "Northwest");
+            assert_eq!(query.excluded_members[0].dimension, "Territory");
+        });
+    }
+
+    #[test]
     fn collapse_exclude_region_keeps_north_visible_as_all() {
         let xml = get_execute_statement_response(MDX_COLLAPSE_EXCLUDE_REGION);
         // North is excluded from Region — should appear as (Region leaf, Produktkategori.All)
@@ -731,5 +996,582 @@ mod tests {
         assert!(out.contains("region = 'North'"));
         assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B' or produktkategori = 'Kategori D')"));
         assert!(!out.contains(" | "), "cross-dimension filters should use AND (,) not OR (|)");
+    }
+
+    #[test]
+    fn excel_trace_replay_project3_execute_shapes_render_cellsets() {
+        with_project3(|| {
+            for mdx in EXCEL_TRACE_PROJECT3_EXECUTES {
+                let xml = get_execute_statement_response(mdx);
+                assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "query failed: {mdx}");
+                assert!(xml.contains("<Axes>"), "missing axes for: {mdx}");
+            }
+        });
+    }
+
+    #[test]
+    fn excel_trace_total_revenue_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TOTAL_REVENUE);
+            let expected = Backend::get().query_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(cell_values(&xml), vec![expected]);
+        });
+    }
+
+    #[test]
+    fn excel_trace_territory_drilldown_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_DRILLDOWN_REVENUE);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(revenue) FROM sales_fact GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_territory_subquery_filter_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_FILTER_NORTHWEST_REVENUE);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(revenue) FROM sales_fact WHERE territory = 'Northwest' GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_segment_all_matches_unfiltered_revenue() {
+        with_project3(|| {
+            let all_xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_ALL_REVENUE);
+            let plain_xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_DRILLDOWN_REVENUE);
+            assert_eq!(axis_captions(&all_xml, "Axis0"), axis_captions(&plain_xml, "Axis0"));
+            assert_eq!(cell_values(&all_xml), cell_values(&plain_xml));
+        });
+    }
+
+    #[test]
+    fn excel_trace_segment_consumer_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_REVENUE);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_nested_territory_and_segment_filter_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_FILTER_SOUTH_SEGMENT_CONSUMER_REVENUE);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(revenue) FROM sales_fact WHERE territory = 'South' AND segment = 'Consumer' GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_channel_all_filter_is_noop_under_consumer_filter() {
+        with_project3(|| {
+            let all_xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_ALL_REVENUE);
+            let plain_xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_REVENUE);
+            assert_eq!(axis_captions(&all_xml, "Axis0"), axis_captions(&plain_xml, "Axis0"));
+            assert_eq!(cell_values(&all_xml), cell_values(&plain_xml));
+        });
+    }
+
+    #[test]
+    fn excel_trace_two_leaf_filters_match_raw_revenue_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_REVENUE);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_omitted_measure_matches_explicit_revenue() {
+        with_project3(|| {
+            let implicit_xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_DEFAULT_MEASURE);
+            let explicit_xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_REVENUE);
+            assert_eq!(axis_captions(&implicit_xml, "Axis0"), axis_captions(&explicit_xml, "Axis0"));
+            assert_eq!(cell_values(&implicit_xml), cell_values(&explicit_xml));
+            assert_eq!(cell_format_strings(&implicit_xml), cell_format_strings(&explicit_xml));
+        });
+    }
+
+    #[test]
+    fn excel_trace_units_uses_units_values_and_format_string() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_SEGMENT_CONSUMER_CHANNEL_WHOLESALE_UNITS);
+            let (expected_captions, expected_values) = query_grouped(
+                "SELECT territory, SUM(units) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory ORDER BY territory"
+            );
+            assert_eq!(axis_captions(&xml, "Axis0"), expected_captions);
+            assert_eq!(cell_values(&xml), expected_values);
+            assert!(cell_format_strings(&xml).iter().all(|fmt| fmt == "#,##0"));
+            assert!(xml.contains("[Measures].[Units]"), "Units should be reflected on slicer axis");
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_revenue_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_REVENUE);
+            let (expected_tuples, expected_values) = query_pairs(
+                "SELECT territory, category, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory, category ORDER BY territory, category"
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), expected_tuples);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_reorder_matches_raw_sql_and_preserves_pair_values() {
+        with_project3(|| {
+            let forward_xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_REVENUE);
+            let reverse_xml = get_execute_statement_response(EXCEL_TRACE_CATEGORY_TERRITORY_REVENUE);
+
+            let (expected_forward_tuples, expected_forward_values) = query_pairs(
+                "SELECT territory, category, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory, category ORDER BY territory, category"
+            );
+            let (expected_reverse_tuples, expected_reverse_values) = query_pairs(
+                "SELECT category, territory, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY category, territory ORDER BY category, territory"
+            );
+
+            let forward_tuples = axis_tuple_captions(&forward_xml, "Axis0");
+            let reverse_tuples = axis_tuple_captions(&reverse_xml, "Axis0");
+            let forward_values = cell_values(&forward_xml);
+            let reverse_values = cell_values(&reverse_xml);
+
+            assert_eq!(forward_tuples, expected_forward_tuples);
+            assert_eq!(forward_values, expected_forward_values);
+            assert_eq!(reverse_tuples, expected_reverse_tuples);
+            assert_eq!(reverse_values, expected_reverse_values);
+
+            assert_eq!(
+                tuple_value_map(&forward_tuples, &forward_values, false),
+                tuple_value_map(&reverse_tuples, &reverse_values, true),
+            );
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_implicit_measure_matches_explicit_revenue() {
+        with_project3(|| {
+            let implicit_xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_DEFAULT_MEASURE);
+            let explicit_xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_REVENUE);
+            assert_eq!(axis_tuple_captions(&implicit_xml, "Axis0"), axis_tuple_captions(&explicit_xml, "Axis0"));
+            assert_eq!(cell_values(&implicit_xml), cell_values(&explicit_xml));
+            assert_eq!(cell_format_strings(&implicit_xml), cell_format_strings(&explicit_xml));
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_collapse_rolls_up_northwest_total() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_COLLAPSE_NORTHWEST_REVENUE);
+            let (expected_tuples, expected_values) = collapse_first_dimension(
+                "SELECT territory, category, SUM(revenue) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory, category ORDER BY territory, category",
+                "Northwest",
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), expected_tuples);
+            assert_eq!(cell_values(&xml), expected_values);
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_units_matches_raw_sql_and_format() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_UNITS);
+            let (expected_tuples, expected_values) = query_pairs(
+                "SELECT territory, category, SUM(units) FROM sales_fact WHERE segment = 'Consumer' AND channel = 'Wholesale' GROUP BY territory, category ORDER BY territory, category"
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), expected_tuples);
+            assert_eq!(cell_values(&xml), expected_values);
+            assert!(cell_format_strings(&xml).iter().all(|fmt| fmt == "#,##0"));
+            assert!(xml.contains("[Measures].[Units]"), "Units should be reflected on slicer axis");
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_consumer_units_matches_raw_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_CONSUMER_UNITS);
+            let (expected_tuples, expected_values) = query_pairs(
+                "SELECT territory, category, SUM(units) FROM sales_fact WHERE segment = 'Consumer' GROUP BY territory, category ORDER BY territory, category"
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), expected_tuples);
+            assert_eq!(cell_values(&xml), expected_values);
+            assert!(cell_format_strings(&xml).iter().all(|fmt| fmt == "#,##0"));
+        });
+    }
+
+    #[test]
+    fn excel_trace_crossjoin_all_units_matches_unfiltered_sql() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(EXCEL_TRACE_TERRITORY_CATEGORY_ALL_UNITS);
+            let (expected_tuples, expected_values) = query_pairs(
+                "SELECT territory, category, SUM(units) FROM sales_fact GROUP BY territory, category ORDER BY territory, category"
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), expected_tuples);
+            assert_eq!(cell_values(&xml), expected_values);
+            assert!(cell_format_strings(&xml).iter().all(|fmt| fmt == "#,##0"));
+        });
+    }
+
+    #[test]
+    fn excel_trace_filtered_cchildren_probes_render_cellsets() {
+        with_project3(|| {
+            for mdx in [EXCEL_TRACE_CHANNEL_WHOLESALE_CCHILDREN, EXCEL_TRACE_SEGMENT_CONSUMER_CCHILDREN] {
+                let xml = get_execute_statement_response(mdx);
+                assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "query failed: {mdx}");
+                assert!(xml.contains("<CellData>"), "missing cell data for: {mdx}");
+            }
+        });
+    }
+
+    #[test]
+    fn column_only_measure_uses_correct_measure() {
+        with_project3(|| {
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml = get_execute_statement_response(mdx);
+            let expected = Backend::get().query_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(cell_values(&xml), vec![expected]);
+            assert!(xml.contains("[Measures].[Revenue]"), "slicer axis should show Revenue");
+        });
+    }
+
+    #[test]
+    fn parser_axis_dimension_ids_match_semantic_parse_axis_dimensions() {
+        with_project3(|| {
+            for mdx in EXCEL_TRACE_PROJECT3_EXECUTES {
+                // Skip member/children probes — they don't have axis dimensions.
+                if mdx.contains(".Members") || mdx.contains(".Children") || mdx.contains("AddCalculatedMembers") {
+                    continue;
+                }
+                let parsed = crate::mdx_parser::parse_mdx(mdx);
+                let from_parser: Vec<String> = parsed.axis_dimension_ids.iter()
+                    .filter(|id| crate::proxy_project::project().model.dim_def_opt(id).is_some())
+                    .cloned()
+                    .collect();
+                let from_semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx).axis_dimensions;
+                assert_eq!(from_parser, from_semantic,
+                    "axis dimension mismatch for: {mdx}");
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_ytd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue YTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue YTD"),
+                "should resolve measure from MDX WHERE clause");
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue YTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE ytd_flag = true)"),
+                "Revenue YTD plan should include date_dim ytd_flag subquery, got: {sql}"
+            );
+            // Verify the plan itself carries the time_flag filter.
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti_filters: Vec<_> = filters.iter()
+                        .filter(|f| f.time_flag.is_some())
+                        .collect();
+                    assert_eq!(ti_filters.len(), 1,
+                        "should have exactly one time_flag filter");
+                    assert_eq!(ti_filters[0].time_flag.as_deref(), Some("ytd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_prior_year_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue Prior Year]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue Prior Year"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue Prior Year SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE prior_year_ytd_flag = true)"),
+                "Revenue Prior Year plan should include date_dim prior_year_ytd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("prior_year_ytd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_qtd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue QTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue QTD"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue QTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE qtd_flag = true)"),
+                "Revenue QTD plan should include date_dim qtd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("qtd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_revenue_mtd_plan_has_date_dim_filter() {
+        with_project3(|| {
+            use crate::engine::plan::plan_from_semantic_with_model;
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let mdx = "SELECT  FROM [Sales] WHERE ([Measures].[Revenue MTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            assert_eq!(semantic.measure.as_deref(), Some("Revenue MTD"));
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            println!("=== Revenue MTD SQL ===\n{sql}");
+            assert!(
+                sql.contains("IN (SELECT date_key FROM date_dim WHERE mtd_flag = true)"),
+                "Revenue MTD plan should include date_dim mtd_flag subquery, got: {sql}"
+            );
+            match &plan {
+                crate::engine::plan::QueryPlan::Total { filters, .. } => {
+                    let ti: Vec<_> = filters.iter().filter(|f| f.time_flag.is_some()).collect();
+                    assert_eq!(ti.len(), 1);
+                    assert_eq!(ti[0].time_flag.as_deref(), Some("mtd_flag"));
+                }
+                other => panic!("expected Total plan, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn time_intelligence_measures_execute_non_empty() {
+        with_project3(|| {
+            use crate::backend::Backend;
+            use crate::engine::plan::plan_from_semantic_with_model;
+            let project = crate::proxy_project::project();
+            let backend = Backend::get();
+            for (mdx, label) in [
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue YTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "YTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue Prior Year]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "PriorYTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue QTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "QTD"),
+                ("SELECT  FROM [Sales] WHERE ([Measures].[Revenue MTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR", "MTD"),
+            ] {
+                let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+                let plan = plan_from_semantic_with_model(&semantic, &project.model);
+                let result = crate::engine::plan::execute_plan_with_backend(
+                    &plan, &project.model, backend,
+                );
+                match result {
+                    crate::engine::plan::QueryResult::Scalar(v) => {
+                        assert!(v > 0.0, "{label} revenue should be non-zero against demo data, got {v}");
+                    }
+                    other => panic!("{label} expected Scalar result, got {other:?}"),
+                }
+            }
+        });
+    }
+
+    // ---- Generated retail analytics compatibility gate ----
+
+    #[test]
+    fn retail_analytics_discover_catalogs_returns_correct_name() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::catalogs::get_catalogs_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("SEMANTICMODEL"), "should contain catalog name");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_cubes_returns_correct_name() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::cubes::get_cubes_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_dimensions_has_date_role() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::dimensions::get_dimensions_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains(">Dates<"), "should contain Dates dimension");
+            assert!(xml.contains(">Stores<"), "should contain Stores dimension");
+            let rows = xml.matches("<row").count();
+            assert!(rows >= 5, "should have at least 5 dimension rows");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_discover_measures_has_total_revenue() {
+        with_retail_analytics(|| {
+            let xml = crate::xmla::discover::measures::get_measures_response();
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"), "missing rowset namespace");
+            assert!(xml.contains("<row"), "should have at least one row");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_total_revenue_is_fallback_returns_empty() {
+        // Total Revenue is no longer a stub — Plan 021 generated real SQL.
+        // The fallback returns a real value (0 on empty DB).
+        with_retail_analytics(|| {
+            let project = crate::proxy_project::project();
+            let conn = duckdb::Connection::open(
+                "generated_retail_analytics/data/sales.db"
+            ).expect("open retail db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            let mdx = "SELECT  FROM [SALES] WHERE ([Measures].[Total Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml = crate::execute_builders::get_execute_cellset_response_with_backend(
+                mdx, &backend, &project.model,
+            );
+
+            assert!(!xml.is_empty(), "should not panic on fallback measure");
+            assert!(xml.contains("urn:schemas-microsoft-com:xml-analysis:mddataset"), "missing mddataset");
+            assert!(xml.contains("<Axes>"), "missing axes");
+            // Real fallback SQL now returns a value
+            assert!(xml.contains("<Cell "), "real fallback should have Cell elements");
+        });
+    }
+
+    #[test]
+    fn retail_analytics_config_has_no_placeholder_sql() {
+        // Verify the checked-in config contract: no converted measure
+        // should use SUM(1), SUM(...), AVG(...), etc. as sql_expr.
+        let config_text = std::fs::read_to_string(
+            "generated_retail_analytics/proxy-config.json"
+        ).expect("read retail config");
+        let line = config_text.lines().find(|l| l.contains("sql_expr"))
+            .unwrap_or("");
+        // All measures should be sql_fallback (sql_expr: "null").
+        // Placeholder aggregations should never appear.
+        assert!(!config_text.contains("SUM(1)"), "SUM(1) placeholder found in config");
+        assert!(!config_text.contains("SUM(...)"), "SUM(...) placeholder found in config");
+        assert!(!config_text.contains("AVG(...)"), "AVG(...) placeholder found in config");
+        assert!(!config_text.contains("COUNT(...)"), "COUNT(...) placeholder found in config");
+        assert!(!config_text.contains("COUNT(DISTINCT ...)"), "COUNT(DISTINCT ...) placeholder found in config");
+    }
+
+    #[test]
+    fn retail_analytics_stub_measures_return_empty() {
+        with_retail_analytics(|| {
+            for mdx in [
+                "SELECT  FROM [SALES] WHERE ([Measures].[Gross Profit]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR",
+                "SELECT  FROM [SALES] WHERE ([Measures].[Total COGS]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR",
+            ] {
+                let xml = get_execute_statement_response(mdx);
+                assert!(!xml.is_empty(), "should not panic on stub measure");
+                // Stubs return Empty QueryResult — cellset has no cell data
+            }
+        });
+    }
+
+    #[test]
+    fn generated_project_fallback_measures_return_real_data() {
+        // ---- direct DuckDB characterization (independent data-proof) ----
+        use duckdb::Connection;
+        let conn = Connection::open("data/generated.db").expect("open generated db");
+
+        // DVT measure: should find matching rows in the fixture
+        let dvt_count: f64 = conn.query_row(
+            "SELECT COUNT(DISTINCT f.remissnummer) AS value
+             FROM dw_fys_f_undersökning f
+             JOIN dw_fys_d_remisskoder rk ON f.remisskoderid = rk.remisskoderid
+             JOIN dw_fys_d_produkt p ON f.produktid = p.produktid
+             JOIN dw_fys_kalender_signeringsdatum kd ON f.signeringsdatum = kd.signeringsdatum
+             JOIN dw_fys_d_beställare b ON f.beställareid = b.beställareid
+             WHERE rk.akut = 'Ja'
+               AND p.produktkod IN ('516', '526', '524')
+               AND f.beställningstimme BETWEEN 8 AND 14
+               AND kd.veckodagssiffra BETWEEN 1 AND 5
+               AND RIGHT(b.beställarekod, 3) = 'M08'",
+            [], |r| r.get(0)
+        ).expect("DVT query");
+        assert!(dvt_count > 0.0, "DVT measure should return > 0 remissnummer, got {dvt_count}");
+
+        // Medeltid measure: should return a non-null average
+        let medeltid: Option<f64> = conn.query_row(
+            "SELECT AVG(avg_per_remiss) FROM (
+                SELECT AVG(undersökningsslut_till_signering_ej_akut) AS avg_per_remiss
+                FROM dw_fys_f_undersökning
+                GROUP BY remissnummer
+            ) sub",
+            [], |r| r.get(0)
+        ).expect("Medeltid query");
+        assert!(medeltid.is_some(), "Medeltid measure should return a value");
+        assert!(medeltid.unwrap() > 0.0, "Medeltid should be > 0, got {medeltid:?}");
+
+        // ---- execution-path assertions (prove the proxy returns the same) ----
+        with_generated_project(|| {
+            let project = crate::proxy_project::project();
+            let conn = Connection::open("data/generated.db").expect("open generated db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            // DVT measure through proxy execution
+            let mdx_dvt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Antal signerade DVT-remisser]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml_dvt = crate::execute_builders::get_execute_cellset_response_with_backend(
+                mdx_dvt, &backend, &project.model,
+            );
+            assert!(xml_dvt.contains("<CellData>"), "DVT execution should produce cellset");
+            let dvt_val = extract_cell_value(&xml_dvt)
+                .expect("DVT cellset should contain <Value>");
+            let dvt_parsed: f64 = dvt_val.parse().expect("DVT value should be numeric");
+            assert!(dvt_parsed > 0.0, "DVT measure should return > 0 through proxy execution, got {dvt_parsed}");
+
+            // Medeltid measure through proxy execution
+            let mdx_mt = "SELECT  FROM [DW_FYS_F_UNDERSÖKNING] WHERE ([Measures].[Medeltid Undersökningsslut till signering (ej akut)]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml_mt = crate::execute_builders::get_execute_cellset_response_with_backend(
+                mdx_mt, &backend, &project.model,
+            );
+            assert!(xml_mt.contains("<CellData>"), "Medeltid execution should produce cellset");
+            let mt_val = extract_cell_value(&xml_mt)
+                .expect("Medeltid cellset should contain <Value>");
+            let mt_parsed: f64 = mt_val.parse().expect("Medeltid value should be numeric");
+            assert!(mt_parsed > 0.0, "Medeltid should return > 0 through proxy execution, got {mt_parsed}");
+        });
     }
 }

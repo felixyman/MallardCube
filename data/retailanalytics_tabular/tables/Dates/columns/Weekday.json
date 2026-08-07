@@ -1,0 +1,8 @@
+{
+  "name": "Weekday",
+  "dataType": "string",
+  "sourceColumn": "weekdayname",
+  "sortByColumn": "Weekday Number",
+  "sourceProviderType": "nvarchar",
+  "lineageTag": "a4dc6fb0-47d3-4b3d-82f6-5cbf71755daa"
+}

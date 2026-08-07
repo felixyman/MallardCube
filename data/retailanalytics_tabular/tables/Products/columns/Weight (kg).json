@@ -1,0 +1,7 @@
+{
+  "name": "Weight (kg)",
+  "dataType": "decimal",
+  "sourceColumn": "weight",
+  "sourceProviderType": "decimal",
+  "lineageTag": "be70a080-91ea-4a8e-bda7-62f24cca649a"
+}

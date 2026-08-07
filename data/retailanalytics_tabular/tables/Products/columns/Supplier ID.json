@@ -1,0 +1,7 @@
+{
+  "name": "Supplier ID",
+  "dataType": "int64",
+  "sourceColumn": "supplierid",
+  "sourceProviderType": "int",
+  "lineageTag": "bb0d3172-fc69-4f68-aa04-8a0b38b6b286"
+}

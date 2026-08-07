@@ -1,0 +1,7 @@
+{
+  "name": "Is Discounted",
+  "dataType": "int64",
+  "sourceColumn": "discountapplied",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "8f8dd081-fcc0-448a-9b6f-96710df20a0d"
+}

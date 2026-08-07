@@ -5,14 +5,22 @@
   "table_name": "sales_fact",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
-  "db_path": "./../../data/sales.db",
+  "relationships": [
+    {
+      "fact_table": "default",
+      "fact_column": "date_key",
+      "dimension_id": "Date",
+      "dim_table": "date_dim",
+      "dim_column": "date_key"
+    }
+  ],
   "dimensions": [
     {
       "id": "Category",
       "malloy_name": "category",
       "physical_field": "category",
       "caption": "Category",
-      "description": "Product categories for analysis",
+      "description": "Product category",
       "hierarchy_name": "Category",
       "all_level_name": "(All)",
       "leaf_level_name": "Category",
@@ -26,28 +34,28 @@
       "malloy_name": "territory",
       "physical_field": "territory",
       "caption": "Territory",
-      "description": "Geographic sales territories",
+      "description": "Sales territory",
       "hierarchy_name": "Territory",
       "all_level_name": "(All)",
       "leaf_level_name": "Territory",
       "ordinal": 2,
       "visible": true,
       "has_all": true,
-      "cardinality_hint": 8
+      "cardinality_hint": 10
     },
     {
       "id": "Channel",
       "malloy_name": "channel",
       "physical_field": "channel",
       "caption": "Channel",
-      "description": "Sales channel type",
+      "description": "Sales channel",
       "hierarchy_name": "Channel",
       "all_level_name": "(All)",
       "leaf_level_name": "Channel",
       "ordinal": 3,
       "visible": true,
       "has_all": true,
-      "cardinality_hint": 4
+      "cardinality_hint": 10
     },
     {
       "id": "Segment",
@@ -61,7 +69,24 @@
       "ordinal": 4,
       "visible": true,
       "has_all": true,
-      "cardinality_hint": 5
+      "cardinality_hint": 10
+    },
+    {
+      "id": "Date",
+      "malloy_name": "date",
+      "physical_field": "full_date",
+      "caption": "Date",
+      "description": "Calendar date dimension",
+      "hierarchy_name": "Date",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Date",
+      "ordinal": 5,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 5000,
+      "is_date_role": true,
+      "fact_table": null,
+      "shared": false
     }
   ],
   "measures": [
@@ -71,10 +96,10 @@
       "physical_expr": "revenue.sum()",
       "sql_expr": "SUM(revenue)",
       "caption": "Revenue",
-      "display_name": "Revenue (USD)",
+      "display_name": "Revenue",
       "description": "Total sales revenue",
       "format_string": "#,##0.00",
-      "units": "USD",
+      "units": "",
       "ordinal": 1,
       "visible": true,
       "measure_group_name": "Sales"
@@ -85,13 +110,91 @@
       "physical_expr": "units.sum()",
       "sql_expr": "SUM(units)",
       "caption": "Units",
-      "display_name": "Units Sold",
+      "display_name": "Units",
       "description": "Total units sold",
       "format_string": "#,##0",
       "units": "",
       "ordinal": 2,
       "visible": true,
       "measure_group_name": "Sales"
+    },
+    {
+      "id": "RevenueYTD",
+      "malloy_name": "total_revenue_ytd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue YTD",
+      "display_name": "Revenue YTD",
+      "description": "Year-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 3,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "ytd_flag" }
+    },
+    {
+      "id": "RevenuePriorYearYTD",
+      "malloy_name": "total_revenue_prior_year_ytd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue Prior Year",
+      "display_name": "Revenue Prior Year",
+      "description": "Prior-year-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 4,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "prior_year_ytd_flag" }
+    },
+    {
+      "id": "RevenueQTD",
+      "malloy_name": "total_revenue_qtd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue QTD",
+      "display_name": "Revenue QTD",
+      "description": "Quarter-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 5,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "qtd_flag" }
+    },
+    {
+      "id": "RevenueMTD",
+      "malloy_name": "total_revenue_mtd",
+      "physical_expr": "revenue.sum()",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue MTD",
+      "display_name": "Revenue MTD",
+      "description": "Month-to-date revenue",
+      "format_string": "#,##0.00",
+      "units": "",
+      "ordinal": 6,
+      "visible": true,
+      "measure_group_name": "Sales",
+      "time_intelligence": { "dimension_id": "Date", "flag_column": "mtd_flag" }
     }
-  ]
+  ],
+  "time_intelligence": {
+    "date_dimension": {
+      "dimension_id": "Date",
+      "table_name": "date_dim",
+      "date_key_column": "date_key",
+      "full_date_column": "full_date",
+      "flag_columns": {
+        "year_column": "year",
+        "quarter_column": "quarter",
+        "month_column": "month",
+        "ytd_flag_column": "ytd_flag",
+        "prior_year_ytd_flag_column": "prior_year_ytd_flag",
+        "current_year_flag_column": "current_year_flag",
+        "qtd_flag_column": "qtd_flag",
+        "mtd_flag_column": "mtd_flag"
+      }
+    }
+  }
 }

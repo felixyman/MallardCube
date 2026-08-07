@@ -1,0 +1,7 @@
+{
+  "name": "Floor Count",
+  "dataType": "int64",
+  "sourceColumn": "floornumber",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "abc2e69d-1529-4f59-b480-caafdb979131"
+}

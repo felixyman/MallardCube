@@ -1,0 +1,7 @@
+{
+  "name": "Annual Rent Cost",
+  "dataType": "decimal",
+  "sourceColumn": "annualrentcost",
+  "sourceProviderType": "decimal",
+  "lineageTag": "944ca2bc-f621-48d9-b1a1-7fc79b1b8c58"
+}

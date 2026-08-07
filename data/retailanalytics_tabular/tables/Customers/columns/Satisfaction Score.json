@@ -1,0 +1,7 @@
+{
+  "name": "Satisfaction Score",
+  "dataType": "decimal",
+  "sourceColumn": "satisfactionscore",
+  "sourceProviderType": "decimal",
+  "lineageTag": "dfad4fdd-7736-4f9c-b28f-c5b229029391"
+}

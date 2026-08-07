@@ -1,4 +1,4 @@
-use crate::response::discover_rowset_envelope;
+use crate::response::{discover_rowset_envelope, xml_escape};
 
 pub struct ColumnDef {
     pub field: &'static str,
@@ -63,7 +63,7 @@ impl Rowset {
                 if let Some(col) = self.columns.iter().find(|c| c.field == *field) {
                     rows_xml.push_str(&format!(
                         "            <{n}>{v}</{n}>\n",
-                        n = col.name, v = val
+                        n = col.name, v = xml_escape(val)
                     ));
                 }
             }

@@ -1,0 +1,7 @@
+{
+  "name": "a4fcc5fb-ed59-4b92-af5b-f2d84c88d5da",
+  "fromTable": "Sales",
+  "fromColumn": "Date Key",
+  "toTable": "Dates",
+  "toColumn": "Date Key"
+}

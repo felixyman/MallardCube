@@ -1,0 +1,7 @@
+{
+  "name": "Is Active Campaign",
+  "dataType": "int64",
+  "sourceColumn": "isactive",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "e2dc0ccf-13a7-4e90-937c-58cc24bad6d1"
+}

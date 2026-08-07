@@ -1,0 +1,7 @@
+{
+  "name": "Shipping Weight",
+  "dataType": "decimal",
+  "sourceColumn": "shipweight",
+  "sourceProviderType": "decimal",
+  "lineageTag": "ada46174-caff-47b8-948c-fe47f19f9142"
+}

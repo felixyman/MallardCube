@@ -12,13 +12,14 @@ use std::sync::{Mutex, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 use crate::engine::malloy_compiler::{CompileResult, MalloyCompiler, MalloyCompileError};
 
-const COMPILE_TIMEOUT: Duration = Duration::from_secs(10);
+const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct LongLivedNodeMalloyCompiler {
     stdin: Mutex<ChildStdin>,
     reader: Mutex<BufReader<std::process::ChildStdout>>,
     child: Mutex<Option<Child>>,
     next_id: AtomicU64,
+    request_lock: Mutex<()>,
 }
 
 impl Drop for LongLivedNodeMalloyCompiler {
@@ -44,18 +45,9 @@ impl LongLivedNodeMalloyCompiler {
         cmd = cmd.arg("js/malloy-worker.js")
             .env("PROXY_CONFIG", &config_path);
 
-        // When the project config specifies a DuckDB file path, pass it to
-        // the JS worker so it opens the same database for Malloy compile
-        // validation.
-        let project = crate::proxy_project::project();
-        if let Some(ref db_path) = project.config.db_path {
-            let resolved = std::path::Path::new(&config_path).parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join(db_path);
-            let abs = resolved.canonicalize()
-                .unwrap_or_else(|_| resolved.clone());
-            cmd = cmd.env("DUCKDB_PATH", abs);
-        }
+        // Worker compiles against an in-memory derived schema — it does not
+        // open the real DuckDB file.  The Rust backend is the only process
+        // that opens the real database, avoiding DuckDB file-lock conflicts.
 
         let mut child = cmd
             .stdin(Stdio::piped())
@@ -88,10 +80,13 @@ impl LongLivedNodeMalloyCompiler {
             reader: Mutex::new(reader),
             child: Mutex::new(Some(child)),
             next_id: AtomicU64::new(1),
+            request_lock: Mutex::new(()),
         })
     }
 
     fn send_request(&self, source: &str) -> Result<(String, f64), MalloyCompileError> {
+        let _lock = self.request_lock.lock().unwrap();
+
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = serde_json::json!({"id": id, "type": "compile", "source": source});
         let req_line = serde_json::to_string(&req).unwrap();
@@ -201,6 +196,7 @@ mod tests {
             group_by: vec!["Produktkategori".to_string()],
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".to_string(),
+                time_flag: None,
                 members: vec!["North".into()],
             }],
         };

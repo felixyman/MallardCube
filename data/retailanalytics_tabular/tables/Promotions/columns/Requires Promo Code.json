@@ -1,0 +1,7 @@
+{
+  "name": "Requires Promo Code",
+  "dataType": "int64",
+  "sourceColumn": "coderequired",
+  "sourceProviderType": "tinyint",
+  "lineageTag": "062e2016-3a07-45c2-bd4b-3abe02d72168"
+}

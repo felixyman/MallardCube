@@ -1,0 +1,7 @@
+{
+  "name": "Registration Date",
+  "dataType": "dateTime",
+  "sourceColumn": "regdate",
+  "sourceProviderType": "date",
+  "lineageTag": "1269135d-8276-4b19-9138-d1fd11d65de4"
+}

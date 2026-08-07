@@ -12,6 +12,21 @@ pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
     )
 }
 
+/// Escape text content for safe XML insertion.
+/// Handles `&`, `<`, `>`.
+pub fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 pub const UUID_TYPE: &str = r#"<xsd:simpleType name="uuid">
               <xsd:restriction base="xsd:string">
                 <xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/>

@@ -1,0 +1,7 @@
+{
+  "name": "Rating",
+  "dataType": "decimal",
+  "sourceColumn": "productrating",
+  "sourceProviderType": "decimal",
+  "lineageTag": "c780dd37-21be-4700-abb5-1c2f55c8c43c"
+}
