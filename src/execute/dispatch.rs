@@ -1057,56 +1057,6 @@ mod tests {
         assert!(xml.contains("<CellData>"));
     }
 
-    // --- MDX -> Malloy integration ---
-
-    fn malloy_for_mdx(mdx: &str) -> String {
-        let query = semantic_query_from_mdx(mdx);
-        let plan = crate::engine::plan::plan_from_semantic(&query);
-        crate::engine::malloy::malloy_for_query_plan(&crate::engine::model::default_model(), &plan)
-    }
-
-    #[test]
-    fn slicer_produces_malloy_total() {
-        let out = malloy_for_mdx(MDX_SLICER);
-        assert!(out.contains("aggregate: total_forsaljning"));
-        assert!(out.contains("where: produktkategori = 'Kategori A'"));
-    }
-
-    #[test]
-    fn drilldown_produces_malloy_group_by_produktkategori() {
-        let out = malloy_for_mdx(MDX_DRILLDOWN);
-        assert!(out.contains("group_by: produktkategori"));
-        assert!(out.contains("aggregate: total_forsaljning"));
-    }
-
-    #[test]
-    fn crossjoin_produces_malloy_group_by_two_dimensions() {
-        let out = malloy_for_mdx(MDX_CROSSJOIN_PROBE);
-        assert!(out.contains("group_by: produktkategori, region"));
-    }
-
-    #[test]
-    fn kat_rows_region_filter_produces_malloy_filter() {
-        let out = malloy_for_mdx(MDX_KAT_ROWS_REGION_FILTER);
-        assert!(out.contains("where: region = 'North'"));
-        assert!(out.contains("group_by: produktkategori"));
-    }
-
-    #[test]
-    fn malloy_two_dim_filtered_query() {
-        let query = semantic_query_from_mdx(MDX_NESTED_BOTH_FILTERS);
-        let plan = crate::engine::plan::plan_from_semantic(&query);
-        let out =
-            crate::engine::malloy::malloy_query(&crate::engine::model::default_model(), &plan);
-        assert!(out.contains("group_by: region"));
-        assert!(out.contains("region = 'North'"));
-        assert!(out.contains("(produktkategori = 'Kategori A' or produktkategori = 'Kategori B' or produktkategori = 'Kategori D')"));
-        assert!(
-            !out.contains(" | "),
-            "cross-dimension filters should use AND (,) not OR (|)"
-        );
-    }
-
     #[test]
     fn excel_trace_replay_project3_execute_shapes_render_cellsets() {
         with_project3(|| {

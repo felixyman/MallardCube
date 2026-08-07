@@ -55,14 +55,9 @@ pub fn trace_request(
             "semantic_us": t.semantic_us,
             "plan_us": t.plan_us,
             "sql_emit_us": t.sql_emit_us,
-            "malloy_emit_us": t.malloy_emit_us,
-            "malloy_compile_us": t.malloy_compile_us,
             "sql_execute_us": t.sql_execute_us,
             "xml_render_us": t.xml_render_us,
             "total_us": t.total_us,
-            "js_compile_ms": t.js_compile_ms,
-            "malloy_source_cache_hit": t.malloy_source_cache_hit,
-            "compiled_sql_cache_hit": t.compiled_sql_cache_hit,
         });
     }
 

@@ -7,17 +7,13 @@ use crate::mdx_semantic::SemanticQuery;
 ///
 /// Public API for statement execution — the entry point that `dispatch.rs`
 /// and `main.rs` call.  Cellset rendering logic lives in `render.rs`;
-/// Malloy runtime machinery lives in `runtime.rs`.
+/// runtime execution lives in `runtime.rs`.
 ///
 /// Legacy MDX/DAX flat-rowset helpers also live here as transitional code.
 use crate::response::wrap_in_soap_envelope;
 
-// Re-export Malloy runtime machinery at the same path callers expect.
-pub use crate::execute::runtime::{
-    USE_MALLOY_RUNTIME, disable_malloy_runtime, enable_malloy_runtime,
-    get_execute_cellset_response_timed_malloy_with_backend,
-    get_execute_cellset_response_timed_with_backend, warm_malloy_worker,
-};
+// Re-export runtime entry point at the same path callers expect.
+pub use crate::execute::runtime::get_execute_cellset_response_with_backend_and_context;
 
 // ---- public API consumed by execute.rs dispatch ----
 

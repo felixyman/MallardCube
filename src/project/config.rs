@@ -91,6 +91,8 @@ pub struct ProxyConfig {
     pub source_name: String,
     pub table_name: String,
     pub dialect: String,
+    /// Deprecated since plan 027 — no longer consumed by the runtime.
+    /// Kept parseable for backward compatibility with existing project configs.
     pub malloy_model_file: String,
     #[serde(default)]
     pub db_path: Option<String>,
@@ -220,6 +222,8 @@ fn default_trusted_header() -> String {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DimensionConfig {
     pub id: String,
+    /// Deprecated since plan 027 — no longer consumed by the runtime.
+    /// Kept parseable for backward compatibility with existing project configs.
     pub malloy_name: String,
     pub physical_field: String,
     pub caption: String,
@@ -243,6 +247,8 @@ pub struct DimensionConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MeasureConfig {
     pub id: String,
+    /// Deprecated since plan 027 — no longer consumed by the runtime.
+    /// Kept parseable for backward compatibility with existing project configs.
     pub malloy_name: String,
     pub physical_expr: String,
     pub sql_expr: String,

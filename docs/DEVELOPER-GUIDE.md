@@ -8,11 +8,10 @@ How the SSAS Proxy works, module by module. For new developers.
 
 1. Init debug logging to `debug-last-run.log`.
 2. Load the proxy project: reads `PROXY_CONFIG` env var, parses
-   `proxy-config.json`, loads the `.malloy` model file. Falls back to
+   `proxy-config.json`. Falls back to
    `project3/` (at repo root) if no config is set.
 3. Init DuckDB backend: opens a file-based database when `db_path` is
    set, otherwise creates an in-memory demo database with synthetic data.
-4. Optionally start the Malloy runtime if `MALLOY_RUNTIME=1`.
 5. Start axum HTTP server on port 8080 at `POST /xmla`.
 
 ## Request lifecycle
@@ -28,7 +27,7 @@ How the SSAS Proxy works, module by module. For new developers.
     -> ParsedMdx (mdx/parser.rs, nom parser, cube-agnostic)
     -> SemanticQuery (mdx/semantic.rs, sourced from ParsedMdx struct fields)
     -> QueryPlan { Total | GroupBy | Count | Empty } (engine/plan.rs)
-    -> SQL or Malloy compilation (engine/sql.rs or engine/malloy.rs)
+    -> SQL (engine/sql.rs)
     -> DuckDB execution with fallback capability gates (backend/mod.rs)
     -> QueryResult { Scalar | Grouped | Pairs | Count | Empty }
     -> Cellset XML rendering (execute/render.rs + execute/axis_members.rs)
@@ -68,16 +67,8 @@ src/
     model.rs                     SemanticModel, DimensionDef, MeasureDef, FactTable
     plan.rs                      QueryPlan, QueryResult, plan_from_semantic, execute_plan
     sql.rs                       SQL emitter: sql_for_query_plan
-    malloy.rs                    Malloy emitter: malloy_source_with_model_text
+    sql.rs                       SQL emitter: sql_for_query_plan
     normalize.rs                 plan_key normalization
-    cache.rs                     PlanCache for compiled SQL
-
-    # Malloy runtime (Node.js worker)
-    malloy_compiler.rs           MalloyCompiler trait, CompileResult
-    malloy_node.rs               One-shot Node.js compiler (spike)
-    malloy_node_longlived.rs     Long-lived worker client with compile_ms timing
-
-    parity.rs                    Direct SQL vs Malloy result parity tests
     timing.rs                    Timings struct, RuntimePath enum
 
   execute/                       Query execution and XML rendering
@@ -85,9 +76,8 @@ src/
                                  production path routes via main.rs; this module's
                                  get_execute_statement_response is the test seam,
                                  plus most end-to-end tests
-    runtime.rs                   Execution entry: backend injection, runtime-path
-                                 selection (direct SQL default; Malloy if enabled),
-                                 timing instrumentation
+    runtime.rs                   Execution entry: backend injection, timing
+                                 instrumentation
     render.rs                    Cellset XML rendering: dispatch_with_backend,
                                  11 query-kind handlers
     builders.rs                  Thin public entry points / re-exports over runtime
@@ -160,13 +150,12 @@ src/
 | Statement type | Detector | Dispatcher | Builder |
 |---|---|---|---|
 | DAX (`EVALUATE`) | `is_dax()` | `get_execute_dax_response()` | Direct rowset |
-| MDX SELECT | `is_mdx_select()` | `get_execute_cellset_response_timed_malloy_with_backend()` (main.rs -> `execute/runtime.rs`) | Cellset via semantic pipeline |
+| MDX SELECT | `is_mdx_select()` | `get_execute_cellset_response_with_backend_and_context()` (main.rs -> `execute/runtime.rs`) | Cellset via semantic pipeline |
 | MDX probe (WITH MEMBER etc.) | Fallthrough | `get_execute_mdx_response()` | Direct rowset or cellset per kind |
 
 Note: `execute/dispatch.rs::get_execute_statement_response` is the test-only
 seam used by the end-to-end test suite; production routing lives in
-`main.rs::route_request`. (The `_malloy` infix in the entry-point name is a
-legacy of the Malloy-first era; plan 027 renames it.)
+`main.rs::route_request`.
 
 ## Naming conventions
 
@@ -175,7 +164,7 @@ Three distinct name types flow through the proxy. Never conflate them.
 | Concept | Config field | Runtime field | Example | Purpose |
 |---------|-------------|---------------|---------|---------|
 | Internal ID | `id` | `QueryPlan` fields, `plan_key` | `"Category"` | Stable key for routing, caching, lookups |
-| Semantic name | `malloy_name` | `semantic_name` | `"category"` | Matches Malloy source field, DuckDB column |
+| Semantic name | `malloy_name` (deprecated) | `semantic_name` | `"category"` | Legacy field, kept for backward compat |
 | Excel label | `caption` | `caption` | `"Category"` | Human-readable, appears in PivotTable |
 
 See `docs/naming-contract.md` for full rules.
@@ -190,10 +179,6 @@ See `docs/naming-contract.md` for full rules.
    - `engine/plan.rs:` - is `QueryPlan` built correctly?
    - `engine/sql.rs:` - is the SQL correct for the plan?
    - Enable `debug-last-run.log` (auto-written) and check the generated SQL.
-
-3. **Malloy compile fails** - Check stderr for compile errors (logged automatically).
-   The proxy falls back to direct SQL, so Excel stays functional. Fix the Malloy
-   source or the emitter in `engine/malloy.rs`.
 
 4. **Add a new XMLA rowset** - Add a variant to `XmlaRequest` in `xmla/parser.rs`,
    add a dispatch arm in `main.rs`, create a handler in `xmla/discover/`.
@@ -210,7 +195,6 @@ See `docs/naming-contract.md` for full rules.
 | `engine/sql.rs` | Stable | SQL emission from QueryPlan, date-dim subquery, relationship joins |
 | `engine/normalize.rs` | Stable | Plan key normalization for caching |
 | `engine/timing.rs` | Stable | Timing instrumentation |
-| `engine/malloy.rs` | Stable | Malloy emission |
 | `project/config.rs` | Stable | Config schema: time_intelligence, fallback_capability, is_date_role |
 | `project/project.rs` | Stable | Project loader, model builder, parse_fallback_capability |
 | `xmla/discover/*.rs` | Stable | Metadata rowset generation from model |
@@ -228,7 +212,6 @@ See `docs/naming-contract.md` for full rules.
 | `execute/axis_members.rs` | Needs cleanup | Heavy, some model-agnostic gaps |
 | `src/main.rs` | Needs cleanup | Mixed concerns, large match statement |
 | `src/lib.rs` | Transitional | Legacy flat re-exports should be phased out |
-| `engine/malloy_node.rs` | Legacy | One-shot compiler (replaced by long-lived); all Malloy modules die in plan 027 |
 | `tools/convert_tabular.rs` | Active | Tabular converter: fact detection, date-role detection, time metadata, DAX classification |
 
 ## Multi-fact semantics
@@ -250,12 +233,10 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 345 tests covering MDX parsing, semantic classification, plan generation,
-  SQL and Malloy emission, compile path, result parity, metadata rowsets,
-  multi-fact routing, end-to-end cellset rendering, Excel replay/oracle
-  verification, time intelligence, security roles, and compatibility-gate
-  assertions.
-- `engine/parity.rs` - Direct SQL vs Malloy result parity.
+- 293 tests covering MDX parsing, semantic classification, plan generation,
+  SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
+  rendering, Excel replay/oracle verification, time intelligence, security
+  roles, and compatibility-gate assertions.
 - Shared test fixtures: `src/test_support/fixtures.rs`.
 - `project/project.rs` - Config parsing and model building.
 - `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses,
@@ -267,7 +248,6 @@ cargo test --lib
 | Variable | Effect |
 |---|---|
 | `PROXY_CONFIG` | Path to `proxy-config.json` (default: `project3/proxy-config.json`) |
-| `MALLOY_RUNTIME` | Set to `1` to enable Malloy compile path |
 | `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
 | `BIND_ADDRESS` | Override listen address:port (default: `127.0.0.1:8080`) |
 
