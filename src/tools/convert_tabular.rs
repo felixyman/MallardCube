@@ -147,7 +147,6 @@ pub fn run(args: Vec<String>) -> i32 {
         render_proxy_config(&model),
     )
     .expect("write config");
-    fs::write(format!("{out_dir}/model.malloy"), render_malloy(&model)).expect("write malloy");
     fs::write(format!("{out_dir}/schema.sql"), render_schema(&model)).expect("write schema");
 
     // Data loading scripts
@@ -209,7 +208,7 @@ pub fn run(args: Vec<String>) -> i32 {
 
     eprintln!("Generated project in {out_dir}/");
     eprintln!(
-        "  Files: proxy-config.json, model.malloy, schema.sql, load_data.sql, load_dummy_data.sql, bootstrap.sql, conversion-report.md"
+        "  Files: proxy-config.json, schema.sql, load_data.sql, load_dummy_data.sql, bootstrap.sql, conversion-report.md"
     );
     0
 }
@@ -958,83 +957,6 @@ fn find_comparison_op(s: &str) -> Option<(&'static str, usize)> {
         return Some(("<", pos));
     }
     None
-}
-
-fn render_malloy(m: &ConversionModel) -> String {
-    let ft = &m.fact_table;
-    let mut out = String::new();
-
-    // Build a lookup: SSAS table name → malloy source name
-    let table_source: std::collections::HashMap<String, String> =
-        std::iter::once((ft.name.clone(), malloy_name(&ft.ssas_name)))
-            .chain(
-                m.dimensions
-                    .iter()
-                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
-            )
-            .chain(
-                m.date_roles
-                    .iter()
-                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
-            )
-            .chain(
-                m.lookup_tables
-                    .iter()
-                    .map(|t| (t.name.clone(), malloy_name(&t.ssas_name))),
-            )
-            .collect();
-
-    // Fact source with joins and measures
-    out.push_str(&format!(
-        "source: {} is duckdb.table('{}') extend {{\n",
-        malloy_name(&ft.ssas_name),
-        malloy_name(&ft.name),
-    ));
-
-    // Emit joins: find relationships where from_table == fact table
-    for rel in &m.relationships {
-        if rel.from_table == ft.name
-            && let Some(to_src) = table_source.get(&rel.to_table)
-        {
-            let join_col = malloy_name(&rel.from_column);
-            out.push_str(&format!("  join_one: {to_src} with {join_col}\n"));
-        }
-    }
-
-    out.push('\n');
-
-    // Emit simple measures
-    for meas in &ft.measures {
-        if meas.classification == "simple" {
-            let expr = meas.expression.as_str();
-            let malloy_expr = dax_to_malloy_expr(expr);
-            out.push_str(&format!(
-                "  measure: {} is {malloy_expr}  -- {}\n",
-                malloy_name(&meas.name),
-                meas.name
-            ));
-        }
-    }
-
-    out.push_str("}\n\n");
-
-    // Dimension table sources
-    for t in &m.dimensions {
-        out.push_str(&format!(
-            "source: {} is duckdb.table('{}') extend {{\n}}\n\n",
-            malloy_name(&t.ssas_name),
-            malloy_name(&t.name),
-        ));
-    }
-    for t in &m.date_roles {
-        out.push_str(&format!(
-            "source: {} is duckdb.table('{}') extend {{\n}}\n\n",
-            malloy_name(&t.ssas_name),
-            malloy_name(&t.name),
-        ));
-    }
-
-    out
 }
 
 fn render_fallback_stub(name: &str, dax: &str) -> String {
