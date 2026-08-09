@@ -189,7 +189,7 @@ pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
         }
         let day = remaining + 1;
         let date = format!("{y:04}-{:02}-{:02}", mo + 1, day);
-        let date_key_val = (y * 10000 + (mo as i32 + 1) * 100 + day as i32) as i32;
+        let date_key_val = y * 10000 + (mo as i32 + 1) * 100 + day as i32;
         rows.push(FactRow {
             produktkategori: kat.clone(),
             region: reg.clone(),

@@ -55,19 +55,18 @@ pub fn get_execute_drillthrough_response(statement: &str) -> String {
                     .or_else(|| prefix.rfind("(["))
                     .unwrap_or(0);
                 let member = &statement[bracket + 1..abs + 3 + k.len() + 1];
-                if let Some(dim_name) = crate::mdx_semantic::first_bracket(member) {
-                    if dim_name != "Measures" {
-                        if let Some(dim) = model.dim_def_opt(&dim_name) {
-                            let col = model
-                                .rel_for_dimension(&dim_name)
-                                .map(|r| r.fact_column.as_str())
-                                .unwrap_or(&dim.physical_field);
-                            where_clauses.push(format!(
-                                "CAST({col} AS VARCHAR) LIKE '{}%'",
-                                k.replace('\'', "''")
-                            ));
-                        }
-                    }
+                if let Some(dim_name) = crate::mdx_semantic::first_bracket(member)
+                    && dim_name != "Measures"
+                    && let Some(dim) = model.dim_def_opt(&dim_name)
+                {
+                    let col = model
+                        .rel_for_dimension(&dim_name)
+                        .map(|r| r.fact_column.as_str())
+                        .unwrap_or(&dim.physical_field);
+                    where_clauses.push(format!(
+                        "CAST({col} AS VARCHAR) LIKE '{}%'",
+                        k.replace('\'', "''")
+                    ));
                 }
                 k.len()
             })

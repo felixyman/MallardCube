@@ -98,7 +98,7 @@ pub fn get_levels_response() -> String {
         if !d.levels.is_empty() {
             for level in &d.levels {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
-                let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), &level.name);
+                let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -127,7 +127,7 @@ pub fn get_levels_response() -> String {
                     lcard = level.cardinality.max(1),
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
-                    guid = base_guid + 1 + level.level_number as u32 * 2,
+                    guid = base_guid + 1 + level.level_number * 2,
                     catalog = project.config.catalog,
                     cube = project.config.cube,
                 ));
