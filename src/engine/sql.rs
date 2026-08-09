@@ -53,21 +53,20 @@ pub fn sql_for_query_plan_with_context(
                 resolve_group_cols(model, group_by, &mut joined, user, config);
             // When drilling a specific hierarchy level, swap the dimension column
             // to the level's column (e.g. "year" instead of "full_date").
-            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first()) {
-                if let Some(dim) = model.dim_def_opt(dim_id) {
-                    if let Some(level) = dim.levels.get(*level_idx) {
-                        let alias_prefix = col_map
-                            .get(dim_id)
-                            .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
-                            .unwrap_or("");
-                        let new_col = if alias_prefix.is_empty() {
-                            level.column.clone()
-                        } else {
-                            format!("{}.{}", alias_prefix, level.column)
-                        };
-                        col_map.insert(dim_id.clone(), new_col);
-                    }
-                }
+            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first())
+                && let Some(dim) = model.dim_def_opt(dim_id)
+                && let Some(level) = dim.levels.get(*level_idx)
+            {
+                let alias_prefix = col_map
+                    .get(dim_id)
+                    .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
+                    .unwrap_or("");
+                let new_col = if alias_prefix.is_empty() {
+                    level.column.clone()
+                } else {
+                    format!("{}.{}", alias_prefix, level.column)
+                };
+                col_map.insert(dim_id.clone(), new_col);
             }
             let col_names: Vec<String> = group_by
                 .iter()
@@ -81,22 +80,21 @@ pub fn sql_for_query_plan_with_context(
             // deeper level, the filter uses the parent level's column (e.g.
             // WHERE year = '2023') not the target level's column (quarter).
             let mut where_col_map = col_map.clone();
-            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first()) {
-                if *level_idx > 0
-                    && let Some(dim) = model.dim_def_opt(dim_id)
-                    && let Some(parent_level) = dim.levels.get(level_idx - 1)
-                {
-                    let alias_prefix = col_map
-                        .get(dim_id)
-                        .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
-                        .unwrap_or("");
-                    let parent_col = if alias_prefix.is_empty() {
-                        parent_level.column.clone()
-                    } else {
-                        format!("{}.{}", alias_prefix, parent_level.column)
-                    };
-                    where_col_map.insert(dim_id.clone(), parent_col);
-                }
+            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first())
+                && *level_idx > 0
+                && let Some(dim) = model.dim_def_opt(dim_id)
+                && let Some(parent_level) = dim.levels.get(level_idx - 1)
+            {
+                let alias_prefix = col_map
+                    .get(dim_id)
+                    .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
+                    .unwrap_or("");
+                let parent_col = if alias_prefix.is_empty() {
+                    parent_level.column.clone()
+                } else {
+                    format!("{}.{}", alias_prefix, parent_level.column)
+                };
+                where_col_map.insert(dim_id.clone(), parent_col);
             }
 
             let wc = sql_where_with_cols(model, filters, &where_col_map, user, config, table);

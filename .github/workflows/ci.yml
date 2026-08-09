@@ -7,7 +7,7 @@ on:
     branches: [main, master]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +20,19 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy (lib)
-        run: cargo clippy --lib -- -D warnings
+        run: cargo clippy --lib --release -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: Seed test fixture
-        run: cargo run --bin xmla_proxy -- seed-generated-db
+        run: cargo run --release --bin xmla_proxy -- seed-generated-db
 
       - name: Test
-        run: cargo test --lib
+        run: cargo test --lib --release
