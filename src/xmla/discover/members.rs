@@ -334,7 +334,7 @@ fn query_level_children<B: QueryBackend + ?Sized>(
                 name,
                 &child_u,
                 name,
-                child_cardinality as u32,
+                child_cardinality,
                 (level_idx + 1) as u32,
                 Some(&parent_u),
                 name,
@@ -397,6 +397,7 @@ fn parse_level_member(filter: &str) -> Option<(String, String, String)> {
     Some((hier_path, level.to_string(), key))
 }
 
+#[allow(clippy::too_many_arguments)] // XML row assembly mirrors the flat MDSCHEMA_MEMBERS column list
 fn member_xml_for_discover(
     dim_u: &str,
     hier_u: &str,
@@ -455,7 +456,7 @@ fn member_xml_for_discover(
         pl = parent_level,
         pc = parent_count,
         mk = xml_escape(member_key),
-        guid = Uuid::new_v5(&Uuid::NAMESPACE_OID, member_unique_name.as_bytes()).to_string(),
+        guid = Uuid::new_v5(&Uuid::NAMESPACE_OID, member_unique_name.as_bytes()),
     )
 }
 

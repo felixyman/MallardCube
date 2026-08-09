@@ -297,14 +297,13 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
     // another table in lookups does, prefer the relationships-bearing table.
     // Metadata tables (e.g. Info with LOOKUPVALUE measures) should not be facts.
     let fact_rel_count = rels.iter().filter(|r| r.from_table == ft.name).count();
-    if fact_rel_count == 0 && !lookups.is_empty() {
-        if let Some(pos) = lookups
+    if fact_rel_count == 0 && !lookups.is_empty()
+        && let Some(pos) = lookups
             .iter()
             .position(|t| rels.iter().any(|r| r.from_table == t.name))
-        {
-            let better = lookups.remove(pos);
-            lookups.push(std::mem::replace(&mut ft, better));
-        }
+    {
+        let better = lookups.remove(pos);
+        lookups.push(std::mem::replace(&mut ft, better));
     }
 
     // Merge DAX calculated table measures into the fact table

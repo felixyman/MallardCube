@@ -295,22 +295,20 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
     let mut extra_filters: Vec<DimensionFilter> = Vec::new();
 
-    if parsed.has_drilldown || parsed.has_drilldown_member {
-        if let Some((dim_name, level_name, key)) = extract_drill_member(mdx) {
-            if let Some(dim) = project.model.dim_def_opt(&dim_name) {
-                if let Some(level_idx) = dim.levels.iter().position(|l| l.name == level_name) {
-                    drilldown_level = Some(level_idx + 1);
-                    extra_filters.push(DimensionFilter {
-                        dimension: dim_name,
-                        members: vec![key],
-                    });
-                    // Route to the single-dimension drilldown renderer,
-                    // not the DrilldownMemberProbe 2-dimension path.
-                    if kind == SemanticQueryKind::DrilldownMemberProbe {
-                        kind = SemanticQueryKind::DrilldownCategories;
-                    }
-                }
-            }
+    if (parsed.has_drilldown || parsed.has_drilldown_member)
+        && let Some((dim_name, level_name, key)) = extract_drill_member(mdx)
+        && let Some(dim) = project.model.dim_def_opt(&dim_name)
+        && let Some(level_idx) = dim.levels.iter().position(|l| l.name == level_name)
+    {
+        drilldown_level = Some(level_idx + 1);
+        extra_filters.push(DimensionFilter {
+            dimension: dim_name,
+            members: vec![key],
+        });
+        // Route to the single-dimension drilldown renderer,
+        // not the DrilldownMemberProbe 2-dimension path.
+        if kind == SemanticQueryKind::DrilldownMemberProbe {
+            kind = SemanticQueryKind::DrilldownCategories;
         }
     }
 
