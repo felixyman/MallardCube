@@ -305,6 +305,37 @@ pub struct DimensionDef {
     pub cardinality_hint: u32,
     /// True if this dimension represents a date/calendar role.
     pub is_date_role: bool,
+    /// Multi-level hierarchy definitions. Empty = single-level (legacy).
+    pub levels: Vec<LevelDef>,
+}
+
+/// One level in a multi-level hierarchy (e.g. "Year", "Quarter", "Month").
+#[derive(Debug, Clone)]
+pub struct LevelDef {
+    pub name: String,
+    pub column: String,
+    pub level_number: u32,
+    pub cardinality: u32,
+}
+
+impl DimensionDef {
+    /// When drilling down to `drilldown_level`, return the children cardinality
+    /// of the next deeper level (for the `+` icon), or 0 if this is the deepest
+    /// level or no levels are defined.
+    pub fn children_cardinality_at(&self, drilldown_level: Option<usize>) -> u32 {
+        let Some(level) = drilldown_level else {
+            return 0;
+        };
+        if self.levels.is_empty() {
+            return self.cardinality_hint;
+        }
+        let next = level + 1;
+        if next < self.levels.len() {
+            self.levels[next].cardinality.max(1)
+        } else {
+            0
+        }
+    }
 }
 
 impl DimensionDef {
@@ -609,6 +640,7 @@ pub fn default_model() -> SemanticModel {
                 leaf_level_name: "Produktkategori".into(),
                 cardinality_hint: 50,
                 is_date_role: false,
+                levels: vec![],
             },
             DimensionDef {
                 id: "Region".into(),
@@ -625,6 +657,7 @@ pub fn default_model() -> SemanticModel {
                 leaf_level_name: "Region".into(),
                 cardinality_hint: 10,
                 is_date_role: false,
+                levels: vec![],
             },
         ],
         measures: vec![MeasureDef {
@@ -1202,5 +1235,87 @@ mod tests {
         let ctx = resolve_user_context(&cfg, "DOMAIN\\multi", &[]);
         let access = effective_table_filter(&cfg, &ctx, "mixed_table");
         assert_eq!(access, TableAccess::Full);
+    }
+
+    fn dim_with_levels() -> DimensionDef {
+        DimensionDef {
+            id: "Date".into(),
+            semantic_name: "date".into(),
+            physical_field: "full_date".into(),
+            table_name: Some("date_dim".into()),
+            shared: false,
+            caption: "Date".into(),
+            description: String::new(),
+            visible: true,
+            ordinal: 5,
+            hierarchy_name: "Date".into(),
+            all_level_name: "(All)".into(),
+            leaf_level_name: "Date".into(),
+            cardinality_hint: 5000,
+            is_date_role: true,
+            levels: vec![
+                LevelDef {
+                    name: "Year".into(),
+                    column: "year".into(),
+                    level_number: 0,
+                    cardinality: 11,
+                },
+                LevelDef {
+                    name: "Quarter".into(),
+                    column: "quarter".into(),
+                    level_number: 1,
+                    cardinality: 44,
+                },
+                LevelDef {
+                    name: "Month".into(),
+                    column: "month".into(),
+                    level_number: 2,
+                    cardinality: 132,
+                },
+                LevelDef {
+                    name: "Date".into(),
+                    column: "full_date".into(),
+                    level_number: 3,
+                    cardinality: 4018,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn children_cardinality_none() {
+        let d = dim_with_levels();
+        assert_eq!(d.children_cardinality_at(None), 0);
+    }
+
+    #[test]
+    fn children_cardinality_no_levels() {
+        let mut d = dim_with_levels();
+        d.levels.clear();
+        assert_eq!(d.children_cardinality_at(Some(0)), d.cardinality_hint);
+    }
+
+    #[test]
+    fn children_cardinality_year() {
+        let d = dim_with_levels();
+        assert_eq!(d.children_cardinality_at(Some(0)), 44);
+    }
+
+    #[test]
+    fn children_cardinality_quarter() {
+        let d = dim_with_levels();
+        assert_eq!(d.children_cardinality_at(Some(1)), 132);
+    }
+
+    #[test]
+    fn children_cardinality_month() {
+        let d = dim_with_levels();
+        assert_eq!(d.children_cardinality_at(Some(2)), 4018);
+    }
+
+    #[test]
+    fn children_cardinality_leaf() {
+        let d = dim_with_levels();
+        assert_eq!(d.children_cardinality_at(Some(3)), 0);
     }
 }

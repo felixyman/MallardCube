@@ -1,7 +1,7 @@
 {
   "catalog": "SALES_ANALYTICS",
   "cube": "Sales",
-  "source_name": "sales_data",
+  "source_name": "sales_fact",
   "table_name": "sales_fact",
   "dialect": "duckdb",
   "malloy_model_file": "model.malloy",
@@ -12,6 +12,13 @@
       "dimension_id": "Date",
       "dim_table": "date_dim",
       "dim_column": "date_key"
+    },
+    {
+      "fact_table": "default",
+      "fact_column": "order_datum",
+      "dimension_id": "Date",
+      "dim_table": "date_dim",
+      "dim_column": "full_date"
     }
   ],
   "dimensions": [
@@ -86,7 +93,33 @@
       "cardinality_hint": 5000,
       "is_date_role": true,
       "fact_table": null,
-      "shared": false
+      "shared": false,
+      "hierarchy_levels": [
+        {
+          "name": "Year",
+          "column": "year",
+          "level_number": 0,
+          "cardinality": 11
+        },
+        {
+          "name": "Quarter",
+          "column": "quarter",
+          "level_number": 1,
+          "cardinality": 44
+        },
+        {
+          "name": "Month",
+          "column": "month",
+          "level_number": 2,
+          "cardinality": 132
+        },
+        {
+          "name": "Date",
+          "column": "full_date",
+          "level_number": 3,
+          "cardinality": 4018
+        }
+      ]
     }
   ],
   "measures": [
@@ -131,7 +164,10 @@
       "ordinal": 3,
       "visible": true,
       "measure_group_name": "Sales",
-      "time_intelligence": { "dimension_id": "Date", "flag_column": "ytd_flag" }
+      "time_intelligence": {
+        "dimension_id": "Date",
+        "flag_column": "ytd_flag"
+      }
     },
     {
       "id": "RevenuePriorYearYTD",
@@ -146,7 +182,10 @@
       "ordinal": 4,
       "visible": true,
       "measure_group_name": "Sales",
-      "time_intelligence": { "dimension_id": "Date", "flag_column": "prior_year_ytd_flag" }
+      "time_intelligence": {
+        "dimension_id": "Date",
+        "flag_column": "prior_year_ytd_flag"
+      }
     },
     {
       "id": "RevenueQTD",
@@ -161,7 +200,10 @@
       "ordinal": 5,
       "visible": true,
       "measure_group_name": "Sales",
-      "time_intelligence": { "dimension_id": "Date", "flag_column": "qtd_flag" }
+      "time_intelligence": {
+        "dimension_id": "Date",
+        "flag_column": "qtd_flag"
+      }
     },
     {
       "id": "RevenueMTD",
@@ -176,7 +218,10 @@
       "ordinal": 6,
       "visible": true,
       "measure_group_name": "Sales",
-      "time_intelligence": { "dimension_id": "Date", "flag_column": "mtd_flag" }
+      "time_intelligence": {
+        "dimension_id": "Date",
+        "flag_column": "mtd_flag"
+      }
     }
   ],
   "time_intelligence": {

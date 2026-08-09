@@ -23,6 +23,8 @@ pub trait QueryBackend {
     fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)>;
     fn query_count(&self, sql: &str) -> u32;
     fn query_strings(&self, sql: &str) -> Vec<String>;
+    fn query_rows(&self, sql: &str) -> Vec<Vec<String>>;
+    fn query_column_names(&self, sql: &str) -> Vec<String>;
 }
 
 impl BackendSource {
@@ -142,6 +144,8 @@ impl SeededRng {
 pub struct FactRow {
     pub produktkategori: String,
     pub region: String,
+    pub order_datum: String,
+    pub date_key: i32,
     pub sales: f64,
 }
 
@@ -155,19 +159,50 @@ pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
         .collect();
 
     let mut rows = Vec::with_capacity(config.row_count + 1);
-    for _ in 0..config.row_count {
+    for i in 0..config.row_count {
         let kat = &categories[rng.next() as usize % config.category_count];
         let reg = &regions[rng.next() as usize % config.region_count];
         let sales = 10_000.0 + (rng.next() as f64 % 100_000.0);
+        let day_offset = (i % (365 * 6)) as i64;
+        // Generate a date string 2020-MM-DD within 2020-2026 range
+        let months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let total_days = day_offset;
+        let mut remaining = total_days;
+        let mut y = 2020;
+        loop {
+            let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                366
+            } else {
+                365
+            };
+            if remaining < days_in_year {
+                break;
+            }
+            remaining -= days_in_year;
+            y += 1;
+        }
+        let mut mo = 0;
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        while mo < 12 && remaining >= months[mo] + if mo == 1 && leap { 1 } else { 0 } {
+            remaining -= months[mo] + if mo == 1 && leap { 1 } else { 0 };
+            mo += 1;
+        }
+        let day = remaining + 1;
+        let date = format!("{y:04}-{:02}-{:02}", mo + 1, day);
+        let date_key_val = (y * 10000 + (mo as i32 + 1) * 100 + day as i32) as i32;
         rows.push(FactRow {
             produktkategori: kat.clone(),
             region: reg.clone(),
+            order_datum: date,
+            date_key: date_key_val,
             sales,
         });
     }
     rows.push(FactRow {
         produktkategori: "Kategori SKEW".into(),
         region: "Region SKEW".into(),
+        order_datum: "2020-01-01".into(),
+        date_key: 20200101,
         sales: 9_999_999.0,
     });
     rows
@@ -374,6 +409,14 @@ impl QueryBackend for Backend {
     fn query_strings(&self, sql: &str) -> Vec<String> {
         Backend::query_strings(self, sql)
     }
+
+    fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
+        Backend::query_rows(self, sql)
+    }
+
+    fn query_column_names(&self, sql: &str) -> Vec<String> {
+        Backend::query_column_names(self, sql)
+    }
 }
 
 impl Backend {
@@ -475,10 +518,12 @@ impl Backend {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
             "CREATE TABLE faktatabell (
-                 produktkategori VARCHAR NOT NULL,
-                 region VARCHAR NOT NULL,
-                 sales DOUBLE NOT NULL
-              );",
+                  produktkategori VARCHAR NOT NULL,
+                  region VARCHAR NOT NULL,
+                  order_datum DATE NOT NULL,
+                  date_key INTEGER NOT NULL,
+                  sales DOUBLE NOT NULL
+               );",
         )?;
 
         let rows = generate_rows(config);
@@ -488,6 +533,8 @@ impl Backend {
                 app.append_row(params![
                     row.produktkategori.as_str(),
                     row.region.as_str(),
+                    row.order_datum.as_str(),
+                    row.date_key,
                     row.sales,
                 ])?;
             }
@@ -598,6 +645,50 @@ impl Backend {
             .collect()
     }
 
+    pub fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        // Get column count via pragma (avoids DuckDB's unexecuted-statement requirement)
+        let upper = sql.to_uppercase();
+        let from_pos = upper.find("FROM ").unwrap_or(0);
+        let after_from = &sql[from_pos + 5..].trim();
+        let table = after_from.split_whitespace().next().unwrap_or("?");
+        let pragma = format!("SELECT count(*) FROM pragma_table_info('{table}')");
+        let col_count: usize = conn.query_row(&pragma, [], |r| r.get(0)).unwrap_or(0);
+        let mut stmt = conn.prepare(sql).expect("prepare query_rows");
+        if col_count > 0 {
+            stmt.query_map([], move |row| {
+                let mut cols = Vec::with_capacity(col_count);
+                for i in 0..col_count {
+                    cols.push(
+                        row.get::<_, duckdb::types::Value>(i)
+                            .map(val_to_string)
+                            .unwrap_or_default(),
+                    );
+                }
+                Ok(cols)
+            })
+            .expect("query_map query_rows")
+            .filter_map(|r| r.ok())
+            .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    pub fn query_column_names(&self, sql: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let upper = sql.to_uppercase();
+        let from_pos = upper.find("FROM ").unwrap_or(0);
+        let after_from = &sql[from_pos + 5..].trim();
+        let table = after_from.split_whitespace().next().unwrap_or("?");
+        let pragma = format!("SELECT name FROM pragma_table_info('{table}') ORDER BY cid");
+        let mut stmt = conn.prepare(&pragma).expect("prepare pragma_table_info");
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .expect("query_map pragma")
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
     pub fn execute_ddl(&self, sql: &str) {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(sql).expect("execute_ddl");
@@ -628,6 +719,22 @@ impl Backend {
             .filter_map(|r| r.ok())
             .collect();
         rows
+    }
+}
+
+/// Convert a DuckDB Value enum variant to a plain string.
+pub(crate) fn val_to_string(v: duckdb::types::Value) -> String {
+    match v {
+        duckdb::types::Value::Null => String::new(),
+        duckdb::types::Value::Boolean(b) => b.to_string(),
+        duckdb::types::Value::TinyInt(i) => i.to_string(),
+        duckdb::types::Value::SmallInt(i) => i.to_string(),
+        duckdb::types::Value::Int(i) => i.to_string(),
+        duckdb::types::Value::BigInt(i) => i.to_string(),
+        duckdb::types::Value::Float(f) => f.to_string(),
+        duckdb::types::Value::Double(f) => f.to_string(),
+        duckdb::types::Value::Text(s) => s,
+        _ => format!("{v:?}"),
     }
 }
 

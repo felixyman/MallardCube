@@ -50,10 +50,16 @@ fn dim_props_leaf(
     dim: &crate::engine::model::DimensionDef,
     name: &str,
     requested: &[String],
+    parent_uname: Option<&str>,
 ) -> Vec<(String, String)> {
     filter_dim_props(
         vec![
-            ("PARENT_UNIQUE_NAME".into(), dim.all_member_unique_name()),
+            (
+                "PARENT_UNIQUE_NAME".into(),
+                parent_uname
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| dim.all_member_unique_name()),
+            ),
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), name.to_string()),
             ("MEMBER_KEY".into(), name.to_string()),
@@ -153,16 +159,46 @@ fn leaf_member_for_dim(
     dim: &crate::engine::model::DimensionDef,
     name: &str,
     requested: &[String],
+    drilldown_level: Option<usize>,
+    parent_uname: Option<&str>,
 ) -> cellset::MemberConfig {
-    let u_name = format!("{}.&amp;[{}]", dim.hierarchy_unique_name(), name);
+    let (u_name, l_name, l_num) =
+        if let (Some(level_idx), true) = (drilldown_level, !dim.levels.is_empty()) {
+            if let Some(level) = dim.levels.get(level_idx) {
+                (
+                    format!(
+                        "{}.[{}].&amp;[{}]",
+                        dim.hierarchy_unique_name(),
+                        level.name,
+                        name
+                    ),
+                    format!("{}.[{}]", dim.hierarchy_unique_name(), level.name),
+                    (level_idx + 1) as i32,
+                )
+            } else {
+                (
+                    format!("{}.&amp;[{}]", dim.hierarchy_unique_name(), name),
+                    dim.leaf_level_unique_name(),
+                    1,
+                )
+            }
+        } else {
+            (
+                format!("{}.&amp;[{}]", dim.hierarchy_unique_name(), name),
+                dim.leaf_level_unique_name(),
+                1,
+            )
+        };
+    let cc = dim.children_cardinality_at(drilldown_level);
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
         u_name,
         caption: name.to_string(),
-        l_name: dim.leaf_level_unique_name(),
-        l_num: 1,
-        display_info: 3,
-        dim_props: dim_props_leaf(dim, name, requested),
+        l_name,
+        l_num,
+        display_info: if cc > 0 { 131075 } else { 3 },
+        children_cardinality: cc,
+        dim_props: dim_props_leaf(dim, name, requested, parent_uname),
     }
 }
 
@@ -171,13 +207,15 @@ fn all_member_for_dim<B: QueryBackend + ?Sized>(
     requested: &[String],
     backend: &B,
 ) -> cellset::MemberConfig {
+    let cc = dim.levels.first().map(|l| l.cardinality).unwrap_or(0);
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
         u_name: dim.all_member_unique_name(),
         caption: "All".into(),
         l_name: dim.all_level_unique_name(),
         l_num: 0,
-        display_info: 5,
+        display_info: if cc > 0 { 131075 } else { 5 },
+        children_cardinality: cc,
         dim_props: dim_props_all(dim, requested, backend),
     }
 }
@@ -186,10 +224,12 @@ fn leaf_members_from_dim(
     dim: &crate::engine::model::DimensionDef,
     names: &[String],
     requested: &[String],
+    drilldown_level: Option<usize>,
+    parent_uname: Option<&str>,
 ) -> Vec<cellset::MemberConfig> {
     names
         .iter()
-        .map(|name| leaf_member_for_dim(dim, name, requested))
+        .map(|name| leaf_member_for_dim(dim, name, requested, drilldown_level, parent_uname))
         .collect()
 }
 
@@ -297,6 +337,7 @@ pub(crate) fn measures_member(unique_name: &str, caption: &str) -> cellset::Memb
         l_name: MEASURES_LEVEL.into(),
         l_num: 0,
         display_info: 131072,
+        children_cardinality: 0,
         dim_props: vec![],
     }
 }
@@ -426,12 +467,12 @@ pub(crate) fn empty_member_list_axis(
 
 pub(crate) fn row_dim(query: &SemanticQuery) -> &str {
     if let Some(dim) = query.axis_dimensions.first() {
-        dim.as_str()
-    } else if let Some(dim) = query.row_dimension.as_deref() {
-        dim
-    } else {
-        "Produktkategori"
+        return dim.as_str();
     }
+    if let Some(dim) = query.row_dimension.as_deref() {
+        return dim;
+    }
+    ""
 }
 
 pub(crate) fn leaf_member_for(
@@ -440,7 +481,7 @@ pub(crate) fn leaf_member_for(
     requested: &[String],
 ) -> cellset::MemberConfig {
     match dim_def(dim) {
-        Some(d) => leaf_member_for_dim(d, name, requested),
+        Some(d) => leaf_member_for_dim(d, name, requested, None, None),
         None => unknown_dim_member(dim, name),
     }
 }
@@ -470,9 +511,11 @@ pub(crate) fn leaf_members_from(
     dim: &str,
     names: &[String],
     requested: &[String],
+    drilldown_level: Option<usize>,
+    parent_uname: Option<&str>,
 ) -> Vec<cellset::MemberConfig> {
     match dim_def(dim) {
-        Some(d) => leaf_members_from_dim(d, names, requested),
+        Some(d) => leaf_members_from_dim(d, names, requested, drilldown_level, parent_uname),
         None => names.iter().map(|n| unknown_dim_member(dim, n)).collect(),
     }
 }
@@ -485,6 +528,7 @@ fn unknown_dim_member(dim: &str, name: &str) -> cellset::MemberConfig {
         l_name: format!("[{dim}].[{dim}].[{dim}]"),
         l_num: 1,
         display_info: 3,
+        children_cardinality: 0,
         dim_props: vec![],
     }
 }
@@ -532,7 +576,7 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
         } else {
             let dim_members = filter_members_for(&dim.id, &query.filters);
             for name in &dim_members {
-                members.push(leaf_member_for_dim(dim, name, &[]));
+                members.push(leaf_member_for_dim(dim, name, &[], None, None));
             }
         }
     }
@@ -541,5 +585,110 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
         name: "SlicerAxis".into(),
         hierarchies,
         tuples: vec![cellset::TupleConfig { members }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::model::LevelDef;
+
+    fn date_dim_with_levels() -> crate::engine::model::DimensionDef {
+        crate::engine::model::DimensionDef {
+            id: "Date".into(),
+            semantic_name: "date".into(),
+            physical_field: "full_date".into(),
+            table_name: Some("date_dim".into()),
+            shared: false,
+            caption: "Date".into(),
+            description: String::new(),
+            visible: true,
+            ordinal: 5,
+            hierarchy_name: "Date".into(),
+            all_level_name: "(All)".into(),
+            leaf_level_name: "Date".into(),
+            cardinality_hint: 5000,
+            is_date_role: true,
+            levels: vec![
+                LevelDef {
+                    name: "Year".into(),
+                    column: "year".into(),
+                    level_number: 0,
+                    cardinality: 11,
+                },
+                LevelDef {
+                    name: "Quarter".into(),
+                    column: "quarter".into(),
+                    level_number: 1,
+                    cardinality: 44,
+                },
+                LevelDef {
+                    name: "Month".into(),
+                    column: "month".into(),
+                    level_number: 2,
+                    cardinality: 132,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn leaf_member_di_drillable() {
+        let d = date_dim_with_levels();
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        assert_eq!(m.display_info, 131075);
+        assert_eq!(m.children_cardinality, 44);
+    }
+
+    #[test]
+    fn leaf_member_di_leaf() {
+        let d = date_dim_with_levels();
+        let m = leaf_member_for_dim(&d, "1", &[], Some(2), None);
+        assert_eq!(m.display_info, 3);
+        assert_eq!(m.children_cardinality, 0);
+    }
+
+    #[test]
+    fn leaf_member_uname_level_qualified() {
+        let d = date_dim_with_levels();
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        assert_eq!(m.u_name, "[Date].[Date].[Year].&amp;[2020]");
+    }
+
+    #[test]
+    fn leaf_member_lname_level_qualified() {
+        let d = date_dim_with_levels();
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        assert_eq!(m.l_name, "[Date].[Date].[Year]");
+    }
+
+    #[test]
+    fn leaf_member_parent_uname_override() {
+        let d = date_dim_with_levels();
+        let req: Vec<String> = vec!["PARENT_UNIQUE_NAME".into()];
+        let m = leaf_member_for_dim(
+            &d,
+            "1",
+            &req,
+            Some(1),
+            Some("[Date].[Date].[Year].&amp;[2024]"),
+        );
+        let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
+        assert!(pun.is_some(), "should have PARENT_UNIQUE_NAME prop");
+        assert!(
+            pun.unwrap().1.contains("Year"),
+            "should contain Year in parent: {:?}",
+            pun
+        );
+    }
+
+    #[test]
+    fn leaf_member_parent_uname_default() {
+        let d = date_dim_with_levels();
+        let req: Vec<String> = vec!["PARENT_UNIQUE_NAME".into()];
+        let m = leaf_member_for_dim(&d, "2020", &req, Some(0), None);
+        let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
+        assert!(pun.is_some());
+        assert_eq!(pun.unwrap().1, "[Date].[Date].[All]");
     }
 }

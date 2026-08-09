@@ -5,6 +5,7 @@ use crate::axis_members::{
     member_list_axis, render_response, row_dim, single_member_axis,
 };
 use crate::backend::QueryBackend;
+use crate::cellset;
 use crate::engine::plan::QueryResult;
 /// Cellset render functions.
 ///
@@ -61,8 +62,10 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     let dim = dims.first().map(|s| s.as_str()).unwrap_or_else(|| {
         fallback_dim = crate::proxy_project::project()
             .model
-            .default_dimension_id()
-            .unwrap_or_else(|| "Produktkategori".into());
+            .dimensions
+            .first()
+            .map(|d| d.id.clone())
+            .expect("model has no dimensions");
         &fallback_dim
     });
     let mut data = match result {
@@ -70,11 +73,72 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         _ => unreachable!(),
     };
     data.sort_by(|a, b| a.0.cmp(&b.0));
-    let members = leaf_members_from(
+    let parent_uname: Option<String> = query.drilldown_level.and_then(|dl| {
+        if dl == 0 {
+            return None;
+        }
+        let project = crate::proxy_project::project();
+        let dim_def = project.model.dim_def_opt(dim)?;
+        let parent_level = dim_def.levels.get(dl - 1)?;
+        let key = query
+            .filters
+            .iter()
+            .find(|f| f.dimension == *dim)
+            .and_then(|f| f.members.first())?;
+        Some(format!(
+            "{}.[{}].&amp;[{}]",
+            dim_def.hierarchy_unique_name(),
+            parent_level.name,
+            key
+        ))
+    });
+    let mut members = leaf_members_from(
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
+        query.drilldown_level,
+        parent_uname.as_deref(),
     );
+    // Prepend the parent member so Excel can establish the
+    // parent-child link for multi-level hierarchy expandability.
+    if let Some(dl) = query.drilldown_level {
+        let parent: Option<cellset::MemberConfig> = if dl == 0 {
+            Some(all_member_for_with_backend(dim, &query.dim_props, backend))
+        } else {
+            let project = crate::proxy_project::project();
+            let dim_def = project.model.dim_def_opt(dim);
+            let filter_key = query
+                .filters
+                .iter()
+                .find(|f| f.dimension == *dim)
+                .and_then(|f| f.members.first());
+            let parent_level = dim_def.and_then(|d| d.levels.get(dl - 1));
+            if let (Some(def), Some(key), Some(pl)) = (dim_def, filter_key, parent_level) {
+                let parent_u = format!(
+                    "{}.[{}].&amp;[{}]",
+                    def.hierarchy_unique_name(),
+                    pl.name,
+                    key
+                );
+                let parent_lname = format!("{}.[{}]", def.hierarchy_unique_name(), pl.name);
+                Some(cellset::MemberConfig {
+                    hierarchy: def.hierarchy_unique_name(),
+                    u_name: parent_u,
+                    caption: key.clone(),
+                    l_name: parent_lname,
+                    l_num: dl as i32,
+                    display_info: 0,
+                    children_cardinality: 0,
+                    dim_props: vec![],
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(p) = parent {
+            members.insert(0, p);
+        }
+    }
 
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
@@ -257,6 +321,8 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
+        query.drilldown_level,
+        None,
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
@@ -328,6 +394,8 @@ pub(crate) fn build_leaf_level_members<B: QueryBackend + ?Sized>(
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
+        None,
+        None,
     );
     let mut cells = Vec::new();
     for (i, (_name, value)) in data.iter().enumerate() {
@@ -486,6 +554,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, result, backend),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query, result, backend),
         SemanticQueryKind::SlicerOnly => build_slicer_only(query, result, backend),
-        SemanticQueryKind::DrilldownMemberProbe => build_drilldown_member(query, result, backend),
+        SemanticQueryKind::DrilldownMemberProbe => match result {
+            QueryResult::Grouped(_) => build_drilldown(query, result, backend),
+            _ => build_drilldown_member(query, result, backend),
+        },
     }
 }

@@ -242,6 +242,21 @@ pub struct DimensionConfig {
     pub shared: bool,
     #[serde(default)]
     pub is_date_role: bool,
+    #[serde(default)]
+    pub hierarchy_levels: Vec<HierarchyLevelConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HierarchyLevelConfig {
+    /// Level name, e.g. "Year", "Quarter", "Month", "Day"
+    pub name: String,
+    /// SQL column that provides values for this level
+    pub column: String,
+    /// Distance from the root; 0 = top level (e.g. Year), 1 = next (Quarter)
+    pub level_number: u32,
+    /// Cardinality hint for this level
+    #[serde(default)]
+    pub cardinality: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
