@@ -38,13 +38,27 @@ honor its STOP conditions, and update your row when done.
 | 028  | Hygiene foundation (green baseline, plan bookkeeping, lint bar, CI) | P1 | M | — | DONE |
 | 029  | Multi-level date hierarchies | P1 | L | 023, 027, 028 | DONE |
 | 030  | DRILLTHROUGH ("show details") | P1 | M | — | DONE |
+| 031  | In-memory dimension metadata cache | P2 | S | — | TODO |
+| 032  | MDX-hash result cache — deduplicate repeated Excel queries | P1 | XS | — | TODO |
+| 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | XS | — | TODO |
+| 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
+| 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
+| 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**All 30 plans DONE. No open plans. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 DONE. 031–036 are performance/adoption plans queued behind Gate G1. Next milestone: Gate G1 (public validation).**
 
 ## Reconcile Status
 
+- Plans 031–036 written 2026-08-10: performance + adoption queue behind Gate G1.
+  - **031** (metadata cache) — biggest perf lever; eliminates N+1 metadata queries.
+  - **032** (result cache) — XS effort, prevents 3× duplicate work for Excel repeat requests.
+  - **033** (DRILLTHROUGH equality) — XS effort bug+perf fix.
+  - **034** (streaming XML) — deferred; medium effort, only matters for extreme crossjoins.
+  - **035** (connection pool) — needed for multi-user demo; also unlocks concurrent test.
+  - **036** (AutoModel) — deferred behind Gate G1; adoption wedge, not performance.
+  - Execution order within batch: 031 → 032 → 033 → 035 → (034, 036 later).
 - Reconciled on 2026-06-17 against the current working tree on git HEAD `c89764f`.
 - DONE plans 001-014 were spot-checked with cheap current-state verification.
 - Verification snapshot:
@@ -162,10 +176,9 @@ against these decisions.
 ## Phase 4 candidates (post-Gate G1, ranked at a fresh planning pass)
 
 1. Attached data sources via DuckDB (incl. MSSQL point-at-existing-DW)
-2. Multi-level/date hierarchies (Excel table stakes)
-3. DRILLTHROUGH + MDX breadth via deliberate trace-corpus growth
-4. Calculation-group strategy decision (Contoso finding expected)
-5. DAX coverage checkpoint: pattern library vs DAX-subset compiler,
+2. MDX breadth via deliberate trace-corpus growth (remaining Excel PivotTable operations)
+3. Calculation-group strategy decision (Contoso finding expected)
+4. DAX coverage checkpoint: pattern library vs DAX-subset compiler,
    decided with three models' pattern distribution in hand
 
 ## Dependency notes
@@ -241,6 +254,18 @@ against these decisions.
 - 023 depends on 027 (added 2026-08-07) so that `generated_contoso/` is
   produced by the Malloy-free converter and never contains Malloy
   artifacts; it keeps its original dependency on 022 (generic lowering).
+- 031 is independent (metadata cache touches axis_members + discover modules
+  but doesn't depend on any other open plan).
+- 032 depends on 031 because the result cache needs the metadata path to be
+  fast before measuring the cache hit/miss ratio on the full execution path.
+- 033 is independent (single-function change in dispatch.rs).
+- 034 depends on 031 (streaming XML memory win is only measurable after
+  metadata queries are eliminated from the render path).
+- 035 is independent (connection pool replaces the singleton backend; no
+  dependency on cache changes).
+- 036 depends on Gate G1 success (AutoModel only makes sense if the project
+  attracts non-SSAS-conversion users). Execution order: 031 → 032 → 033
+  → 035, with 034 and 036 queued after.
 
 ## Findings considered and rejected
 
@@ -279,11 +304,4 @@ against these decisions.
 
 ## Deferred for later planning
 
-- Superseded by the **Phase 4 candidates** list above (2026-08-07). The
-  original deferral rationale for calendar hierarchies is preserved below
-  for history.
-
-- **Calendar hierarchies (Year -> Quarter -> Month -> Day)**: important for
-  Excel browsing, but deferred until the date-role contract (006-008) and
-  generated-project proof loop (009) are in place; otherwise the repo would
-  add hierarchy surface area before the underlying date semantics settle.
+- Superseded by plans 031–036 and the **Phase 4 candidates** list above.
