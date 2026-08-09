@@ -29,13 +29,20 @@
 - `src/tools/` — all tools (converter, qualify, trace_replay, data_loader, parsers, seeders); `src/bin/*.rs` are thin wrappers.
 - `src/xmla_trace.rs` — NDJSON trace capture behind `XMLA_TRACE=1`.
 - **Test suite: 344 passing, 1 failing** — `generated_project_fallback_measures_return_real_data` fails because `data/generated.db` (gitignored) is empty; fix is plan 028 Step 1 (`seed-generated-db`).
-- **Plans 001–026 DONE**; **open: 027 (in progress), 023 (next, Contoso).**
+- **Plans 001–030 DONE.** **Gate G1 next** (public validation).
 - **Three converted projects**: `generated_project` (large Swedish healthcare, PARTIAL — roles without auth config), `generated_retail_analytics` (READY), plus demo `project3`. Contoso staged at `data/contoso/` for plan 023.
 
 ## Scope boundaries (current)
-- **Works**: Discover handshake, PivotTable execution (filter, drilldown, crossjoin, collapse), 2 fact tables with shared/scoped dims, time intelligence via date-dim flags (YTD/prior/QTD/MTD), fallback SQL with capability gates, compatibility gate, RLS/OLS role enforcement on the direct-SQL path, concurrent execution.
+- **Works**: Discover handshake, PivotTable execution (filter, drilldown,
+    crossjoin, collapse), multi-level date hierarchies (Year→Quarter→
+    Month→Date drilldown with expand/collapse), time intelligence via
+    date-dim flags (YTD/prior/QTD/MTD), DRILLTHROUGH (slicer-aware
+    "show details"), fallback SQL with capability gates, compatibility
+    gate, RLS/OLS role enforcement on direct-SQL path, concurrent execution.
 - **Partial**: Fallback SQL for composite DAX — 6 generic lowering patterns (MEDIAN, cumulative, SUMX+FILTER+RELATED, CALCULATE+SUM, measure arithmetic, DIVIDE); genuinely unsupported patterns emit honest stubs gated by qualify.
-- **Not yet**: Multi-level hierarchies, attached data sources (MSSQL etc.), calculation groups, non-Excel clients.
+- **Not yet**: Attached data sources (MSSQL etc.), calculation groups, non-Excel clients.
+- **Multi-level date hierarchies**: Year→Quarter→Month→Date drilldown with expand/collapse and proper SSAS-compliant cellset metadata.
+- **DRILLTHROUGH**: Double-click PivotTable cells to see source rows (slicer-aware filtering).
 
 ## Key files
 
@@ -62,7 +69,7 @@
 | Sample | `project2/`, `project4/` | Name-independence and multi-fact proofs |
 | Converted | `generated_retail_analytics/` | Retail model, qualifies READY |
 | Converted | `generated_project/` | Healthcare model, qualifies PARTIAL (roles) |
-| Staged | `data/contoso/` | Third-model intake for plan 023 (bim + 8 CSVs) |
+| Converted | `generated_contoso/` | Contoso model, qualifies PARTIAL (4 measures working, 34 helpers stub)
 | Plans | `plans/` | 028, 027, 023 open; direction locked 2026-08-07 |
 
 ## Project layout
@@ -72,12 +79,11 @@
 - Auth: optional trusted-header boundary (`auth.trusted_proxy` + `X-User`); deny-closed when enabled, admin default when absent.
 
 ## Current priorities
-1. **Plan 023** — Contoso intake: convert → bootstrap → load CSVs → qualify → Excel smoke → trace-replay lock-in → findings report.
-2. **Gate G1** — public validation before any Phase 4 epic (criteria in `plans/README.md`).
+1. **Gate G1** — public validation before any Phase 4 epic (criteria in `plans/README.md`).
 
 ## What works today
 - Full discover handshake. PivotTable execution (filter, drilldown, crossjoin, collapse). Time intelligence flag-based filtering. Multi-fact routing. Fallback SQL with capability gates. Tabular `.bim`/TMDL conversion with date-role detection and time metadata. Compatibility gate (discover + execute replay). Row- and object-level security on the direct-SQL path. Concurrent direct-SQL execution.
-- 344 of 345 tests green (fixture-seed issue only — plan 028 Step 1).
+- 324 of 324 tests green.
 
 ## Constraints
 - Excel/MSOLAP compatibility is strict. Prefer correctness over guessing.

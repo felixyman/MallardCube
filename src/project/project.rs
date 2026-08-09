@@ -142,6 +142,7 @@ impl ProxyProject {
                         fact_table: None,
                         shared: false,
                         is_date_role: false,
+                        hierarchy_levels: Vec::new(),
                     },
                     crate::proxy_config::DimensionConfig {
                         id: "Region".into(),
@@ -159,6 +160,7 @@ impl ProxyProject {
                         fact_table: None,
                         shared: false,
                         is_date_role: false,
+                        hierarchy_levels: Vec::new(),
                     },
                 ],
                 measures: vec![crate::proxy_config::MeasureConfig {
@@ -226,7 +228,7 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
         .iter()
         .map(|dc| {
             let id = dc.id.clone();
-            let table_name = dc.fact_table.as_ref().map(|ft_id| {
+            let mut table_name = dc.fact_table.as_ref().map(|ft_id| {
                 fact_tables
                     .iter()
                     .find(|ft| ft.id == *ft_id)
@@ -239,6 +241,12 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
                     .table_name
                     .clone()
             });
+            if table_name.is_none() && dc.is_date_role {
+                table_name = config
+                    .time_intelligence
+                    .as_ref()
+                    .map(|ti| ti.date_dimension.table_name.clone());
+            }
             DimensionDef {
                 id,
                 semantic_name: dc.malloy_name.clone(),
@@ -254,6 +262,16 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
                 leaf_level_name: dc.leaf_level_name.clone(),
                 cardinality_hint: dc.cardinality_hint,
                 is_date_role: dc.is_date_role,
+                levels: dc
+                    .hierarchy_levels
+                    .iter()
+                    .map(|l| crate::engine::model::LevelDef {
+                        name: l.name.clone(),
+                        column: l.column.clone(),
+                        level_number: l.level_number,
+                        cardinality: l.cardinality,
+                    })
+                    .collect(),
             }
         })
         .collect();
@@ -952,6 +970,7 @@ mod tests {
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
             measure: None,
+            drilldown_level: None,
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -987,6 +1006,7 @@ mod tests {
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
             measure: None,
+            drilldown_level: None,
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1022,6 +1042,7 @@ mod tests {
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
             measure: Some("Cost".to_string()),
+            drilldown_level: None,
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1056,6 +1077,7 @@ mod tests {
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
             measure: Some("Cost".to_string()),
+            drilldown_level: None,
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {

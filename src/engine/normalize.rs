@@ -18,6 +18,7 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             measure,
             group_by,
             filters,
+            ..
         } => {
             format!("groupby|measure={}|dims={}", measure, group_by.join(","),)
                 + &filter_suffix(filters)
@@ -97,6 +98,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into(), "Region".into()],
+            group_level: None,
             filters: vec![],
         };
         assert_eq!(
@@ -110,6 +112,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
+            group_level: None,
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),

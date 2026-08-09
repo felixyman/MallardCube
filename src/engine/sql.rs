@@ -43,18 +43,63 @@ pub fn sql_for_query_plan_with_context(
             measure,
             group_by,
             filters,
+            group_level,
         } => {
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
 
             let mut joined: HashSet<String> = HashSet::new();
-            let (col_map, joins) = resolve_group_cols(model, group_by, &mut joined, user, config);
-            let col_names: Vec<&str> = group_by
+            let (mut col_map, joins) =
+                resolve_group_cols(model, group_by, &mut joined, user, config);
+            // When drilling a specific hierarchy level, swap the dimension column
+            // to the level's column (e.g. "year" instead of "full_date").
+            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first()) {
+                if let Some(dim) = model.dim_def_opt(dim_id) {
+                    if let Some(level) = dim.levels.get(*level_idx) {
+                        let alias_prefix = col_map
+                            .get(dim_id)
+                            .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
+                            .unwrap_or("");
+                        let new_col = if alias_prefix.is_empty() {
+                            level.column.clone()
+                        } else {
+                            format!("{}.{}", alias_prefix, level.column)
+                        };
+                        col_map.insert(dim_id.clone(), new_col);
+                    }
+                }
+            }
+            let col_names: Vec<String> = group_by
                 .iter()
-                .map(|d| col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??"))
+                .map(|d| {
+                    let col = col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??");
+                    format!("CAST({col} AS VARCHAR)")
+                })
                 .collect();
 
-            let wc = sql_where_with_cols(model, filters, &col_map, user, config, table);
+            // Build a WHERE column map: for the drilldown dimension at a
+            // deeper level, the filter uses the parent level's column (e.g.
+            // WHERE year = '2023') not the target level's column (quarter).
+            let mut where_col_map = col_map.clone();
+            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first()) {
+                if *level_idx > 0
+                    && let Some(dim) = model.dim_def_opt(dim_id)
+                    && let Some(parent_level) = dim.levels.get(level_idx - 1)
+                {
+                    let alias_prefix = col_map
+                        .get(dim_id)
+                        .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
+                        .unwrap_or("");
+                    let parent_col = if alias_prefix.is_empty() {
+                        parent_level.column.clone()
+                    } else {
+                        format!("{}.{}", alias_prefix, parent_level.column)
+                    };
+                    where_col_map.insert(dim_id.clone(), parent_col);
+                }
+            }
+
+            let wc = sql_where_with_cols(model, filters, &where_col_map, user, config, table);
             let group_nums: Vec<String> = (1..=col_names.len()).map(|i| i.to_string()).collect();
             format!(
                 "SELECT {}, {} FROM {} f{}{} GROUP BY {} ORDER BY {}",
@@ -348,12 +393,13 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
+            group_level: None,
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert_eq!(
             sql,
-            "SELECT produktkategori, SUM(sales) FROM faktatabell f GROUP BY 1 ORDER BY 1"
+            "SELECT CAST(produktkategori AS VARCHAR), SUM(sales) FROM faktatabell f GROUP BY 1 ORDER BY 1"
         );
     }
 
@@ -362,12 +408,13 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into(), "Region".into()],
+            group_level: None,
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert_eq!(
             sql,
-            "SELECT produktkategori, region, SUM(sales) FROM faktatabell f GROUP BY 1, 2 ORDER BY 1, 2"
+            "SELECT CAST(produktkategori AS VARCHAR), CAST(region AS VARCHAR), SUM(sales) FROM faktatabell f GROUP BY 1, 2 ORDER BY 1, 2"
         );
     }
 
@@ -376,6 +423,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
+            group_level: None,
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
                 time_flag: None,
@@ -424,7 +472,7 @@ mod tests {
     // ---- star-schema join ----
 
     use crate::engine::model::{
-        Dialect, DimensionDef, FactTable, MeasureDef, RelationshipDef, SemanticModel,
+        Dialect, DimensionDef, FactTable, LevelDef, MeasureDef, RelationshipDef, SemanticModel,
     };
 
     fn star_model() -> SemanticModel {
@@ -451,6 +499,7 @@ mod tests {
                 leaf_level_name: "Product".into(),
                 cardinality_hint: 100,
                 is_date_role: false,
+                levels: vec![],
             }],
             measures: vec![MeasureDef {
                 id: "Revenue".into(),
@@ -513,12 +562,13 @@ mod tests {
             &QueryPlan::GroupBy {
                 measure: "Revenue".into(),
                 group_by: vec!["Product".into()],
+                group_level: None,
                 filters: vec![],
             },
         );
         assert!(sql.contains("FROM fact_table f"));
         assert!(sql.contains("JOIN dim_product _product ON f.product_id = _product.product_id"));
-        assert!(sql.contains("SELECT _product.product_name"));
+        assert!(sql.contains("SELECT CAST(_product.product_name AS VARCHAR)"));
     }
 
     // ---- multi-fact-table ----
@@ -637,6 +687,7 @@ mod tests {
                 leaf_level_name: "Category".into(),
                 cardinality_hint: 20,
                 is_date_role: false,
+                levels: vec![],
                 table_name: None,
                 shared: false,
             }],
@@ -647,6 +698,7 @@ mod tests {
             &QueryPlan::GroupBy {
                 measure: "Stock".into(),
                 group_by: vec!["Category".into()],
+                group_level: None,
                 filters: vec![],
             },
         );
@@ -674,6 +726,7 @@ mod tests {
                 leaf_level_name: "Category".into(),
                 cardinality_hint: 20,
                 is_date_role: false,
+                levels: vec![],
             }],
             ..two_fact_model()
         };
@@ -686,6 +739,142 @@ mod tests {
         assert!(
             sql.contains("FROM inventory_dim"),
             "Count should use dimension's table: {sql}"
+        );
+    }
+
+    fn date_level_model() -> SemanticModel {
+        SemanticModel {
+            fact_tables: vec![FactTable {
+                id: "default".into(),
+                source_name: "fact".into(),
+                table_name: "fact_table".into(),
+                measure_group_name: "Fact".into(),
+            }],
+            dialect: Dialect::DuckDB,
+            dimensions: vec![DimensionDef {
+                id: "Date".into(),
+                semantic_name: "date".into(),
+                physical_field: "full_date".into(),
+                table_name: Some("date_dim".into()),
+                shared: false,
+                caption: "Date".into(),
+                description: String::new(),
+                visible: true,
+                ordinal: 1,
+                hierarchy_name: "Date".into(),
+                all_level_name: "(All)".into(),
+                leaf_level_name: "Date".into(),
+                cardinality_hint: 5000,
+                is_date_role: true,
+                levels: vec![
+                    LevelDef {
+                        name: "Year".into(),
+                        column: "year".into(),
+                        level_number: 0,
+                        cardinality: 11,
+                    },
+                    LevelDef {
+                        name: "Quarter".into(),
+                        column: "quarter".into(),
+                        level_number: 1,
+                        cardinality: 44,
+                    },
+                    LevelDef {
+                        name: "Month".into(),
+                        column: "month".into(),
+                        level_number: 2,
+                        cardinality: 132,
+                    },
+                ],
+            }],
+            measures: vec![MeasureDef {
+                id: "Revenue".into(),
+                fact_table_idx: 0,
+                semantic_name: "rev".into(),
+                physical_expr: String::new(),
+                sql_expr: "SUM(revenue)".into(),
+                caption: "Revenue".into(),
+                display_name: "Revenue".into(),
+                description: String::new(),
+                visible: true,
+                aggregator: 1,
+                units: String::new(),
+                format_string: String::new(),
+                measure_group_name: "Fact".into(),
+                numeric_precision: 18,
+                numeric_scale: 2,
+                expression: String::new(),
+                sql_fallback_sql: None,
+                time_flag: None,
+                date_dimension_id: None,
+                fallback_capability: None,
+            }],
+            relationships: vec![RelationshipDef {
+                fact_table_id: "default".into(),
+                fact_column: "date_key".into(),
+                dimension_id: "Date".into(),
+                dim_table: "date_dim".into(),
+                dim_column: "date_key".into(),
+            }],
+            date_dim: None,
+            date_dims: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn sql_group_level_0() {
+        let m = date_level_model();
+        let plan = QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Date".into()],
+            filters: vec![],
+            group_level: Some(0),
+        };
+        let sql = sql_for_query_plan(&m, &plan);
+        assert!(
+            sql.contains("CAST(_date.year AS VARCHAR)"),
+            "should group by year: {sql}"
+        );
+        assert!(sql.contains("GROUP BY 1"), "should have GROUP BY: {sql}");
+    }
+
+    #[test]
+    fn sql_group_level_1() {
+        let m = date_level_model();
+        let plan = QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Date".into()],
+            filters: vec![TypedDimensionFilter {
+                dimension: "Date".into(),
+                members: vec!["2024".into()],
+                time_flag: None,
+            }],
+            group_level: Some(1),
+        };
+        let sql = sql_for_query_plan(&m, &plan);
+        assert!(
+            sql.contains("CAST(_date.quarter AS VARCHAR)"),
+            "should group by quarter: {sql}"
+        );
+        assert!(
+            sql.contains("_date.year IN ('2024')"),
+            "should filter by year: {sql}"
+        );
+    }
+
+    #[test]
+    fn sql_no_group_level() {
+        let m = date_level_model();
+        let plan = QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Date".into()],
+            filters: vec![],
+            group_level: None,
+        };
+        let sql = sql_for_query_plan(&m, &plan);
+        assert!(
+            sql.contains("CAST(_date.full_date AS VARCHAR)"),
+            "should group by physical_field: {sql}"
         );
     }
 }

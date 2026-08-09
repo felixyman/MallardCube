@@ -193,7 +193,7 @@ See `docs/ssas-to-malloy-conversion.md` for details.
 cargo test --lib
 ```
 
-293 tests covering MDX parsing, semantic classification, plan generation, SQL
+324 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 Excel replay/oracle verification, time intelligence, security roles, and
 compatibility-gate assertions.

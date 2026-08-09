@@ -234,7 +234,11 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
             calcs.push(t);
         } else {
             let lower = t.name.to_lowercase();
-            if lower.contains("f_") || t.measures.len() > 5 {
+            let has_lookupvalue_only = !t.measures.is_empty()
+                && t.measures
+                    .iter()
+                    .all(|m| m.expression.to_uppercase().contains("LOOKUPVALUE"));
+            if (lower.contains("f_") || t.measures.len() > 5) && !has_lookupvalue_only {
                 fact.push(t);
             } else if lower.contains("kalender") || lower == "dates" {
                 dates.push(t);
@@ -288,6 +292,20 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
             hierarchies: vec![],
         }
     };
+
+    // Heuristic: if the selected fact table has no outgoing relationships but
+    // another table in lookups does, prefer the relationships-bearing table.
+    // Metadata tables (e.g. Info with LOOKUPVALUE measures) should not be facts.
+    let fact_rel_count = rels.iter().filter(|r| r.from_table == ft.name).count();
+    if fact_rel_count == 0 && !lookups.is_empty() {
+        if let Some(pos) = lookups
+            .iter()
+            .position(|t| rels.iter().any(|r| r.from_table == t.name))
+        {
+            let better = lookups.remove(pos);
+            lookups.push(std::mem::replace(&mut ft, better));
+        }
+    }
 
     // Merge DAX calculated table measures into the fact table
     let mut calc_measures: Vec<MeasureInfo> = calcs
@@ -369,28 +387,26 @@ fn render_proxy_config(m: &ConversionModel) -> String {
 fn render_roles(m: &ConversionModel) -> String {
     let mut out = String::new();
     for (i, r) in m.roles.iter().enumerate() {
-        // Render members
         let members_json: String = r.members.iter()
             .map(|m| format!(
-                r##"{{{{\n          \"member_name\": \"{}\",\n          \"member_type\": \"{}\"\n        }}}}"##,
+                "        {{\n          \"member_name\": \"{}\",\n          \"member_type\": \"{}\"\n        }}",
                 json_escape(&m.member_name),
                 json_escape(&m.member_type),
-            ).replace("{{", "{").replace("}}", "}"))
+            ))
             .collect::<Vec<_>>()
             .join(",\n");
 
-        // Render table permissions
         let tp_json: String = r.table_permissions.iter()
             .map(|tp| {
                 let dax = tp.dax_filter.as_ref()
                     .map(|s| format!("\n          \"dax_filter\": \"{}\",", json_escape(s)))
                     .unwrap_or_default();
                 format!(
-                    r##"{{{{\n          \"table\": \"{}\",\n          \"filter_expression\": \"\",{}\n          \"metadata_permission\": \"{}\"\n        }}}}"##,
+                    "        {{\n          \"table\": \"{}\",\n          \"filter_expression\": \"\",{}\n          \"metadata_permission\": \"{}\"\n        }}",
                     json_escape(&tp.table),
                     dax,
                     tp.metadata_permission,
-                ).replace("{{", "{").replace("}}", "}")
+                )
             })
             .collect::<Vec<_>>()
             .join(",\n");
@@ -601,6 +617,7 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         .iter()
         .chain(m.dimensions.iter().flat_map(|t| &t.measures))
         .chain(m.date_roles.iter().flat_map(|t| &t.measures))
+        .chain(m.lookup_tables.iter().flat_map(|t| &t.measures))
         .collect();
     for (i, meas) in all_measures.iter().enumerate() {
         let dax_expr = meas.expression.as_str();

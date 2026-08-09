@@ -58,6 +58,10 @@ pub enum QueryPlan {
         measure: MeasId,
         group_by: Vec<DimId>,
         filters: Vec<TypedDimensionFilter>,
+        /// When drilling a multi-level hierarchy, which level index to group by.
+        /// The SQL emitter uses the level's `column` instead of the dimension's
+        /// `physical_field`.  None = use the leaf physical_field.
+        group_level: Option<usize>,
     },
 
     Count {
@@ -226,10 +230,12 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
             None
         })
         .or_else(|| model.default_measure_id())
-        .unwrap_or_else(|| "TotalSales".into());
+        .or_else(|| model.measures.first().map(|m| m.id.clone()))
+        .expect("model has no measures");
     let default_dim = model
         .default_dimension_id()
-        .unwrap_or_else(|| "Produktkategori".into());
+        .or_else(|| model.dimensions.first().map(|d| d.id.clone()))
+        .expect("model has no dimensions");
 
     let dim = query
         .axis_dimensions
@@ -280,6 +286,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                 measure: meas.clone(),
                 group_by,
                 filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
+                group_level: query.drilldown_level,
             }
         }
 

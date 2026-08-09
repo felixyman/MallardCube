@@ -65,6 +65,14 @@ pub fn get_hierarchies_response() -> String {
     ));
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        let (dim_type, hier_origin) = if !d.levels.is_empty() {
+            (
+                if d.is_date_role { 1 } else { 0 }, // Time dim = 1, Regular = 0
+                1,                                  // User-defined hierarchy
+            )
+        } else {
+            (3, 2) // Other dim, Attribute hierarchy (current defaults)
+        };
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -74,7 +82,7 @@ pub fn get_hierarchies_response() -> String {
             <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
             <HIERARCHY_GUID>00000000-0000-0000-0000-{guid:012}</HIERARCHY_GUID>
             <HIERARCHY_CAPTION>{caption}</HIERARCHY_CAPTION>
-            <DIMENSION_TYPE>3</DIMENSION_TYPE>
+            <DIMENSION_TYPE>{dim_type}</DIMENSION_TYPE>
             <HIERARCHY_CARDINALITY>{cardinality}</HIERARCHY_CARDINALITY>
             <DEFAULT_MEMBER>{all_member}</DEFAULT_MEMBER>
             <ALL_MEMBER>{all_member}</ALL_MEMBER>
@@ -83,7 +91,7 @@ pub fn get_hierarchies_response() -> String {
             <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
             <HIERARCHY_IS_VISIBLE>{visible}</HIERARCHY_IS_VISIBLE>
-            <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
+            <HIERARCHY_ORIGIN>{hier_origin}</HIERARCHY_ORIGIN>
             <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
             <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
             <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
@@ -95,13 +103,56 @@ pub fn get_hierarchies_response() -> String {
             caption = xml_escape(&d.caption),
             hier_u = xml_escape(&d.hierarchy_unique_name()),
             guid = 20 + i as u32,
+            dim_type = dim_type,
             cardinality = d.cardinality_hint,
             all_member = xml_escape(&d.all_member_unique_name()),
             visible = d.visible,
+            hier_origin = hier_origin,
             catalog = project.config.catalog,
             cube = project.config.cube,
         ));
     }
 
     discover_rowset_envelope(UUID_TYPE, HIER_ROW_FIELDS, &rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::project::project::ProxyProject;
+    use crate::project::project::with_test_project;
+
+    #[test]
+    fn date_dim_has_correct_hierarchy_origin() {
+        // project3 has Date with hierarchy_levels + is_date_role=true
+        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let resp = super::get_hierarchies_response();
+            // Date hierarchy should have HIERARCHY_ORIGIN=1, DIMENSION_TYPE=1
+            assert!(
+                resp.contains("<HIERARCHY_ORIGIN>1</HIERARCHY_ORIGIN>"),
+                "Date should have HIERARCHY_ORIGIN=1 (user hierarchy)"
+            );
+            assert!(
+                resp.contains("<DIMENSION_TYPE>1</DIMENSION_TYPE>"),
+                "Date should have DIMENSION_TYPE=1 (Time)"
+            );
+        });
+    }
+
+    #[test]
+    fn regular_dim_has_default_origin() {
+        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let resp = super::get_hierarchies_response();
+            // Category hierarchy should have HIERARCHY_ORIGIN=2, DIMENSION_TYPE=3
+            assert!(
+                resp.contains("<HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>"),
+                "Regular dims should have HIERARCHY_ORIGIN=2"
+            );
+            assert!(
+                resp.contains("<DIMENSION_TYPE>3</DIMENSION_TYPE>"),
+                "Regular dims should have DIMENSION_TYPE=3"
+            );
+        });
+    }
 }
