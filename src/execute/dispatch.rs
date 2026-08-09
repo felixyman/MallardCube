@@ -1,7 +1,7 @@
 use crate::execute_builders::{
     get_execute_cellset_response, get_execute_dax_response, get_execute_mdx_response,
 };
-use crate::mdx_semantic::{is_dax, is_mdx_select};
+use crate::mdx_semantic::{is_dax, is_drillthrough, is_mdx_select};
 /// Execute dispatch.
 ///
 /// Routes incoming MDX/DAX statements to the correct response builder.
@@ -24,11 +24,123 @@ pub fn get_empty_execute_response() -> String {
 pub fn get_execute_statement_response(statement: &str) -> String {
     if is_dax(statement) {
         get_execute_dax_response(statement)
+    } else if is_drillthrough(statement) {
+        get_execute_drillthrough_response(statement)
     } else if is_mdx_select(statement) {
         get_execute_cellset_response(statement)
     } else {
         get_execute_mdx_response(statement)
     }
+}
+
+pub fn get_execute_drillthrough_response(statement: &str) -> String {
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    let table = model.primary_table_name();
+
+    // Extract slicer filters from WHERE clause members like
+    // [Territory].[Territory].&[Northeast] or [Date].[Date].[Year].&[2024].
+    // Reuses the same bracket/key parsers the drilldown path uses.
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut pos = 0usize;
+    while let Some(rel) = statement[pos..].find(".&[") {
+        let abs = pos + rel;
+        let key_len = crate::mdx_semantic::parse_amp_key(&statement[abs..])
+            .map(|k| {
+                // Backtrack to find the opening [Dim] bracket.
+                // DRILLTHROUGH uses (...), not {[...]}, so search for any [.
+                let prefix = &statement[..abs];
+                let bracket = prefix
+                    .rfind(",[")
+                    .or_else(|| prefix.rfind("(["))
+                    .unwrap_or(0);
+                let member = &statement[bracket + 1..abs + 3 + k.len() + 1];
+                if let Some(dim_name) = crate::mdx_semantic::first_bracket(member) {
+                    if dim_name != "Measures" {
+                        if let Some(dim) = model.dim_def_opt(&dim_name) {
+                            let col = model
+                                .rel_for_dimension(&dim_name)
+                                .map(|r| r.fact_column.as_str())
+                                .unwrap_or(&dim.physical_field);
+                            where_clauses.push(format!(
+                                "CAST({col} AS VARCHAR) LIKE '{}%'",
+                                k.replace('\'', "''")
+                            ));
+                        }
+                    }
+                }
+                k.len()
+            })
+            .unwrap_or(1);
+        pos = abs + 3 + key_len + 1;
+    }
+
+    let sql = if where_clauses.is_empty() {
+        format!("SELECT * FROM {table} LIMIT 1000")
+    } else {
+        format!(
+            "SELECT * FROM {table} WHERE {} LIMIT 1000",
+            where_clauses.join(" AND ")
+        )
+    };
+    let backend = crate::backend::Backend::get();
+    let rows = backend.query_rows(&sql);
+    let col_names = backend.query_column_names(&sql);
+    build_drillthrough_rowset(&col_names, rows, statement)
+}
+
+fn build_drillthrough_rowset(
+    col_names: &[String],
+    rows: Vec<Vec<String>>,
+    _statement: &str,
+) -> String {
+    let mut xml_rows = String::new();
+    for row in &rows {
+        xml_rows.push_str("          <row>\n");
+        for (i, col) in col_names.iter().enumerate() {
+            let val = row.get(i).map(|s| s.as_str()).unwrap_or("");
+            let safe_col = col.replace(' ', "_x0020_").replace('.', "_x002E_");
+            xml_rows.push_str(&format!(
+                "            <{safe_col}>{}</{safe_col}>\n",
+                crate::response::xml_escape(val),
+            ));
+        }
+        xml_rows.push_str("          </row>\n");
+    }
+
+    let mut schema = String::new();
+    schema.push_str(r#"              <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql" elementFormDefault="qualified">
+                <xsd:element name="root">
+                  <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
+                </xsd:element>
+                <xsd:complexType name="row">
+                  <xsd:sequence>
+"#);
+    for col in col_names {
+        let safe_col = col.replace(' ', "_x0020_").replace('.', "_x002E_");
+        schema.push_str(&format!(
+            r#"                    <xsd:element sql:field="{col}" name="{safe_col}" type="xsd:string" minOccurs="0"/>
+"#,
+        ));
+    }
+    schema.push_str(
+        r#"                  </xsd:sequence>
+                </xsd:complexType>
+              </xsd:schema>
+"#,
+    );
+
+    let inner = format!(
+        r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
+      <return>
+        <root xmlns="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+{schema}
+{xml_rows}
+        </root>
+      </return>
+    </ExecuteResponse>"#
+    );
+    wrap_in_soap_envelope(&inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +301,48 @@ mod tests {
             let mut stmt = conn.prepare(sql).expect("prepare query_strings");
             stmt.query_map([], |r| r.get::<_, String>(0))
                 .expect("query_map query_strings")
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+
+        fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
+            let conn = self.0.lock().unwrap();
+            let upper = sql.to_uppercase();
+            let from_pos = upper.find("FROM ").unwrap_or(0);
+            let after_from = &sql[from_pos + 5..].trim();
+            let table = after_from.split_whitespace().next().unwrap_or("?");
+            let pragma = format!("SELECT count(*) FROM pragma_table_info('{table}')");
+            let col_count: usize = conn.query_row(&pragma, [], |r| r.get(0)).unwrap_or(0);
+            let mut stmt = conn.prepare(sql).expect("prepare query_rows");
+            if col_count > 0 {
+                stmt.query_map([], move |r| {
+                    let mut cols = Vec::with_capacity(col_count);
+                    for i in 0..col_count {
+                        cols.push(crate::backend::val_to_string(
+                            r.get::<_, duckdb::types::Value>(i)
+                                .unwrap_or(duckdb::types::Value::Null),
+                        ));
+                    }
+                    Ok(cols)
+                })
+                .expect("query_map query_rows")
+                .filter_map(|r| r.ok())
+                .collect()
+            } else {
+                vec![]
+            }
+        }
+
+        fn query_column_names(&self, sql: &str) -> Vec<String> {
+            let conn = self.0.lock().unwrap();
+            let upper = sql.to_uppercase();
+            let from_pos = upper.find("FROM ").unwrap_or(0);
+            let after_from = &sql[from_pos + 5..].trim();
+            let table = after_from.split_whitespace().next().unwrap_or("?");
+            let pragma = format!("SELECT name FROM pragma_table_info('{table}') ORDER BY cid");
+            let mut stmt = conn.prepare(&pragma).expect("prepare pragma_table_info");
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .expect("query_map pragma")
                 .filter_map(|r| r.ok())
                 .collect()
         }
@@ -1797,6 +1951,64 @@ mod tests {
                 mt_parsed > 0.0,
                 "Medeltid should return > 0 through proxy execution, got {mt_parsed}"
             );
+        });
+    }
+
+    #[test]
+    fn contoso_sales_amount_returns_data() {
+        use duckdb::Connection;
+        let project =
+            crate::project::project::ProxyProject::load("generated_contoso/proxy-config.json")
+                .expect("load contoso config");
+        let conn = Connection::open("generated_contoso/data/sales.db").expect("open contoso db");
+        crate::project::project::with_test_project(project, || {
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+            let mdx = "SELECT FROM [SALES] WHERE ([Measures].[Sales Amount]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml = crate::execute_builders::get_execute_cellset_response_with_backend(
+                mdx,
+                &backend,
+                &crate::proxy_project::project().model,
+            );
+            assert!(
+                xml.contains("<CellData>"),
+                "Contoso Sales Amount should produce cellset"
+            );
+            assert!(
+                xml.contains("7305939"),
+                "Sales Amount should be > 7M, got {:?}",
+                &xml[..xml.len().min(500)]
+            );
+        });
+    }
+
+    #[test]
+    fn drilldown_member_year_to_quarter() {
+        with_project3(|| {
+            let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR"##;
+            let xml = get_execute_statement_response(mdx);
+            assert!(xml.contains("<CellData>"), "should produce cellset");
+            assert!(
+                xml.contains("<Caption>2024</Caption>"),
+                "should have year as parent"
+            );
+            assert!(
+                xml.contains("<Caption>1</Caption>"),
+                "should have quarter 1"
+            );
+            assert!(
+                xml.contains("<Caption>2</Caption>"),
+                "should have quarter 2"
+            );
+            assert!(
+                xml.contains("<Caption>3</Caption>"),
+                "should have quarter 3"
+            );
+            assert!(
+                xml.contains("<Caption>4</Caption>"),
+                "should have quarter 4"
+            );
+            // Should have real values
+            assert!(xml.contains("xsd:double"), "should have numeric values");
         });
     }
 }

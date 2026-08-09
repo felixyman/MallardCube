@@ -17,6 +17,7 @@ pub struct MemberConfig {
     pub l_name: String,
     pub l_num: i32,
     pub display_info: u32,
+    pub children_cardinality: u32,
     /// Extra dimension properties: (element_tag, value).  Do NOT include
     /// the standard five (UName / Caption / LName / LNum / DisplayInfo) here.
     pub dim_props: Vec<(String, String)>,
@@ -94,6 +95,11 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
             &hier_qualified(p, "[DISPLAY_INFO]"),
             "xsd:unsignedInt",
         ),
+        (
+            "CHILDREN_CARDINALITY",
+            &hier_qualified(p, "[CHILDREN_CARDINALITY]"),
+            "xsd:unsignedInt",
+        ),
     ];
     for (tag, qname, typ) in standard {
         out.push_str(&format!(
@@ -120,6 +126,7 @@ fn render_member(m: &MemberConfig) -> String {
                     <LName>{l}</LName>
                     <LNum>{ln}</LNum>
                     <DisplayInfo>{di}</DisplayInfo>
+                    <CHILDREN_CARDINALITY>{cc}</CHILDREN_CARDINALITY>
 "#,
         hier = m.hierarchy,
         u = m.u_name,
@@ -127,6 +134,7 @@ fn render_member(m: &MemberConfig) -> String {
         l = m.l_name,
         ln = m.l_num,
         di = m.display_info,
+        cc = m.children_cardinality,
     ));
     for (tag, val) in &m.dim_props {
         out.push_str(&format!(

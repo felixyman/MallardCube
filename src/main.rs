@@ -468,20 +468,19 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
             debug_write(body);
-            let (resp, timings) =
+
+            let resp = if mdx_semantic::is_drillthrough(mdx) {
+                execute::dispatch::get_execute_drillthrough_response(mdx)
+            } else {
                 execute_builders::get_execute_cellset_response_with_backend_and_context(
                     mdx, backend, user, config,
-                );
+                )
+                .0
+            };
+
             debug_write("RESPONSE XML:");
             debug_write(&resp);
-            debug_write(&timings.to_log_line());
-            xmla_proxy::xmla_trace::trace_request(
-                "ExecuteStatement",
-                body,
-                &resp,
-                Some(mdx),
-                Some(&timings),
-            );
+            xmla_proxy::xmla_trace::trace_request("ExecuteStatement", body, &resp, Some(mdx), None);
             resp
         }
 

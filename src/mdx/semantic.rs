@@ -13,6 +13,11 @@ pub fn is_dax(statement: &str) -> bool {
     upper.starts_with("EVALUATE") || upper.starts_with("DEFINE")
 }
 
+pub fn is_drillthrough(statement: &str) -> bool {
+    let upper = statement.trim_start().to_uppercase();
+    upper.starts_with("DRILLTHROUGH")
+}
+
 pub fn is_mdx_select(mdx: &str) -> bool {
     let trimmed = mdx.trim_start();
     let upper = trimmed.to_uppercase();
@@ -186,9 +191,53 @@ pub struct SemanticQuery {
     pub drilldown_member_hierarchy: Option<String>,
     /// Explicitly requested measure from MDX (WHERE or columns).
     pub measure: Option<String>,
+    /// When drilling a multi-level hierarchy, which level index to group by.
+    pub drilldown_level: Option<usize>,
 }
 
 // ---- main classification entry point ----
+
+fn extract_drill_member(mdx: &str) -> Option<(String, String, String)> {
+    let pos = mdx.rfind(".&[")?;
+    let prefix = &mdx[..pos];
+    let bracket_open = prefix.rfind("{[")?;
+    let member_ref = &mdx[bracket_open + 1..];
+    let close = member_ref.find('}')?;
+    let member = &member_ref[..close];
+    let dim = first_bracket(member)?;
+    let level = third_bracket(member).unwrap_or_default();
+    let key = parse_amp_key(member)?;
+    if key.is_empty() || dim.is_empty() {
+        return None;
+    }
+    Some((dim, level, key))
+}
+
+pub(crate) fn first_bracket(s: &str) -> Option<String> {
+    let rest = s.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    Some(rest[..close].to_string())
+}
+
+fn third_bracket(s: &str) -> Option<String> {
+    let mut rest = s.strip_prefix('[')?;
+    // skip [Dim]
+    let close = rest.find(']')?;
+    rest = &rest[close + 1..];
+    // skip .[Hier]
+    rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    rest = &rest[close + 1..];
+    // extract [Level]
+    rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    Some(rest[..close].to_string())
+}
+
+pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
+    let idx = s.find(".&[")?;
+    Some(s[idx + 3..].split(']').next()?.to_string())
+}
 
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let parsed = crate::mdx_parser::parse_mdx(mdx);
@@ -236,11 +285,43 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
     let project = crate::proxy_project::project();
 
+    let mut kind = kind;
+    let mut drilldown_level: Option<usize> = parsed
+        .axis_dimension_ids
+        .first()
+        .and_then(|id| project.model.dim_def_opt(id))
+        .filter(|d| !d.levels.is_empty())
+        .map(|_| 0);
+
+    let mut extra_filters: Vec<DimensionFilter> = Vec::new();
+
+    if parsed.has_drilldown || parsed.has_drilldown_member {
+        if let Some((dim_name, level_name, key)) = extract_drill_member(mdx) {
+            if let Some(dim) = project.model.dim_def_opt(&dim_name) {
+                if let Some(level_idx) = dim.levels.iter().position(|l| l.name == level_name) {
+                    drilldown_level = Some(level_idx + 1);
+                    extra_filters.push(DimensionFilter {
+                        dimension: dim_name,
+                        members: vec![key],
+                    });
+                    // Route to the single-dimension drilldown renderer,
+                    // not the DrilldownMemberProbe 2-dimension path.
+                    if kind == SemanticQueryKind::DrilldownMemberProbe {
+                        kind = SemanticQueryKind::DrilldownCategories;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut filters = filters_from_parsed(&parsed);
+    filters.extend(extra_filters);
+
     SemanticQuery {
         kind,
         dim_props: parsed.dim_props.clone(),
         cell_props: parsed.cell_props.clone(),
-        filters: filters_from_parsed(&parsed),
+        filters,
         cchildren_leaf_name,
         row_dimension: parsed
             .axis_dimension_ids
@@ -264,5 +345,78 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .collect(),
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
+        drilldown_level,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_drillmember_year() {
+        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+        let r = extract_drill_member(mdx);
+        assert_eq!(r, Some(("Date".into(), "Year".into(), "2024".into())));
+    }
+
+    #[test]
+    fn extract_drillmember_quarter() {
+        let mdx = "{[Dim].[Hier].[Quarter].&[2]}";
+        let r = extract_drill_member(mdx);
+        assert_eq!(r, Some(("Dim".into(), "Quarter".into(), "2".into())));
+    }
+
+    #[test]
+    fn extract_drillmember_all_skips() {
+        let mdx = "DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)";
+        let r = extract_drill_member(mdx);
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn extract_drillmember_no_amp() {
+        let mdx = "{[Date].[Date].[Year]}";
+        let r = extract_drill_member(mdx);
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn first_bracket_valid() {
+        assert_eq!(
+            first_bracket("[Date].[Date].[Year].&[2024]"),
+            Some("Date".into())
+        );
+    }
+
+    #[test]
+    fn first_bracket_empty() {
+        assert_eq!(first_bracket("no brackets"), None);
+    }
+
+    #[test]
+    fn third_bracket_level() {
+        assert_eq!(
+            third_bracket("[Dim].[Hier].[Level].&[key]"),
+            Some("Level".into())
+        );
+    }
+
+    #[test]
+    fn third_bracket_no_level() {
+        assert_eq!(third_bracket("[Dim].[Hier].&[key]"), None);
+    }
+
+    #[test]
+    fn amp_key_normal() {
+        assert_eq!(
+            parse_amp_key("[Date].[Date].[Year].&[2024]"),
+            Some("2024".into())
+        );
+    }
+
+    #[test]
+    fn amp_key_no_amp() {
+        assert_eq!(parse_amp_key("[Date].[Date].[Year]"), None);
     }
 }

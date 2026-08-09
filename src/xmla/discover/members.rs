@@ -271,6 +271,194 @@ fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(
     build_leaf_member_rows(&project.model, backend, user, config)
 }
 
+/// Query children of a specific multi-level hierarchy member.
+/// Parses filter like `[Date].[Date].[Year].&[2025]`, resolves the next
+/// level's column, and queries DuckDB directly.  Returns None if the
+/// filter doesn't match a multi-level dimension.
+fn query_level_children<B: QueryBackend + ?Sized>(
+    filter: &str,
+    _existing_rows: &[MemberRow],
+    backend: &B,
+) -> Option<Vec<MemberRow>> {
+    let decoded = filter.replace("&amp;", "&");
+    // Parse [Hier].[Hier].[Level].&[key] format
+    // Extract: hier_path, level_name, key
+    let (hier_path, level_name, key) = parse_level_member(&decoded)?;
+    let project = proxy_project::project();
+    let model = &project.model;
+    // Find the dimension whose hierarchy matches
+    let dim = model
+        .dimensions
+        .iter()
+        .find(|d| d.hierarchy_unique_name() == hier_path)?;
+    // Find the current level
+    let level_idx = dim.levels.iter().position(|l| l.name == level_name)?;
+    // Get the next level (children)
+    let next_level = dim.levels.get(level_idx + 1)?;
+    // Build SQL: SELECT DISTINCT next_level.column FROM table
+    // WHERE current_level.column = 'key' ORDER BY 1
+    let table = model.dim_table_for_discovery(&dim.id);
+    let parent_col = &dim.levels[level_idx].column;
+    // First get the parent member to compute its cardinality
+    let count_sql = format!(
+        "SELECT COUNT(DISTINCT {}) FROM {} WHERE CAST({} AS VARCHAR) = '{}'",
+        next_level.column, table, parent_col, key
+    );
+    let child_count = backend.query_count(&count_sql);
+    let child_cardinality = if level_idx + 2 < dim.levels.len() {
+        dim.levels[level_idx + 2].cardinality.max(1)
+    } else {
+        0
+    };
+    let sql = format!(
+        "SELECT DISTINCT CAST({} AS VARCHAR) FROM {} WHERE CAST({} AS VARCHAR) = '{}' ORDER BY 1",
+        next_level.column, table, parent_col, key
+    );
+    let child_names = backend.query_strings(&sql);
+    if child_names.is_empty() {
+        return Some(vec![]);
+    }
+    let parent_u = format!("{}.[{}].&[{}]", hier_path, level_name, key);
+    let mut rows: Vec<MemberRow> = child_names
+        .iter()
+        .enumerate()
+        .map(|(ord, name)| {
+            let child_u = format!("{}.[{}].&[{}]", hier_path, next_level.name, name);
+            let child_level_u = format!("{}.[{}]", hier_path, next_level.name);
+            let xml = member_xml_for_discover(
+                &dim.dimension_unique_name(),
+                &dim.hierarchy_unique_name(),
+                &child_level_u,
+                (level_idx + 2) as u32,
+                (ord + 1) as u32,
+                name,
+                &child_u,
+                name,
+                child_cardinality as u32,
+                (level_idx + 1) as u32,
+                Some(&parent_u),
+                name,
+            );
+            MemberRow {
+                xml,
+                dimension_id: dim.id.clone(),
+                member_unique_name: child_u,
+                parent_unique_name: Some(parent_u.clone()),
+            }
+        })
+        .collect();
+    // Prepend the parent member
+    let parent_cardinality = child_count;
+    let parent_level_u = format!("{}.[{}]", hier_path, level_name);
+    let parent_xml = member_xml_for_discover(
+        &dim.dimension_unique_name(),
+        &dim.hierarchy_unique_name(),
+        &parent_level_u,
+        (level_idx + 1) as u32,
+        0,
+        &key,
+        &parent_u,
+        &key,
+        parent_cardinality,
+        0,
+        Some(&dim.all_member_unique_name()),
+        &key,
+    );
+    rows.insert(
+        0,
+        MemberRow {
+            xml: parent_xml,
+            dimension_id: dim.id.clone(),
+            member_unique_name: parent_u.clone(),
+            parent_unique_name: Some(dim.all_member_unique_name()),
+        },
+    );
+    Some(rows)
+}
+
+/// Try to parse `[Hier].[Hier].[Level].&[key]` into components.
+fn parse_level_member(filter: &str) -> Option<(String, String, String)> {
+    let rest = filter.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let _dim = &rest[..close];
+    let rest = &rest[close + 1..];
+    let rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    let hier_part = &rest[..close];
+    let rest = &rest[close + 1..];
+    let rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    let level = &rest[..close];
+    let rest = &rest[close + 1..];
+    let rest = rest.strip_prefix(".&[")?;
+    let close = rest.find(']')?;
+    let key = rest[..close].to_string();
+    let hier_path = format!("[{}].[{}]", _dim, hier_part);
+    Some((hier_path, level.to_string(), key))
+}
+
+fn member_xml_for_discover(
+    dim_u: &str,
+    hier_u: &str,
+    level_u: &str,
+    level_num: u32,
+    member_ordinal: u32,
+    member_name: &str,
+    member_unique_name: &str,
+    member_caption: &str,
+    children_cardinality: u32,
+    parent_level: u32,
+    parent_unique_name: Option<&str>,
+    member_key: &str,
+) -> String {
+    let project = proxy_project::project();
+    let pun = parent_unique_name
+        .map(|p| {
+            format!(
+                "            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n",
+                xml_escape(p)
+            )
+        })
+        .unwrap_or_default();
+    let parent_count = if parent_unique_name.is_some() { 1 } else { 0 };
+    format!(
+        r#"          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_e}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_e}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>{level_e}</LEVEL_UNIQUE_NAME>
+            <LEVEL_NUMBER>{ln}</LEVEL_NUMBER>
+            <MEMBER_ORDINAL>{mo}</MEMBER_ORDINAL>
+            <MEMBER_NAME>{mn}</MEMBER_NAME>
+            <MEMBER_UNIQUE_NAME>{mu}</MEMBER_UNIQUE_NAME>
+            <MEMBER_TYPE>1</MEMBER_TYPE>
+            <MEMBER_GUID>{guid}</MEMBER_GUID>
+            <MEMBER_CAPTION>{mc}</MEMBER_CAPTION>
+            <CHILDREN_CARDINALITY>{cc}</CHILDREN_CARDINALITY>
+            <PARENT_LEVEL>{pl}</PARENT_LEVEL>{pun}
+            <PARENT_COUNT>{pc}</PARENT_COUNT>
+            <MEMBER_KEY>{mk}</MEMBER_KEY>
+          </row>
+"#,
+        catalog = project.config.catalog,
+        cube = project.config.cube,
+        dim_e = xml_escape(dim_u),
+        hier_e = xml_escape(hier_u),
+        level_e = xml_escape(level_u),
+        ln = level_num,
+        mo = member_ordinal,
+        mn = xml_escape(member_name),
+        mu = xml_escape(member_unique_name),
+        mc = xml_escape(member_caption),
+        cc = children_cardinality,
+        pl = parent_level,
+        pc = parent_count,
+        mk = xml_escape(member_key),
+        guid = Uuid::new_v5(&Uuid::NAMESPACE_OID, member_unique_name.as_bytes()).to_string(),
+    )
+}
+
 fn all_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
@@ -320,15 +508,17 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
-    let rows = all_rows_with_backend(backend, user, config);
+    let mut rows = all_rows_with_backend(backend, user, config);
 
     let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
-        (Some(filter), Some(1)) => {
-            // 0x01 = CHILDREN — return children of the filtered member
+        (Some(filter), Some(1) | Some(8)) => {
+            if let Some(extra) = query_level_children(filter, &rows, backend) {
+                rows.extend(extra);
+            }
+            // Now search in the extended rows
             let mut children = find_children(&rows, filter);
-            // Also include the parent member itself before its children
             if let Some(parent) = find_member(&rows, filter) {
-                let mut result = vec![parent];
+                let mut result: Vec<&MemberRow> = vec![parent];
                 result.append(&mut children);
                 result
             } else {

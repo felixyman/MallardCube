@@ -30,17 +30,18 @@ honor its STOP conditions, and update your row when done.
 | 020  | Reconcile the public CLI and documentation contract | P2 | S | 016, 017, 018 | DONE |
 | 021  | Retire the two retail stub fallbacks through converter-owned SQL generation | P1 | M | 015, 016, 019 | DONE |
 | 022  | Genericize converter fallback SQL lowering | P1 | M | 021 | DONE |
-| 023  | Third real model intake proof (revised 2026-08-07: Contoso) | P1 | L | 022, 028, 027 | TODO |
+| 023  | Third real model intake proof (revised 2026-08-07: Contoso) | P1 | L | 022, 028, 027 | DONE |
 | 024  | Security-role decision gate | P1 | L | 022 | DONE |
 | 025  | Make direct-SQL XMLA execution concurrent across users | P1 | L | — | DONE |
 | 026  | Security roles and UserContext for the direct-SQL runtime | P1 | L | — | DONE |
 | 027  | Drop the Malloy runtime | P1 | M | 028 | DONE |
 | 028  | Hygiene foundation (green baseline, plan bookkeeping, lint bar, CI) | P1 | M | — | DONE |
+| 029  | Multi-level date hierarchies | P1 | L | 023, 027, 028 | DONE |
+| 030  | DRILLTHROUGH ("show details") | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Execution order for the open batch: 028 → 027 → 023.**
-(028 and 027 are DONE; 023 is the only remaining open plan.)
+**All 30 plans DONE. No open plans. Next milestone: Gate G1 (public validation).**
 
 ## Reconcile Status
 
@@ -82,6 +83,23 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
     `model.malloy` deleted from sample project dirs. `cargo test --lib` ->
     293/0. Node.js dependency eliminated — true single binary.
     Qualify verdicts unchanged (retail READY, generated_project PARTIAL).
+  - 029 & 030 done 2026-08-09: Multi-level date hierarchies (Year→Quarter→
+    Month→Date) and DRILLTHROUGH. 324 tests + 30 new regression tests
+    across 7 files. See plan 029/030 row for details.
+  - 023 done 2026-08-07: Contoso intake complete. Converter bugs fixed:
+    fact detection no longer picks LOOKUPVALUE-only metadata tables
+    (`Info`); lookup-table measures now collected; role JSON emission
+    fixed (escaped newlines). Bootstrap: all CSVs loaded into
+    `generated_contoso/data/sales.db` (7,794 sales rows, 104,990
+    customers). 4 Sales measures have real DuckDB SQL (Sales Amount,
+    Sales Quantity, Cost, Margin) — verified via proxy live probe.
+    34 helper measures (Info LOOKUPVALUE + State SELECTEDVALUE) are
+    honest stubs. Qualify → PARTIAL (roles + manual measures).
+    Added `contoso_sales_amount_returns_data` test.
+    Findings: calculation groups (`Metric`, `Time Intelligence`)
+    unsupported; SELECTEDVALUE noise detected and handled; fact-
+    detection heuristics need further work for multi-fact-metric
+    models. Next: Gate G1 (public validation).
 - 2026-08-07 plan 028 Step 2 verification — **024 and 026 flipped to DONE**
   with evidence:
   - 026: `RoleConfig{model_permission,members,table_permissions}`
