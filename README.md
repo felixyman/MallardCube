@@ -60,7 +60,7 @@ Save an `.odc` file for repeat connections:
 
 ## Project structure
 
-Each project is a directory containing two files:
+Each project is a directory containing at minimum one file:
 
 | File | Purpose |
 |------|---------|
@@ -75,12 +75,10 @@ Each project is a directory containing two files:
   "source_name": "sales_data",
   "table_name": "sales_fact",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "db_path": null,
   "dimensions": [
     {
       "id": "Category",
-      "malloy_name": "category",
       "physical_field": "category",
       "caption": "Category",
       "hierarchy_name": "Category",
@@ -95,8 +93,6 @@ Each project is a directory containing two files:
   "measures": [
     {
       "id": "Revenue",
-      "malloy_name": "total_revenue",
-      "physical_expr": "revenue.sum()",
       "sql_expr": "SUM(revenue)",
       "caption": "Revenue",
       "display_name": "Revenue (USD)",
@@ -109,11 +105,11 @@ Each project is a directory containing two files:
 }
 ```
 
-Key naming rules (see `docs/naming-contract.md`):
+Key naming rules:
 
 - **`id`** - Internal identifier for `QueryPlan`, `plan_key`, filter routing. Must be unique.
-- **`malloy_name`** - Must match the field/measure name in your `.malloy` source.
 - **`caption`** - Excel-visible label. Can include spaces and Unicode.
+- **`sql_expr`** - DuckDB SQL expression for the measure. Direct SQL is the only runtime.
 
 ### Multi-fact-table config
 
@@ -166,9 +162,11 @@ Sample projects live at the repo root.
 | Project | Description |
 |---------|-------------|
 | `project2/` | Renamed variant proving name independence. 2 dims, 1 measure. |
-| `project3/` | Default startup. 5 dims (incl. Date with time intelligence), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
+| `project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
 | `project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
-| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 measures (Total Revenue + 3 fallback). |
+| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
+| `generated_project/` | Large healthcare model (Swedish): ~50 dims, ~80 measures. Qualifies PARTIAL (roles without auth config). |
+| `generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
 
 ## Converting SSAS Tabular models
 
@@ -195,8 +193,8 @@ cargo test --lib
 
 324 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
-Excel replay/oracle verification, time intelligence, security roles, and
-compatibility-gate assertions.
+multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
+time intelligence, security roles, and compatibility-gate assertions.
 
 ## Compatibility gate
 
@@ -275,33 +273,36 @@ For detailed documentation:
 |------|-------------|
 | `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
-| `docs/naming-contract.md` | `id` vs `malloy_name` vs `caption` naming rules |
 | `docs/cellset-reference.md` | XMLA cellset layout reference |
-| `docs/ssas-to-malloy-conversion.md` | Tabular `.bim` -> Malloy + DuckDB conversion reference |
 
 ## Current scope
 
 **Works:**
 - Full Excel discover/metadata handshake (all required rowsets)
 - PivotTable execution: filtering, drilldown, crossjoin, collapse
+- Multi-level date hierarchies (Year→Quarter→Month→Date expand/collapse)
+- DRILLTHROUGH (double-click cell → filtered source rows)
 - Single or multiple fact tables with shared/scoped dimensions
-- One hierarchy per dimension: `(All)` + one leaf level
-- Up to 2 visible row dimensions
-- Direct SQL execution
-- Tabular Editor `.bim` structural conversion
 - Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
-- Explicit date-role dimension (flag-based, not dynamic MDX function parsing)
-- Structured fallback SQL with capability gates (scalar-only, grouped-specific, universal)
-- Compatibility gate: discover + execute validation for converted projects
+- Direct SQL execution (single runtime, no intermediate engine)
+- Row-level security (RLS) via SQL predicates
+- Object-level security (OLS) via table hiding
+- Model-level permission gating (read / administrator / none)
+- Trusted-proxy auth boundary (IIS/nginx → X-User header)
+- Tabular `.bim` / TMDL → proxy config converter
+- Structured fallback SQL with capability gates (6 generic DAX-lowering patterns)
+- Qualify migration readiness gate (READY / PARTIAL / BLOCKED)
+- Compatibility gate: discover + execute + replay validation
+- Three converted models proven (retail, healthcare, Contoso)
 
-**Partial / in progress:**
-- Fallback SQL for composite DAX measures (DIVIDE, CALCULATE, SUMX) — structural support exists, individual measure SQL must be written per model
-- Star-schema join execution at runtime
+**Partial:**
+- Fallback SQL for composite DAX — 6 generic patterns covered; genuinely unsupported patterns emit honest stubs
+- SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
 
 **Not yet:**
-- Multi-level hierarchies (Year → Quarter → Month → Day)
-- Postgres/MSSQL ingestion
-- Arrow/zero-copy transport
+- Attached data sources (MSSQL, Postgres, S3) — DuckDB extensions exist, not wired
+- Calculation groups
+- Native Kerberos — reverse proxy in front is the documented boundary
 
 ## Security and roles
 
@@ -418,25 +419,20 @@ translate DAX to SQL using the aliases above.
 
 ## Roadmap
 
-The project has completed its core engineering sprint (plans 001–010). Current
-direction:
+All 30 implementation plans complete (001–030). Next milestone is **Gate G1**
+(public validation): publish the project, gather real-world usage signals, and
+decide whether to proceed to Phase 4.
 
-1. **Prove 3 real SSAS Tabular models end-to-end** — load real customer data into
-   DuckDB, convert via `convert_tabular`, pass the compatibility gate, and
-   connect Excel. This surfaces model-specific blockers before generalizing.
+| # | Theme | Status |
+|---|-------|--------|
+| 001–003 | MDX parser → typed structural fields | DONE |
+| 004–018 | Generated project intake, time intelligence, fallback SQL, converter hardening | DONE |
+| 019–022 | Capability gates, CLI contract, retail stub retirement, generic DAX lowering | DONE |
+| 023 | Third model intake — Contoso (4 working measures, 34 helper stubs) | DONE |
+| 024–026 | Security roles: decision gate, user context, RLS/OLS enforcement | DONE |
+| 027 | Drop Malloy runtime — direct SQL is the only path | DONE |
+| 028 | Hygiene foundation: green baseline, lint bar, CI | DONE |
+| 029 | Multi-level date hierarchies (Year→Quarter→Month→Date) | DONE |
+| 030 | DRILLTHROUGH (slicer-aware "show details") | DONE |
 
-2. **Minimal DAX measure support** — add conversion patterns for common DAX
-   (DIVIDE, CALCULATE with simple filters, SUMX over single-table iterators)
-   so more converted measures are executable without manual SQL.
-
-3. **Date dimension population** — auto-generate a populated `date_dim` table
-   from the converter when date-role tables are detected, so time intelligence
-   works out-of-box for converted projects.
-
-4. **Multi-level hierarchies** — only after 3 real models prove single-level
-   hierarchies are sufficient for Excel browsing in practice.
-
-Bugs and technical debt are tracked in `plans/README.md` and the
-`considered and rejected` / `deferred` sections. The top 3 active concerns
-are the converter measure pipeline, the bound-adapter exhaustiveness check
-(previously SEC-04), and the multi-fact rendering known gap.
+Active concerns and deferred items are tracked in `plans/README.md`.
