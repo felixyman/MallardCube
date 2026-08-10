@@ -1,7 +1,10 @@
 pub mod catalogs;
 pub mod cubes;
+pub mod datasources;
 pub mod dimensions;
+pub mod enumerators;
 pub mod hierarchies;
+pub mod keywords;
 pub mod kpis;
 pub mod levels;
 pub mod literals;
