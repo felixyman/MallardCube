@@ -44,10 +44,11 @@ honor its STOP conditions, and update your row when done.
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
 | 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
 | 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | TODO |
+| 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 DONE. 031–036 are performance/adoption plans queued behind Gate G1. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 DONE. 031–037 are performance/adoption/compatibility plans. Next milestone: Gate G1 (public validation).**
 
 ## Reconcile Status
 
@@ -266,6 +267,8 @@ against these decisions.
 - 036 depends on Gate G1 success (AutoModel only makes sense if the project
   attracts non-SSAS-conversion users). Execution order: 031 → 032 → 033
   → 035, with 034 and 036 queued after.
+- 037 is independent (three XS DISCOVER rowset handlers, no dependency on
+  any other open plan). Can execute in any order.
 
 ## Findings considered and rejected
 
