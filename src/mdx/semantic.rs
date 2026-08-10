@@ -248,19 +248,12 @@ pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
     Some(s[idx + 3..].split(']').next()?.to_string())
 }
 
-fn extract_strtomember_measure(mdx: &str) -> Option<String> {
-    let pos = mdx.find("strtomember(\"")?;
-    let rest = &mdx[pos + 14..];
+fn extract_strtomember_target(mdx: &str) -> Option<String> {
+    let prefix = "strtomember(\"";
+    let pos = mdx.find(prefix)?;
+    let rest = &mdx[pos + prefix.len()..];
     let close = rest.find('"')?;
-    let full = &rest[..close];
-    // full looks like "[Measures].[Total Försäljning]"
-    // Extract just the measure name after the last dot-bracket pair
-    let measure_id = full
-        .split("].[")
-        .last()
-        .map(|s| s.trim_end_matches(']'))
-        .unwrap_or(full);
-    Some(measure_id.to_string())
+    Some(rest[..close].to_string())
 }
 
 fn extract_strtomember_properties(mdx: &str) -> Vec<String> {
@@ -281,7 +274,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let parsed = crate::mdx_parser::parse_mdx(mdx);
 
     if mdx.contains("strtomember(\"") {
-        let measure = extract_strtomember_measure(mdx);
+        let measure = extract_strtomember_target(mdx);
         let props = extract_strtomember_properties(mdx);
         return SemanticQuery {
             kind: SemanticQueryKind::MeasureMetadataProbe,
@@ -487,13 +480,22 @@ mod tests {
     }
 
     #[test]
-    fn extract_strtomember_measure_parses_brackets() {
-        // [Measures].[Total Försäljning] → "Total Försäljning"
+    fn extract_strtomember_target_parses_brackets() {
         assert_eq!(
-            extract_strtomember_measure(
+            extract_strtomember_target(
                 r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName'"##
             ),
-            Some("Total Försäljning".into())
+            Some("[Measures].[Total Försäljning]".into())
+        );
+    }
+
+    #[test]
+    fn extract_strtomember_target_parses_dim_member() {
+        assert_eq!(
+            extract_strtomember_target(
+                r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Category].[Category].&[Kategori A]").UniqueName'"##
+            ),
+            Some("[Category].[Category].&[Kategori A]".into())
         );
     }
 
@@ -509,7 +511,10 @@ mod tests {
         let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Försäljning]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Försäljning]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;
         let q = semantic_query_from_mdx(mdx);
         assert_eq!(q.kind, SemanticQueryKind::MeasureMetadataProbe);
-        assert_eq!(q.metadata_probe_measure, Some("Total Försäljning".into()));
+        assert_eq!(
+            q.metadata_probe_measure,
+            Some("[Measures].[Total Försäljning]".into())
+        );
         assert_eq!(q.metadata_probe_properties.len(), 3);
     }
 }

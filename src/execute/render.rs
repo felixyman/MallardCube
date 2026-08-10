@@ -569,16 +569,38 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
     backend: &B,
 ) -> String {
     let project = crate::proxy_project::project();
-    let measure_id = query.metadata_probe_measure.as_deref().unwrap_or("");
-    let m =
-        project.model.measures.iter().find(|m| {
+    let target = query.metadata_probe_measure.as_deref().unwrap_or("");
+    let is_measure = target.starts_with("[Measures]");
+
+    let (unique_name, caption, level_unique) = if is_measure {
+        let measure_id = target
+            .split("].[")
+            .last()
+            .map(|s| s.trim_end_matches(']'))
+            .unwrap_or(target);
+        let m = project.model.measures.iter().find(|m| {
             m.id == measure_id || m.caption == measure_id || m.display_name == measure_id
         });
-    let unique_name = m
-        .map(|m| m.measure_unique_name())
-        .unwrap_or_else(|| format!("[Measures].[{}]", measure_id));
-    let caption = m.map(|m| m.display_name.as_str()).unwrap_or(measure_id);
-    let level_unique = "[Measures].[MeasuresLevel]";
+        let un = m
+            .map(|m| m.measure_unique_name())
+            .unwrap_or_else(|| format!("[Measures].[{}]", measure_id));
+        let cap = m.map(|m| m.display_name.as_str()).unwrap_or(measure_id);
+        (
+            un,
+            cap.to_string(),
+            "[Measures].[MeasuresLevel]".to_string(),
+        )
+    } else {
+        let caption = target
+            .split("&[")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .unwrap_or("")
+            .to_string();
+        let level = extract_dim_hierarchy_name(target)
+            .unwrap_or_else(|| "[Measures].[MeasuresLevel]".to_string());
+        (target.to_string(), caption, level)
+    };
 
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
     let mut cells: Vec<cellset::CellConfig> = Vec::new();
@@ -586,8 +608,8 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
     for (i, prop) in query.metadata_probe_properties.iter().enumerate() {
         let val = match prop.as_str() {
             "UniqueName" => unique_name.clone(),
-            "caption" => caption.to_string(),
-            "level.UniqueName" => level_unique.to_string(),
+            "caption" => caption.clone(),
+            "level.UniqueName" => level_unique.clone(),
             _ => String::new(),
         };
         members.push(cellset::MemberConfig {
@@ -615,4 +637,15 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
     let slicer = full_slicer_axis_with_backend(query, backend);
 
     render_response(vec![axis0, slicer], cells, &query.cell_props)
+}
+
+fn extract_dim_hierarchy_name(target: &str) -> Option<String> {
+    let rest = target.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let dim = &rest[..close];
+    let rest = &rest[close + 1..];
+    let rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    let hier = &rest[..close];
+    Some(format!("[{}].[{}].[{}]", dim, hier, hier))
 }
