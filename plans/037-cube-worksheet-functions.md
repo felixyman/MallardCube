@@ -3,10 +3,11 @@
 ## Status
 
 - **Priority**: P2 (feature completeness)
-- **Effort**: XS
+- **Effort**: S (was XS; strtomember handling pushed it up)
 - **Risk**: LOW
 - **Depends on**: none
 - **Category**: compatibility
+- **Status**: DONE
 
 ## Why this matters
 

@@ -971,6 +971,8 @@ mod tests {
             drilldown_member_hierarchy: None,
             measure: None,
             drilldown_level: None,
+            metadata_probe_measure: None,
+            metadata_probe_properties: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1007,6 +1009,8 @@ mod tests {
             drilldown_member_hierarchy: None,
             measure: None,
             drilldown_level: None,
+            metadata_probe_measure: None,
+            metadata_probe_properties: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1043,6 +1047,8 @@ mod tests {
             drilldown_member_hierarchy: None,
             measure: Some("Cost".to_string()),
             drilldown_level: None,
+            metadata_probe_measure: None,
+            metadata_probe_properties: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1078,6 +1084,8 @@ mod tests {
             drilldown_member_hierarchy: None,
             measure: Some("Cost".to_string()),
             drilldown_level: None,
+            metadata_probe_measure: None,
+            metadata_probe_properties: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {

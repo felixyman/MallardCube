@@ -24,6 +24,10 @@ pub fn is_mdx_select(mdx: &str) -> bool {
     upper.starts_with("SELECT") || (upper.starts_with("WITH") && upper.contains("SELECT "))
 }
 
+pub fn is_measure_metadata_probe(mdx: &str) -> bool {
+    mdx.contains("strtomember(\"")
+}
+
 // ---- property parsing (delegates to nom parser) ----
 
 pub fn parse_dimension_properties(mdx: &str) -> Vec<String> {
@@ -169,6 +173,7 @@ pub enum SemanticQueryKind {
     DrilldownCategories,
     SlicerOnly,
     DrilldownMemberProbe,
+    MeasureMetadataProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +198,10 @@ pub struct SemanticQuery {
     pub measure: Option<String>,
     /// When drilling a multi-level hierarchy, which level index to group by.
     pub drilldown_level: Option<usize>,
+    /// Measure name parsed from strtomember() probe (CUBEVALUE metadata query).
+    pub metadata_probe_measure: Option<String>,
+    /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
+    pub metadata_probe_properties: Vec<String>,
 }
 
 // ---- main classification entry point ----
@@ -239,8 +248,58 @@ pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
     Some(s[idx + 3..].split(']').next()?.to_string())
 }
 
+fn extract_strtomember_measure(mdx: &str) -> Option<String> {
+    let pos = mdx.find("strtomember(\"")?;
+    let rest = &mdx[pos + 14..];
+    let close = rest.find('"')?;
+    let full = &rest[..close];
+    // full looks like "[Measures].[Total Försäljning]"
+    // Extract just the measure name after the last dot-bracket pair
+    let measure_id = full
+        .split("].[")
+        .last()
+        .map(|s| s.trim_end_matches(']'))
+        .unwrap_or(full);
+    Some(measure_id.to_string())
+}
+
+fn extract_strtomember_properties(mdx: &str) -> Vec<String> {
+    let mut props = Vec::new();
+    for part in mdx.split("MEMBER [Measures].[").skip(1) {
+        if part.contains("UniqueName") && !part.contains(".level.UniqueName") {
+            props.push("UniqueName".to_string());
+        } else if part.contains(".level.UniqueName") {
+            props.push("level.UniqueName".to_string());
+        } else if part.contains("properties(\"caption\")") {
+            props.push("caption".to_string());
+        }
+    }
+    props
+}
+
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let parsed = crate::mdx_parser::parse_mdx(mdx);
+
+    if mdx.contains("strtomember(\"") {
+        let measure = extract_strtomember_measure(mdx);
+        let props = extract_strtomember_properties(mdx);
+        return SemanticQuery {
+            kind: SemanticQueryKind::MeasureMetadataProbe,
+            dim_props: vec![],
+            cell_props: parsed.cell_props.clone(),
+            filters: vec![],
+            cchildren_leaf_name: None,
+            row_dimension: None,
+            axis_dimensions: vec![],
+            slicers: vec![],
+            excluded_members: vec![],
+            drilldown_member_hierarchy: None,
+            measure: None,
+            drilldown_level: None,
+            metadata_probe_measure: measure,
+            metadata_probe_properties: props,
+        };
+    }
 
     let kind = if parsed.has_with_member_cchildren {
         match &parsed.cchildren_target {
@@ -344,6 +403,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
         drilldown_level,
+        metadata_probe_measure: None,
+        metadata_probe_properties: vec![],
     }
 }
 
@@ -416,5 +477,39 @@ mod tests {
     #[test]
     fn amp_key_no_amp() {
         assert_eq!(parse_amp_key("[Date].[Date].[Year]"), None);
+    }
+
+    #[test]
+    fn is_measure_metadata_probe_detects_strtomember() {
+        assert!(is_measure_metadata_probe(
+            r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName'"##
+        ));
+    }
+
+    #[test]
+    fn extract_strtomember_measure_parses_brackets() {
+        // [Measures].[Total Försäljning] → "Total Försäljning"
+        assert_eq!(
+            extract_strtomember_measure(
+                r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName'"##
+            ),
+            Some("Total Försäljning".into())
+        );
+    }
+
+    #[test]
+    fn extract_strtomember_properties_parses_all_three() {
+        let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Försäljning]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Försäljning]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM"##;
+        let props = extract_strtomember_properties(mdx);
+        assert_eq!(props, vec!["UniqueName", "caption", "level.UniqueName"]);
+    }
+
+    #[test]
+    fn semantic_query_classifies_cubevalue_metadata_probe() {
+        let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Försäljning]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Försäljning]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;
+        let q = semantic_query_from_mdx(mdx);
+        assert_eq!(q.kind, SemanticQueryKind::MeasureMetadataProbe);
+        assert_eq!(q.metadata_probe_measure, Some("Total Försäljning".into()));
+        assert_eq!(q.metadata_probe_properties.len(), 3);
     }
 }

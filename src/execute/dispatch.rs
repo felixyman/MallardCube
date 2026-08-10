@@ -2010,4 +2010,24 @@ mod tests {
             assert!(xml.contains("xsd:double"), "should have numeric values");
         });
     }
+
+    #[test]
+    fn cubevalue_metadata_probe_returns_measure_info() {
+        with_project3(|| {
+            let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Revenue]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Revenue]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Revenue]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;
+            let xml = get_execute_statement_response(mdx);
+            assert!(
+                xml.contains("[Measures].[Revenue]"),
+                "should contain measure unique name"
+            );
+            assert!(
+                xml.contains("<Caption>Revenue</Caption>"),
+                "should contain measure caption"
+            );
+            assert!(
+                xml.contains("[Measures].[MeasuresLevel]"),
+                "should contain measures level"
+            );
+        });
+    }
 }

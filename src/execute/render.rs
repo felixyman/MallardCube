@@ -530,7 +530,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     result: &QueryResult,
     backend: &B,
 ) -> String {
-    if matches!(result, QueryResult::Empty) {
+    if matches!(result, QueryResult::Empty)
+        && !matches!(query.kind, SemanticQueryKind::MeasureMetadataProbe)
+    {
         return empty_cellset(query, backend);
     }
     match query.kind {
@@ -558,5 +560,58 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
             QueryResult::Grouped(_) => build_drilldown(query, result, backend),
             _ => build_drilldown_member(query, result, backend),
         },
+        SemanticQueryKind::MeasureMetadataProbe => build_measure_metadata_probe(query, backend),
     }
+}
+
+fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+) -> String {
+    let project = crate::proxy_project::project();
+    let measure_id = query.metadata_probe_measure.as_deref().unwrap_or("");
+    let m =
+        project.model.measures.iter().find(|m| {
+            m.id == measure_id || m.caption == measure_id || m.display_name == measure_id
+        });
+    let unique_name = m
+        .map(|m| m.measure_unique_name())
+        .unwrap_or_else(|| format!("[Measures].[{}]", measure_id));
+    let caption = m.map(|m| m.display_name.as_str()).unwrap_or(measure_id);
+    let level_unique = "[Measures].[MeasuresLevel]";
+
+    let mut members: Vec<cellset::MemberConfig> = Vec::new();
+    let mut cells: Vec<cellset::CellConfig> = Vec::new();
+
+    for (i, prop) in query.metadata_probe_properties.iter().enumerate() {
+        let val = match prop.as_str() {
+            "UniqueName" => unique_name.clone(),
+            "caption" => caption.to_string(),
+            "level.UniqueName" => level_unique.to_string(),
+            _ => String::new(),
+        };
+        members.push(cellset::MemberConfig {
+            hierarchy: "[Measures]".into(),
+            u_name: format!("[Measures].[XL_SD{}]", i),
+            caption: val.clone(),
+            l_name: "[Measures].[MeasuresLevel]".into(),
+            l_num: 0,
+            display_info: 0,
+            children_cardinality: 0,
+            dim_props: vec![],
+        });
+        cells.push(cellset::CellConfig {
+            ordinal: i as u32,
+            value: 127.0, // dummy, used as fmt_value below
+            fmt_value: val,
+            format_string: String::new(),
+            back_color: String::new(),
+            fore_color: String::new(),
+        });
+    }
+
+    let axis0 = member_list_axis("Axis0", measures_hierarchy(), members);
+    let slicer = full_slicer_axis_with_backend(query, backend);
+
+    render_response(vec![axis0, slicer], cells, &query.cell_props)
 }
