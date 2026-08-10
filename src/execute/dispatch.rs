@@ -2032,6 +2032,10 @@ mod tests {
                 xml.contains("<FmtValue>Revenue</FmtValue>"),
                 "should emit FmtValue with string metadata"
             );
+            assert!(
+                !xml.contains("<Value xsi:type=\"xsd:double\">127</Value>"),
+                "should NOT emit numeric Value for metadata probe"
+            );
         });
     }
 }
