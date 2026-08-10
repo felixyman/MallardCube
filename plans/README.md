@@ -44,7 +44,7 @@ honor its STOP conditions, and update your row when done.
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
 | 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
 | 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | TODO |
-| 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | TODO |
+| 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
