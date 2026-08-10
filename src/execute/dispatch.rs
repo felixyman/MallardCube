@@ -2028,6 +2028,10 @@ mod tests {
                 xml.contains("[Measures].[MeasuresLevel]"),
                 "should contain measures level"
             );
+            assert!(
+                xml.contains("<FmtValue>Revenue</FmtValue>"),
+                "should emit FmtValue with string metadata"
+            );
         });
     }
 }

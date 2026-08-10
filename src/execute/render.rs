@@ -613,5 +613,9 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
     let axis0 = member_list_axis("Axis0", measures_hierarchy(), members);
     let slicer = full_slicer_axis_with_backend(query, backend);
 
-    render_response(vec![axis0, slicer], cells, &query.cell_props)
+    let mut props = query.cell_props.clone();
+    if !props.iter().any(|p| p == "FORMATTED_VALUE") {
+        props.push("FORMATTED_VALUE".to_string());
+    }
+    render_response(vec![axis0, slicer], cells, &props)
 }
