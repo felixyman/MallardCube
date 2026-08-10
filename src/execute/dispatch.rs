@@ -2029,12 +2029,8 @@ mod tests {
                 "should contain measures level"
             );
             assert!(
-                xml.contains("<FmtValue>Revenue</FmtValue>"),
-                "should emit FmtValue with string metadata"
-            );
-            assert!(
-                !xml.contains("<Value xsi:type=\"xsd:double\">127</Value>"),
-                "should NOT emit numeric Value for metadata probe"
+                xml.contains("<Value xsi:type=\"xsd:string\">Revenue</Value>"),
+                "should emit string-typed Value with measure caption"
             );
         });
     }

@@ -602,23 +602,17 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
         });
         cells.push(cellset::CellConfig {
             ordinal: i as u32,
-            value: 127.0, // dummy, used as fmt_value below
-            fmt_value: val,
+            value: 0.0,
+            fmt_value: val.clone(),
             format_string: String::new(),
             back_color: String::new(),
             fore_color: String::new(),
+            string_value: Some(val),
         });
     }
 
     let axis0 = member_list_axis("Axis0", measures_hierarchy(), members);
     let slicer = full_slicer_axis_with_backend(query, backend);
 
-    let mut props: Vec<String> = query
-        .cell_props
-        .iter()
-        .filter(|p| *p != "VALUE")
-        .cloned()
-        .collect();
-    props.push("FORMATTED_VALUE".to_string());
-    render_response(vec![axis0, slicer], cells, &props)
+    render_response(vec![axis0, slicer], cells, &query.cell_props)
 }

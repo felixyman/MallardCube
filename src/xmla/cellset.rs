@@ -40,6 +40,8 @@ pub struct CellConfig {
     pub format_string: String,
     pub back_color: String,
     pub fore_color: String,
+    /// When set, emits `<Value xsi:type="xsd:string">` instead of numeric Value.
+    pub string_value: Option<String>,
 }
 
 /// An axis description — name, hierarchy identity, and the member list.
@@ -178,11 +180,18 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
             ord = cell.ordinal
         ));
         if resp.include_value {
-            out.push_str(&format!(
-                r#"              <Value xsi:type="xsd:double">{val}</Value>
+            if let Some(ref sv) = cell.string_value {
+                out.push_str(&format!(
+                    "              <Value xsi:type=\"xsd:string\">{}</Value>\n",
+                    sv
+                ));
+            } else {
+                out.push_str(&format!(
+                    r#"              <Value xsi:type="xsd:double">{val}</Value>
 "#,
-                val = cell.value,
-            ));
+                    val = cell.value,
+                ));
+            }
         }
         if resp.include_fmt_value {
             out.push_str(&format!(
