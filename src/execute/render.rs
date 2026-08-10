@@ -531,7 +531,10 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
 ) -> String {
     if matches!(result, QueryResult::Empty)
-        && !matches!(query.kind, SemanticQueryKind::MeasureMetadataProbe)
+        && !matches!(
+            query.kind,
+            SemanticQueryKind::MeasureMetadataProbe | SemanticQueryKind::MemberOnlyProbe
+        )
     {
         return empty_cellset(query, backend);
     }
@@ -561,7 +564,73 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
             _ => build_drilldown_member(query, result, backend),
         },
         SemanticQueryKind::MeasureMetadataProbe => build_measure_metadata_probe(query, backend),
+        SemanticQueryKind::MemberOnlyProbe => build_member_only_probe(query, backend),
     }
+}
+
+fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, backend: &B) -> String {
+    let mut members: Vec<cellset::MemberConfig> = Vec::new();
+    let mut cells: Vec<cellset::CellConfig> = Vec::new();
+
+    for (i, uname) in query.member_only_unames.iter().enumerate() {
+        let caption = uname
+            .split("&[")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .unwrap_or(uname)
+            .to_string();
+        let dim = uname.split(".[").next().unwrap_or(uname);
+        let hier = uname
+            .split(".[")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .unwrap_or("");
+        let lname = format!("{dim}.[{hier}].[{hier}]");
+        members.push(cellset::MemberConfig {
+            hierarchy: format!("{dim}.[{hier}]"),
+            u_name: uname.clone(),
+            caption,
+            l_name: lname,
+            l_num: 1,
+            display_info: 3,
+            children_cardinality: 0,
+            dim_props: vec![],
+        });
+        cells.push(cellset::CellConfig {
+            ordinal: i as u32,
+            value: 0.0,
+            fmt_value: String::new(),
+            format_string: String::new(),
+            back_color: String::new(),
+            fore_color: String::new(),
+            string_value: None,
+        });
+    }
+
+    let axis0 = member_list_axis(
+        "Axis0",
+        cellset::HierarchyConfig {
+            name: query
+                .member_only_unames
+                .first()
+                .map(|u| {
+                    let mut parts = u.split(".[");
+                    if let (Some(dim), Some(hier)) = (parts.next(), parts.next()) {
+                        let hier = hier.trim_end_matches(']');
+                        format!("{dim}.[{hier}]")
+                    } else {
+                        u.clone()
+                    }
+                })
+                .unwrap_or_else(|| "[Measures]".to_string()),
+            dim_prop_decls: vec![],
+        },
+        members,
+    );
+    let slicer = full_slicer_axis_with_backend(query, backend);
+
+    let props = vec!["CELL_ORDINAL".to_string()];
+    render_response(vec![axis0, slicer], cells, &props)
 }
 
 fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(

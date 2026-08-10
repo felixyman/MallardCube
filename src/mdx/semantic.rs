@@ -174,6 +174,7 @@ pub enum SemanticQueryKind {
     SlicerOnly,
     DrilldownMemberProbe,
     MeasureMetadataProbe,
+    MemberOnlyProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,6 +203,8 @@ pub struct SemanticQuery {
     pub metadata_probe_measure: Option<String>,
     /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
     pub metadata_probe_properties: Vec<String>,
+    /// Dimension member UName strings for MemberOnlyProbe (e.g. "[Category].[Category].&[Kategori A]").
+    pub member_only_unames: Vec<String>,
 }
 
 // ---- main classification entry point ----
@@ -291,6 +294,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             drilldown_level: None,
             metadata_probe_measure: measure,
             metadata_probe_properties: props,
+            member_only_unames: vec![],
         };
     }
 
@@ -323,6 +327,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                     } else {
                         SemanticQueryKind::SlicerOnly
                     }
+                } else if parsed.has_cols && !parsed.has_rows && !parsed.has_measures {
+                    SemanticQueryKind::MemberOnlyProbe
                 } else {
                     SemanticQueryKind::SlicerOnly
                 }
@@ -367,6 +373,12 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let mut filters = filters_from_parsed(&parsed);
     filters.extend(extra_filters);
 
+    let member_only_unames: Vec<String> = if kind == SemanticQueryKind::MemberOnlyProbe {
+        parse_member_only_unames(mdx)
+    } else {
+        vec![]
+    };
+
     SemanticQuery {
         kind,
         dim_props: parsed.dim_props.clone(),
@@ -398,7 +410,19 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_level,
         metadata_probe_measure: None,
         metadata_probe_properties: vec![],
+        member_only_unames,
     }
+}
+
+fn parse_member_only_unames(mdx: &str) -> Vec<String> {
+    let mut unames = Vec::new();
+    if let Some(start) = mdx.find("{[") {
+        let rest = &mdx[start + 2..];
+        if let Some(end) = rest.find('}') {
+            unames.push(rest[..end].to_string());
+        }
+    }
+    unames
 }
 
 #[cfg(test)]

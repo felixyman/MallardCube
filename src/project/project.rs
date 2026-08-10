@@ -973,6 +973,7 @@ mod tests {
             drilldown_level: None,
             metadata_probe_measure: None,
             metadata_probe_properties: vec![],
+            member_only_unames: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1011,6 +1012,7 @@ mod tests {
             drilldown_level: None,
             metadata_probe_measure: None,
             metadata_probe_properties: vec![],
+            member_only_unames: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1049,6 +1051,7 @@ mod tests {
             drilldown_level: None,
             metadata_probe_measure: None,
             metadata_probe_properties: vec![],
+            member_only_unames: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
@@ -1086,6 +1089,7 @@ mod tests {
             drilldown_level: None,
             metadata_probe_measure: None,
             metadata_probe_properties: vec![],
+            member_only_unames: vec![],
         };
         let plan = plan_from_semantic_with_model(&query, &p.model);
         match plan {
