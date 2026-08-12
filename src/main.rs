@@ -271,10 +271,13 @@ fn default_headers() -> HeaderMap {
         "text/xml; charset=utf-8".parse().unwrap(),
     );
     headers.insert(header::SERVER, "SSAS-Proxy/2.0".parse().unwrap());
-    headers.insert(header::CONNECTION, "close".parse().unwrap());
     headers.insert(
         HeaderName::from_static("x-transport-caps-negotiation-flags"),
         "0,0,0,0,0".parse().unwrap(),
+    );
+    headers.insert(
+        HeaderName::from_static("persistent-auth"),
+        "true".parse().unwrap(),
     );
     headers
 }
@@ -350,6 +353,13 @@ async fn handle_xmla(
     let cfg = config.clone();
     let backend_source = state.backend_source.clone();
     let response_body = tokio::task::spawn_blocking(move || {
+        let session_id = body_for_worker.find("SessionId=\"").and_then(|start| {
+            let after = start + 11;
+            body_for_worker[after..]
+                .find('"')
+                .map(|end| body_for_worker[after..after + end].to_string())
+        });
+        xmla_proxy::response::set_session_id(session_id);
         let backend = backend_source
             .checkout()
             .expect("failed to checkout DuckDB backend");

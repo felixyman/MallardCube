@@ -168,6 +168,18 @@ dimension's default member (the default measure).
 
 Without SlicerAxis, the cell data won't be properly mapped.
 
+### `<Tuples>` vs `NormTupleSet` (decision record)
+
+The SlicerAxis (and every axis) is emitted in the plain `<Tuples>` format above.
+Excel's MSOLAP client accepts this. We deliberately do **not** use the
+`NormTupleSet` optimized format for the SlicerAxis:
+
+- `NormTupleSet` was introduced once (commit `8fdaa53`) to mirror real SSAS
+  Tabular output, but it regressed both CUBEVALUE and PivotTable execution
+  (Excel raised "rowset store ... null value" and stopped rendering cells).
+- The plain `<Tuples>` SlicerAxis is the verified-working shape; keep it unless a
+  concrete Excel trace proves `NormTupleSet` is required.
+
 ### Member element rules
 
 1. `Hierarchy` attribute: value is the hierarchy unique name (e.g., `[Produktkategori].[Produktkategori]`)
