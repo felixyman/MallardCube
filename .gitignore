@@ -3,6 +3,7 @@ CONTEXT.md
 debug-last-run.log
 xmla-trace.jsonl
 data/generated.db
+*.db
 node_modules/
 build/
 conversion-inventory.json
