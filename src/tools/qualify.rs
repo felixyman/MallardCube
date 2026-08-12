@@ -206,7 +206,7 @@ pub fn run(args: Vec<String>) -> i32 {
     let config_path = args
         .get(1)
         .map(|s| s.as_str())
-        .unwrap_or("project3/proxy-config.json");
+        .unwrap_or("projects/project3/proxy-config.json");
     let trace_path = args.get(2).map(|s| s.as_str());
 
     let verdict = qualify(config_path, trace_path);
@@ -231,7 +231,10 @@ mod tests {
 
     #[test]
     fn generated_retail_analytics_is_ready_after_plan_021() {
-        let v = qualify("generated_retail_analytics/proxy-config.json", None);
+        let v = qualify(
+            "projects/generated_retail_analytics/proxy-config.json",
+            None,
+        );
         // Plan 021 retired all retail fallback stubs. All 4 measures have real SQL.
         // Plan 017 makes db_path resolve relative to config, so data/sales.db exists.
         assert_eq!(
@@ -245,7 +248,7 @@ mod tests {
 
     #[test]
     fn generated_project_is_partial_with_unsupported_roles() {
-        let v = qualify("generated_project/proxy-config.json", None);
+        let v = qualify("projects/generated_project/proxy-config.json", None);
         // Plan 014 retired both stub fallbacks. No auth config + roles defined.
         assert_eq!(
             v.label(),
@@ -264,8 +267,10 @@ mod tests {
 
     #[test]
     fn generated_project_has_no_stub_fallbacks() {
-        let p = crate::proxy_project::ProxyProject::load("generated_project/proxy-config.json")
-            .expect("load generated_project");
+        let p = crate::proxy_project::ProxyProject::load(
+            "projects/generated_project/proxy-config.json",
+        )
+        .expect("load generated_project");
         let stubs: Vec<_> = p
             .model
             .measures
@@ -290,7 +295,7 @@ mod tests {
     #[test]
     fn project3_is_ready() {
         // project3 is complete, has db_path=null (in-memory is intentional for demo)
-        let v = qualify("project3/proxy-config.json", None);
+        let v = qualify("projects/project3/proxy-config.json", None);
         // project3 has a null db_path so it should be PARTIAL
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
         // Has null db_path but that's by design for demo
@@ -318,7 +323,7 @@ mod tests {
     #[test]
     fn generated_retail_from_report_counts_manual_measures() {
         let p = crate::proxy_project::ProxyProject::load(
-            "generated_retail_analytics/proxy-config.json",
+            "projects/generated_retail_analytics/proxy-config.json",
         )
         .expect("load retail analytics");
         let manual: Vec<_> = p
@@ -345,8 +350,10 @@ mod tests {
 
     #[test]
     fn generated_project_has_known_stub_count() {
-        let p = crate::proxy_project::ProxyProject::load("generated_project/proxy-config.json")
-            .expect("load generated_project");
+        let p = crate::proxy_project::ProxyProject::load(
+            "projects/generated_project/proxy-config.json",
+        )
+        .expect("load generated_project");
         let stubs: Vec<_> = p
             .model
             .measures
@@ -375,7 +382,7 @@ mod tests {
         // is missing, replay is still skipped gracefully without touching the
         // global project singleton before trace_replay would need it.
         let v = qualify(
-            "project3/proxy-config.json",
+            "projects/project3/proxy-config.json",
             Some("nonexistent-trace.jsonl"),
         );
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();

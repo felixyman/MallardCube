@@ -77,7 +77,7 @@ enum Command {
     /// Qualify a converted project for Excel readiness
     Qualify {
         /// Path to proxy-config.json
-        #[arg(default_value = "project3/proxy-config.json")]
+        #[arg(default_value = "projects/project3/proxy-config.json")]
         config: String,
         /// Optional path to xmla-trace.jsonl for replay validation
         trace: Option<String>,
@@ -175,7 +175,7 @@ async fn run_server() {
 
     let config_path = std::env::var("PROXY_CONFIG")
         .ok()
-        .unwrap_or_else(|| "project3/proxy-config.json".into());
+        .unwrap_or_else(|| "projects/project3/proxy-config.json".into());
     proxy_project::init_project(Some(&config_path)).expect("init project");
 
     let state = {

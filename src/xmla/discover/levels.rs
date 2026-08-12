@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn date_dim_has_five_levels() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_levels_response();
             let date_section = &resp[resp.find("[Date]").unwrap_or(0)..];
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn single_dim_has_two_levels() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_levels_response();
             let cat_section = resp

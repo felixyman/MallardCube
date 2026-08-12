@@ -3,5 +3,9 @@ CONTEXT.md
 debug-last-run.log
 xmla-trace.jsonl
 data/generated.db
-/js/node_modules
+node_modules/
+build/
+conversion-inventory.json
+conversion-inventory.md
+skills-lock.json
 .slim/deepwork/

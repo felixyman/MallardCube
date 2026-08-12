@@ -13,7 +13,7 @@ Direct SQL is the only runtime path.
 cargo run
 ```
 
-Without configuration, the default `project3/` sample project (at repo root) loads with
+Without configuration, the default `projects/project3/` sample project (at repo root) loads with
 synthetic in-memory data and starts on `http://localhost:8080/xmla`.
 
 The server binds to `127.0.0.1:8080` by default. To expose it on all interfaces
@@ -161,12 +161,12 @@ Sample projects live at the repo root.
 
 | Project | Description |
 |---------|-------------|
-| `project2/` | Renamed variant proving name independence. 2 dims, 1 measure. |
-| `project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
-| `project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
-| `generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
-| `generated_project/` | Large healthcare model (Swedish): ~50 dims, ~80 measures. Qualifies PARTIAL (roles without auth config). |
-| `generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
+| `projects/project2/` | Renamed variant proving name independence. 2 dims, 1 measure. |
+| `projects/project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
+| `projects/project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
+| `projects/generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
+| `projects/generated_project/` | Large healthcare model (Swedish): ~50 dims, ~80 measures. Qualifies PARTIAL (roles without auth config). |
+| `projects/generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
 
 ## Converting SSAS Tabular models
 
@@ -233,8 +233,8 @@ The `qualify` subcommand gives a readiness verdict for a converted project
 before you connect Excel:
 
 ```bash
-cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json
-cargo run --bin xmla_proxy -- qualify generated_retail_analytics/proxy-config.json
+cargo run --bin xmla_proxy -- qualify projects/generated_project/proxy-config.json
+cargo run --bin xmla_proxy -- qualify projects/generated_retail_analytics/proxy-config.json
 ```
 
 Output: `READY`, `PARTIAL` (usable with caveats), or `BLOCKED` (stub fallbacks
@@ -246,23 +246,23 @@ or broken config — not Excel-safe). Reason codes are machine-readable.
    `cargo run --bin xmla_proxy -- inventory path/to/tabular_export/`
 
 2. **Convert** to a MallardCube project:
-   `cargo run --bin xmla_proxy -- convert-tabular path/to/tabular_export/ generated_project/`
+   `cargo run --bin xmla_proxy -- convert-tabular path/to/tabular_export/ projects/generated_project/`
 
 3. **Bootstrap** the database (for projects with date-role tables):
    ```bash
-   cd generated_project/
+   cd projects/generated_project/
    duckdb data/<cube>.db < bootstrap.sql
    # Then load your own data into the tables listed in schema.sql
    ```
 
 4. **Qualify** the output before Excel:
-   `cargo run --bin xmla_proxy -- qualify generated_project/proxy-config.json`
+   `cargo run --bin xmla_proxy -- qualify projects/generated_project/proxy-config.json`
 
 5. **Capture + replay** an Excel session to lock in compatibility:
    ```bash
-   XMLA_TRACE=1 PROXY_CONFIG=generated_project/proxy-config.json cargo run
+   XMLA_TRACE=1 PROXY_CONFIG=projects/generated_project/proxy-config.json cargo run
    # ... use Excel ...
-   cargo run --bin xmla_proxy -- trace-replay xmla-trace.jsonl generated_project/proxy-config.json
+   cargo run --bin xmla_proxy -- trace-replay xmla-trace.jsonl projects/generated_project/proxy-config.json
    ```
 
 ## Architecture

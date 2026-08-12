@@ -239,18 +239,19 @@ mod tests {
     }
 
     fn with_project3<T>(f: impl FnOnce() -> T) -> T {
-        let project = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let project =
+            ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(project, f)
     }
 
     fn with_retail_analytics<T>(f: impl FnOnce() -> T) -> T {
-        let project = ProxyProject::load("generated_retail_analytics/proxy-config.json")
+        let project = ProxyProject::load("projects/generated_retail_analytics/proxy-config.json")
             .expect("load generated_retail_analytics");
         with_test_project(project, f)
     }
 
     fn with_generated_project<T>(f: impl FnOnce() -> T) -> T {
-        let project = ProxyProject::load("generated_project/proxy-config.json")
+        let project = ProxyProject::load("projects/generated_project/proxy-config.json")
             .expect("load generated_project");
         with_test_project(project, f)
     }
@@ -1770,8 +1771,9 @@ mod tests {
         // The fallback returns a real value (0 on empty DB).
         with_retail_analytics(|| {
             let project = crate::proxy_project::project();
-            let conn = duckdb::Connection::open("generated_retail_analytics/data/sales.db")
-                .expect("open retail db");
+            let conn =
+                duckdb::Connection::open("projects/generated_retail_analytics/data/sales.db")
+                    .expect("open retail db");
             let backend = FileQueryBackend(std::sync::Mutex::new(conn));
 
             let mdx = "SELECT  FROM [SALES] WHERE ([Measures].[Total Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
@@ -1799,8 +1801,9 @@ mod tests {
     fn retail_analytics_config_has_no_placeholder_sql() {
         // Verify the checked-in config contract: no converted measure
         // should use SUM(1), SUM(...), AVG(...), etc. as sql_expr.
-        let config_text = std::fs::read_to_string("generated_retail_analytics/proxy-config.json")
-            .expect("read retail config");
+        let config_text =
+            std::fs::read_to_string("projects/generated_retail_analytics/proxy-config.json")
+                .expect("read retail config");
         let _line = config_text
             .lines()
             .find(|l| l.contains("sql_expr"))
@@ -1956,10 +1959,12 @@ mod tests {
     #[test]
     fn contoso_sales_amount_returns_data() {
         use duckdb::Connection;
-        let project =
-            crate::project::project::ProxyProject::load("generated_contoso/proxy-config.json")
-                .expect("load contoso config");
-        let conn = Connection::open("generated_contoso/data/sales.db").expect("open contoso db");
+        let project = crate::project::project::ProxyProject::load(
+            "projects/generated_contoso/proxy-config.json",
+        )
+        .expect("load contoso config");
+        let conn =
+            Connection::open("projects/generated_contoso/data/sales.db").expect("open contoso db");
         crate::project::project::with_test_project(project, || {
             let backend = FileQueryBackend(std::sync::Mutex::new(conn));
             let mdx = "SELECT FROM [SALES] WHERE ([Measures].[Sales Amount]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
