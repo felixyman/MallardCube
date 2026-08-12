@@ -7,13 +7,13 @@ use crate::axis_members::{
 use crate::backend::QueryBackend;
 use crate::cellset;
 use crate::engine::plan::QueryResult;
-use crate::response::xml_escape;
 /// Cellset render functions.
 ///
 /// Converts a `SemanticQuery` + `QueryResult` into an XMLA cellset
 /// XML string.  Each `build_*` function handles one query shape.
 /// `dispatch()` routes by `SemanticQueryKind`.
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::response::xml_escape;
 
 pub(crate) fn ordered_pair(
     dims: &[String],
@@ -583,7 +583,10 @@ fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, back
         // Extract [Dim] and [Hier] by parsing the first two [...] segments.
         let parts: Vec<&str> = uname.splitn(3, ']').collect();
         let dim = parts.first().map(|s| format!("{s}]")).unwrap_or_default();
-        let hier = parts.get(1).map(|s| s.strip_prefix(".[").unwrap_or(s)).unwrap_or("");
+        let hier = parts
+            .get(1)
+            .map(|s| s.strip_prefix(".[").unwrap_or(s))
+            .unwrap_or("");
         let hier_bracketed = format!("[{hier}]");
         if i == 0 {
             hier_name = format!("{dim}.{hier_bracketed}");

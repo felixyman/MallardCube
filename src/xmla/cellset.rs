@@ -299,7 +299,9 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
         olap_info.push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:string\"/>\n");
     }
     if r.include_cell_ordinal {
-        olap_info.push_str("              <CellOrdinal name=\"CELL_ORDINAL\" type=\"xsd:unsignedInt\"/>\n");
+        olap_info.push_str(
+            "              <CellOrdinal name=\"CELL_ORDINAL\" type=\"xsd:unsignedInt\"/>\n",
+        );
     }
     olap_info.push_str("            </CellInfo>\n          </OlapInfo>\n");
 
