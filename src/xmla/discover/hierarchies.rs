@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn date_dim_has_correct_hierarchy_origin() {
         // project3 has Date with hierarchy_levels + is_date_role=true
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_hierarchies_response();
             // Date hierarchy should have HIERARCHY_ORIGIN=1, DIMENSION_TYPE=1
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn regular_dim_has_default_origin() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_hierarchies_response();
             // Category hierarchy should have HIERARCHY_ORIGIN=2, DIMENSION_TYPE=3

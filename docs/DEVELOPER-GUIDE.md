@@ -9,7 +9,7 @@ How the SSAS Proxy works, module by module. For new developers.
 1. Init debug logging to `debug-last-run.log`.
 2. Load the proxy project: reads `PROXY_CONFIG` env var, parses
    `proxy-config.json`. Falls back to
-   `project3/` (at repo root) if no config is set.
+   `projects/project3/` (at repo root) if no config is set.
 3. Init DuckDB backend: opens a file-based database when `db_path` is
    set, otherwise creates an in-memory demo database with synthetic data.
 5. Start axum HTTP server on port 8080 at `POST /xmla`.
@@ -247,7 +247,7 @@ cargo test --lib
 
 | Variable | Effect |
 |---|---|
-| `PROXY_CONFIG` | Path to `proxy-config.json` (default: `project3/proxy-config.json`) |
+| `PROXY_CONFIG` | Path to `proxy-config.json` (default: `projects/project3/proxy-config.json`) |
 | `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
 | `BIND_ADDRESS` | Override listen address:port (default: `127.0.0.1:8080`) |
 

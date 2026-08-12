@@ -3,7 +3,7 @@
 /// Reads xmla-trace.jsonl and replays every XMLA request through
 /// the pipeline, validating responses against the captured trace.
 ///
-/// Usage: cargo run --bin trace_replay [-- xmla-trace.jsonl] [--project project3/proxy-config.json]
+/// Usage: cargo run --bin trace_replay [-- xmla-trace.jsonl] [--project projects/project3/proxy-config.json]
 ///
 /// Validates:
 /// - ExecuteStatement: replays MDX and diffs cellset output

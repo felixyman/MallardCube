@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn second_project_loads() {
-        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
+        let p = ProxyProject::load("projects/project2/proxy-config.json").expect("load project2");
         assert_eq!(p.config.catalog, "MY_CATALOG");
         assert_eq!(p.config.cube, "SalesCube");
         // Two differently-named dimensions
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn second_project_defaults_differ() {
-        let p = ProxyProject::load("project2/proxy-config.json").expect("load project2");
+        let p = ProxyProject::load("projects/project2/proxy-config.json").expect("load project2");
         assert_eq!(p.model.default_dimension_id().as_deref(), Some("Category"));
         assert_eq!(p.model.default_measure_id().as_deref(), Some("Revenue"));
     }
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn third_project_loads() {
-        let p = ProxyProject::load("project3/proxy-config.json").expect("load project3");
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         assert_eq!(p.config.catalog, "SALES_ANALYTICS");
         assert_eq!(p.config.cube, "Sales");
         assert_eq!(p.model.dimensions.len(), 5);
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn fourth_project_loads() {
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         assert_eq!(p.config.catalog, "OPERATIONS_ANALYTICS");
         assert_eq!(p.config.cube, "Operations");
         assert_eq!(p.model.fact_tables.len(), 2);
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn fourth_project_fact_table_assignments() {
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         // Measures scoped correctly
         assert_eq!(m.meas_def("Revenue").fact_table_idx, 0, "Revenue -> sales");
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn fourth_project_dimension_tables() {
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         // Shared dimensions fall back to primary
         assert_eq!(
@@ -921,7 +921,7 @@ mod tests {
 
     #[test]
     fn fourth_project_measure_groups() {
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         assert_eq!(m.fact_tables[0].measure_group_name, "Sales");
         assert_eq!(m.fact_tables[1].measure_group_name, "Inventory");
@@ -933,7 +933,7 @@ mod tests {
     #[test]
     fn fourth_project_sql_uses_correct_table() {
         use crate::engine::sql::sql_for_query_plan;
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let m = &p.model;
         let sql = sql_for_query_plan(
             m,
@@ -957,7 +957,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
@@ -996,7 +996,7 @@ mod tests {
     fn fourth_project_fact_aware_default_measure_sales_dim() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
@@ -1030,7 +1030,7 @@ mod tests {
     fn unrelated_filter_ignored() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         // Cost (inventory) with Channel filter (sales-only dimension).
         // Channel should be ignored because it's unrelated.
         let query = SemanticQuery {
@@ -1069,7 +1069,7 @@ mod tests {
     fn shared_filter_passes_through() {
         use crate::engine::plan::plan_from_semantic_with_model;
         use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
-        let p = ProxyProject::load("project4/proxy-config.json").expect("load project4");
+        let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         // Category is shared — it should pass through for any measure.
         let query = SemanticQuery {
             kind: SemanticQueryKind::SlicerAllAndMeasure,
@@ -1109,7 +1109,7 @@ mod tests {
 
     #[test]
     fn generated_project_loads() {
-        let p = ProxyProject::load("generated_project/proxy-config.json")
+        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
             .expect("load generated_project");
         assert_eq!(p.config.catalog, "SEMANTICMODEL");
         assert_eq!(p.config.cube, "DW_FYS_F_UNDERSÖKNING");
@@ -1127,7 +1127,7 @@ mod tests {
 
     #[test]
     fn generated_project_picks_one_non_fallback_measure() {
-        let p = ProxyProject::load("generated_project/proxy-config.json")
+        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
             .expect("load generated_project");
         let simple = p
             .model
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[test]
     fn generated_project_relationship_backed_dimension_has_correct_table() {
-        let p = ProxyProject::load("generated_project/proxy-config.json")
+        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
             .expect("load generated_project");
         let rel_dim = p
             .model
@@ -1161,7 +1161,7 @@ mod tests {
 
     #[test]
     fn retail_analytics_project_loads() {
-        let p = ProxyProject::load("generated_retail_analytics/proxy-config.json")
+        let p = ProxyProject::load("projects/generated_retail_analytics/proxy-config.json")
             .expect("load generated_retail_analytics");
         assert!(
             p.model.dimensions.len() >= 4,
@@ -1200,12 +1200,12 @@ mod tests {
     #[test]
     fn resolve_db_path_relative_resolves_against_config_dir() {
         let resolved = resolve_db_path(
-            "generated_retail_analytics/proxy-config.json",
+            "projects/generated_retail_analytics/proxy-config.json",
             Some("data/sales.db"),
         );
         assert_eq!(
             resolved,
-            Some("generated_retail_analytics/data/sales.db".into())
+            Some("projects/generated_retail_analytics/data/sales.db".into())
         );
     }
 
