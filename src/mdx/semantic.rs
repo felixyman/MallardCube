@@ -24,6 +24,10 @@ pub fn is_mdx_select(mdx: &str) -> bool {
     upper.starts_with("SELECT") || (upper.starts_with("WITH") && upper.contains("SELECT "))
 }
 
+pub fn is_measure_metadata_probe(mdx: &str) -> bool {
+    mdx.contains("strtomember(\"")
+}
+
 // ---- property parsing (delegates to nom parser) ----
 
 pub fn parse_dimension_properties(mdx: &str) -> Vec<String> {
@@ -83,6 +87,12 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
         }
     }
 
+    for m in &parsed.select_members {
+        if let MemberRef::Leaf { dim, key } = m {
+            add_leaf(&mut result, dim_ref_str(dim), key);
+        }
+    }
+
     result
 }
 
@@ -109,6 +119,20 @@ fn slicers_from_parsed(parsed: &ParsedMdx) -> Vec<SlicerSelection> {
                 }
             }
             _ => {}
+        }
+    }
+    for mref in &parsed.select_members {
+        if let MemberRef::Leaf { dim, .. } = mref {
+            let dim_str = dim_ref_str(dim);
+            if !result
+                .iter()
+                .any(|s: &SlicerSelection| s.dimension == dim_str)
+            {
+                result.push(SlicerSelection {
+                    dimension: dim_str,
+                    is_all: false,
+                });
+            }
         }
     }
     result
@@ -169,6 +193,8 @@ pub enum SemanticQueryKind {
     DrilldownCategories,
     SlicerOnly,
     DrilldownMemberProbe,
+    MeasureMetadataProbe,
+    MemberOnlyProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +219,12 @@ pub struct SemanticQuery {
     pub measure: Option<String>,
     /// When drilling a multi-level hierarchy, which level index to group by.
     pub drilldown_level: Option<usize>,
+    /// Measure/member names parsed from strtomember() probe (CUBEVALUE metadata query).
+    pub metadata_probe_targets: Vec<String>,
+    /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
+    pub metadata_probe_properties: Vec<String>,
+    /// Dimension member UName strings for MemberOnlyProbe (e.g. "[Category].[Category].&[Kategori A]").
+    pub member_only_unames: Vec<String>,
 }
 
 // ---- main classification entry point ----
@@ -239,8 +271,68 @@ pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
     Some(s[idx + 3..].split(']').next()?.to_string())
 }
 
+fn extract_strtomember_targets(mdx: &str) -> Vec<String> {
+    let prefix = "strtomember(\"";
+    let mut targets = Vec::new();
+    let mut pos = 0;
+    while let Some(found) = mdx[pos..].find(prefix) {
+        let abs = pos + found + prefix.len();
+        if let Some(close) = mdx[abs..].find('"') {
+            let target = mdx[abs..abs + close].to_string();
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+            pos = abs + close + 1;
+        } else {
+            break;
+        }
+    }
+    targets
+}
+
+fn extract_strtomember_properties(mdx: &str) -> Vec<String> {
+    let mut props = Vec::new();
+    for part in mdx.split("MEMBER [Measures].[").skip(1) {
+        let prop = if part.contains("UniqueName") && !part.contains(".level.UniqueName") {
+            "UniqueName"
+        } else if part.contains(".level.UniqueName") {
+            "level.UniqueName"
+        } else if part.contains("properties(\"caption\")") {
+            "caption"
+        } else {
+            continue;
+        };
+        if !props.contains(&prop.to_string()) {
+            props.push(prop.to_string());
+        }
+    }
+    props
+}
+
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let parsed = crate::mdx_parser::parse_mdx(mdx);
+
+    if mdx.contains("strtomember(\"") {
+        let targets = extract_strtomember_targets(mdx);
+        let props = extract_strtomember_properties(mdx);
+        return SemanticQuery {
+            kind: SemanticQueryKind::MeasureMetadataProbe,
+            dim_props: vec![],
+            cell_props: parsed.cell_props.clone(),
+            filters: vec![],
+            cchildren_leaf_name: None,
+            row_dimension: None,
+            axis_dimensions: vec![],
+            slicers: vec![],
+            excluded_members: vec![],
+            drilldown_member_hierarchy: None,
+            measure: None,
+            drilldown_level: None,
+            metadata_probe_targets: targets,
+            metadata_probe_properties: props,
+            member_only_unames: vec![],
+        };
+    }
 
     let kind = if parsed.has_with_member_cchildren {
         match &parsed.cchildren_target {
@@ -271,6 +363,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                     } else {
                         SemanticQueryKind::SlicerOnly
                     }
+                } else if parsed.has_cols && !parsed.has_rows && !parsed.has_measures {
+                    SemanticQueryKind::MemberOnlyProbe
                 } else {
                     SemanticQueryKind::SlicerOnly
                 }
@@ -315,6 +409,12 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let mut filters = filters_from_parsed(&parsed);
     filters.extend(extra_filters);
 
+    let member_only_unames: Vec<String> = if kind == SemanticQueryKind::MemberOnlyProbe {
+        parse_member_only_unames(mdx)
+    } else {
+        vec![]
+    };
+
     SemanticQuery {
         kind,
         dim_props: parsed.dim_props.clone(),
@@ -326,12 +426,22 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .iter()
             .find(|id| project.model.dim_def_opt(id).is_some())
             .cloned(),
-        axis_dimensions: parsed
-            .axis_dimension_ids
-            .iter()
-            .filter(|id| project.model.dim_def_opt(id).is_some())
-            .cloned()
-            .collect(),
+        axis_dimensions: if matches!(
+            kind,
+            SemanticQueryKind::SlicerOnly | SemanticQueryKind::SlicerAllAndMeasure
+        ) {
+            // A slicer/measure+member-tuple query has no real axis dimension:
+            // any dimension referenced in the select tuple must land in the
+            // SlicerAxis (as a filter), not be skipped as an axis dimension.
+            vec![]
+        } else {
+            parsed
+                .axis_dimension_ids
+                .iter()
+                .filter(|id| project.model.dim_def_opt(id).is_some())
+                .cloned()
+                .collect()
+        },
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parsed
             .excluded_members
@@ -344,7 +454,21 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
         drilldown_level,
+        metadata_probe_targets: vec![],
+        metadata_probe_properties: vec![],
+        member_only_unames,
     }
+}
+
+fn parse_member_only_unames(mdx: &str) -> Vec<String> {
+    let mut unames = Vec::new();
+    if let Some(start) = mdx.find('{') {
+        let rest = &mdx[start + 1..];
+        if let Some(end) = rest.find('}') {
+            unames.push(rest[..end].to_string());
+        }
+    }
+    unames
 }
 
 #[cfg(test)]
@@ -416,5 +540,60 @@ mod tests {
     #[test]
     fn amp_key_no_amp() {
         assert_eq!(parse_amp_key("[Date].[Date].[Year]"), None);
+    }
+
+    #[test]
+    fn is_measure_metadata_probe_detects_strtomember() {
+        assert!(is_measure_metadata_probe(
+            r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName'"##
+        ));
+    }
+
+    #[test]
+    fn extract_strtomember_target_parses_brackets() {
+        assert_eq!(
+            extract_strtomember_targets(
+                r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName'"##
+            ),
+            vec!["[Measures].[Total Försäljning]"]
+        );
+    }
+
+    #[test]
+    fn extract_strtomember_target_parses_dim_member() {
+        assert_eq!(
+            extract_strtomember_targets(
+                r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Category].[Category].&[Kategori A]").UniqueName'"##
+            ),
+            vec!["[Category].[Category].&[Kategori A]"]
+        );
+    }
+
+    #[test]
+    fn extract_strtomember_targets_parses_multiple() {
+        let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Category].[Category].&[A]").UniqueName' MEMBER [Measures].[XL_SD3] AS 'strtomember("[Measures].[Revenue]").UniqueName' SELECT"##;
+        assert_eq!(
+            extract_strtomember_targets(mdx),
+            vec!["[Category].[Category].&[A]", "[Measures].[Revenue]"]
+        );
+    }
+
+    #[test]
+    fn extract_strtomember_properties_parses_all_three() {
+        let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Försäljning]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Försäljning]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM"##;
+        let props = extract_strtomember_properties(mdx);
+        assert_eq!(props, vec!["UniqueName", "caption", "level.UniqueName"]);
+    }
+
+    #[test]
+    fn semantic_query_classifies_cubevalue_metadata_probe() {
+        let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Försäljning]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Försäljning]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Försäljning]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;
+        let q = semantic_query_from_mdx(mdx);
+        assert_eq!(q.kind, SemanticQueryKind::MeasureMetadataProbe);
+        assert_eq!(
+            q.metadata_probe_targets,
+            vec!["[Measures].[Total Försäljning]"]
+        );
+        assert_eq!(q.metadata_probe_properties.len(), 3);
     }
 }

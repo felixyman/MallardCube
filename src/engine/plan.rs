@@ -255,7 +255,9 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
 
         SemanticQueryKind::ChildrenCountMeasures
         | SemanticQueryKind::MeasureChildrenEmpty
-        | SemanticQueryKind::LeafChildrenEmpty => QueryPlan::Empty,
+        | SemanticQueryKind::LeafChildrenEmpty
+        | SemanticQueryKind::MeasureMetadataProbe
+        | SemanticQueryKind::MemberOnlyProbe => QueryPlan::Empty,
 
         SemanticQueryKind::SlicerAllAndMeasure | SemanticQueryKind::SlicerOnly => {
             QueryPlan::Total {

@@ -315,6 +315,7 @@ fn measurement_cell_for_measure(
         format_string: m.format_string.clone(),
         back_color: String::new(),
         fore_color: String::new(),
+        string_value: None,
     }
 }
 
@@ -326,6 +327,7 @@ pub(crate) fn count_cell(ordinal: u32, value: u32) -> cellset::CellConfig {
         format_string: "0".into(),
         back_color: String::new(),
         fore_color: String::new(),
+        string_value: None,
     }
 }
 
@@ -384,6 +386,7 @@ pub(crate) fn render_response(
         include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
         include_back_color: includes_prop(cell_props, "BACK_COLOR"),
         include_fore_color: includes_prop(cell_props, "FORE_COLOR"),
+        include_cell_ordinal: includes_prop(cell_props, "CELL_ORDINAL"),
     };
     cellset::render_cellset(&resp)
 }

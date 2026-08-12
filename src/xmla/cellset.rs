@@ -40,6 +40,8 @@ pub struct CellConfig {
     pub format_string: String,
     pub back_color: String,
     pub fore_color: String,
+    /// When set, emits `<Value xsi:type="xsd:string">` instead of numeric Value.
+    pub string_value: Option<String>,
 }
 
 /// An axis description — name, hierarchy identity, and the member list.
@@ -59,6 +61,7 @@ pub struct CellsetResponse {
     pub include_format_string: bool,
     pub include_back_color: bool,
     pub include_fore_color: bool,
+    pub include_cell_ordinal: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -178,11 +181,15 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
             ord = cell.ordinal
         ));
         if resp.include_value {
-            out.push_str(&format!(
-                r#"              <Value xsi:type="xsd:double">{val}</Value>
+            if let Some(ref sv) = cell.string_value {
+                out.push_str(&format!("              <Value>{}</Value>\n", sv));
+            } else {
+                out.push_str(&format!(
+                    r#"              <Value xsi:type="xsd:double">{val}</Value>
 "#,
-                val = cell.value,
-            ));
+                    val = cell.value,
+                ));
+            }
         }
         if resp.include_fmt_value {
             out.push_str(&format!(
@@ -290,6 +297,11 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
     }
     if r.include_fore_color {
         olap_info.push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:string\"/>\n");
+    }
+    if r.include_cell_ordinal {
+        olap_info.push_str(
+            "              <CellOrdinal name=\"CELL_ORDINAL\" type=\"xsd:unsignedInt\"/>\n",
+        );
     }
     olap_info.push_str("            </CellInfo>\n          </OlapInfo>\n");
 
