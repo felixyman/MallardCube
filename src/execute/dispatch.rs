@@ -2021,16 +2021,16 @@ mod tests {
                 "should contain measure unique name"
             );
             assert!(
-                xml.contains("<Caption>Revenue</Caption>"),
-                "should contain measure caption"
+                xml.contains("<Caption>XL_SD1</Caption>"),
+                "metadata probe members should be captioned with the XL_SD label"
             );
             assert!(
                 xml.contains("[Measures].[MeasuresLevel]"),
                 "should contain measures level"
             );
             assert!(
-                xml.contains("<Value xsi:type=\"xsd:string\">Revenue</Value>"),
-                "should emit string-typed Value with measure caption"
+                xml.contains("<Value>Revenue</Value>"),
+                "should emit plain string Value with measure caption"
             );
         });
     }

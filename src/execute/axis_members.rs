@@ -386,6 +386,7 @@ pub(crate) fn render_response(
         include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
         include_back_color: includes_prop(cell_props, "BACK_COLOR"),
         include_fore_color: includes_prop(cell_props, "FORE_COLOR"),
+        include_cell_ordinal: includes_prop(cell_props, "CELL_ORDINAL"),
     };
     cellset::render_cellset(&resp)
 }

@@ -61,6 +61,7 @@ pub struct CellsetResponse {
     pub include_format_string: bool,
     pub include_back_color: bool,
     pub include_fore_color: bool,
+    pub include_cell_ordinal: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,10 +182,7 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
         ));
         if resp.include_value {
             if let Some(ref sv) = cell.string_value {
-                out.push_str(&format!(
-                    "              <Value xsi:type=\"xsd:string\">{}</Value>\n",
-                    sv
-                ));
+                out.push_str(&format!("              <Value>{}</Value>\n", sv));
             } else {
                 out.push_str(&format!(
                     r#"              <Value xsi:type="xsd:double">{val}</Value>
@@ -299,6 +297,9 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
     }
     if r.include_fore_color {
         olap_info.push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:string\"/>\n");
+    }
+    if r.include_cell_ordinal {
+        olap_info.push_str("              <CellOrdinal name=\"CELL_ORDINAL\" type=\"xsd:unsignedInt\"/>\n");
     }
     olap_info.push_str("            </CellInfo>\n          </OlapInfo>\n");
 

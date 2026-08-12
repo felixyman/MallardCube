@@ -413,6 +413,7 @@ fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
     let axis_end = upper
         .find("DIMENSION PROPERTIES")
         .or_else(|| upper.find("ON COLUMNS"))
+        .or_else(|| upper.find(" ON 0 "))
         .unwrap_or(before_from.len());
     let axis_expr = &before_from[..axis_end];
 
@@ -549,8 +550,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     ParsedMdx {
         dim_props: parse_dimension_properties(input),
         cell_props: parse_cell_properties(input),
-        has_rows: up.contains("ON ROWS"),
-        has_cols: up.contains("ON COLUMNS"),
+        has_rows: up.contains("ON ROWS") || up.contains(" ON 1 "),
+        has_cols: up.contains("ON COLUMNS") || up.contains(" ON 0 "),
         has_crossjoin: has_crossjoin(input),
         has_drilldown: has_drilldown(input),
         has_dot_members: has_dot_members(input),

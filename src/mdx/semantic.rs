@@ -416,8 +416,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
 fn parse_member_only_unames(mdx: &str) -> Vec<String> {
     let mut unames = Vec::new();
-    if let Some(start) = mdx.find("{[") {
-        let rest = &mdx[start + 2..];
+    if let Some(start) = mdx.find('{') {
+        let rest = &mdx[start + 1..];
         if let Some(end) = rest.find('}') {
             unames.push(rest[..end].to_string());
         }

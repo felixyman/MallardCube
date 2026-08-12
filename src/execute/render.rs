@@ -7,6 +7,7 @@ use crate::axis_members::{
 use crate::backend::QueryBackend;
 use crate::cellset;
 use crate::engine::plan::QueryResult;
+use crate::response::xml_escape;
 /// Cellset render functions.
 ///
 /// Converts a `SemanticQuery` + `QueryResult` into an XMLA cellset
@@ -570,7 +571,7 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
 
 fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, backend: &B) -> String {
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
-    let mut cells: Vec<cellset::CellConfig> = Vec::new();
+    let mut hier_name = "[Measures]".to_string();
 
     for (i, uname) in query.member_only_unames.iter().enumerate() {
         let caption = uname
@@ -579,50 +580,31 @@ fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, back
             .and_then(|s| s.split(']').next())
             .unwrap_or(uname)
             .to_string();
-        let dim = uname.split(".[").next().unwrap_or(uname);
-        let hier = uname
-            .split(".[")
-            .nth(1)
-            .and_then(|s| s.split(']').next())
-            .unwrap_or("");
-        let lname = format!("{dim}.[{hier}].[{hier}]");
+        // Extract [Dim] and [Hier] by parsing the first two [...] segments.
+        let parts: Vec<&str> = uname.splitn(3, ']').collect();
+        let dim = parts.first().map(|s| format!("{s}]")).unwrap_or_default();
+        let hier = parts.get(1).map(|s| s.strip_prefix(".[").unwrap_or(s)).unwrap_or("");
+        let hier_bracketed = format!("[{hier}]");
+        if i == 0 {
+            hier_name = format!("{dim}.{hier_bracketed}");
+        }
+        let lname = format!("{dim}.{hier_bracketed}.{hier_bracketed}");
         members.push(cellset::MemberConfig {
-            hierarchy: format!("{dim}.[{hier}]"),
-            u_name: uname.clone(),
-            caption,
-            l_name: lname,
+            hierarchy: format!("{dim}.{hier_bracketed}"),
+            u_name: xml_escape(uname),
+            caption: xml_escape(&caption),
+            l_name: xml_escape(&lname),
             l_num: 1,
-            display_info: 3,
+            display_info: 0,
             children_cardinality: 0,
             dim_props: vec![],
-        });
-        cells.push(cellset::CellConfig {
-            ordinal: i as u32,
-            value: 0.0,
-            fmt_value: String::new(),
-            format_string: String::new(),
-            back_color: String::new(),
-            fore_color: String::new(),
-            string_value: None,
         });
     }
 
     let axis0 = member_list_axis(
         "Axis0",
         cellset::HierarchyConfig {
-            name: query
-                .member_only_unames
-                .first()
-                .map(|u| {
-                    let mut parts = u.split(".[");
-                    if let (Some(dim), Some(hier)) = (parts.next(), parts.next()) {
-                        let hier = hier.trim_end_matches(']');
-                        format!("{dim}.[{hier}]")
-                    } else {
-                        u.clone()
-                    }
-                })
-                .unwrap_or_else(|| "[Measures]".to_string()),
+            name: hier_name,
             dim_prop_decls: vec![],
         },
         members,
@@ -630,7 +612,7 @@ fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, back
     let slicer = full_slicer_axis_with_backend(query, backend);
 
     let props = vec!["CELL_ORDINAL".to_string()];
-    render_response(vec![axis0, slicer], cells, &props)
+    render_response(vec![axis0, slicer], vec![], &props)
 }
 
 fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
@@ -684,21 +666,21 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
         members.push(cellset::MemberConfig {
             hierarchy: "[Measures]".into(),
             u_name: format!("[Measures].[XL_SD{}]", i),
-            caption: val.clone(),
+            caption: format!("XL_SD{}", i),
             l_name: "[Measures].[MeasuresLevel]".into(),
             l_num: 0,
-            display_info: 0,
+            display_info: if i == 0 { 0 } else { 131072 },
             children_cardinality: 0,
             dim_props: vec![],
         });
         cells.push(cellset::CellConfig {
             ordinal: i as u32,
             value: 0.0,
-            fmt_value: val.clone(),
+            fmt_value: String::new(),
             format_string: String::new(),
             back_color: String::new(),
             fore_color: String::new(),
-            string_value: Some(val),
+            string_value: Some(xml_escape(&val)),
         });
     }
 
