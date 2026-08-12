@@ -2034,4 +2034,52 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn cubevalue_metadata_probe_handles_multiple_targets() {
+        with_project3(|| {
+            let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Category].[Category].&[Electronics]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Category].[Category].&[Electronics]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Category].[Category].&[Electronics]")}.item(0).item(0).level.UniqueName' MEMBER [Measures].[XL_SD3] AS 'strtomember("[Measures].[Revenue]").UniqueName' MEMBER [Measures].[XL_SD4] AS 'strtomember("[Measures].[Revenue]").properties("caption")' MEMBER [Measures].[XL_SD5] AS '{strtomember("[Measures].[Revenue]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2],[Measures].[XL_SD3],[Measures].[XL_SD4],[Measures].[XL_SD5]} ON 0 FROM  CELL PROPERTIES VALUE"##;
+            let xml = get_execute_statement_response(mdx);
+            assert!(
+                xml.contains("<Value>[Category].[Category].&amp;[Electronics]</Value>"),
+                "member unique name should be present and escaped"
+            );
+            assert!(
+                xml.contains("<Value>Electronics</Value>"),
+                "member caption should be present"
+            );
+            assert!(
+                xml.contains("<Value>[Measures].[Revenue]</Value>"),
+                "measure unique name should be present"
+            );
+            assert!(
+                xml.contains("<Value>Revenue</Value>"),
+                "measure caption should be present"
+            );
+            assert!(
+                xml.contains("<Caption>XL_SD5</Caption>"),
+                "sixth XL_SD member should be captioned XL_SD5"
+            );
+        });
+    }
+
+    #[test]
+    fn cubevalue_tuple_filters_measure_by_member() {
+        with_project3(|| {
+            let mdx = "SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0 FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
+            let xml = get_execute_statement_response(mdx);
+            assert!(
+                xml.contains("[Category].[Category].&amp;[Electronics]"),
+                "member should appear in the slicer, got no member"
+            );
+            assert!(
+                xml.contains("24719896"),
+                "should return the Electronics-filtered total, not the grand total"
+            );
+            assert!(
+                !xml.contains("521586767"),
+                "must not return the unfiltered grand total"
+            );
+        });
+    }
 }

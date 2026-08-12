@@ -144,6 +144,33 @@ fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
     results
 }
 
+/// Parse a parenthesized, comma-separated member list (e.g. the tuple
+/// `([Measures].[Revenue],[Category].[Category].&[Electronics])`).
+fn paren_members(input: &str) -> IResult<&str, Vec<MemberRef>> {
+    let (input, _) = ws(input)?;
+    let (input, _) = char('(')(input)?;
+    let (input, _) = ws(input)?;
+    let (input, members) = separated_list0(delimited(ws, char(','), ws), member_ref)(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = char(')')(input)?;
+    Ok((input, members))
+}
+
+/// Find dimension/measure members written as a tuple on the main SELECT axis,
+/// e.g. `SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0`.
+fn find_select_tuple_members(input: &str) -> Vec<MemberRef> {
+    let mut results = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = input[search_from..].find("SELECT {(") {
+        let after_brace = &input[search_from + pos + "SELECT {".len()..];
+        if let Ok((_, members)) = paren_members(after_brace) {
+            results.extend(members);
+        }
+        search_from += pos + "SELECT {(".len();
+    }
+    results
+}
+
 // ---- axis detection ----
 
 /// Find the first non-Measures bracketed identifier in the MDX text.
@@ -382,6 +409,7 @@ pub struct ParsedMdx {
     pub has_measures: bool,
     pub where_members: Vec<MemberRef>,
     pub subquery_members: Vec<MemberRef>,
+    pub select_members: Vec<MemberRef>,
     pub main_dim: DimRef,
     pub cchildren_target: CChildrenTarget,
     pub calculated_members_pat: CalculatedMembersPat,
@@ -528,6 +556,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let all_subquery = find_all_subquery_members(input);
     let subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
 
+    let select_members = find_select_tuple_members(input);
+
     let selected_measure = where_members.iter().find_map(|m| match m {
         MemberRef::Measure(name) => Some(name.clone()),
         _ => None,
@@ -562,6 +592,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         has_measures: has_measures_in_where_or_cols(input),
         where_members,
         subquery_members,
+        select_members,
         main_dim: detect_axis_dimension(before_from),
         cchildren_target: detect_cchildren_target(input),
         calculated_members_pat: detect_calculated_members_pat(input),
