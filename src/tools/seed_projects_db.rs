@@ -49,6 +49,9 @@ fn seed_contoso() {
 }
 
 fn reset_db(db_path: &str) {
+    if let Some(parent) = Path::new(db_path).parent() {
+        std::fs::create_dir_all(parent).expect("create db parent dir");
+    }
     if Path::new(db_path).exists() {
         std::fs::remove_file(db_path).expect("remove db");
     }
