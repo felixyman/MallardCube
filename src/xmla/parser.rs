@@ -36,6 +36,9 @@ pub enum XmlaRequest {
     TmschemaPartitions,
     DiscoverXmlMetadata,
     DiscoverCalcDependency,
+    DiscoverEnumerators,
+    DiscoverKeywords,
+    DiscoverDatasources,
     BeginSession,
     ExecuteEmpty,
     ExecuteStatement(String),
@@ -149,6 +152,9 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "TMSCHEMA_PARTITIONS" => return XmlaRequest::TmschemaPartitions,
         "DISCOVER_XML_METADATA" => return XmlaRequest::DiscoverXmlMetadata,
         "DISCOVER_CALC_DEPENDENCY" => return XmlaRequest::DiscoverCalcDependency,
+        "DISCOVER_ENUMERATORS" => return XmlaRequest::DiscoverEnumerators,
+        "DISCOVER_KEYWORDS" => return XmlaRequest::DiscoverKeywords,
+        "DISCOVER_DATASOURCES" => return XmlaRequest::DiscoverDatasources,
         _ => (),
     };
 

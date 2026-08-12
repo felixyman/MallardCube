@@ -228,6 +228,7 @@ fn validate_discover_response(kind: &str, xml: &str, cube: &str, catalog: &str) 
         | "MDSCHEMA_MEASURES" | "MDSCHEMA_MEMBERS" | "MDSCHEMA_PROPERTIES"
         | "MDSCHEMA_MEASUREGROUPS" | "MDSCHEMA_MEASUREGROUP_DIMENSIONS"
         | "DISCOVER_SCHEMA_ROWSETS" | "DISCOVER_PROPERTIES"
+        | "DISCOVER_ENUMERATORS" | "DISCOVER_KEYWORDS" | "DISCOVER_DATASOURCES"
             // Generic: must have rows
             if row_count == 0 => {
                 diffs.push(format!("{kind} returned zero rows"));

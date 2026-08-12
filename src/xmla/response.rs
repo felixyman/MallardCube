@@ -1,8 +1,24 @@
+use std::cell::RefCell;
+
+thread_local! {
+    static CURRENT_SESSION_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Set the session id to echo back in the SOAP response header.
+pub fn set_session_id(sid: Option<String>) {
+    CURRENT_SESSION_ID.with(|c| *c.borrow_mut() = sid);
+}
+
 pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
+    let session_id = CURRENT_SESSION_ID.with(|c| {
+        c.borrow()
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().to_uppercase())
+    });
     format!(
         r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Header>
-    <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="RUST-SESSION-456" />
+    <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="{session_id}" />
   </soap:Header>
   <soap:Body>
 {}

@@ -13,6 +13,7 @@ use crate::engine::plan::QueryResult;
 /// XML string.  Each `build_*` function handles one query shape.
 /// `dispatch()` routes by `SemanticQueryKind`.
 use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::response::xml_escape;
 
 pub(crate) fn ordered_pair(
     dims: &[String],
@@ -530,7 +531,12 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     result: &QueryResult,
     backend: &B,
 ) -> String {
-    if matches!(result, QueryResult::Empty) {
+    if matches!(result, QueryResult::Empty)
+        && !matches!(
+            query.kind,
+            SemanticQueryKind::MeasureMetadataProbe | SemanticQueryKind::MemberOnlyProbe
+        )
+    {
         return empty_cellset(query, backend);
     }
     match query.kind {
@@ -558,5 +564,145 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
             QueryResult::Grouped(_) => build_drilldown(query, result, backend),
             _ => build_drilldown_member(query, result, backend),
         },
+        SemanticQueryKind::MeasureMetadataProbe => build_measure_metadata_probe(query, backend),
+        SemanticQueryKind::MemberOnlyProbe => build_member_only_probe(query, backend),
     }
+}
+
+fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, backend: &B) -> String {
+    let mut members: Vec<cellset::MemberConfig> = Vec::new();
+    let mut hier_name = "[Measures]".to_string();
+
+    for (i, uname) in query.member_only_unames.iter().enumerate() {
+        let caption = uname
+            .split("&[")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .unwrap_or(uname)
+            .to_string();
+        // Extract [Dim] and [Hier] by parsing the first two [...] segments.
+        let parts: Vec<&str> = uname.splitn(3, ']').collect();
+        let dim = parts.first().map(|s| format!("{s}]")).unwrap_or_default();
+        let hier = parts
+            .get(1)
+            .map(|s| s.strip_prefix(".[").unwrap_or(s))
+            .unwrap_or("");
+        let hier_bracketed = format!("[{hier}]");
+        if i == 0 {
+            hier_name = format!("{dim}.{hier_bracketed}");
+        }
+        let lname = format!("{dim}.{hier_bracketed}.{hier_bracketed}");
+        members.push(cellset::MemberConfig {
+            hierarchy: format!("{dim}.{hier_bracketed}"),
+            u_name: xml_escape(uname),
+            caption: xml_escape(&caption),
+            l_name: xml_escape(&lname),
+            l_num: 1,
+            display_info: 0,
+            children_cardinality: 0,
+            dim_props: vec![],
+        });
+    }
+
+    let axis0 = member_list_axis(
+        "Axis0",
+        cellset::HierarchyConfig {
+            name: hier_name,
+            dim_prop_decls: vec![],
+        },
+        members,
+    );
+    let slicer = full_slicer_axis_with_backend(query, backend);
+
+    let props = vec!["CELL_ORDINAL".to_string()];
+    render_response(vec![axis0, slicer], vec![], &props)
+}
+
+fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+) -> String {
+    let project = crate::proxy_project::project();
+
+    let mut members: Vec<cellset::MemberConfig> = Vec::new();
+    let mut cells: Vec<cellset::CellConfig> = Vec::new();
+    let mut cell_ordinal: u32 = 0;
+
+    for target in &query.metadata_probe_targets {
+        let is_measure = target.starts_with("[Measures]");
+        let (unique_name, caption, level_unique) = if is_measure {
+            let measure_id = target
+                .split("].[")
+                .last()
+                .map(|s| s.trim_end_matches(']'))
+                .unwrap_or(target);
+            let m = project.model.measures.iter().find(|m| {
+                m.id == measure_id || m.caption == measure_id || m.display_name == measure_id
+            });
+            let un = m
+                .map(|m| m.measure_unique_name())
+                .unwrap_or_else(|| format!("[Measures].[{}]", measure_id));
+            let cap = m.map(|m| m.display_name.as_str()).unwrap_or(measure_id);
+            (
+                un,
+                cap.to_string(),
+                "[Measures].[MeasuresLevel]".to_string(),
+            )
+        } else {
+            let caption = target
+                .split("&[")
+                .nth(1)
+                .and_then(|s| s.split(']').next())
+                .unwrap_or("")
+                .to_string();
+            let level = extract_dim_hierarchy_name(target)
+                .unwrap_or_else(|| "[Measures].[MeasuresLevel]".to_string());
+            (target.to_string(), caption, level)
+        };
+
+        for prop in &query.metadata_probe_properties {
+            let val = match prop.as_str() {
+                "UniqueName" => unique_name.clone(),
+                "caption" => caption.clone(),
+                "level.UniqueName" => level_unique.clone(),
+                _ => String::new(),
+            };
+            members.push(cellset::MemberConfig {
+                hierarchy: "[Measures]".into(),
+                u_name: format!("[Measures].[XL_SD{}]", cell_ordinal),
+                caption: format!("XL_SD{}", cell_ordinal),
+                l_name: "[Measures].[MeasuresLevel]".into(),
+                l_num: 0,
+                display_info: if cell_ordinal == 0 { 0 } else { 131072 },
+                children_cardinality: 0,
+                dim_props: vec![],
+            });
+            cells.push(cellset::CellConfig {
+                ordinal: cell_ordinal,
+                value: 0.0,
+                fmt_value: String::new(),
+                format_string: String::new(),
+                back_color: String::new(),
+                fore_color: String::new(),
+                string_value: Some(xml_escape(&val)),
+            });
+            cell_ordinal += 1;
+        }
+    }
+
+    let axis0 = member_list_axis("Axis0", measures_hierarchy(), members);
+    let slicer = full_slicer_axis_with_backend(query, backend);
+
+    render_response(vec![axis0, slicer], cells, &query.cell_props)
+}
+
+fn extract_dim_hierarchy_name(target: &str) -> Option<String> {
+    let rest = target.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let dim = &rest[..close];
+    let rest = &rest[close + 1..];
+    let rest = rest.strip_prefix(".[")?;
+    let close = rest.find(']')?;
+    let hier = &rest[..close];
+    Some(format!("[{}].[{}].[{}]", dim, hier, hier))
 }
