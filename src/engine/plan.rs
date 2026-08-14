@@ -211,13 +211,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
     let meas: MeasId = query
         .measure
         .as_deref()
-        .and_then(|name| {
-            model
-                .measures
-                .iter()
-                .find(|m| m.caption == name)
-                .map(|m| m.id.clone())
-        })
+        .and_then(|name| model.lookup_measure(name).map(|m| m.id.clone()))
         .or_else(|| {
             for dim_id in &query.axis_dimensions {
                 if let Some(dim) = model.dim_def_opt(dim_id)

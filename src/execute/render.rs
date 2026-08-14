@@ -102,6 +102,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     );
     // Prepend the parent member so Excel can establish the
     // parent-child link for multi-level hierarchy expandability.
+    let mut inserted_parent = false;
     if let Some(dl) = query.drilldown_level {
         let parent: Option<cellset::MemberConfig> = if dl == 0 {
             Some(all_member_for_with_backend(dim, &query.dim_props, backend))
@@ -138,12 +139,25 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         };
         if let Some(p) = parent {
             members.insert(0, p);
+            inserted_parent = true;
         }
     }
 
     let mut cells = Vec::new();
+    // The prepended parent member (e.g. the [All] grand total) needs its own
+    // cell, otherwise every subsequent cell shifts by one and Excel renders
+    // each year's value under the wrong label.
+    if inserted_parent {
+        let total: f64 = data.iter().map(|(_, v)| *v).sum();
+        cells.push(measurement_cell_for_query(query, 0, total));
+    }
     for (i, (_name, value)) in data.iter().enumerate() {
-        cells.push(measurement_cell_for_query(query, i as u32, *value));
+        let ordinal = if inserted_parent {
+            i as u32 + 1
+        } else {
+            i as u32
+        };
+        cells.push(measurement_cell_for_query(query, ordinal, *value));
     }
 
     render_response(

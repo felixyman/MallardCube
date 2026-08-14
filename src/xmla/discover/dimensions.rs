@@ -61,7 +61,7 @@ pub fn get_dimensions_response() -> String {
             <DIMENSION_GUID>00000000-0000-0000-0000-{:012}</DIMENSION_GUID>
             <DIMENSION_CAPTION>{caption}</DIMENSION_CAPTION>
             <DIMENSION_ORDINAL>{ordinal}</DIMENSION_ORDINAL>
-            <DIMENSION_TYPE>3</DIMENSION_TYPE>
+            <DIMENSION_TYPE>{dim_type}</DIMENSION_TYPE>
             <DIMENSION_CARDINALITY>{cardinality}</DIMENSION_CARDINALITY>
             <DEFAULT_HIERARCHY>{hier_u}</DEFAULT_HIERARCHY>
             <DESCRIPTION>{description}</DESCRIPTION>
@@ -81,6 +81,7 @@ pub fn get_dimensions_response() -> String {
             hier_u = xml_escape(&d.hierarchy_unique_name()),
             description = xml_escape(&d.description),
             visible = d.visible,
+            dim_type = if d.is_date_role { 1 } else { 3 },
         ));
     }
 

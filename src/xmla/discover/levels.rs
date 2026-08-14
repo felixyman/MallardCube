@@ -1,6 +1,18 @@
 use crate::proxy_project;
 use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
 
+/// MDSCHEMA_LEVELS `LEVEL_TYPE` for time-hierarchy levels (mdstypes.h).
+/// Excel uses these to recognize Year/Quarter/Month/Day as time levels.
+fn time_level_type(name: &str) -> u32 {
+    match name.to_ascii_lowercase().as_str() {
+        "year" => 20,         // MDLEVEL_TYPE_TIME_YEARS
+        "quarter" => 68,      // MDLEVEL_TYPE_TIME_QUARTERS
+        "month" => 84,        // MDLEVEL_TYPE_TIME_MONTHS
+        "day" | "date" => 96, // MDLEVEL_TYPE_TIME_DAYS
+        _ => 0,
+    }
+}
+
 const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string"/>
@@ -99,6 +111,11 @@ pub fn get_levels_response() -> String {
             for level in &d.levels {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
                 let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
+                let level_type = if d.is_date_role {
+                    time_level_type(&level.name)
+                } else {
+                    0
+                };
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -111,7 +128,7 @@ pub fn get_levels_response() -> String {
             <LEVEL_CAPTION>{lname}</LEVEL_CAPTION>
             <LEVEL_NUMBER>{lnum}</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>{lcard}</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>0</LEVEL_TYPE>
+            <LEVEL_TYPE>{ltype}</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
@@ -125,6 +142,7 @@ pub fn get_levels_response() -> String {
                     lunique = xml_escape(&level_unique),
                     lnum = level_num,
                     lcard = level.cardinality.max(1),
+                    ltype = level_type,
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
                     guid = base_guid + 1 + level.level_number * 2,

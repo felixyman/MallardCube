@@ -521,6 +521,21 @@ impl SemanticModel {
         self.measures.iter().find(|m| m.id == id)
     }
 
+    /// Resolve a measure from an MDX reference by id, caption, or display name.
+    /// MDX uses the measure id (e.g. `[Measures].[RevenueYTD]`), which may
+    /// differ from the caption (e.g. "Revenue YTD").
+    pub fn lookup_measure(&self, text: &str) -> Option<&MeasureDef> {
+        let clean = text.trim_matches(|c: char| c == '[' || c == ']');
+        self.measures.iter().find(|m| {
+            m.id == text
+                || m.id == clean
+                || m.caption == text
+                || m.caption == clean
+                || m.display_name == text
+                || m.display_name == clean
+        })
+    }
+
     /// Find a relationship that connects this dimension to the fact table.
     pub fn rel_for_dimension(&self, dim_id: &str) -> Option<&RelationshipDef> {
         self.relationships.iter().find(|r| r.dimension_id == dim_id)
