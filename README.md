@@ -444,23 +444,3 @@ translate DAX to SQL using the aliases above.
 | Column-level OLS | No | Only table-level `metadata_permission` is supported |
 | Dynamic `USERNAME()` | No | `USERNAME()` and `USERPRINCIPALNAME()` are not substituted at runtime |
 | Native Kerberos | No | Authentication must be terminated by a reverse proxy |
-
-## Roadmap
-
-All 30 implementation plans complete (001–030). Next milestone is **Gate G1**
-(public validation): publish the project, gather real-world usage signals, and
-decide whether to proceed to Phase 4.
-
-| # | Theme | Status |
-|---|-------|--------|
-| 001–003 | MDX parser → typed structural fields | DONE |
-| 004–018 | Generated project intake, time intelligence, fallback SQL, converter hardening | DONE |
-| 019–022 | Capability gates, CLI contract, retail stub retirement, generic DAX lowering | DONE |
-| 023 | Third model intake — Contoso (4 working measures, 34 helper stubs) | DONE |
-| 024–026 | Security roles: decision gate, user context, RLS/OLS enforcement | DONE |
-| 027 | Drop Malloy runtime — direct SQL is the only path | DONE |
-| 028 | Hygiene foundation: green baseline, lint bar, CI | DONE |
-| 029 | Multi-level date hierarchies (Year→Quarter→Month→Date) | DONE |
-| 030 | DRILLTHROUGH (slicer-aware "show details") | DONE |
-
-Active concerns and deferred items are tracked in `plans/README.md`.
