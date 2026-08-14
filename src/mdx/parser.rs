@@ -94,6 +94,22 @@ fn member_leaf(input: &str) -> IResult<&str, MemberRef> {
     ))
 }
 
+/// Name-based member reference `[Dim].[Hier].[Name]` (no `&` key qualifier).
+/// Valid MDX — Excel usually emits `&`-qualified members, but hand-written MDX
+/// and CUBEMEMBER with name references use this form.
+fn member_named(input: &str) -> IResult<&str, MemberRef> {
+    let (input, (dim, _hier)) = dim_hierarchy(input)?;
+    let (input, _) = char('.')(input)?;
+    let (input, key) = bracket_str(input)?;
+    Ok((
+        input,
+        MemberRef::Leaf {
+            dim,
+            key: key.to_string(),
+        },
+    ))
+}
+
 fn measure_member(input: &str) -> IResult<&str, MemberRef> {
     let (input, _) = bracket(dim_name)(input)?;
     let (input, _) = char('.')(input)?;
@@ -102,7 +118,7 @@ fn measure_member(input: &str) -> IResult<&str, MemberRef> {
 }
 
 fn member_ref(input: &str) -> IResult<&str, MemberRef> {
-    alt((member_all, member_leaf, measure_member))(input)
+    alt((member_all, member_leaf, member_named, measure_member))(input)
 }
 
 // ---- WHERE clause ----

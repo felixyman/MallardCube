@@ -1293,6 +1293,22 @@ mod tests {
         });
     }
 
+    // Regression: name-based member references (no `&` key qualifier) in the
+    // WHERE clause must filter, not fall through to the unfiltered grand total.
+    #[test]
+    fn report_filter_name_form_filters_correctly() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])",
+            );
+            assert_eq!(
+                cell_values(&xml),
+                vec![24_719_896.0],
+                "name-form report filter must return the Electronics subset"
+            );
+        });
+    }
+
     #[test]
     fn excel_trace_segment_all_matches_unfiltered_revenue() {
         with_project3(|| {
