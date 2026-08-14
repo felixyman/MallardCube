@@ -191,20 +191,16 @@ Sample projects live at the repo root.
 
 ## Converting SSAS Tabular models
 
-The converter turns a Tabular Editor folder (`.bim`, tables) into a DuckDB
-project:
+Convert an existing Tabular Editor export (`.bim`/TMDL) into a DuckDB project:
 
 ```bash
 cargo run --bin mallard -- convert-tabular path/to/tabulareditor_src output_dir
 ```
 
-Output:
-- `proxy-config.json` - project config with dimensions and measures
-- `schema.sql` - DuckDB `CREATE TABLE` statements
-- `sql_fallback/` - DuckDB SQL for complex measures (MEDIAN, cumulative, etc.)
-- `conversion-report.md` - summary and data-loading checklist
-
-See `docs/ssas-to-malloy-conversion.md` for details.
+This produces a `proxy-config.json`, a `schema.sql`, fallback SQL for complex
+measures, and a conversion report. See `docs/converting-models.md` for the full
+migration intake loop (inventory → convert → bootstrap → qualify → replay) and
+the compatibility gate.
 
 ## Running tests
 
@@ -225,72 +221,10 @@ assertions.
 
 ## Compatibility gate
 
-Every converted project should pass a structural compatibility check before
-it is considered "Excel-safe." The gate verifies three layers:
-
-1. **Discover handshake** — all required metadata rowsets return catalog, cube,
-   dimension, and measure data (structurally valid XML with row elements).
-2. **Execute shape** — at least one non-stub measure executes and renders a
-   valid XMLA cellset (`mddataset` namespace, `<Axes>`, `<CellData>`).
-3. **Replay (optional)** — when an `xmla-trace.jsonl` is available, the replay
-   harness diffs captured Excel responses against live proxy output.
-
-**Quick gate check** (against the default project):
-
-```bash
-# Record a fresh Excel session (project3 by default)
-XMLA_TRACE=1 cargo run
-
-# Replay the capture — validates discover + execute
-cargo run --bin mallard -- trace-replay
-
-# Run compatibility gate tests for generated projects
-cargo test --lib retail_analytics_
-```
-
-The `trace_replay` binary validates:
-- `ExecuteStatement` entries: replays MDX, diffs cell values and axis captions
-- Discover/DBSCHEMA/MDSCHEMA entries: validates non-empty XML with `<row>` data
-  and checks for expected catalog/cube names in key rowsets
-- Session entries: validates non-empty response with standard XMLA elements
-
-## Qualify: migration intake loop
-
-The `qualify` subcommand gives a readiness verdict for a converted project
-before you connect Excel:
-
-```bash
-cargo run --bin mallard -- qualify projects/generated_project/proxy-config.json
-cargo run --bin mallard -- qualify projects/generated_retail_analytics/proxy-config.json
-```
-
-Output: `READY`, `PARTIAL` (usable with caveats), or `BLOCKED` (stub fallbacks
-or broken config — not Excel-safe). Reason codes are machine-readable.
-
-**Full intake workflow:**
-
-1. **Inventory** the source export:
-   `cargo run --bin mallard -- inventory path/to/tabular_export/`
-
-2. **Convert** to a MallardCube project:
-   `cargo run --bin mallard -- convert-tabular path/to/tabular_export/ projects/generated_project/`
-
-3. **Bootstrap** the database (for projects with date-role tables):
-   ```bash
-   cd projects/generated_project/
-   duckdb data/<cube>.db < bootstrap.sql
-   # Then load your own data into the tables listed in schema.sql
-   ```
-
-4. **Qualify** the output before Excel:
-   `cargo run --bin mallard -- qualify projects/generated_project/proxy-config.json`
-
-5. **Capture + replay** an Excel session to lock in compatibility:
-   ```bash
-   XMLA_TRACE=1 PROXY_CONFIG=projects/generated_project/proxy-config.json cargo run
-   # ... use Excel ...
-   cargo run --bin mallard -- trace-replay xmla-trace.jsonl projects/generated_project/proxy-config.json
-   ```
+Every converted project should pass a structural compatibility check before it
+is considered "Excel-safe." See `docs/converting-models.md` for the gate's
+three layers (discover handshake, execute shape, optional trace replay) and the
+`qualify` / `inventory` / `trace-replay` workflow.
 
 ## Architecture
 
@@ -299,6 +233,7 @@ For detailed documentation:
 | File | Description |
 |------|-------------|
 | `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
+| `docs/converting-models.md` | SSAS Tabular conversion: intake loop, qualify, compatibility gate |
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
 | `docs/cellset-reference.md` | XMLA cellset layout reference |
 
