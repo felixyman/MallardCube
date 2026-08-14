@@ -43,12 +43,18 @@ honor its STOP conditions, and update your row when done.
 | 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | XS | — | TODO |
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
 | 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
-| 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | TODO |
+| 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | DONE |
 | 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
 **Plans 001–030 DONE. 031–037 are performance/adoption/compatibility plans. Next milestone: Gate G1 (public validation).**
+
+- 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
+  detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
+  dimensions, DATE → seeded date_dim with Year/Quarter/Month/Date hierarchy —
+  via `MALLARDCUBE_DB` env + `auto-model` CLI. Verified end-to-end (smoke script
+  + Excel MCP: revenue by category/date hierarchy render correctly).
 
 ## Reconcile Status
 

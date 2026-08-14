@@ -5,8 +5,9 @@
 - **Priority**: P3 (adoption, large effort)
 - **Effort**: L
 - **Risk**: MEDIUM
-- **Depends on**: Gate G1 success (public validation signals demand)
+- **Depends on**: Gate G1 success (public validation signals demand) — *pulled forward by user request 2026-08-15*
 - **Category**: adoption
+- **Status**: DONE
 
 ## Why this matters
 
