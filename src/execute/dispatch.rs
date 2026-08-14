@@ -1246,6 +1246,40 @@ mod tests {
         });
     }
 
+    // Regression: the [All] parent member prepended to a multi-level drilldown
+    // axis must get its own grand-total cell. Without it the cellset has one
+    // fewer value than members and Excel shifts every year's value down one row
+    // (Grand Total shows 2020, 2020 shows 2021, … 2030 shows empty).
+    #[test]
+    fn date_hierarchy_drilldown_has_aligned_all_total_cell() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]",
+            );
+            let captions = axis_captions(&xml, "Axis0");
+            let values = cell_values(&xml);
+            assert_eq!(
+                captions.len(),
+                12,
+                "expected All + 11 years on Axis0, got {captions:?}"
+            );
+            assert_eq!(
+                values.len(),
+                captions.len(),
+                "must have one cell per axis member (off-by-one guard)"
+            );
+            assert_eq!(values[0], 521_586_767.0, "[All] grand total");
+            assert_eq!(values[1], 47_536_588.0, "2020 must not be shifted");
+            assert_eq!(values[11], 45_853_856.0, "2030 must not be empty");
+            let sum_years: f64 = values[1..].iter().sum();
+            assert!(
+                (values[0] - sum_years).abs() < 1.0,
+                "[All] {} should equal sum of years {sum_years}",
+                values[0]
+            );
+        });
+    }
+
     #[test]
     fn excel_trace_territory_subquery_filter_matches_raw_sql() {
         with_project3(|| {
@@ -1711,7 +1745,119 @@ mod tests {
         });
     }
 
-    // ---- Generated retail analytics compatibility gate ----
+    // Regression: time-flag measures selected on an AXIS (the MDX shape Excel
+    // actually emits for a YTD/QTD/MTD measure) must resolve to the time-flag
+    // measure and apply the date-dimension flag filter. Previously the measure
+    // was looked up by caption only, so `[Measures].[RevenueYTD]` (id) failed
+    // to match caption "Revenue YTD" and fell back to the plain Revenue measure.
+    #[test]
+    fn time_intelligence_measure_on_axis_applies_flag_filter() {
+        with_project3(|| {
+            use crate::backend::Backend;
+            use crate::engine::plan::{
+                QueryResult, execute_plan_with_backend, plan_from_semantic_with_model,
+            };
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let backend = Backend::get();
+
+            let total_plan = plan_from_semantic_with_model(
+                &crate::mdx_semantic::semantic_query_from_mdx(
+                    "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+                ),
+                &project.model,
+            );
+            let total = match execute_plan_with_backend(&total_plan, &project.model, backend) {
+                QueryResult::Scalar(v) => v,
+                other => panic!("expected scalar total, got {other:?}"),
+            };
+
+            for (mdx, label, flag) in [
+                (
+                    "SELECT {[Measures].[RevenueYTD]} ON COLUMNS FROM [Sales]",
+                    "YTD",
+                    "ytd_flag",
+                ),
+                (
+                    "SELECT {[Measures].[RevenueQTD]} ON COLUMNS FROM [Sales]",
+                    "QTD",
+                    "qtd_flag",
+                ),
+                (
+                    "SELECT {[Measures].[RevenueMTD]} ON COLUMNS FROM [Sales]",
+                    "MTD",
+                    "mtd_flag",
+                ),
+                (
+                    "SELECT {[Measures].[RevenuePriorYearYTD]} ON COLUMNS FROM [Sales]",
+                    "PriorYear",
+                    "prior_year_ytd_flag",
+                ),
+            ] {
+                let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+                let plan = plan_from_semantic_with_model(&semantic, &project.model);
+                let sql = sql_for_query_plan(&project.model, &plan);
+                assert!(
+                    sql.contains(&format!("WHERE {flag} = true")),
+                    "{label} SQL should filter by {flag}, got: {sql}"
+                );
+                match &plan {
+                    crate::engine::plan::QueryPlan::Total { measure, .. } => {
+                        assert!(
+                            project.model.meas_def(measure).time_flag.is_some(),
+                            "{label} should resolve to a time-flag measure, got {measure}"
+                        );
+                    }
+                    other => panic!("{label} expected Total plan, got {other:?}"),
+                }
+                match execute_plan_with_backend(&plan, &project.model, backend) {
+                    QueryResult::Scalar(v) => {
+                        assert!(v > 0.0, "{label} should be non-zero, got {v}");
+                        assert!(
+                            v < total,
+                            "{label} should be a strict subset of total {total}, got {v}"
+                        );
+                    }
+                    other => panic!("{label} expected Scalar, got {other:?}"),
+                }
+            }
+        });
+    }
+
+    // Regression: a time-flag measure grouped by the date dimension on the rows
+    // axis (e.g. Year) must also apply the flag filter, so every year except the
+    // current one is zero.
+    #[test]
+    fn time_intelligence_measure_grouped_by_year_applies_flag_filter() {
+        with_project3(|| {
+            use crate::backend::Backend;
+            use crate::engine::plan::{
+                QueryResult, execute_plan_with_backend, plan_from_semantic_with_model,
+            };
+            use crate::engine::sql::sql_for_query_plan;
+            let project = crate::proxy_project::project();
+            let backend = Backend::get();
+
+            let mdx = "SELECT [Date].[Date].[Year].Members ON ROWS, {[Measures].[RevenueYTD]} ON COLUMNS FROM [Sales]";
+            let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+            let plan = plan_from_semantic_with_model(&semantic, &project.model);
+            let sql = sql_for_query_plan(&project.model, &plan);
+            assert!(
+                sql.contains("WHERE ytd_flag = true"),
+                "grouped YTD SQL should filter by ytd_flag, got: {sql}"
+            );
+            match execute_plan_with_backend(&plan, &project.model, backend) {
+                QueryResult::Grouped(rows) => {
+                    let nonzero = rows.iter().filter(|(_, v)| *v > 0.0).count();
+                    assert!(
+                        nonzero <= 1,
+                        "only the current year should be non-zero, got {nonzero} non-zero rows: {rows:?}"
+                    );
+                }
+                other => panic!("expected Grouped, got {other:?}"),
+            }
+        });
+    }
 
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
