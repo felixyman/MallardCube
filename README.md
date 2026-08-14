@@ -1,4 +1,4 @@
-# SSAS Proxy
+# MallardCube
 
 Excel/XMLA frontend for DuckDB. Runs as a local HTTP
 server. Excel connects to it as a SSAS data source and gets PivotTable
@@ -43,7 +43,7 @@ then serves the model as cube `AutoModel`. Override the fact table with
 To generate a project you can edit instead of re-detecting every startup:
 
 ```bash
-cargo run --bin xmla_proxy -- auto-model /path/to/data.duckdb --output my-project/
+cargo run --bin mallard -- auto-model /path/to/data.duckdb --output my-project/
 # writes my-project/proxy-config.json (+ bootstrap.sql for the date dimension)
 ```
 
@@ -195,7 +195,7 @@ The converter turns a Tabular Editor folder (`.bim`, tables) into a DuckDB
 project:
 
 ```bash
-cargo run --bin xmla_proxy -- convert-tabular path/to/tabulareditor_src output_dir
+cargo run --bin mallard -- convert-tabular path/to/tabulareditor_src output_dir
 ```
 
 Output:
@@ -209,13 +209,19 @@ See `docs/ssas-to-malloy-conversion.md` for details.
 ## Running tests
 
 ```bash
+cargo run --bin mallard -- seed-generated-db     # once, seeds test fixtures
+cargo run --bin seed_projects_db                # once, seeds converted-project DBs
 cargo test --lib
 ```
 
-324 tests covering MDX parsing, semantic classification, plan generation, SQL
+Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
+does this automatically).
+
+343 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
-time intelligence, security roles, and compatibility-gate assertions.
+time intelligence, security roles, AutoModel detection, and compatibility-gate
+assertions.
 
 ## Compatibility gate
 
@@ -236,7 +242,7 @@ it is considered "Excel-safe." The gate verifies three layers:
 XMLA_TRACE=1 cargo run
 
 # Replay the capture — validates discover + execute
-cargo run --bin xmla_proxy -- trace-replay
+cargo run --bin mallard -- trace-replay
 
 # Run compatibility gate tests for generated projects
 cargo test --lib retail_analytics_
@@ -254,8 +260,8 @@ The `qualify` subcommand gives a readiness verdict for a converted project
 before you connect Excel:
 
 ```bash
-cargo run --bin xmla_proxy -- qualify projects/generated_project/proxy-config.json
-cargo run --bin xmla_proxy -- qualify projects/generated_retail_analytics/proxy-config.json
+cargo run --bin mallard -- qualify projects/generated_project/proxy-config.json
+cargo run --bin mallard -- qualify projects/generated_retail_analytics/proxy-config.json
 ```
 
 Output: `READY`, `PARTIAL` (usable with caveats), or `BLOCKED` (stub fallbacks
@@ -264,10 +270,10 @@ or broken config — not Excel-safe). Reason codes are machine-readable.
 **Full intake workflow:**
 
 1. **Inventory** the source export:
-   `cargo run --bin xmla_proxy -- inventory path/to/tabular_export/`
+   `cargo run --bin mallard -- inventory path/to/tabular_export/`
 
 2. **Convert** to a MallardCube project:
-   `cargo run --bin xmla_proxy -- convert-tabular path/to/tabular_export/ projects/generated_project/`
+   `cargo run --bin mallard -- convert-tabular path/to/tabular_export/ projects/generated_project/`
 
 3. **Bootstrap** the database (for projects with date-role tables):
    ```bash
@@ -277,13 +283,13 @@ or broken config — not Excel-safe). Reason codes are machine-readable.
    ```
 
 4. **Qualify** the output before Excel:
-   `cargo run --bin xmla_proxy -- qualify projects/generated_project/proxy-config.json`
+   `cargo run --bin mallard -- qualify projects/generated_project/proxy-config.json`
 
 5. **Capture + replay** an Excel session to lock in compatibility:
    ```bash
    XMLA_TRACE=1 PROXY_CONFIG=projects/generated_project/proxy-config.json cargo run
    # ... use Excel ...
-   cargo run --bin xmla_proxy -- trace-replay xmla-trace.jsonl projects/generated_project/proxy-config.json
+   cargo run --bin mallard -- trace-replay xmla-trace.jsonl projects/generated_project/proxy-config.json
    ```
 
 ## Architecture
