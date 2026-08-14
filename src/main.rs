@@ -211,9 +211,10 @@ async fn run_server() {
             // Zero-config AutoModel: detect a semantic model from the DuckDB
             // file, seeding date_dim tables in place.
             let abs_db = std::fs::canonicalize(&db).unwrap_or_else(|_| db.into());
+            let fact_override = std::env::var("MALLARDCUBE_FACT").ok();
             let detected = xmla_proxy::tools::auto_model::detect_config(
                 abs_db.to_string_lossy().as_ref(),
-                None,
+                fact_override.as_deref(),
                 true,
             )
             .expect("AutoModel detection failed");

@@ -26,6 +26,27 @@ limit is always enforced.
 PROXY_CONFIG=/path/to/my-project/proxy-config.json cargo run
 ```
 
+### With AutoModel (zero-config)
+
+Point the proxy at any DuckDB file — no `proxy-config.json` needed:
+
+```bash
+MALLARDCUBE_DB=/path/to/data.duckdb cargo run
+```
+
+At startup the proxy detects a fact table (largest table), measures (numeric
+columns → `SUM`), dimensions (FK-linked and string columns), and date
+hierarchies (`DATE` columns → a seeded `date_dim` with Year/Quarter/Month/Date),
+then serves the model as cube `AutoModel`. Override the fact table with
+`MALLARDCUBE_FACT=<table>`.
+
+To generate a project you can edit instead of re-detecting every startup:
+
+```bash
+cargo run --bin xmla_proxy -- auto-model /path/to/data.duckdb --output my-project/
+# writes my-project/proxy-config.json (+ bootstrap.sql for the date dimension)
+```
+
 ## Connecting Excel
 
 1. Start the proxy (see Quick Start above).
@@ -294,6 +315,7 @@ For detailed documentation:
 - Qualify migration readiness gate (READY / PARTIAL / BLOCKED)
 - Compatibility gate: discover + execute + replay validation
 - Three converted models proven (retail, healthcare, Contoso)
+- AutoModel: zero-config semantic model from any DuckDB file (`MALLARDCUBE_DB` / `auto-model` CLI)
 
 **Partial:**
 - Fallback SQL for composite DAX — 6 generic patterns covered; genuinely unsupported patterns emit honest stubs
