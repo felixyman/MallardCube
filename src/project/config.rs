@@ -4,18 +4,18 @@
 /// Malloy model to Excel.  Malloy owns the semantics; this owns the
 /// Excel/XMLA-facing presentation details (captions, order, formatting,
 /// whether a dimension has an All member, etc.).
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ---- new time-intelligence config types ----
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct TimeIntelligenceConfig {
     pub date_dimension: DateDimensionConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DateDimensionConfig {
     /// Which dimension serves as the calendar/date dimension.
@@ -43,7 +43,7 @@ impl Default for DateDimensionConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DateFlagColumns {
     pub year_column: String,
@@ -71,7 +71,7 @@ impl Default for DateFlagColumns {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct MeasureTimeIntelligenceConfig {
@@ -84,7 +84,7 @@ pub struct MeasureTimeIntelligenceConfig {
 
 // ---- main config types ----
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub catalog: String,
     pub cube: String,
@@ -110,7 +110,7 @@ pub struct ProxyConfig {
     pub measures: Vec<MeasureConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactTableConfig {
     pub id: String,
     pub source_name: String,
@@ -118,7 +118,7 @@ pub struct FactTableConfig {
     pub measure_group_name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipConfig {
     pub fact_table: String,
     pub fact_column: String,
@@ -133,7 +133,7 @@ pub struct RelationshipConfig {
 /// `Read` is the default for backward compat (existing roles without explicit
 /// permission get read access). The proxy treats `readRefresh` and `refresh`
 /// as equivalent to `Read` (the proxy is a read-only runtime).
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelPermission {
     None,
@@ -151,7 +151,7 @@ fn default_read() -> ModelPermission {
 /// `filter_expression` is a DuckDB SQL fragment used at runtime for RLS.
 /// `dax_filter` carries the original DAX expression from the Tabular model
 /// (for documentation / future DAX-to-SQL lowering).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TablePermissionConfig {
     pub table: String,
     #[serde(default)]
@@ -163,7 +163,7 @@ pub struct TablePermissionConfig {
 }
 
 /// A member (user or group) assigned to a role.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleMemberConfig {
     pub member_name: String,
     #[serde(default)]
@@ -183,7 +183,7 @@ pub struct RoleMemberConfig {
 /// When no `auth` is configured, roles are informational only (backward
 /// compat). The proxy emits a startup warning if roles are present without
 /// auth.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleConfig {
     pub name: String,
     #[serde(default)]
@@ -207,7 +207,7 @@ pub struct RoleConfig {
 /// When `auth` is `None` (or absent) in `ProxyConfig`, the proxy operates
 /// in admin-default mode: no user context is built, all requests see all
 /// data, and roles are informational-only.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     #[serde(default)]
     pub trusted_proxy: bool,
@@ -219,7 +219,7 @@ fn default_trusted_header() -> String {
     "X-User".into()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionConfig {
     pub id: String,
     /// Deprecated since plan 027 — no longer consumed by the runtime.
@@ -246,7 +246,7 @@ pub struct DimensionConfig {
     pub hierarchy_levels: Vec<HierarchyLevelConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HierarchyLevelConfig {
     /// Level name, e.g. "Year", "Quarter", "Month", "Day"
     pub name: String,
@@ -259,7 +259,7 @@ pub struct HierarchyLevelConfig {
     pub cardinality: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasureConfig {
     pub id: String,
     /// Deprecated since plan 027 — no longer consumed by the runtime.

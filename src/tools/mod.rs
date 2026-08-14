@@ -1,3 +1,4 @@
+pub mod auto_model;
 pub mod convert_tabular;
 pub mod data_loader;
 pub mod extract_trace_mdx;

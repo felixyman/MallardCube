@@ -74,6 +74,17 @@ enum Command {
     SeedGeneratedDb,
     /// Emit SQL to create demo fact tables
     SeedSql,
+    /// Auto-detect a semantic model from a DuckDB database
+    AutoModel {
+        /// Path to the DuckDB database file
+        db_path: String,
+        /// Output directory for proxy-config.json (default: current dir)
+        #[arg(long)]
+        output: Option<String>,
+        /// Override the auto-detected fact table
+        #[arg(long)]
+        fact: Option<String>,
+    },
     /// Qualify a converted project for Excel readiness
     Qualify {
         /// Path to proxy-config.json
@@ -158,6 +169,22 @@ async fn main() {
         Command::SeedSql => {
             std::process::exit(xmla_proxy::tools::seed_sql::run(vec!["seed-sql".into()]));
         }
+        Command::AutoModel {
+            db_path,
+            output,
+            fact,
+        } => {
+            let mut args = vec!["auto-model".into(), db_path];
+            if let Some(o) = output {
+                args.push("--output".into());
+                args.push(o);
+            }
+            if let Some(f) = fact {
+                args.push("--fact".into());
+                args.push(f);
+            }
+            std::process::exit(xmla_proxy::tools::auto_model::run(args));
+        }
         Command::Qualify { config, trace } => {
             let mut args = vec!["qualify".into(), config];
             if let Some(t) = trace {
@@ -173,10 +200,31 @@ async fn run_server() {
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
     xmla_proxy::xmla_trace::init_trace();
 
-    let config_path = std::env::var("PROXY_CONFIG")
-        .ok()
-        .unwrap_or_else(|| "projects/project3/proxy-config.json".into());
-    proxy_project::init_project(Some(&config_path)).expect("init project");
+    let config_path = std::env::var("PROXY_CONFIG").ok();
+    let auto_db = std::env::var("MALLARDCUBE_DB").ok();
+
+    match (config_path, auto_db) {
+        (Some(path), _) => {
+            proxy_project::init_project(Some(&path)).expect("init project");
+        }
+        (None, Some(db)) => {
+            // Zero-config AutoModel: detect a semantic model from the DuckDB
+            // file, seeding date_dim tables in place.
+            let abs_db = std::fs::canonicalize(&db).unwrap_or_else(|_| db.into());
+            let detected = xmla_proxy::tools::auto_model::detect_config(
+                abs_db.to_string_lossy().as_ref(),
+                None,
+                true,
+            )
+            .expect("AutoModel detection failed");
+            let dir = abs_db.parent().unwrap_or(std::path::Path::new("."));
+            proxy_project::init_project_with_config(detected.config, dir).expect("init project");
+        }
+        (None, None) => {
+            proxy_project::init_project(Some("projects/project3/proxy-config.json"))
+                .expect("init project");
+        }
+    }
 
     let state = {
         let p = proxy_project::project();
@@ -189,7 +237,11 @@ async fn run_server() {
             p.model.measures.len(),
         ));
 
-        let db_path = proxy_project::resolve_db_path(&config_path, p.config.db_path.as_deref());
+        let config_dir = std::env::var("PROXY_CONFIG")
+            .ok()
+            .or_else(|| std::env::var("MALLARDCUBE_DB").ok())
+            .unwrap_or_else(|| "projects/project3/proxy-config.json".into());
+        let db_path = proxy_project::resolve_db_path(&config_dir, p.config.db_path.as_deref());
         let backend_source = match db_path {
             Some(path) => {
                 let source = backend::init_backend_source(Some(&path))
