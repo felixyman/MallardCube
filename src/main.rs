@@ -11,10 +11,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use xmla_proxy::engine::model::{UserContext, resolve_user_context};
-use xmla_proxy::parser::{XmlaRequest, parse_xmla};
-use xmla_proxy::project::config::ProxyConfig;
-use xmla_proxy::*;
+use mallardcube::engine::model::{UserContext, resolve_user_context};
+use mallardcube::parser::{XmlaRequest, parse_xmla};
+use mallardcube::project::config::ProxyConfig;
+use mallardcube::*;
 
 #[derive(Clone)]
 struct AppState {
@@ -24,7 +24,7 @@ struct AppState {
 // ---- CLI ----
 
 #[derive(Parser)]
-#[command(name = "mallardcube", about = "SSAS Tabular proxy for Excel + DuckDB")]
+#[command(name = "mallard", about = "SSAS Tabular proxy for Excel + DuckDB")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -127,7 +127,7 @@ async fn main() {
             out_dir,
             dummy_rows,
         } => {
-            std::process::exit(xmla_proxy::tools::convert_tabular::run(vec![
+            std::process::exit(mallardcube::tools::convert_tabular::run(vec![
                 "convert-tabular".into(),
                 src_dir,
                 out_dir,
@@ -142,10 +142,10 @@ async fn main() {
             if let Some(p) = project {
                 args.push(p);
             }
-            std::process::exit(xmla_proxy::tools::trace_replay::run(args));
+            std::process::exit(mallardcube::tools::trace_replay::run(args));
         }
         Command::ExtractTrace { path } => {
-            std::process::exit(xmla_proxy::tools::extract_trace_mdx::run(vec![
+            std::process::exit(mallardcube::tools::extract_trace_mdx::run(vec![
                 "extract-trace".into(),
                 path,
             ]));
@@ -153,21 +153,21 @@ async fn main() {
         Command::LoadReplay { args } => {
             let mut forwarded = vec!["load-replay".into()];
             forwarded.extend(args);
-            std::process::exit(xmla_proxy::tools::load_replay::run(forwarded));
+            std::process::exit(mallardcube::tools::load_replay::run(forwarded));
         }
         Command::Inventory { src_dir } => {
-            std::process::exit(xmla_proxy::tools::inventory::run(vec![
+            std::process::exit(mallardcube::tools::inventory::run(vec![
                 "inventory".into(),
                 src_dir,
             ]));
         }
         Command::SeedGeneratedDb => {
-            std::process::exit(xmla_proxy::tools::seed_generated_db::run(vec![
+            std::process::exit(mallardcube::tools::seed_generated_db::run(vec![
                 "seed-generated-db".into(),
             ]));
         }
         Command::SeedSql => {
-            std::process::exit(xmla_proxy::tools::seed_sql::run(vec!["seed-sql".into()]));
+            std::process::exit(mallardcube::tools::seed_sql::run(vec!["seed-sql".into()]));
         }
         Command::AutoModel {
             db_path,
@@ -183,14 +183,14 @@ async fn main() {
                 args.push("--fact".into());
                 args.push(f);
             }
-            std::process::exit(xmla_proxy::tools::auto_model::run(args));
+            std::process::exit(mallardcube::tools::auto_model::run(args));
         }
         Command::Qualify { config, trace } => {
             let mut args = vec!["qualify".into(), config];
             if let Some(t) = trace {
                 args.push(t);
             }
-            std::process::exit(xmla_proxy::tools::qualify::run(args));
+            std::process::exit(mallardcube::tools::qualify::run(args));
         }
     }
 }
@@ -198,7 +198,7 @@ async fn main() {
 async fn run_server() {
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
-    xmla_proxy::xmla_trace::init_trace();
+    mallardcube::xmla_trace::init_trace();
 
     let config_path = std::env::var("PROXY_CONFIG").ok();
     let auto_db = std::env::var("MALLARDCUBE_DB").ok();
@@ -212,7 +212,7 @@ async fn run_server() {
             // file, seeding date_dim tables in place.
             let abs_db = std::fs::canonicalize(&db).unwrap_or_else(|_| db.into());
             let fact_override = std::env::var("MALLARDCUBE_FACT").ok();
-            let detected = xmla_proxy::tools::auto_model::detect_config(
+            let detected = mallardcube::tools::auto_model::detect_config(
                 abs_db.to_string_lossy().as_ref(),
                 fact_override.as_deref(),
                 true,
@@ -412,7 +412,7 @@ async fn handle_xmla(
                 .find('"')
                 .map(|end| body_for_worker[after..after + end].to_string())
         });
-        xmla_proxy::response::set_session_id(session_id);
+        mallardcube::response::set_session_id(session_id);
         let backend = backend_source
             .checkout()
             .expect("failed to checkout DuckDB backend");
@@ -448,7 +448,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
             let resp = execute::dispatch::get_empty_execute_response();
-            xmla_proxy::xmla_trace::trace_request(
+            mallardcube::xmla_trace::trace_request(
                 &format!("{:?}", request),
                 body,
                 &resp,
@@ -469,7 +469,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
                 println!("Excel asking for properties: {:?}", property_names);
                 properties::get_properties_response(property_names)
             };
-            xmla_proxy::xmla_trace::trace_request(
+            mallardcube::xmla_trace::trace_request(
                 &format!("{:?}", request),
                 body,
                 &resp,
@@ -481,47 +481,53 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
 
         XmlaRequest::DiscoverSchemaRowsets => {
             let resp = schema_rowsets::get_schemas_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverSchemaRowsets", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request(
+                "DiscoverSchemaRowsets",
+                body,
+                &resp,
+                None,
+                None,
+            );
             resp
         }
         XmlaRequest::DbSchemaCatalogs => {
             let resp = catalogs::get_catalogs_response();
-            xmla_proxy::xmla_trace::trace_request("DbSchemaCatalogs", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DbSchemaCatalogs", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaCubes => {
             let resp = cubes::get_cubes_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaCubes", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaCubes", body, &resp, None, None);
             resp
         }
         XmlaRequest::DbschemaTables => {
             let resp = tables::get_tables_response();
-            xmla_proxy::xmla_trace::trace_request("DbschemaTables", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DbschemaTables", body, &resp, None, None);
             resp
         }
 
         XmlaRequest::MdschemaDimensions => {
             println!("📥 Sending Dimensions to Excel");
             let resp = dimensions::get_dimensions_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaDimensions", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaDimensions", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaMeasures => {
             println!("📥 Sending Measures to Excel");
             let resp = measures::get_measures_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaHierarchies => {
             println!("📥 Hierarchies");
             let resp = hierarchies::get_hierarchies_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaHierarchies", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaHierarchies", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaLevels => {
             println!("📥 Levels");
             let resp = levels::get_levels_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaLevels", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaLevels", body, &resp, None, None);
             resp
         }
 
@@ -543,14 +549,20 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
 
             debug_write("RESPONSE XML:");
             debug_write(&resp);
-            xmla_proxy::xmla_trace::trace_request("ExecuteStatement", body, &resp, Some(mdx), None);
+            mallardcube::xmla_trace::trace_request(
+                "ExecuteStatement",
+                body,
+                &resp,
+                Some(mdx),
+                None,
+            );
             resp
         }
 
         XmlaRequest::MdschemaProperties { property_type } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
             let resp = mdschema_properties::get_mdschema_properties_response(*property_type);
-            xmla_proxy::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaMembers {
@@ -575,38 +587,44 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             );
             debug_write("RESPONSE XML:");
             debug_write(&resp);
-            xmla_proxy::xmla_trace::trace_request("MdschemaMembers", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaMembers", body, &resp, None, None);
             resp
         }
 
         XmlaRequest::DiscoverLiterals => {
             println!("📥 DISCOVER_LITERALS");
             let resp = literals::get_literals_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverLiterals", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DiscoverLiterals", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaSets => {
             println!("📥 MDSCHEMA_SETS");
             let resp = sets::get_sets_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaSets", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaSets", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaKpis => {
             println!("📥 MDSCHEMA_KPIS");
             let resp = kpis::get_kpis_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaKpis", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("MdschemaKpis", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaMeasureGroups => {
             println!("📥 MDSCHEMA_MEASUREGROUPS");
             let resp = measure_groups::get_measure_groups_response();
-            xmla_proxy::xmla_trace::trace_request("MdschemaMeasureGroups", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request(
+                "MdschemaMeasureGroups",
+                body,
+                &resp,
+                None,
+                None,
+            );
             resp
         }
         XmlaRequest::MdschemaMeasureGroupDimensions => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
             let resp = measuregroup_dimensions::get_measuregroup_dimensions_response();
-            xmla_proxy::xmla_trace::trace_request(
+            mallardcube::xmla_trace::trace_request(
                 "MdschemaMeasureGroupDimensions",
                 body,
                 &resp,
@@ -619,61 +637,67 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
         XmlaRequest::TmschemaModel => {
             println!("📥 TMSCHEMA_MODEL");
             let resp = tmschema::get_tmschema_model_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaModel", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaModel", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaTables => {
             println!("📥 TMSCHEMA_TABLES");
             let resp = tmschema::get_tmschema_tables_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaColumns => {
             println!("📥 TMSCHEMA_COLUMNS");
             let resp = tmschema::get_tmschema_columns_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaColumns", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaColumns", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaMeasures => {
             println!("📥 TMSCHEMA_MEASURES");
             let resp = tmschema::get_tmschema_measures_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaMeasures", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaMeasures", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaHierarchies => {
             println!("📥 TMSCHEMA_HIERARCHIES");
             let resp = tmschema::get_tmschema_hierarchies_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaHierarchies", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaHierarchies", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaLevels => {
             println!("📥 TMSCHEMA_LEVELS");
             let resp = tmschema::get_tmschema_levels_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaLevels", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaLevels", body, &resp, None, None);
             resp
         }
         XmlaRequest::TmschemaRelationships => {
             println!("📥 TMSCHEMA_RELATIONSHIPS");
             let resp = tmschema::get_tmschema_relationships_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaRelationships", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request(
+                "TmschemaRelationships",
+                body,
+                &resp,
+                None,
+                None,
+            );
             resp
         }
         XmlaRequest::TmschemaPartitions => {
             println!("📥 TMSCHEMA_PARTITIONS");
             let resp = tmschema::get_tmschema_partitions_response();
-            xmla_proxy::xmla_trace::trace_request("TmschemaPartitions", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("TmschemaPartitions", body, &resp, None, None);
             resp
         }
         XmlaRequest::DiscoverXmlMetadata => {
             println!("📥 DISCOVER_XML_METADATA");
             let resp = tmschema::get_discover_xml_metadata_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverXmlMetadata", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DiscoverXmlMetadata", body, &resp, None, None);
             resp
         }
         XmlaRequest::DiscoverCalcDependency => {
             println!("📥 DISCOVER_CALC_DEPENDENCY");
             let resp = tmschema::get_discover_calc_dependency_response();
-            xmla_proxy::xmla_trace::trace_request(
+            mallardcube::xmla_trace::trace_request(
                 "DiscoverCalcDependency",
                 body,
                 &resp,
@@ -685,25 +709,25 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
         XmlaRequest::DiscoverEnumerators => {
             println!("📥 DISCOVER_ENUMERATORS");
             let resp = enumerators::get_enumerators_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverEnumerators", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DiscoverEnumerators", body, &resp, None, None);
             resp
         }
         XmlaRequest::DiscoverKeywords => {
             println!("📥 DISCOVER_KEYWORDS");
             let resp = keywords::get_keywords_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverKeywords", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DiscoverKeywords", body, &resp, None, None);
             resp
         }
         XmlaRequest::DiscoverDatasources => {
             println!("📥 DISCOVER_DATASOURCES");
             let resp = datasources::get_datasources_response();
-            xmla_proxy::xmla_trace::trace_request("DiscoverDatasources", body, &resp, None, None);
+            mallardcube::xmla_trace::trace_request("DiscoverDatasources", body, &resp, None, None);
             resp
         }
 
         XmlaRequest::Unknown => {
             eprintln!("Unknown request: {}", body);
-            xmla_proxy::xmla_trace::trace_request("Unknown", body, "", None, None);
+            mallardcube::xmla_trace::trace_request("Unknown", body, "", None, None);
             String::new()
         }
     }

@@ -1,8 +1,16 @@
 [package]
-name = "xmla_proxy"
-default-run = "xmla_proxy"
+name = "mallardcube"
+default-run = "mallard"
 version = "0.1.0"
 edition = "2024"
+description = "SSAS Tabular replacement — Excel/XMLA frontend for DuckDB"
+license = "MIT"
+keywords = ["ssas", "xmla", "olap", "excel", "pivottable", "duckdb", "mdx"]
+categories = ["database", "command-line-utilities"]
+
+[[bin]]
+name = "mallard"
+path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"

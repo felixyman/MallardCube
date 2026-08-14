@@ -255,15 +255,15 @@ cargo test --lib
 
 | Command | Purpose |
 |---|---|
-| `cargo run --bin xmla_proxy` | Start the proxy server |
-| `cargo run --bin xmla_proxy -- convert-tabular <src> <dest>` | Convert Tabular Editor folder to proxy project |
-| `cargo run --bin xmla_proxy -- inventory <src>` | Extract model inventory from Tabular Editor folder |
-| `cargo run --bin xmla_proxy -- qualify <config> [trace]` | Emit READY/PARTIAL/BLOCKED readiness verdict |
-| `cargo run --bin xmla_proxy -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
-| `cargo run --bin xmla_proxy -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
-| `cargo run --bin xmla_proxy -- load-replay [args...]` | Concurrently replay captured requests against a live /xmla endpoint |
-| `cargo run --bin xmla_proxy -- seed-generated-db` | Seed generated_project DuckDB file with synthetic data |
-| `cargo run --bin xmla_proxy -- seed-sql` | Emit SQL to create demo fact tables |
+| `cargo run --bin mallard` | Start the proxy server |
+| `cargo run --bin mallard -- convert-tabular <src> <dest>` | Convert Tabular Editor folder to proxy project |
+| `cargo run --bin mallard -- inventory <src>` | Extract model inventory from Tabular Editor folder |
+| `cargo run --bin mallard -- qualify <config> [trace]` | Emit READY/PARTIAL/BLOCKED readiness verdict |
+| `cargo run --bin mallard -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
+| `cargo run --bin mallard -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
+| `cargo run --bin mallard -- load-replay [args...]` | Concurrently replay captured requests against a live /xmla endpoint |
+| `cargo run --bin mallard -- seed-generated-db` | Seed generated_project DuckDB file with synthetic data |
+| `cargo run --bin mallard -- seed-sql` | Emit SQL to create demo fact tables |
 
 ## Appendix: Config reference
 

@@ -18,7 +18,7 @@ PROXY="${1:-http://127.0.0.1:8080/xmla}"
 if [ "${1:-}" = "serve" ]; then
   cd "$(dirname "$0")/.." || exit 1
   cargo build >/dev/null 2>&1 || { echo "build failed"; exit 1; }
-  pkill -f 'target/debug/xmla_proxy' 2>/dev/null
+  pkill -f 'target/debug/mallard' 2>/dev/null
   sleep 1
   BIND_ADDRESS=0.0.0.0:8080 XMLA_TRACE=1 setsid nohup cargo run > /tmp/opencode/proxy.log 2>&1 < /dev/null &
   for _ in $(seq 1 30); do

@@ -22,7 +22,7 @@ just curl. Two layers, in order of cheapness:
 
 ## Environment facts (do not rediscover these)
 
-- The proxy runs **on Linux** (`cargo run` / `target/debug/xmla_proxy`), and by
+- The proxy runs **on Linux** (`cargo run` / `target/debug/mallard`), and by
   default binds **`127.0.0.1:8080` only**.
 - **HARD REQUIREMENT: always start it with `BIND_ADDRESS=0.0.0.0:8080`.** The
   Windows VM/Excel cannot reach `127.0.0.1`; it reaches the Linux host on the

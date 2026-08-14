@@ -2,7 +2,7 @@
 
 This document is a specification for converting Microsoft SSAS Tabular Model
 (`Model.bim`) projects to Malloy semantic models backed by DuckDB, served
-through the `xmla_proxy` Excel/XMLA proxy.
+through the the `mallard` Excel/XMLA proxy.
 
 It is designed to be used as a system prompt for an LLM. The LLM should:
 

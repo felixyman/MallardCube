@@ -2015,7 +2015,7 @@ mod tests {
         let conn = Connection::open("data/generated.db").unwrap_or_else(|e| {
             panic!(
                 "data/generated.db is missing or unreadable ({e}) — run:\n    \
-                 cargo run --bin xmla_proxy -- seed-generated-db"
+                 cargo run --bin mallard -- seed-generated-db"
             )
         });
         let has_fact_table: bool = conn
@@ -2029,7 +2029,7 @@ mod tests {
         assert!(
             has_fact_table,
             "data/generated.db is empty or stale (fact table missing) — run:\n    \
-             cargo run --bin xmla_proxy -- seed-generated-db"
+             cargo run --bin mallard -- seed-generated-db"
         );
 
         // DVT measure: should find matching rows in the fixture

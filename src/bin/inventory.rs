@@ -1,5 +1,5 @@
 fn main() {
-    std::process::exit(xmla_proxy::tools::inventory::run(
+    std::process::exit(mallardcube::tools::inventory::run(
         std::env::args().collect(),
     ));
 }

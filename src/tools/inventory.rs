@@ -33,7 +33,7 @@ pub fn run(args: Vec<String>) -> i32 {
     let src_dir = match args.get(1) {
         Some(d) => d,
         None => {
-            eprintln!("Usage: xmla_proxy inventory <tabulareditor_src>");
+            eprintln!("Usage: mallard inventory <tabulareditor_src>");
             eprintln!("  <tabulareditor_src> can be a directory (folder/TMDL format) or .bim file");
             return 1;
         }
@@ -62,7 +62,7 @@ pub fn run(args: Vec<String>) -> i32 {
                 "Error: '{}' is neither a .bim file nor a directory with Tabular Editor files",
                 src_dir
             );
-            eprintln!("Usage: xmla_proxy inventory <tabulareditor_src>");
+            eprintln!("Usage: mallard inventory <tabulareditor_src>");
             return 1;
         }
     };
