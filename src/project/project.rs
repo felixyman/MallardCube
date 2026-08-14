@@ -68,6 +68,15 @@ pub fn init_project(config_path: Option<&str>) -> Result<(), String> {
         .map_err(|_| "project already initialised".into())
 }
 
+/// Initialize the project singleton from an in-memory `ProxyConfig` (e.g.
+/// AutoModel detection at startup via `MALLARDCUBE_DB`).
+pub fn init_project_with_config(config: ProxyConfig, config_dir: &Path) -> Result<(), String> {
+    let p = ProxyProject::from_config(config, config_dir)?;
+    PROJECT
+        .set(p)
+        .map_err(|_| "project already initialised".into())
+}
+
 /// Resolve `db_path` relative to the directory containing the config file.
 /// If `db_path` is None, returns None.  If `db_path` is absolute, returns it
 /// unchanged.  This is the canonical resolution rule shared by `serve`,
@@ -105,6 +114,13 @@ impl ProxyProject {
             Path::new(config_path).parent().unwrap_or(Path::new(".")),
         );
 
+        Ok(Self { config, model })
+    }
+
+    /// Build a project from an in-memory `ProxyConfig` (e.g. AutoModel output)
+    /// instead of a config file on disk.
+    pub fn from_config(config: ProxyConfig, config_dir: &Path) -> Result<Self, String> {
+        let model = build_semantic_model(&config, config_dir);
         Ok(Self { config, model })
     }
 
