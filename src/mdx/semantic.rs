@@ -217,6 +217,9 @@ pub struct SemanticQuery {
     pub drilldown_member_hierarchy: Option<String>,
     /// Explicitly requested measure from MDX (WHERE or columns).
     pub measure: Option<String>,
+    /// All measures requested on the SELECT axis, in order. Multiple entries
+    /// mean a multi-measure query (batched CUBEVALUE cells).
+    pub measures: Vec<String>,
     /// When drilling a multi-level hierarchy, which level index to group by.
     pub drilldown_level: Option<usize>,
     /// Measure/member names parsed from strtomember() probe (CUBEVALUE metadata query).
@@ -327,6 +330,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
             measure: None,
+            measures: vec![],
             drilldown_level: None,
             metadata_probe_targets: targets,
             metadata_probe_properties: props,
@@ -453,6 +457,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .collect(),
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
+        measures: parsed.selected_measures.clone(),
         drilldown_level,
         metadata_probe_targets: vec![],
         metadata_probe_properties: vec![],

@@ -64,6 +64,13 @@ pub enum QueryPlan {
         group_level: Option<usize>,
     },
 
+    /// Multiple measures on the SELECT axis with no row dimension (e.g. batched
+    /// CUBEVALUE cells). Each measure is an independent scalar cell.
+    MultiMeasure {
+        measures: Vec<MeasId>,
+        filters: Vec<TypedDimensionFilter>,
+    },
+
     Count {
         dimension: DimId,
     },
@@ -81,6 +88,8 @@ pub enum QueryResult {
     Grouped(Vec<(String, f64)>),
     Pairs(Vec<(String, String, f64)>),
     Count(u32),
+    /// One scalar per measure, in the same order as `MultiMeasure.measures`.
+    Multi(Vec<f64>),
     Empty,
 }
 
@@ -192,6 +201,16 @@ pub fn plan_from_semantic_with_model_and_context(
                 return QueryPlan::Empty;
             }
         }
+        QueryPlan::MultiMeasure { measures, .. } => {
+            for measure in measures {
+                let fact_table = model.fact_table_for_measure(measure);
+                if effective_table_filter(config, user, &fact_table.table_name)
+                    == TableAccess::Hidden
+                {
+                    return QueryPlan::Empty;
+                }
+            }
+        }
         QueryPlan::Count { dimension } => {
             let table = model.dim_table_for_discovery(dimension);
             if effective_table_filter(config, user, table) == TableAccess::Hidden {
@@ -254,9 +273,32 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         | SemanticQueryKind::MemberOnlyProbe => QueryPlan::Empty,
 
         SemanticQueryKind::SlicerAllAndMeasure | SemanticQueryKind::SlicerOnly => {
-            QueryPlan::Total {
-                measure: meas.clone(),
-                filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
+            if query.measures.len() > 1 {
+                let measures: Vec<MeasId> = query
+                    .measures
+                    .iter()
+                    .filter_map(|name| model.lookup_measure(name).map(|m| m.id.clone()))
+                    .collect();
+                if measures.len() > 1 {
+                    QueryPlan::MultiMeasure {
+                        measures,
+                        filters: typed_filters(&query.filters),
+                    }
+                } else {
+                    QueryPlan::Total {
+                        measure: meas.clone(),
+                        filters: filters_with_time_flag(
+                            model,
+                            &meas,
+                            &typed_filters(&query.filters),
+                        ),
+                    }
+                }
+            } else {
+                QueryPlan::Total {
+                    measure: meas.clone(),
+                    filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
+                }
             }
         }
 
@@ -325,6 +367,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
                 QueryResult::Grouped(backend.query_grouped_1d(sql))
             }
         }
+        QueryPlan::MultiMeasure { .. } => QueryResult::Empty,
         QueryPlan::Count { .. } => QueryResult::Count(backend.query_count(sql)),
         QueryPlan::Empty => QueryResult::Empty,
     }
@@ -340,6 +383,24 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> QueryResult {
+    // A multi-measure plan is just N independent single-measure scalars, each
+    // with its own time-flag/filter resolution. Recurse per measure.
+    if let QueryPlan::MultiMeasure { measures, filters } = plan {
+        let mut values = Vec::with_capacity(measures.len());
+        for measure in measures {
+            let per_measure = QueryPlan::Total {
+                measure: measure.clone(),
+                filters: filters_with_time_flag(model, measure, filters),
+            };
+            match execute_plan_with_backend_and_context(&per_measure, model, backend, user, config)
+            {
+                QueryResult::Scalar(v) => values.push(v),
+                _ => values.push(0.0),
+            }
+        }
+        return QueryResult::Multi(values);
+    }
+
     // If the plan's measure has pre-loaded fallback SQL, use it instead of
     // generating SQL from the plan. Role predicates are NOT applied to
     // fallback SQL (pre-written static SQL). This is a documented limitation.
@@ -414,6 +475,8 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             let total = backend.query_scalar(&sql);
             QueryResult::Scalar(total)
         }
+
+        QueryPlan::MultiMeasure { .. } => QueryResult::Empty,
 
         QueryPlan::GroupBy { group_by, .. } => {
             if group_by.len() >= 2 {

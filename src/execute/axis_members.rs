@@ -591,6 +591,47 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
     }
 }
 
+/// Slicer axis with only the dimension All/leaf members — no measure. Used for
+/// multi-measure queries where the measures live on Axis0.
+pub(crate) fn dims_only_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+) -> cellset::AxisConfig {
+    let project = proxy_project::project();
+    let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
+    let mut members: Vec<cellset::MemberConfig> = Vec::new();
+
+    let mut dims: Vec<&crate::engine::model::DimensionDef> = project
+        .model
+        .dimensions
+        .iter()
+        .filter(|d| d.visible)
+        .collect();
+    dims.sort_by_key(|d| d.ordinal);
+
+    for dim in dims {
+        if query.axis_dimensions.contains(&dim.id) {
+            continue;
+        }
+        hierarchies.push(hierarchy_for_dim(dim, &[]));
+        let slc = query.slicers.iter().find(|s| s.dimension == dim.id);
+        if slc.map(|s| s.is_all).unwrap_or(true) {
+            members.push(all_member_for_dim(dim, &[], backend));
+        } else {
+            let dim_members = filter_members_for(&dim.id, &query.filters);
+            for name in &dim_members {
+                members.push(leaf_member_for_dim(dim, name, &[], None, None));
+            }
+        }
+    }
+
+    cellset::AxisConfig {
+        name: "SlicerAxis".into(),
+        hierarchies,
+        tuples: vec![cellset::TupleConfig { members }],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

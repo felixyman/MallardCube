@@ -160,6 +160,29 @@ fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
     results
 }
 
+/// Extract every `[Measures].[name]` reference in the SELECT clause, in order.
+/// Batched CUBEVALUE cells produce a multi-measure tuple set like
+/// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`.
+fn find_all_select_measures(input: &str) -> Vec<String> {
+    let select_pos = input.find("SELECT").unwrap_or(0);
+    let from_pos = input[select_pos..]
+        .find("FROM")
+        .map(|i| select_pos + i)
+        .unwrap_or(input.len());
+    let clause = &input[select_pos..from_pos];
+    let mut result = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = clause[pos..].find("[Measures].[") {
+        let start = pos + i + "[Measures].[".len();
+        let Some(end) = clause[start..].find(']') else {
+            break;
+        };
+        result.push(clause[start..start + end].to_string());
+        pos = start + end + 1;
+    }
+    result
+}
+
 /// Parse a parenthesized, comma-separated member list (e.g. the tuple
 /// `([Measures].[Revenue],[Category].[Category].&[Electronics])`).
 fn paren_members(input: &str) -> IResult<&str, Vec<MemberRef>> {
@@ -432,6 +455,10 @@ pub struct ParsedMdx {
     /// The explicitly requested measure name, extracted from
     /// WHERE/columns (e.g. "Units" from [Measures].[Units]).
     pub selected_measure: Option<String>,
+    /// All measure names referenced in the SELECT clause, in order.
+    /// Multiple entries mean Excel batched several CUBEVALUE cells into one
+    /// multi-measure query (e.g. `{[Measures].[Revenue],[Measures].[Units]}`).
+    pub selected_measures: Vec<String>,
     /// The cube name extracted from `FROM [cubeName]` (e.g. "Sales").
     pub cube_name: Option<String>,
     /// Positionally-ordered dimension IDs from the select clause.
@@ -574,24 +601,16 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
 
     let select_members = find_select_tuple_members(input);
 
-    let selected_measure = where_members.iter().find_map(|m| match m {
-        MemberRef::Measure(name) => Some(name.clone()),
-        _ => None,
-    });
-    // Also check columns for explicit measure selection like
-    // `{[Measures].[Revenue],[Measures].[Units]} ON COLUMNS`.
-    let selected_measure = selected_measure.or_else(|| {
-        let col_start = input
-            .find("ON COLUMNS")
-            .or_else(|| input.find("on columns"))
-            .unwrap_or(input.len());
-        let before_cols = &input[..col_start];
-        let meas_start = before_cols.rfind("[Measures].[")?;
-        match member_ref(&input[meas_start..]) {
-            Ok((_, MemberRef::Measure(name))) => Some(name),
+    // All measures referenced in the SELECT clause, in order. A single cell
+    // holds one measure; batched CUBEVALUE cells produce several.
+    let select_measures = find_all_select_measures(input);
+    let selected_measure = where_members
+        .iter()
+        .find_map(|m| match m {
+            MemberRef::Measure(name) => Some(name.clone()),
             _ => None,
-        }
-    });
+        })
+        .or_else(|| select_measures.first().cloned());
 
     ParsedMdx {
         dim_props: parse_dimension_properties(input),
@@ -613,6 +632,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         cchildren_target: detect_cchildren_target(input),
         calculated_members_pat: detect_calculated_members_pat(input),
         selected_measure,
+        selected_measures: select_measures,
         cube_name,
         axis_dimension_ids,
         excluded_members,
