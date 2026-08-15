@@ -1918,6 +1918,22 @@ mod tests {
         });
     }
 
+    // Regression: level-qualified slicers like [Date].[Date].[Year].&[2024]
+    // must filter on the hierarchy level's column (year), not the leaf column.
+    #[test]
+    fn level_qualified_slicer_filters_by_level_column() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Date].[Date].[Year].&[2024])",
+            );
+            assert_eq!(
+                cell_values(&xml),
+                vec![46_223_804.0],
+                "2024 revenue, not the unfiltered total"
+            );
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {

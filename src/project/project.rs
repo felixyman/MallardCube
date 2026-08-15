@@ -1046,6 +1046,7 @@ mod tests {
             filters: vec![DimensionFilter {
                 dimension: "Channel".to_string(),
                 members: vec!["Online".to_string()],
+                level: None,
             }],
             cchildren_leaf_name: None,
             row_dimension: None,
@@ -1085,6 +1086,7 @@ mod tests {
             filters: vec![DimensionFilter {
                 dimension: "Category".to_string(),
                 members: vec!["Electronics".to_string()],
+                level: None,
             }],
             cchildren_leaf_name: None,
             row_dimension: None,

@@ -468,7 +468,10 @@ impl SemanticModel {
             Some(d) => d,
             None => return true, // unknown dims are treated as compatible
         };
-        if dim.shared {
+        // Date-role dimensions live on a helper date_dim table joined via a
+        // relationship, not a competing fact table — treat them as compatible
+        // (the relationship resolves the join per measure's fact table).
+        if dim.shared || dim.is_date_role {
             return true;
         }
         let meas = self.meas_def(meas_id);

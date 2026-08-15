@@ -105,6 +105,7 @@ mod tests {
             measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                level: None,
                 time_flag: None,
                 members: vec!["North".into()],
             }],
@@ -138,11 +139,13 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["Category B".into(), "Category A".into()],
                 },
@@ -162,11 +165,13 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["Category A".into()],
                 },
@@ -177,11 +182,13 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["Category A".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["North".into()],
                 },

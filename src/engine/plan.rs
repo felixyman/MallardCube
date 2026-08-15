@@ -31,6 +31,8 @@ pub type MeasId = String;
 pub struct TypedDimensionFilter {
     pub dimension: DimId,
     pub members: Vec<String>,
+    /// Hierarchy level name for level-qualified filters (e.g. "Year").
+    pub level: Option<String>,
     /// When set, this is a time-intelligence filter that joins date_dim
     /// on the given flag column (e.g., "ytd_flag").
     pub time_flag: Option<String>,
@@ -114,6 +116,7 @@ fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
         .map(|f| TypedDimensionFilter {
             dimension: f.dimension.clone(),
             members: f.members.clone(),
+            level: f.level.clone(),
             time_flag: None,
         })
         .collect()
@@ -133,6 +136,7 @@ fn filters_with_time_flag(
         result.push(TypedDimensionFilter {
             dimension: date_dim.dimension_id.clone(),
             members: vec![],
+            level: None,
             time_flag: Some(flag.clone()),
         });
     }
