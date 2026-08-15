@@ -1,7 +1,7 @@
 # Naming Contract
 
-Three distinct name types flow through the proxy.  Every module must use
-the correct type intentionally — never conflate them.
+Several distinct name types flow through the proxy. Every module must use the
+correct type intentionally — never conflate them.
 
 ## 1. `id` (internal / XMLA identifier)
 
@@ -14,24 +14,11 @@ the correct type intentionally — never conflate them.
   `"Territory"`, `"Revenue"`.
 - **Rules**:
   - Must be unique within the project.
-  - Does not need to match the Malloy field name or DuckDB column name.
+  - Does not need to match the DuckDB column name.
   - Appears in generated `plan_key` strings.
   - This is the value in `QueryPlan.group_by` / `QueryPlan::Total.measure`.
 
-## 2. `malloy_name` (semantic / runtime field name)
-
-- **Where defined**: `proxy-config.json` – `dimensions[].malloy_name` /
-  `measures[].malloy_name`
-- **What it is**: the name the Malloy compiler and DuckDB know for a field
-  or measure.
-- **Used by**: Malloy emitter (query fragments), DuckDB schema operations.
-- **Examples**: `"produktkategori"`, `"region"`, `"revenue"`.
-- **Rules**:
-  - Must match the corresponding field name in the `.malloy` source.
-  - Stored in `DimensionDef.semantic_name` / `MeasureDef.semantic_name`.
-  - Never appears directly in XMLA output or Excel-visible metadata.
-
-## 3. `caption` (Excel-visible label)
+## 2. `caption` (Excel-visible label)
 
 - **Where defined**: `proxy-config.json` – `dimensions[].caption` /
   `measures[].caption`
@@ -42,22 +29,40 @@ the correct type intentionally — never conflate them.
 - **Examples**: `"Produktkategori"`, `"Category"`, `"Revenue"`.
 - **Rules**:
   - Can be any user-friendly string, including spaces and Unicode.
-  - There is no requirement that `caption` matches `id` or `malloy_name`.
+  - There is no requirement that `caption` matches `id` or `physical_field`.
   - Appears in `DimensionDef.caption`, `MeasureDef.caption`,
     `MeasureDef.display_name`.
 
+## 3. `physical_field` (DuckDB column name)
+
+- **Where defined**: `proxy-config.json` – `dimensions[].physical_field`
+- **What it is**: the DuckDB column backing a dimension.
+- **Used by**: SQL queries and DuckDB introspection.
+- **Rules**:
+  - Must be a real column in the dimension's table.
+  - May use `table.column` syntax.
+  - Often equals `id`, but they are conceptually distinct.
+
+## 4. `sql_expr` (measure SQL expression)
+
+- **Where defined**: `proxy-config.json` – `measures[].sql_expr`
+- **What it is**: the DuckDB SQL expression that computes the measure.
+- **Examples**: `"SUM(revenue)"`, `"COUNT(*)"`, `"AVG(price)"`.
+- **Rules**:
+  - Direct SQL is the only runtime path — this is the expression that runs.
+
+## Deprecated legacy fields
+
+- **`malloy_name`** (`dimensions[]`, `measures[]`) and **`physical_expr`**
+  (`measures[]`) are Malloy-era fields. They are kept parseable for backward
+  compatibility but are **not consumed** by the runtime. New configs should
+  omit them (or set them to `""` / `null`).
+
 ## Additional conventions
 
-- **`physical_field`**: the DuckDB column name (`DimensionsDef.physical_field`).
-  Used by SQL queries and DuckDB introspection.  Often equals `malloy_name`,
-  but they are conceptually distinct.
 - **`hierarchy_name` / `all_level_name` / `leaf_level_name`**: XMLA-specific
-  presentation details that SSAS-style clients expect.  Defined per dimension
-  in the config.  Values are always SSAS-friendly strings (e.g. `"(All)"`).
-- **`physical_expr`** (measures only): the Malloy expression (e.g.
-  `"sales.sum()"`).  Used by the Malloy emitter.
-- **`sql_expr`** (measures only): the SQL expression (e.g. `"SUM(sales)"`).
-  Used only by the direct-SQL fallback path.  Optional in the future.
+  presentation details that SSAS-style clients expect. Defined per dimension
+  in the config. Values are always SSAS-friendly strings (e.g. `"(All)"`).
 
 ## Lookup rules
 
@@ -65,4 +70,5 @@ the correct type intentionally — never conflate them.
   1. Try `lookup_dimension()` which searches by `caption`, `id`, and
      dimension-unique-name fragments.
   2. Fall back to `default_dimension_id()`.
-- To find a measure: use `meas_def(id)` or `default_measure_id()`.
+- To find a measure: use `lookup_measure()` (matches `id`, `caption`, or
+  `display_name`) or `default_measure_id()`.

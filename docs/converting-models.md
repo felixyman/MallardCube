@@ -17,8 +17,6 @@ Output:
 - `sql_fallback/` — DuckDB SQL for complex measures (MEDIAN, cumulative, etc.)
 - `conversion-report.md` — summary and data-loading checklist
 
-See `docs/ssas-to-malloy-conversion.md` for the conversion internals.
-
 ## Migration intake loop
 
 The full flow for bringing an existing Tabular model into MallardCube:
