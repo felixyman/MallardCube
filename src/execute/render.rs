@@ -1,8 +1,9 @@
 use crate::axis_members::{
-    all_member_for_with_backend, cchildren_member, count_cell, empty_member_list_axis,
-    full_slicer_axis_with_backend, hierarchy_for, leaf_member_for, leaf_members_from,
-    measurement_cell_for_query, measures_axis_for_query, measures_hierarchy, measures_total_member,
-    member_list_axis, render_response, row_dim, single_member_axis,
+    all_member_for_with_backend, cchildren_member, count_cell, dims_only_slicer_axis_with_backend,
+    empty_member_list_axis, full_slicer_axis_with_backend, hierarchy_for, leaf_member_for,
+    leaf_members_from, measurement_cell_for, measurement_cell_for_query, measures_axis_for_query,
+    measures_hierarchy, measures_member, measures_total_member, member_list_axis, render_response,
+    row_dim, single_member_axis,
 };
 use crate::backend::QueryBackend;
 use crate::cellset;
@@ -46,6 +47,42 @@ pub(crate) fn build_slicer_only<B: QueryBackend + ?Sized>(
     render_response(
         vec![full_slicer_axis_with_backend(query, backend)],
         vec![measurement_cell_for_query(query, 0, total)],
+        &query.cell_props,
+    )
+}
+
+/// Render a multi-measure query (several measures on Axis0, no row dimension).
+/// Each measure gets its own tuple on the measures axis and one cell.
+fn build_multi_measure<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let values = match result {
+        QueryResult::Multi(v) => v.clone(),
+        _ => return empty_cellset(query, backend),
+    };
+    let project = crate::proxy_project::project();
+    let mut members = Vec::new();
+    let mut measure_ids = Vec::new();
+    for name in &query.measures {
+        if let Some(m) = project.model.lookup_measure(name) {
+            members.push(measures_member(&m.measure_unique_name(), &m.display_name));
+            measure_ids.push(m.id.clone());
+        }
+    }
+    let mut cells = Vec::new();
+    for (i, value) in values.iter().enumerate() {
+        if let Some(measure_id) = measure_ids.get(i) {
+            cells.push(measurement_cell_for(i as u32, *value, measure_id));
+        }
+    }
+    render_response(
+        vec![
+            member_list_axis("Axis0", measures_hierarchy(), members),
+            dims_only_slicer_axis_with_backend(query, backend),
+        ],
+        cells,
         &query.cell_props,
     )
 }
@@ -573,7 +610,10 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         SemanticQueryKind::LeafLevelMembers => build_leaf_level_members(query, result, backend),
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, result, backend),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query, result, backend),
-        SemanticQueryKind::SlicerOnly => build_slicer_only(query, result, backend),
+        SemanticQueryKind::SlicerOnly => match result {
+            QueryResult::Multi(_) => build_multi_measure(query, result, backend),
+            _ => build_slicer_only(query, result, backend),
+        },
         SemanticQueryKind::DrilldownMemberProbe => match result {
             QueryResult::Grouped(_) => build_drilldown(query, result, backend),
             _ => build_drilldown_member(query, result, backend),

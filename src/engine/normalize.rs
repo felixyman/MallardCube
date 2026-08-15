@@ -28,6 +28,14 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             format!("count|dim={}", dimension)
         }
 
+        QueryPlan::MultiMeasure { measures, filters } => {
+            format!(
+                "multi|measures={}|{}",
+                measures.join(","),
+                filter_suffix(filters)
+            )
+        }
+
         QueryPlan::Empty => "empty".into(),
     }
 }

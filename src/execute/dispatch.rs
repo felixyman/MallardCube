@@ -1875,6 +1875,23 @@ mod tests {
         });
     }
 
+    // Regression: batched CUBEVALUE cells produce a multi-measure query
+    // (`SELECT {([Measures].[A]),([Measures].[B])} ON 0`). The proxy must
+    // return one cell per measure instead of a single cell for the last measure.
+    #[test]
+    fn multi_measure_axis_returns_one_cell_per_measure() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {([Measures].[Revenue]),([Measures].[Units]),([Measures].[Revenue QTD])} ON 0 FROM [Sales]",
+            );
+            assert_eq!(
+                cell_values(&xml),
+                vec![521_586_767.0, 4_931_640.0, 6_395_512.0],
+                "one cell per measure, in order"
+            );
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {
