@@ -1,7 +1,7 @@
 /// QueryPlan normalization — produces stable, sortable cache keys
 /// for memoization, deduplication, and parity testing.
 ///
-/// Two plans that would produce the same SQL/Malloy should produce
+/// Two plans that would produce the same SQL should produce
 /// the same key. Key format is human-readable and deterministic.
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
 

@@ -51,13 +51,6 @@ correct type intentionally — never conflate them.
 - **Rules**:
   - Direct SQL is the only runtime path — this is the expression that runs.
 
-## Deprecated legacy fields
-
-- **`malloy_name`** (`dimensions[]`, `measures[]`) and **`physical_expr`**
-  (`measures[]`) are Malloy-era fields. They are kept parseable for backward
-  compatibility but are **not consumed** by the runtime. New configs should
-  omit them (or set them to `""` / `null`).
-
 ## Additional conventions
 
 - **`hierarchy_name` / `all_level_name` / `leaf_level_name`**: XMLA-specific

@@ -191,7 +191,6 @@ fn empty_config() -> ProxyConfig {
         source_name: String::new(),
         table_name: String::new(),
         dialect: "duckdb".into(),
-        malloy_model_file: String::new(),
         db_path: None,
         fact_tables: vec![],
         relationships: vec![],
@@ -484,7 +483,6 @@ mod tests {
             dialect: Dialect::DuckDB,
             dimensions: vec![DimensionDef {
                 id: "Product".into(),
-                semantic_name: "product".into(),
                 physical_field: "dim_product.product_name".into(),
                 table_name: Some("dim_product".into()),
                 shared: false,
@@ -502,8 +500,6 @@ mod tests {
             measures: vec![MeasureDef {
                 id: "Revenue".into(),
                 fact_table_idx: 0,
-                semantic_name: "revenue".into(),
-                physical_expr: "revenue.sum()".into(),
                 sql_expr: "SUM(revenue)".into(),
                 caption: "Revenue".into(),
                 display_name: "Revenue".into(),
@@ -593,8 +589,6 @@ mod tests {
                 MeasureDef {
                     id: "Revenue".into(),
                     fact_table_idx: 0,
-                    semantic_name: "revenue".into(),
-                    physical_expr: "revenue.sum()".into(),
                     sql_expr: "SUM(revenue)".into(),
                     caption: "Revenue".into(),
                     display_name: "Revenue".into(),
@@ -615,8 +609,6 @@ mod tests {
                 MeasureDef {
                     id: "Stock".into(),
                     fact_table_idx: 1,
-                    semantic_name: "stock".into(),
-                    physical_expr: "stock.sum()".into(),
                     sql_expr: "SUM(stock)".into(),
                     caption: "Stock".into(),
                     display_name: "Stock".into(),
@@ -674,7 +666,6 @@ mod tests {
         let m2 = SemanticModel {
             dimensions: vec![DimensionDef {
                 id: "Category".into(),
-                semantic_name: "cat".into(),
                 physical_field: "cat".into(),
                 caption: "Category".into(),
                 description: String::new(),
@@ -711,7 +702,6 @@ mod tests {
         let m = SemanticModel {
             dimensions: vec![DimensionDef {
                 id: "Category".into(),
-                semantic_name: "cat".into(),
                 physical_field: "cat".into(),
                 table_name: Some("inventory_dim".into()),
                 shared: false,
@@ -751,7 +741,6 @@ mod tests {
             dialect: Dialect::DuckDB,
             dimensions: vec![DimensionDef {
                 id: "Date".into(),
-                semantic_name: "date".into(),
                 physical_field: "full_date".into(),
                 table_name: Some("date_dim".into()),
                 shared: false,
@@ -788,8 +777,6 @@ mod tests {
             measures: vec![MeasureDef {
                 id: "Revenue".into(),
                 fact_table_idx: 0,
-                semantic_name: "rev".into(),
-                physical_expr: String::new(),
                 sql_expr: "SUM(revenue)".into(),
                 caption: "Revenue".into(),
                 display_name: "Revenue".into(),

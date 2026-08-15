@@ -22,18 +22,18 @@ use std::collections::{HashMap, HashSet};
 /// use the column display name, but schema.sql uses `source_column`.
 /// Falls back to the original name if no matching column is found.
 fn resolve_source_column(tables: &[TableInfo], table_name: &str, col_name: &str) -> String {
-    let table_malloy = malloy_name(table_name);
+    let table_ident = normalize_ident(table_name);
     for t in tables {
-        if malloy_name(&t.name) == table_malloy {
+        if normalize_ident(&t.name) == table_ident {
             for c in &t.columns {
-                if c.name == col_name || malloy_name(&c.name) == malloy_name(col_name) {
-                    return malloy_name(&c.source_column);
+                if c.name == col_name || normalize_ident(&c.name) == normalize_ident(col_name) {
+                    return normalize_ident(&c.source_column);
                 }
             }
         }
     }
     // Fallback: use the relationship column name directly
-    malloy_name(col_name)
+    normalize_ident(col_name)
 }
 
 /// Render a DuckDB SQL script that populates all tables with dummy data.
@@ -66,29 +66,32 @@ pub fn render_dummy_data_script(
     out.push('\n');
 
     // Normalise input table-name lists for case/spacing-insensitive matching.
-    let fact_names: Vec<String> = fact_table_names.iter().map(|n| malloy_name(n)).collect();
-    let date_names: Vec<String> = date_role_names.iter().map(|n| malloy_name(n)).collect();
+    let fact_names: Vec<String> = fact_table_names
+        .iter()
+        .map(|n| normalize_ident(n))
+        .collect();
+    let date_names: Vec<String> = date_role_names.iter().map(|n| normalize_ident(n)).collect();
 
-    // ── FK map: (from_table_malloy, from_column_malloy) → (to_table_malloy, to_column_malloy) ──
+    // ── FK map: (from_table_ident, from_column_ident) → (to_table_ident, to_column_ident) ──
     // Relationship fromColumn/toColumn use display names; resolve to source_column
     // to match the schema.sql column identifiers.
     let mut fk_map: HashMap<(String, String), (String, String)> = HashMap::new();
     for rel in &model.relationships {
-        let from_table_malloy = malloy_name(&rel.from_table);
-        let from_col_malloy =
+        let from_table_ident = normalize_ident(&rel.from_table);
+        let from_col_ident =
             resolve_source_column(&model.tables, &rel.from_table, &rel.from_column);
-        let to_table_malloy = malloy_name(&rel.to_table);
-        let to_col_malloy = resolve_source_column(&model.tables, &rel.to_table, &rel.to_column);
+        let to_table_ident = normalize_ident(&rel.to_table);
+        let to_col_ident = resolve_source_column(&model.tables, &rel.to_table, &rel.to_column);
         fk_map.insert(
-            (from_table_malloy, from_col_malloy),
-            (to_table_malloy, to_col_malloy),
+            (from_table_ident, from_col_ident),
+            (to_table_ident, to_col_ident),
         );
     }
 
     // ── Row-count map ──
     let mut row_counts: HashMap<String, usize> = HashMap::new();
     for table in &model.tables {
-        let name = malloy_name(&table.name);
+        let name = normalize_ident(&table.name);
         let count = if fact_names.contains(&name) {
             fact_rows
         } else {
@@ -99,18 +102,18 @@ pub fn render_dummy_data_script(
     // Ensure every table referenced in a relationship has an entry
     // (even if it wouldn't generate an INSERT, e.g. date tables).
     for rel in &model.relationships {
-        let from = malloy_name(&rel.from_table);
-        let to = malloy_name(&rel.to_table);
+        let from = normalize_ident(&rel.from_table);
+        let to = normalize_ident(&rel.to_table);
         row_counts.entry(from).or_insert(dim_rows);
         row_counts.entry(to).or_insert(dim_rows);
     }
 
     // ── Per-table generation ──
     for table in &model.tables {
-        let table_name_malloy = malloy_name(&table.name);
+        let table_name_ident = normalize_ident(&table.name);
 
         // Skip date tables (populated by seed_date_dim.sql)
-        if date_names.contains(&table_name_malloy) {
+        if date_names.contains(&table_name_ident) {
             out.push_str(&format!(
                 "-- Date table '{}' is populated by seed_date_dim.sql\n",
                 table.name
@@ -142,33 +145,33 @@ pub fn render_dummy_data_script(
         }
 
         let row_count = row_counts
-            .get(&table_name_malloy)
+            .get(&table_name_ident)
             .copied()
             .unwrap_or(dim_rows);
-        let is_fact = fact_names.contains(&table_name_malloy);
+        let is_fact = fact_names.contains(&table_name_ident);
         let table_type = if is_fact { "fact" } else { "dimension" };
 
         out.push_str(&format!(
             "-- Table: {} ({}, {} rows)\n",
-            table_name_malloy, table_type, row_count
+            table_name_ident, table_type, row_count
         ));
 
-        // Column name list (malloy-normalised, matches schema.sql identifiers)
+        // Column name list (ident-normalised, matches schema.sql identifiers)
         let col_names: Vec<String> = columns
             .iter()
-            .map(|c| malloy_name(&c.source_column))
+            .map(|c| normalize_ident(&c.source_column))
             .collect();
         out.push_str(&format!(
             "INSERT INTO {} ({})\nSELECT\n",
-            table_name_malloy,
+            table_name_ident,
             col_names.join(", ")
         ));
 
         // Build per-column SELECT expressions
         let mut exprs: Vec<String> = Vec::new();
         for col in &columns {
-            let col_malloy = malloy_name(&col.source_column);
-            let fk_key = (table_name_malloy.clone(), col_malloy.clone());
+            let col_ident = normalize_ident(&col.source_column);
+            let fk_key = (table_name_ident.clone(), col_ident.clone());
 
             let expr = if let Some((to_table, _to_col)) = fk_map.get(&fk_key) {
                 // Check the FK column's DuckDB type first — if it's TIMESTAMP or DATE,
@@ -193,7 +196,7 @@ pub fn render_dummy_data_script(
                         format!("(i % {}) + 1", parent_count)
                     }
                 };
-                format!("    {} AS {}", val, col_malloy)
+                format!("    {} AS {}", val, col_ident)
             } else {
                 // ── Regular column: expression based on DuckDB type ──
                 let db_type = duckdb_type(&col.data_type);
@@ -210,7 +213,7 @@ pub fn render_dummy_data_script(
                     "DATE" => "DATE '2020-01-01' + ((i * 7 + 3) % 365)".to_string(),
                     _ => "NULL".to_string(),
                 };
-                format!("    {} AS {}", val, col_malloy)
+                format!("    {} AS {}", val, col_ident)
             };
             exprs.push(expr);
         }
@@ -256,7 +259,7 @@ pub fn render_load_script(
     out.push('\n');
 
     // Normalise date-role names for case/spacing-insensitive matching.
-    let date_names: Vec<String> = date_role_names.iter().map(|n| malloy_name(n)).collect();
+    let date_names: Vec<String> = date_role_names.iter().map(|n| normalize_ident(n)).collect();
 
     // Data source lookup by name.
     let data_source_map: HashMap<&str, &DataSourceInfo> = model
@@ -284,10 +287,10 @@ pub fn render_load_script(
 
     // ── Per-table processing ──
     for table in &model.tables {
-        let table_name_malloy = malloy_name(&table.name);
+        let table_name_ident = normalize_ident(&table.name);
 
         // Skip date tables (populated by seed_date_dim.sql)
-        if date_names.contains(&table_name_malloy) {
+        if date_names.contains(&table_name_ident) {
             out.push_str(&format!(
                 "-- Date table '{}' is populated by seed_date_dim.sql\n",
                 table.name
@@ -386,7 +389,7 @@ fn render_query_partition(
     attach_counter: &mut usize,
     alias_map: &mut HashMap<String, String>,
 ) {
-    let table_name_malloy = malloy_name(&table.name);
+    let table_name_ident = normalize_ident(&table.name);
     let sql = partition.query.as_deref().unwrap_or("");
 
     if sql.is_empty() {
@@ -427,20 +430,20 @@ fn render_query_partition(
 
         out.push_str(&format!(
             "-- Table: {} (query partition)\n",
-            table_name_malloy
+            table_name_ident
         ));
         out.push_str(&format!(
             "-- Raw SQL (SQL Server dialect, cannot run in DuckDB directly):\n\
              -- {}\n\
              -- Rewrite using the ATTACH alias, e.g.:\n\
              -- INSERT INTO {} SELECT * FROM {}.{}.<source_table>;\n",
-            sql, table_name_malloy, alias, schema
+            sql, table_name_ident, alias, schema
         ));
     } else {
         // No DataSourceInfo available (e.g. BIM-originated model with no data sources)
         out.push_str(&format!(
             "-- Table: {} (query partition)\n",
-            table_name_malloy
+            table_name_ident
         ));
         if let (Some(_schema), Some(_database)) = (&partition.schema, &partition.database) {
             out.push_str(&format!(
@@ -450,7 +453,7 @@ fn render_query_partition(
             out.push_str("-- Export to CSV and use:\n");
             out.push_str(&format!(
                 "-- INSERT INTO {} SELECT * FROM read_csv_auto('path/table.csv');\n",
-                table_name_malloy
+                table_name_ident
             ));
         } else {
             out.push_str(&format!(
@@ -459,7 +462,7 @@ fn render_query_partition(
             ));
             out.push_str(&format!(
                 "-- INSERT INTO {} SELECT * FROM read_csv_auto('path/table.csv');\n",
-                table_name_malloy
+                table_name_ident
             ));
         }
     }
@@ -475,7 +478,7 @@ fn render_m_partition(
     attach_counter: &mut usize,
     alias_map: &mut HashMap<String, String>,
 ) {
-    let table_name_malloy = malloy_name(&table.name);
+    let table_name_ident = normalize_ident(&table.name);
     let m_expr = partition.query.as_deref().unwrap_or("");
 
     if m_expr.is_empty() {
@@ -491,7 +494,7 @@ fn render_m_partition(
     match conn {
         Some(sc) => render_m_connection(
             out,
-            table_name_malloy,
+            table_name_ident,
             &sc,
             m_expr,
             partition,
@@ -503,7 +506,7 @@ fn render_m_partition(
         None => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, unrecognized)\n",
-                table_name_malloy
+                table_name_ident
             ));
             if is_complex_m(m_expr) {
                 out.push_str("-- Complex M expression, manual load required\n");
@@ -522,7 +525,7 @@ fn render_m_partition(
 #[allow(clippy::too_many_arguments)] // render context threads the loader's shared state; bundling into a struct is a later refactor
 fn render_m_connection(
     out: &mut String,
-    table_name_malloy: String,
+    table_name_ident: String,
     conn: &SourceConnection,
     _original_m: &str,
     partition: &PartitionInfo,
@@ -540,7 +543,7 @@ fn render_m_connection(
 
             out.push_str(&format!(
                 "-- Table: {} (M partition, SQL Server)\n",
-                table_name_malloy
+                table_name_ident
             ));
             out.push_str("-- Requires: INSTALL sqlserver_scanner; LOAD sqlserver_scanner;\n");
             out.push_str("-- If extension unavailable, export to CSV and use: INSERT INTO t SELECT * FROM read_csv_auto('file.csv');\n");
@@ -585,19 +588,19 @@ fn render_m_connection(
 
             out.push_str(&format!(
                 "INSERT INTO {} SELECT * FROM {}.{}.\"{}\";\n",
-                table_name_malloy, alias, schema, table_n
+                table_name_ident, alias, schema, table_n
             ));
         }
         SourceKind::CSV => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, CSV source)\n",
-                table_name_malloy
+                table_name_ident
             ));
 
             if let Some(path) = &conn.file_path {
                 out.push_str(&format!(
                     "INSERT INTO {} SELECT * FROM read_csv_auto('{}');\n",
-                    table_name_malloy, path
+                    table_name_ident, path
                 ));
             } else if let Some(rel_path) = &conn.relative_path {
                 out.push_str(&format!("-- CSV source: relative path '{}'\n", rel_path));
@@ -610,14 +613,14 @@ fn render_m_connection(
                 out.push_str("-- If you have a local copy of the CSV files, use:\n");
                 out.push_str(&format!(
                     "-- INSERT INTO {} SELECT * FROM read_csv_auto('path/to/{}');\n",
-                    table_name_malloy, filename
+                    table_name_ident, filename
                 ));
             }
         }
         SourceKind::Postgres => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, PostgreSQL source)\n",
-                table_name_malloy
+                table_name_ident
             ));
             let server = conn.server.as_deref().unwrap_or("(unknown)");
             let database = conn.database.as_deref().unwrap_or("(unknown)");
@@ -630,7 +633,7 @@ fn render_m_connection(
         SourceKind::MySQL => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, MySQL source)\n",
-                table_name_malloy
+                table_name_ident
             ));
             let server = conn.server.as_deref().unwrap_or("(unknown)");
             let database = conn.database.as_deref().unwrap_or("(unknown)");
@@ -643,7 +646,7 @@ fn render_m_connection(
         SourceKind::Web => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, Web source)\n",
-                table_name_malloy
+                table_name_ident
             ));
             out.push_str(&format!(
                 "-- URL: {}\n",
@@ -657,7 +660,7 @@ fn render_m_connection(
         SourceKind::Excel => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, Excel source)\n",
-                table_name_malloy
+                table_name_ident
             ));
             if let Some(path) = &conn.file_path {
                 out.push_str(&format!("-- File: {}\n", path));
@@ -667,7 +670,7 @@ fn render_m_connection(
         SourceKind::Unknown => {
             out.push_str(&format!(
                 "-- Table: {} (M partition, unknown source type)\n",
-                table_name_malloy
+                table_name_ident
             ));
             if let Some(schema) = &conn.schema {
                 out.push_str(&format!(

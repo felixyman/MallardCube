@@ -10,7 +10,7 @@ use crate::engine::sql::sql_for_query_plan_with_context;
 /// Produced from a `SemanticQuery` and consumed by the cellset
 /// builders via `execute_plan`.
 ///
-/// Designed to be translatable to both SQL (current) and Malloy (future).
+/// Translates directly to SQL.
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, SemanticQueryKind};
 use crate::project::config::{ModelPermission, ProxyConfig};
 use crate::proxy_project;
@@ -303,7 +303,7 @@ pub fn execute_plan(plan: &QueryPlan, model: &SemanticModel) -> QueryResult {
 
 /// Execute a plan using the given pre-compiled SQL string instead of
 /// generating SQL from `sql_for_query_plan`. Used when the SQL comes
-/// from the Malloy runtime path.
+/// from a pre-compiled path.
 pub fn execute_plan_with_sql(plan: &QueryPlan, sql: &str) -> QueryResult {
     execute_plan_sql_with_backend(plan, sql, Backend::get())
 }

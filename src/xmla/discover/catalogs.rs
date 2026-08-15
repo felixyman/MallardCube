@@ -15,7 +15,7 @@ pub fn get_catalogs_response() -> String {
     let rows = format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
-            <DESCRIPTION>Världens första Rust-till-Malloy proxy</DESCRIPTION>
+            <DESCRIPTION>MallardCube — Excel/XMLA frontend for DuckDB</DESCRIPTION>
             <ROLES>*</ROLES>
             <DATE_MODIFIED>2026-05-20T12:00:00.000000</DATE_MODIFIED>
             <COMPATIBILITY_LEVEL>1500</COMPATIBILITY_LEVEL>

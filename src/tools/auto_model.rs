@@ -236,7 +236,6 @@ pub fn detect_config(
         source_name: fact.name.clone(),
         table_name: fact.name.clone(),
         dialect: "duckdb".into(),
-        malloy_model_file: String::new(),
         db_path: Some(db_path.to_string()),
         fact_tables: vec![],
         relationships: vec![],
@@ -451,7 +450,6 @@ fn humanize(name: &str) -> String {
 fn dimension(id: &str, physical_field: &str, ordinal: u32, cardinality: u32) -> DimensionConfig {
     DimensionConfig {
         id: id.to_string(),
-        malloy_name: id.to_lowercase(),
         physical_field: physical_field.to_string(),
         caption: humanize(id),
         description: String::new(),
@@ -496,8 +494,6 @@ fn measure(col: &Column, ordinal: u32, group: &str) -> MeasureConfig {
     };
     MeasureConfig {
         id: id.clone(),
-        malloy_name: id.to_lowercase(),
-        physical_expr: format!("{}.sum()", id.to_lowercase()),
         sql_expr,
         caption: humanize(&id),
         display_name: humanize(&id),
@@ -521,8 +517,6 @@ fn measure(col: &Column, ordinal: u32, group: &str) -> MeasureConfig {
 fn count_measure(group: &str) -> MeasureConfig {
     MeasureConfig {
         id: "Row Count".into(),
-        malloy_name: "row_count".into(),
-        physical_expr: "count()".into(),
         sql_expr: "COUNT(*)".into(),
         caption: "Row Count".into(),
         display_name: "Row Count".into(),

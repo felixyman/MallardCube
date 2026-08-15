@@ -69,7 +69,7 @@ mod tests {
     fn role_e2e_filtered_sql_through_runtime() {
         let config_str = r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
