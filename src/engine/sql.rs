@@ -134,7 +134,7 @@ pub fn sql_for_query_plan_with_context(
             format!("SELECT COUNT(DISTINCT {}) {}", col, from)
         }
 
-        QueryPlan::MultiMeasure { .. } => String::new(),
+        QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => String::new(),
 
         QueryPlan::Empty => String::new(),
     }

@@ -392,6 +392,62 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
     )
 }
 
+/// Render a multi-measure × dimension cross-join (several measures on Axis0,
+/// a dimension on Axis1). Cells are ordered measure-major (Axis0 varies
+/// slowest), matching SSAS cell-ordinal convention.
+fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let dim = row_dim(query);
+    let merged = match result {
+        QueryResult::MultiGrouped(rows) => rows.clone(),
+        _ => return empty_cellset(query, backend),
+    };
+    let project = crate::proxy_project::project();
+
+    let mut measure_members = Vec::new();
+    let mut measure_ids = Vec::new();
+    for name in &query.measures {
+        if let Some(m) = project.model.lookup_measure(name) {
+            measure_members.push(measures_member(&m.measure_unique_name(), &m.display_name));
+            measure_ids.push(m.id.clone());
+        }
+    }
+
+    let axis1_members = leaf_members_from(
+        dim,
+        &merged.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &query.dim_props,
+        query.drilldown_level,
+        None,
+    );
+
+    let n_measures = measure_ids.len();
+    let mut cells = Vec::new();
+    // SSAS CellOrdinal is row-major: `row * num_columns + column`. Here the
+    // columns are the measures (Axis0) and the rows are the dimension members
+    // (Axis1), so cells interleave measure values per group.
+    for (ci, (_label, values)) in merged.iter().enumerate() {
+        for (mi, measure_id) in measure_ids.iter().enumerate() {
+            let value = values.get(mi).copied().unwrap_or(0.0);
+            let ordinal = (ci * n_measures + mi) as u32;
+            cells.push(measurement_cell_for(ordinal, value, measure_id));
+        }
+    }
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", measures_hierarchy(), measure_members),
+            member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
+            dims_only_slicer_axis_with_backend(query, backend),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
 pub(crate) fn build_slicer_all_and_measure<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
@@ -589,6 +645,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         )
     {
         return empty_cellset(query, backend);
+    }
+    if matches!(result, QueryResult::MultiGrouped(_)) {
+        return build_multi_measure_by_category(query, result, backend);
     }
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, result, backend),
