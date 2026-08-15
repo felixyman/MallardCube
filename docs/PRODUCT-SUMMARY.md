@@ -44,7 +44,7 @@ Airflow + sqlmesh + DuckDB — without your Excel users noticing.
 
 | Feature | Notes |
 |---|---|
-| Attached data sources (MSSQL, Postgres, S3) | DuplicatedDB attach extensions exist and are the planned path; not wired yet |
+| Attached data sources (MSSQL, Postgres, S3) | DuckDB attach extensions exist and are the planned path; not wired yet |
 | Calculation groups | Industry-standard time intelligence mechanism (Contoso finding); accepted as a documented gap |
 | Multi-level hierarchies beyond Date | Model supports it generically; needs Excel testing on non-date dimensions |
 | Native Kerberos | Requires a reverse proxy (IIS/nginx) in front — documented boundary |
@@ -57,6 +57,6 @@ Airflow + sqlmesh + DuckDB — without your Excel users noticing.
 | Power BI connectivity | Tabular metadata rowsets exist but not tested/maintained for Power BI |
 | Multidimensional (MOLAP) | Tabular only |
 | Write-back | Read-only runtime |
-| Aggregate awareness / pre-aggregation | DuplicatedDB's speed + departmental data sizes render this unnecessary for the target segment |
-| Multi-dialect SQL emission | DuplicatedDB only. External sources via DuplicatedDB attach extensions |
+| Aggregate awareness / pre-aggregation | DuckDB's speed + departmental data sizes render this unnecessary for the target segment |
+| Multi-dialect SQL emission | DuckDB only. External sources via DuckDB attach extensions |
 | Cell security, column-level OLS, many-to-many relationships | Rare in departmental Tabular models |

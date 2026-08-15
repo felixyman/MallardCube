@@ -180,7 +180,7 @@ See `docs/naming-contract.md` for full rules.
    - `engine/sql.rs:` - is the SQL correct for the plan?
    - Enable `debug-last-run.log` (auto-written) and check the generated SQL.
 
-4. **Add a new XMLA rowset** - Add a variant to `XmlaRequest` in `xmla/parser.rs`,
+3. **Add a new XMLA rowset** - Add a variant to `XmlaRequest` in `xmla/parser.rs`,
    add a dispatch arm in `main.rs`, create a handler in `xmla/discover/`.
 
 5. **Add a new query kind** - Add a variant to `SemanticQueryKind`, handle it in
@@ -275,10 +275,10 @@ Every field in `proxy-config.json`, with descriptions and defaults.
 |---|---|---|---|
 | `catalog` | string | required | Excel-visible catalog name |
 | `cube` | string | required | Cube name (MDX FROM clause) |
-| `source_name` | string | required | Malloy source name (must match `.malloy`) |
+| `source_name` | string | required | Legacy source name (informational; no longer consumed by the runtime) |
 | `table_name` | string | required | DuckDB table name (single-fact mode) |
 | `dialect` | string | required | Backend dialect (`"duckdb"`) |
-| `malloy_model_file` | string | required | Path to `.malloy` file, relative to config |
+| `malloy_model_file` | string | required | Deprecated — no longer consumed by the runtime |
 | `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with synthetic in-memory data |
 | `fact_tables` | array | `[]` | Fact table definitions (multi-fact mode) |
 | `relationships` | array | `[]` | Dimension-to-fact table relationship definitions |
@@ -294,7 +294,7 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Unique identifier, referenced by dimension/measure `fact_table` fields |
-| `source_name` | string | Malloy source name for this fact table |
+| `source_name` | string | Legacy source name (informational) |
 | `table_name` | string | DuckDB physical table name |
 | `measure_group_name` | string | SSAS measure group name displayed to Excel |
 
@@ -303,7 +303,7 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `id` | string | required | Internal identifier for QueryPlan/plan_key |
-| `malloy_name` | string | required | Must match field name in `.malloy` source |
+| `malloy_name` | string | required | Deprecated legacy field (no longer consumed) |
 | `physical_field` | string | required | DuckDB column name (may include `table.column` syntax) |
 | `caption` | string | required | Excel-visible label |
 | `description` | string | `""` | Human-readable description |
@@ -329,9 +329,9 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 |---|---|---|---|
 | `id` | string | required | Internal identifier for QueryPlan/plan_key |
 | `fact_table` | string\|null | `null` | Which fact table this measure belongs to (multi-fact mode). Required when `fact_tables` is non-empty |
-| `malloy_name` | string | required | Must match measure name in `.malloy` source |
-| `physical_expr` | string | required | Malloy expression (e.g. `"revenue.sum()"`) |
-| `sql_expr` | string | required | SQL fallback expression (e.g. `"SUM(revenue)"`) |
+| `malloy_name` | string | required | Deprecated legacy field (no longer consumed) |
+| `physical_expr` | string | required | Deprecated legacy Malloy expression (no longer consumed) |
+| `sql_expr` | string | required | DuckDB SQL expression (e.g. `"SUM(revenue)"`) — the actual runtime path |
 | `caption` | string | required | Excel-visible measure name |
 | `display_name` | string | required | Longer Excel label |
 | `description` | string | `""` | Human-readable description |
@@ -354,8 +354,8 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 When `null` or omitted, the proxy creates an in-memory DuckDB with synthetic
 data (20k rows of `sales_fact`).
 
-When set, both the Rust backend and the Malloy JS worker open the same file.
-The JS worker receives the resolved path via the `DUCKDB_PATH` env var.
+When set, the DuckDB backend opens the file directly. There is no separate
+runtime — DuckDB is the only execution engine.
 
 ### TimeIntelligenceConfig
 

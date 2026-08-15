@@ -14,8 +14,6 @@ flowchart LR
     (dimensions, measures)"]
     SQL["SQL Emitter
     (engine/sql.rs)"]
-    Malloy["Malloy Emitter
-    (engine/malloy.rs)"]
     DuckDB["DuckDB Backend
     (runtime execution)"]
     Cellset["Cellset / Rowset
@@ -30,9 +28,7 @@ flowchart LR
     Parsed --> Semantic
     Semantic --> Plan
     Model --> SQL
-    Model --> Malloy
     Plan --> SQL
-    Plan --> Malloy
     SQL --> DuckDB
     DuckDB --> Cellset
     Cellset --> Resp
@@ -41,7 +37,6 @@ flowchart LR
     Probe --> XMLA
     XMLA --> Cellset
 
-    style Malloy fill:#f9f,stroke:#333,stroke-dasharray: 5 5
     style DuckDB fill:#3a3,stroke:#333,color:#fff
     style Cellset fill:#36c,stroke:#333,color:#fff
     style XMLA fill:#36c,stroke:#333,color:#fff
