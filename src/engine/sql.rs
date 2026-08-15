@@ -272,6 +272,30 @@ fn sql_where_with_cols(
             }
             continue;
         }
+        // Level-qualified filter (e.g. [Date].[Date].[Year].&[2024]): filter the
+        // hierarchy level's column via a subquery on the relationship's dim table.
+        if let Some(level_name) = &f.level
+            && let (Some(d), Some(rel)) = (
+                model.dim_def_opt(&f.dimension),
+                model.rel_for_dimension(&f.dimension),
+            )
+            && let Some(level) = d.levels.iter().find(|l| &l.name == level_name)
+        {
+            let vals: Vec<String> = f
+                .members
+                .iter()
+                .map(|m| format!("'{}'", m.replace('\'', "''")))
+                .collect();
+            parts.push(format!(
+                "f.{} IN (SELECT {} FROM {} WHERE {} IN ({}))",
+                rel.fact_column,
+                rel.dim_column,
+                rel.dim_table,
+                level.column,
+                vals.join(", ")
+            ));
+            continue;
+        }
         if f.members.is_empty() {
             continue;
         }
@@ -378,6 +402,7 @@ mod tests {
             measure: "TotalSales".into(),
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                level: None,
                 time_flag: None,
                 members: vec!["North".into()],
             }],
@@ -425,6 +450,7 @@ mod tests {
             group_level: None,
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
+                level: None,
                 time_flag: None,
                 members: vec!["North".into()],
             }],
@@ -453,11 +479,13 @@ mod tests {
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["North".into()],
                 },
                 TypedDimensionFilter {
                     dimension: "Produktkategori".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["Kategori A".into(), "Kategori B".into()],
                 },
@@ -540,6 +568,7 @@ mod tests {
                 measure: "Revenue".into(),
                 filters: vec![TypedDimensionFilter {
                     dimension: "Product".into(),
+                    level: None,
                     time_flag: None,
                     members: vec!["Widget".into()],
                 }],
@@ -834,6 +863,7 @@ mod tests {
             filters: vec![TypedDimensionFilter {
                 dimension: "Date".into(),
                 members: vec!["2024".into()],
+                level: None,
                 time_flag: None,
             }],
             group_level: Some(1),

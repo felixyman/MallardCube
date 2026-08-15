@@ -44,6 +44,9 @@ pub fn parse_cell_properties(mdx: &str) -> Vec<String> {
 pub struct DimensionFilter {
     pub dimension: String,
     pub members: Vec<String>,
+    /// Hierarchy level name for level-qualified filters (e.g. "Year" in
+    /// `[Date].[Date].[Year].&[2024]`), so the SQL can filter the level column.
+    pub level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,34 +65,36 @@ fn dim_ref_str(dim: &DimRef) -> String {
 fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
     let mut result: Vec<DimensionFilter> = Vec::new();
 
-    let add_leaf = |result: &mut Vec<DimensionFilter>, dim_str: String, key: &str| {
-        if let Some(df) = result.iter_mut().find(|f| f.dimension == dim_str) {
-            if !df.members.contains(&key.to_string()) {
-                df.members.push(key.to_string());
+    let add_leaf =
+        |result: &mut Vec<DimensionFilter>, dim_str: String, key: &str, level: Option<&str>| {
+            if let Some(df) = result.iter_mut().find(|f| f.dimension == dim_str) {
+                if !df.members.contains(&key.to_string()) {
+                    df.members.push(key.to_string());
+                }
+            } else {
+                result.push(DimensionFilter {
+                    dimension: dim_str,
+                    members: vec![key.to_string()],
+                    level: level.map(|s| s.to_string()),
+                });
             }
-        } else {
-            result.push(DimensionFilter {
-                dimension: dim_str,
-                members: vec![key.to_string()],
-            });
-        }
-    };
+        };
 
     for m in &parsed.where_members {
-        if let MemberRef::Leaf { dim, key } = m {
-            add_leaf(&mut result, dim_ref_str(dim), key);
+        if let MemberRef::Leaf { dim, key, level } = m {
+            add_leaf(&mut result, dim_ref_str(dim), key, level.as_deref());
         }
     }
 
     for m in &parsed.subquery_members {
-        if let MemberRef::Leaf { dim, key } = m {
-            add_leaf(&mut result, dim_ref_str(dim), key);
+        if let MemberRef::Leaf { dim, key, level } = m {
+            add_leaf(&mut result, dim_ref_str(dim), key, level.as_deref());
         }
     }
 
     for m in &parsed.select_members {
-        if let MemberRef::Leaf { dim, key } = m {
-            add_leaf(&mut result, dim_ref_str(dim), key);
+        if let MemberRef::Leaf { dim, key, level } = m {
+            add_leaf(&mut result, dim_ref_str(dim), key, level.as_deref());
         }
     }
 
@@ -402,6 +407,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         extra_filters.push(DimensionFilter {
             dimension: dim_name,
             members: vec![key],
+            level: None,
         });
         // Route to the single-dimension drilldown renderer,
         // not the DrilldownMemberProbe 2-dimension path.

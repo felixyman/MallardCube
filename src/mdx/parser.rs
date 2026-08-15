@@ -71,7 +71,13 @@ fn dim_hierarchy(input: &str) -> IResult<&str, (DimRef, String)> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemberRef {
     All(DimRef),
-    Leaf { dim: DimRef, key: String },
+    Leaf {
+        dim: DimRef,
+        key: String,
+        /// Hierarchy level name for level-qualified references like
+        /// `[Dim].[Hier].[Year].&[2024]`. None for plain leaf references.
+        level: Option<String>,
+    },
     Measure(String),
 }
 
@@ -90,6 +96,7 @@ fn member_leaf(input: &str) -> IResult<&str, MemberRef> {
         MemberRef::Leaf {
             dim,
             key: key.to_string(),
+            level: None,
         },
     ))
 }
@@ -106,6 +113,44 @@ fn member_named(input: &str) -> IResult<&str, MemberRef> {
         MemberRef::Leaf {
             dim,
             key: key.to_string(),
+            level: None,
+        },
+    ))
+}
+
+/// Level-qualified key member `[Dim].[Hier].[Level].&[key]` — the level is
+/// carried so the SQL emitter can filter on the level's column (e.g. the
+/// `year` column for `[Date].[Date].[Year].&[2024]`). Excel emits this for
+/// date-hierarchy filters.
+fn member_level_leaf(input: &str) -> IResult<&str, MemberRef> {
+    let (input, (dim, _hier)) = dim_hierarchy(input)?;
+    let (input, _) = char('.')(input)?;
+    let (input, level) = bracket_str(input)?;
+    let (input, _) = tag(".&")(input)?;
+    let (input, key) = bracket_str(input)?;
+    Ok((
+        input,
+        MemberRef::Leaf {
+            dim,
+            key: key.to_string(),
+            level: Some(level.to_string()),
+        },
+    ))
+}
+
+/// Level-qualified name member `[Dim].[Hier].[Level].[Name]` (no `&`).
+fn member_level_named(input: &str) -> IResult<&str, MemberRef> {
+    let (input, (dim, _hier)) = dim_hierarchy(input)?;
+    let (input, _) = char('.')(input)?;
+    let (input, level) = bracket_str(input)?;
+    let (input, _) = char('.')(input)?;
+    let (input, key) = bracket_str(input)?;
+    Ok((
+        input,
+        MemberRef::Leaf {
+            dim,
+            key: key.to_string(),
+            level: Some(level.to_string()),
         },
     ))
 }
@@ -118,7 +163,14 @@ fn measure_member(input: &str) -> IResult<&str, MemberRef> {
 }
 
 fn member_ref(input: &str) -> IResult<&str, MemberRef> {
-    alt((member_all, member_leaf, member_named, measure_member))(input)
+    alt((
+        member_all,
+        member_level_leaf,
+        member_level_named,
+        member_leaf,
+        member_named,
+        measure_member,
+    ))(input)
 }
 
 // ---- WHERE clause ----
@@ -686,7 +738,8 @@ mod tests {
             m,
             MemberRef::Leaf {
                 dim: DimRef::Cube("Produktkategori".into()),
-                key: "Kategori A".into()
+                key: "Kategori A".into(),
+                level: None,
             }
         );
         assert!(rest.is_empty());
@@ -699,7 +752,8 @@ mod tests {
             m,
             MemberRef::Leaf {
                 dim: DimRef::Cube("Region".into()),
-                key: "North".into()
+                key: "North".into(),
+                level: None,
             }
         );
         assert!(rest.is_empty());
@@ -724,6 +778,7 @@ mod tests {
             MemberRef::Leaf {
                 dim: DimRef::Cube("Produktkategori".into()),
                 key: "Kategori B".into(),
+                level: None,
             }
         );
     }
@@ -751,7 +806,8 @@ mod tests {
             m,
             MemberRef::Leaf {
                 dim: DimRef::Cube("Territory".into()),
-                key: "North".into()
+                key: "North".into(),
+                level: None,
             }
         );
         assert!(rest.is_empty());
@@ -764,7 +820,8 @@ mod tests {
             m,
             MemberRef::Leaf {
                 dim: DimRef::Cube("Channel".into()),
-                key: "Online".into()
+                key: "Online".into(),
+                level: None,
             }
         );
         assert!(rest.is_empty());
@@ -796,6 +853,7 @@ mod tests {
             MemberRef::Leaf {
                 dim: DimRef::Cube("Territory".into()),
                 key: "North".into(),
+                level: None,
             }
         );
         assert_eq!(members[1], MemberRef::Measure("Revenue".into()));
