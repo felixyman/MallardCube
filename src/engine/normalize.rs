@@ -36,6 +36,20 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             )
         }
 
+        QueryPlan::MultiGroupBy {
+            measures,
+            group_by,
+            filters,
+            ..
+        } => {
+            format!(
+                "multigrp|measures={}|dims={}|{}",
+                measures.join(","),
+                group_by.join(","),
+                filter_suffix(filters)
+            )
+        }
+
         QueryPlan::Empty => "empty".into(),
     }
 }

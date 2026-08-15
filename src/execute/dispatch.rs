@@ -1892,6 +1892,32 @@ mod tests {
         });
     }
 
+    // Regression: a PivotTable with multiple measures in Values and a dimension
+    // on Rows cross-joins them; the proxy must return N measures × M rows cells,
+    // ordered row-major (columns = measures, rows = dimension members).
+    #[test]
+    fn multi_measure_crossjoin_returns_row_major_cells() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue],[Measures].[Units]} ON COLUMNS FROM [Sales]",
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 40, "20 categories × 2 measures");
+            let revenue: f64 = values.iter().step_by(2).sum();
+            let units: f64 = values.iter().skip(1).step_by(2).sum();
+            assert!(
+                (revenue - 521_586_767.0).abs() < 1.0,
+                "revenue column: {revenue}"
+            );
+            assert!((units - 4_931_640.0).abs() < 1.0, "units column: {units}");
+            assert_eq!(values[0], 25_102_648.0, "first cell = Automotive revenue");
+            assert!(
+                values[1] < 1_000_000.0,
+                "second cell = Automotive units (small)"
+            );
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {

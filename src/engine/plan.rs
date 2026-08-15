@@ -71,6 +71,15 @@ pub enum QueryPlan {
         filters: Vec<TypedDimensionFilter>,
     },
 
+    /// Multiple measures cross-joined with one or more row dimensions (e.g. a
+    /// PivotTable with several measures in Values and a dimension on Rows).
+    MultiGroupBy {
+        measures: Vec<MeasId>,
+        group_by: Vec<DimId>,
+        filters: Vec<TypedDimensionFilter>,
+        group_level: Option<usize>,
+    },
+
     Count {
         dimension: DimId,
     },
@@ -90,6 +99,8 @@ pub enum QueryResult {
     Count(u32),
     /// One scalar per measure, in the same order as `MultiMeasure.measures`.
     Multi(Vec<f64>),
+    /// One entry per group; `Vec<f64>` is one value per measure, in order.
+    MultiGrouped(Vec<(String, Vec<f64>)>),
     Empty,
 }
 
@@ -201,7 +212,7 @@ pub fn plan_from_semantic_with_model_and_context(
                 return QueryPlan::Empty;
             }
         }
-        QueryPlan::MultiMeasure { measures, .. } => {
+        QueryPlan::MultiMeasure { measures, .. } | QueryPlan::MultiGroupBy { measures, .. } => {
             for measure in measures {
                 let fact_table = model.fact_table_for_measure(measure);
                 if effective_table_filter(config, user, &fact_table.table_name)
@@ -320,11 +331,38 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                 };
                 vec![d]
             };
-            QueryPlan::GroupBy {
-                measure: meas.clone(),
-                group_by,
-                filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
-                group_level: query.drilldown_level,
+            if query.measures.len() > 1 {
+                let measures: Vec<MeasId> = query
+                    .measures
+                    .iter()
+                    .filter_map(|name| model.lookup_measure(name).map(|m| m.id.clone()))
+                    .collect();
+                if measures.len() > 1 {
+                    QueryPlan::MultiGroupBy {
+                        measures,
+                        group_by,
+                        filters: typed_filters(&query.filters),
+                        group_level: query.drilldown_level,
+                    }
+                } else {
+                    QueryPlan::GroupBy {
+                        measure: meas.clone(),
+                        group_by,
+                        filters: filters_with_time_flag(
+                            model,
+                            &meas,
+                            &typed_filters(&query.filters),
+                        ),
+                        group_level: query.drilldown_level,
+                    }
+                }
+            } else {
+                QueryPlan::GroupBy {
+                    measure: meas.clone(),
+                    group_by,
+                    filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
+                    group_level: query.drilldown_level,
+                }
             }
         }
 
@@ -367,7 +405,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
                 QueryResult::Grouped(backend.query_grouped_1d(sql))
             }
         }
-        QueryPlan::MultiMeasure { .. } => QueryResult::Empty,
+        QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
         QueryPlan::Count { .. } => QueryResult::Count(backend.query_count(sql)),
         QueryPlan::Empty => QueryResult::Empty,
     }
@@ -399,6 +437,63 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             }
         }
         return QueryResult::Multi(values);
+    }
+
+    // Multi-measure cross-join: N measures × M groups. Execute each measure's
+    // GroupBy (each with its own time-flag/filter resolution) and merge by group
+    // label, so a time-flag measure that filters rows still aligns with the
+    // unfiltered measures' groups (missing groups get 0.0).
+    if let QueryPlan::MultiGroupBy {
+        measures,
+        group_by,
+        filters,
+        group_level,
+    } = plan
+    {
+        let mut per_measure: Vec<Vec<(String, f64)>> = Vec::with_capacity(measures.len());
+        for measure in measures {
+            let per_measure_plan = QueryPlan::GroupBy {
+                measure: measure.clone(),
+                group_by: group_by.clone(),
+                filters: filters_with_time_flag(model, measure, filters),
+                group_level: *group_level,
+            };
+            match execute_plan_with_backend_and_context(
+                &per_measure_plan,
+                model,
+                backend,
+                user,
+                config,
+            ) {
+                QueryResult::Grouped(rows) => per_measure.push(rows),
+                _ => per_measure.push(Vec::new()),
+            }
+        }
+
+        // Merge by label: preserve the first measure's group order, then append
+        // any groups that only appear in later measures.
+        let mut order: Vec<String> = Vec::new();
+        let mut columns: Vec<std::collections::HashMap<String, f64>> =
+            vec![std::collections::HashMap::new(); measures.len()];
+        for (mi, rows) in per_measure.iter().enumerate() {
+            for (label, value) in rows {
+                if !order.contains(label) {
+                    order.push(label.clone());
+                }
+                columns[mi].insert(label.clone(), *value);
+            }
+        }
+        let merged: Vec<(String, Vec<f64>)> = order
+            .iter()
+            .map(|label| {
+                let vals = columns
+                    .iter()
+                    .map(|col| col.get(label).copied().unwrap_or(0.0))
+                    .collect();
+                (label.clone(), vals)
+            })
+            .collect();
+        return QueryResult::MultiGrouped(merged);
     }
 
     // If the plan's measure has pre-loaded fallback SQL, use it instead of
@@ -476,7 +571,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             QueryResult::Scalar(total)
         }
 
-        QueryPlan::MultiMeasure { .. } => QueryResult::Empty,
+        QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
 
         QueryPlan::GroupBy { group_by, .. } => {
             if group_by.len() >= 2 {

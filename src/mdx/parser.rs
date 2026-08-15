@@ -480,21 +480,49 @@ pub struct ParsedMdx {
 /// collects all non-Measures bracketed identifiers in left-to-right order,
 /// deduplicated.
 fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
+    // Axes live in the outer SELECT clause (between SELECT and the outer FROM);
+    // subquery SELECTs sit inside FROM (...) and must not contribute.
     let upper = before_from.to_uppercase();
-    let axis_end = upper
-        .find("DIMENSION PROPERTIES")
-        .or_else(|| upper.find("ON COLUMNS"))
-        .or_else(|| upper.find(" ON 0 "))
+    let select_pos = upper.find("SELECT").unwrap_or(0);
+    let from_pos = upper[select_pos..]
+        .find("FROM")
+        .map(|i| select_pos + i)
         .unwrap_or(before_from.len());
-    let axis_expr = &before_from[..axis_end];
+    let clause = &before_from[select_pos..from_pos];
+
+    // Drop each "DIMENSION PROPERTIES <props> ON <axis>" segment (member-property
+    // names would otherwise be mistaken for dimensions), then scan the remainder
+    // — which includes both the COLUMNS and ROWS axis expressions.
+    let mut scan = String::new();
+    let mut rest = clause;
+    loop {
+        let upper = rest.to_uppercase();
+        match upper.find("DIMENSION PROPERTIES") {
+            Some(dp) => {
+                scan.push_str(&rest[..dp]);
+                let after = &upper[dp + "DIMENSION PROPERTIES".len()..];
+                let end = after
+                    .find("ON COLUMNS")
+                    .or_else(|| after.find("ON ROWS"))
+                    .or_else(|| after.find(" ON 0 "))
+                    .or_else(|| after.find(" ON 1 "))
+                    .unwrap_or(0);
+                rest = &rest[dp + "DIMENSION PROPERTIES".len() + end..];
+            }
+            None => {
+                scan.push_str(rest);
+                break;
+            }
+        }
+    }
 
     let mut ids = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut pos = 0;
-    while let Some(open) = axis_expr[pos..].find('[') {
+    while let Some(open) = scan[pos..].find('[') {
         let abs = pos + open + 1;
-        let close = axis_expr[abs..].find(']').unwrap_or(axis_expr.len() - abs);
-        let id = &axis_expr[abs..abs + close];
+        let close = scan[abs..].find(']').unwrap_or(scan.len() - abs);
+        let id = &scan[abs..abs + close];
         if id != "Measures" && !id.is_empty() && seen.insert(id.to_string()) {
             ids.push(id.to_string());
         }
