@@ -78,7 +78,6 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     for m in &p.model.measures {
         let has_fallback_file = m.sql_fallback_sql.is_some();
         let has_sql_expr = !m.sql_expr.is_empty() && m.sql_expr != "null";
-        let has_physical_expr = !m.physical_expr.is_empty();
         let has_time_intel = m.time_flag.is_some();
 
         if has_fallback_file {
@@ -94,7 +93,7 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                 continue;
             }
             scalar_fallback_count += 1;
-        } else if !has_sql_expr && !has_physical_expr && !has_time_intel {
+        } else if !has_sql_expr && !has_time_intel {
             manual_count += 1;
         }
     }
@@ -178,7 +177,7 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     // --- build non-blocking partial reasons ---
     if manual_count > 0 {
         partial.push(format!(
-            "{manual_count} measure(s) have no SQL, no Malloy expression, and no fallback — manual review needed"
+            "{manual_count} measure(s) have no SQL expression and no fallback — manual review needed"
         ));
     }
 
@@ -332,10 +331,9 @@ mod tests {
             .iter()
             .filter(|m| {
                 let has_sql = !m.sql_expr.is_empty() && m.sql_expr != "null";
-                let has_malloy = !m.physical_expr.is_empty();
                 let has_fallback = m.sql_fallback_sql.is_some();
                 let has_time = m.time_flag.is_some();
-                !has_sql && !has_malloy && !has_fallback && !has_time
+                !has_sql && !has_fallback && !has_time
             })
             .collect();
         // After Plan 012 regeneration: Gross Profit + Total COGS are sql_fallback (stubs),

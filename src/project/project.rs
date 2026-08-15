@@ -5,9 +5,8 @@ use crate::engine::model::{
 use crate::proxy_config::ProxyConfig;
 #[cfg(test)]
 use std::cell::RefCell;
-/// Proxy project — loads a developer's Malloy files and proxy config
-/// at startup, producing the runtime `SemanticModel` and the Malloy
-/// source text that will be compiled.
+/// Proxy project — loads a developer's proxy config at startup, producing
+/// the runtime `SemanticModel`.
 ///
 /// This is the single entry-point that replaces `default_model()` when
 /// a config is supplied.
@@ -129,12 +128,11 @@ impl ProxyProject {
     pub fn default_() -> Self {
         Self {
             config: ProxyConfig {
-                catalog: "KTH_KEX_MALLOY_CUBE".into(),
+                catalog: "DEFAULT_CATALOG".into(),
                 cube: "Model".into(),
                 source_name: "faktatabell".into(),
                 table_name: "faktatabell".into(),
                 dialect: "duckdb".into(),
-                malloy_model_file: String::new(),
                 db_path: None,
                 fact_tables: vec![],
                 relationships: vec![],
@@ -144,7 +142,6 @@ impl ProxyProject {
                 dimensions: vec![
                     crate::proxy_config::DimensionConfig {
                         id: "Produktkategori".into(),
-                        malloy_name: "produktkategori".into(),
                         physical_field: "produktkategori".into(),
                         caption: "Produktkategori".into(),
                         description: "Våra olika produkter".into(),
@@ -162,7 +159,6 @@ impl ProxyProject {
                     },
                     crate::proxy_config::DimensionConfig {
                         id: "Region".into(),
-                        malloy_name: "region".into(),
                         physical_field: "region".into(),
                         caption: "Region".into(),
                         description: "Geografisk region".into(),
@@ -181,8 +177,6 @@ impl ProxyProject {
                 ],
                 measures: vec![crate::proxy_config::MeasureConfig {
                     id: "TotalSales".into(),
-                    malloy_name: "total_forsaljning".into(),
-                    physical_expr: "sales.sum()".into(),
                     sql_expr: "SUM(sales)".into(),
                     caption: "Total Försäljning".into(),
                     display_name: "Total Försäljning (SEK)".into(),
@@ -265,7 +259,6 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             }
             DimensionDef {
                 id,
-                semantic_name: dc.malloy_name.clone(),
                 physical_field: dc.physical_field.clone(),
                 table_name,
                 shared: dc.shared,
@@ -332,8 +325,6 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
                 MeasureDef {
                     id,
                     fact_table_idx: ft_idx,
-                    semantic_name: mc.malloy_name.clone(),
-                    physical_expr: mc.physical_expr.clone(),
                     sql_expr: mc.sql_expr.clone(),
                     caption: mc.caption.clone(),
                     display_name: mc.display_name.clone(),
@@ -520,16 +511,13 @@ mod tests {
         assert_eq!(p.model.dimensions.len(), 2);
         let cat = p.model.dim_def("Category");
         assert_eq!(cat.caption, "Category");
-        assert_eq!(cat.semantic_name, "produktkategori");
         assert_eq!(cat.physical_field, "produktkategori");
         let ter = p.model.dim_def("Territory");
         assert_eq!(ter.caption, "Territory");
-        assert_eq!(ter.semantic_name, "region");
         // One differently-named measure
         assert_eq!(p.model.measures.len(), 1);
         let rev = p.model.meas_def("Revenue");
         assert_eq!(rev.caption, "Revenue");
-        assert_eq!(rev.semantic_name, "revenue");
     }
 
     #[test]
@@ -601,7 +589,7 @@ mod tests {
         let json = r##"{
             "catalog": "TEST", "cube": "Ops",
             "source_name": "sales_data", "table_name": "sales_fact",
-            "dialect": "duckdb", "malloy_model_file": "model.malloy",
+            "dialect": "duckdb", 
             "db_path": null,
             "relationships": [
                 { "fact_table": "default", "fact_column": "order_date_key",
@@ -610,22 +598,22 @@ mod tests {
                   "dimension_id": "Ship Date", "dim_table": "ship_calendar", "dim_column": "date_key" }
             ],
             "dimensions": [
-                { "id": "Order Date", "malloy_name": "order_date", "physical_field": "order_date",
+                { "id": "Order Date",  "physical_field": "order_date",
                   "caption": "Order Date", "hierarchy_name": "Order Date", "all_level_name": "(All)",
                   "leaf_level_name": "Order Date", "ordinal": 1, "visible": true, "has_all": true,
                   "cardinality_hint": 5000, "is_date_role": true, "fact_table": null, "shared": false },
-                { "id": "Ship Date", "malloy_name": "ship_date", "physical_field": "ship_date",
+                { "id": "Ship Date",  "physical_field": "ship_date",
                   "caption": "Ship Date", "hierarchy_name": "Ship Date", "all_level_name": "(All)",
                   "leaf_level_name": "Ship Date", "ordinal": 2, "visible": true, "has_all": true,
                   "cardinality_hint": 5000, "is_date_role": true, "fact_table": null, "shared": false }
             ],
             "measures": [
-                { "id": "OrdersYTD", "malloy_name": "orders_ytd", "physical_expr": "count()",
+                { "id": "OrdersYTD",  
                   "sql_expr": "COUNT(*)", "caption": "Orders YTD", "display_name": "Orders YTD",
                   "format_string": "#,##0", "units": "", "ordinal": 1, "visible": true,
                   "measure_group_name": "Sales",
                   "time_intelligence": { "dimension_id": "Order Date", "flag_column": "ytd_flag" } },
-                { "id": "SalesPriorYear", "malloy_name": "sales_prior_year", "physical_expr": "sales.sum()",
+                { "id": "SalesPriorYear",  
                   "sql_expr": "SUM(sales)", "caption": "Sales Prior Year", "display_name": "Sales Prior Year",
                   "format_string": "#,##0.00", "units": "", "ordinal": 2, "visible": true,
                   "measure_group_name": "Sales",
@@ -696,7 +684,7 @@ mod tests {
         let json = r##"{
             "catalog": "TEST", "cube": "Ops",
             "source_name": "sales_data", "table_name": "sales_fact",
-            "dialect": "duckdb", "malloy_model_file": "model.malloy",
+            "dialect": "duckdb", 
             "db_path": null,
             "fact_tables": [
                 { "id": "sales", "source_name": "sales_data",
@@ -705,20 +693,20 @@ mod tests {
                   "table_name": "inv_fact", "measure_group_name": "Inventory" }
             ],
             "dimensions": [
-                { "id": "Category", "malloy_name": "cat", "physical_field": "cat",
+                { "id": "Category",  "physical_field": "cat",
                   "caption": "Category", "hierarchy_name": "Category",
                   "all_level_name": "(All)", "leaf_level_name": "Category",
                   "ordinal": 1, "visible": true, "has_all": true, "cardinality_hint": 20 }
             ],
             "measures": [
                 { "id": "Revenue", "fact_table": "sales",
-                  "malloy_name": "rev", "physical_expr": "rev.sum()",
+                   
                   "sql_expr": "SUM(rev)", "caption": "Revenue",
                   "display_name": "Revenue", "format_string": "#,##0.00",
                   "units": "USD", "ordinal": 1, "visible": true,
                   "measure_group_name": "Sales" },
                 { "id": "Stock", "fact_table": "inventory",
-                  "malloy_name": "stock", "physical_expr": "stock.sum()",
+                   
                   "sql_expr": "SUM(stock)", "caption": "Stock",
                   "display_name": "Stock", "format_string": "#,##0",
                   "units": "", "ordinal": 2, "visible": true,
@@ -739,14 +727,14 @@ mod tests {
             r#"{
                 "catalog": "TEST", "cube": "Ops",
                 "source_name": "sales", "table_name": "sf",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "fact_tables": [
                     { "id": "sales", "source_name": "sales", "table_name": "sf", "measure_group_name": "Sales" },
                     { "id": "inv", "source_name": "inv", "table_name": "if", "measure_group_name": "Inventory" }
                 ],
                 "dimensions": [],
                 "measures": [
-                    { "id": "R", "fact_table": "sales", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "Sales" }
+                    { "id": "R", "fact_table": "sales",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "Sales" }
                 ]
             }"#,
         ).unwrap();
@@ -766,13 +754,13 @@ mod tests {
             r#"{
                 "catalog": "T", "cube": "C",
                 "source_name": "s", "table_name": "t",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "fact_tables": [
                     { "id": "sales", "source_name": "s", "table_name": "t", "measure_group_name": "G" }
                 ],
                 "dimensions": [],
                 "measures": [
-                    { "id": "R", "fact_table": "inventory", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
+                    { "id": "R", "fact_table": "inventory",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
                 ]
             }"#,
         ).unwrap();
@@ -786,13 +774,13 @@ mod tests {
             r#"{
                 "catalog": "T", "cube": "C",
                 "source_name": "s", "table_name": "t",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "fact_tables": [
                     { "id": "sales", "source_name": "s", "table_name": "t", "measure_group_name": "G" }
                 ],
                 "dimensions": [],
                 "measures": [
-                    { "id": "R", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
+                    { "id": "R",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
                 ]
             }"#,
         ).unwrap();
@@ -805,20 +793,20 @@ mod tests {
             r##"{
                 "catalog": "T", "cube": "C",
                 "source_name": "s", "table_name": "t",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "fact_tables": [
                     { "id": "sales", "source_name": "s", "table_name": "sf", "measure_group_name": "SG" },
                     { "id": "inv", "source_name": "i", "table_name": "if", "measure_group_name": "IG" }
                 ],
                 "dimensions": [
-                    { "id": "Cat", "malloy_name": "c", "physical_field": "c",
+                    { "id": "Cat",  "physical_field": "c",
                       "caption": "Cat", "hierarchy_name": "C",
                       "all_level_name": "(All)", "leaf_level_name": "C",
                       "ordinal": 1, "visible": true, "has_all": true,
                       "cardinality_hint": 20, "fact_table": "inv" }
                 ],
                 "measures": [
-                    { "id": "R", "fact_table": "sales", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "SG" }
+                    { "id": "R", "fact_table": "sales",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "SG" }
                 ]
             }"##,
         ).unwrap();
@@ -838,16 +826,16 @@ mod tests {
             r##"{
                 "catalog": "T", "cube": "C",
                 "source_name": "s", "table_name": "t",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "dimensions": [
-                    { "id": "Cat", "malloy_name": "c", "physical_field": "c",
+                    { "id": "Cat",  "physical_field": "c",
                       "caption": "Cat", "hierarchy_name": "C",
                       "all_level_name": "(All)", "leaf_level_name": "C",
                       "ordinal": 1, "visible": true, "has_all": true,
                       "cardinality_hint": 20 }
                 ],
                 "measures": [
-                    { "id": "R", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
+                    { "id": "R",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
                 ]
             }"##,
         ).unwrap();
@@ -866,19 +854,19 @@ mod tests {
             r##"{
                 "catalog": "T", "cube": "C",
                 "source_name": "s", "table_name": "t",
-                "dialect": "duckdb", "malloy_model_file": "m.malloy",
+                "dialect": "duckdb", 
                 "fact_tables": [
                     { "id": "sales", "source_name": "s", "table_name": "t", "measure_group_name": "G" }
                 ],
                 "dimensions": [
-                    { "id": "Cat", "malloy_name": "c", "physical_field": "c",
+                    { "id": "Cat",  "physical_field": "c",
                       "caption": "Cat", "hierarchy_name": "C",
                       "all_level_name": "(All)", "leaf_level_name": "C",
                       "ordinal": 1, "visible": true, "has_all": true,
                       "cardinality_hint": 20, "fact_table": "nonexistent" }
                 ],
                 "measures": [
-                    { "id": "R", "malloy_name": "r", "physical_expr": "r.sum()", "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
+                    { "id": "R",   "sql_expr": "SUM(r)", "caption": "R", "display_name": "R", "format_string": "", "units": "", "ordinal": 1, "visible": true, "measure_group_name": "G" }
                 ]
             }"##,
         ).unwrap();
@@ -1151,8 +1139,10 @@ mod tests {
             .iter()
             .find(|m| m.sql_fallback_sql.is_none())
             .expect("at least one non-fallback measure exists");
-        assert!(!simple.semantic_name.is_empty());
-        assert!(!simple.physical_expr.is_empty());
+        assert!(
+            !simple.sql_expr.is_empty(),
+            "a non-fallback measure should have a real SQL expression"
+        );
     }
 
     #[test]

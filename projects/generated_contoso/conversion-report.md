@@ -20,9 +20,9 @@
 | PromotionKey | Promotion | PromotionKey |
 | StoreKey | Store | StoreKey |
 
-## Simple measures (Malloy)
+## Simple measures
 
-| Measure | DAX | Malloy |
+| Measure | DAX | SQL |
 |---|---|---|
 
 ## SQL fallback measures

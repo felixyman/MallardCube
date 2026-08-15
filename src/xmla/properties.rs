@@ -1,3 +1,4 @@
+use crate::proxy_project;
 use crate::response::{UUID_TYPE, discover_rowset_envelope};
 
 struct Property {
@@ -64,7 +65,7 @@ const PROPERTIES: &[Property] = &[
         prop_type: "string",
         access_type: "ReadWrite",
         is_required: false,
-        value: Some("KTH_KEX_MALLOY_CUBE"),
+        value: None,
     },
     Property {
         name: "ServerName",
@@ -132,6 +133,11 @@ const PROPERTY_ROW_FIELDS: &str = r#"                <xsd:element sql:field="Pro
                 <xsd:element sql:field="Value" name="Value" type="xsd:string" minOccurs="0"/>"#;
 
 fn format_row(p: &Property) -> String {
+    let val = if p.name == "Catalog" {
+        proxy_project::project().config.catalog.clone()
+    } else {
+        p.value.unwrap_or("").to_string()
+    };
     format!(
         r#"          <row>
             <PropertyName>{name}</PropertyName>
@@ -146,7 +152,7 @@ fn format_row(p: &Property) -> String {
         ptype = p.prop_type,
         access = p.access_type,
         req = p.is_required,
-        val = p.value.unwrap_or(""),
+        val = val,
     )
 }
 

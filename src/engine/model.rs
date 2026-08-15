@@ -1,7 +1,6 @@
 /// Semantic model — the canonical source of truth for cube metadata.
 ///
 /// This drives:
-/// - Malloy emitter
 /// - SQL emitter
 /// - XMLA metadata rowsets (dimensions, hierarchies, levels, measures)
 ///
@@ -281,7 +280,6 @@ pub struct RelationshipDef {
 
 pub struct DimensionDef {
     pub id: DimId,
-    pub semantic_name: String,
     pub physical_field: String,
     /// Physical table for distinct queries (None = use primary fact table)
     pub table_name: Option<String>,
@@ -369,8 +367,6 @@ impl DimensionDef {
 pub struct MeasureDef {
     pub id: MeasId,
     pub fact_table_idx: usize,
-    pub semantic_name: String,
-    pub physical_expr: String,
     pub sql_expr: String,
     /// XMLA MEASURE_NAME
     pub caption: String,
@@ -642,7 +638,6 @@ pub fn default_model() -> SemanticModel {
         dimensions: vec![
             DimensionDef {
                 id: "Produktkategori".into(),
-                semantic_name: "produktkategori".into(),
                 physical_field: "produktkategori".into(),
                 table_name: None,
                 shared: false,
@@ -659,7 +654,6 @@ pub fn default_model() -> SemanticModel {
             },
             DimensionDef {
                 id: "Region".into(),
-                semantic_name: "region".into(),
                 physical_field: "region".into(),
                 table_name: None,
                 shared: false,
@@ -678,8 +672,6 @@ pub fn default_model() -> SemanticModel {
         measures: vec![MeasureDef {
             id: "TotalSales".into(),
             fact_table_idx: 0,
-            semantic_name: "total_forsaljning".into(),
-            physical_expr: "sales.sum()".into(),
             sql_expr: "SUM(sales)".into(),
             caption: "Total Försäljning".into(),
             display_name: "Total Försäljning (SEK)".into(),
@@ -720,7 +712,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": []
         }"#,
         );
@@ -734,7 +726,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -754,7 +746,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -781,7 +773,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -827,7 +819,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -853,7 +845,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -878,7 +870,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -898,7 +890,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -918,7 +910,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -940,7 +932,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -964,7 +956,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -989,7 +981,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -1009,7 +1001,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -1030,7 +1022,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1059,7 +1051,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1090,7 +1082,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1121,7 +1113,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [{
@@ -1146,7 +1138,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1184,7 +1176,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1222,7 +1214,7 @@ mod tests {
         let cfg = parse_config(
             r#"{
             "catalog": "T", "cube": "C", "source_name": "s", "table_name": "t",
-            "dialect": "duckdb", "malloy_model_file": "m.malloy",
+            "dialect": "duckdb", 
             "dimensions": [], "measures": [],
             "auth": { "trusted_proxy": true },
             "roles": [
@@ -1255,7 +1247,6 @@ mod tests {
     fn dim_with_levels() -> DimensionDef {
         DimensionDef {
             id: "Date".into(),
-            semantic_name: "date".into(),
             physical_field: "full_date".into(),
             table_name: Some("date_dim".into()),
             shared: false,

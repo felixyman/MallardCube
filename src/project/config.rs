@@ -1,9 +1,8 @@
-/// Malloy-to-XMLA projection config.
+/// XMLA projection config.
 ///
-/// A small JSON file that tells the proxy how to present a developer's
-/// Malloy model to Excel.  Malloy owns the semantics; this owns the
-/// Excel/XMLA-facing presentation details (captions, order, formatting,
-/// whether a dimension has an All member, etc.).
+/// A small JSON file that tells the proxy how to present a semantic model to
+/// Excel.  This owns the Excel/XMLA-facing presentation details (captions,
+/// order, formatting, whether a dimension has an All member, etc.).
 use serde::{Deserialize, Serialize};
 
 // ---- new time-intelligence config types ----
@@ -91,9 +90,6 @@ pub struct ProxyConfig {
     pub source_name: String,
     pub table_name: String,
     pub dialect: String,
-    /// Deprecated since plan 027 — no longer consumed by the runtime.
-    /// Kept parseable for backward compatibility with existing project configs.
-    pub malloy_model_file: String,
     #[serde(default)]
     pub db_path: Option<String>,
     #[serde(default)]
@@ -222,9 +218,6 @@ fn default_trusted_header() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionConfig {
     pub id: String,
-    /// Deprecated since plan 027 — no longer consumed by the runtime.
-    /// Kept parseable for backward compatibility with existing project configs.
-    pub malloy_name: String,
     pub physical_field: String,
     pub caption: String,
     #[serde(default)]
@@ -262,10 +255,6 @@ pub struct HierarchyLevelConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasureConfig {
     pub id: String,
-    /// Deprecated since plan 027 — no longer consumed by the runtime.
-    /// Kept parseable for backward compatibility with existing project configs.
-    pub malloy_name: String,
-    pub physical_expr: String,
     pub sql_expr: String,
     pub caption: String,
     pub display_name: String,
@@ -316,10 +305,10 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [{
                 "id": "Produktkategori",
-                "malloy_name": "produktkategori",
+                
                 "physical_field": "produktkategori",
                 "caption": "Produktkategori",
                 "hierarchy_name": "Produktkategori",
@@ -332,8 +321,8 @@ mod tests {
             }],
             "measures": [{
                 "id": "TotalSales",
-                "malloy_name": "total_forsaljning",
-                "physical_expr": "sales.sum()",
+                
+                
                 "sql_expr": "SUM(sales)",
                 "caption": "Total",
                 "display_name": "Total (SEK)",
@@ -358,7 +347,7 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [],
             "measures": [],
             "time_intelligence": {
@@ -388,7 +377,7 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [],
             "measures": []
         }"#;
@@ -407,7 +396,7 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [],
             "measures": [],
             "roles": [{"name": "ReaderRole", "description": "Read only"}]
@@ -430,7 +419,7 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [],
             "measures": [],
             "roles": [{
@@ -474,7 +463,7 @@ mod tests {
             "source_name": "test",
             "table_name": "test_table",
             "dialect": "duckdb",
-            "malloy_model_file": "model.malloy",
+            
             "dimensions": [],
             "measures": [],
             "auth": {

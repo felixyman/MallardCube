@@ -137,7 +137,7 @@ pub fn run(args: Vec<String>) -> i32 {
     for meas in &model.fact_table.measures {
         if meas.classification == "sql_fallback" {
             let sql = generate_fallback_sql(meas, &model);
-            let file_name = format!("{out_dir}/sql_fallback/{}.sql", malloy_name(&meas.name));
+            let file_name = format!("{out_dir}/sql_fallback/{}.sql", normalize_ident(&meas.name));
             fs::write(&file_name, sql).expect("write fallback");
         }
     }
@@ -182,7 +182,7 @@ pub fn run(args: Vec<String>) -> i32 {
     .expect("write report");
 
     // Bootstrap script (always emitted)
-    let cube_db = format!("{}.db", malloy_name(&model.cube));
+    let cube_db = format!("{}.db", normalize_ident(&model.cube));
     fs::create_dir_all(format!("{out_dir}/data")).ok();
 
     let mut bootstrap = format!(
@@ -346,7 +346,6 @@ fn render_proxy_config(m: &ConversionModel) -> String {
   "source_name": "{source}",
   "table_name": "{table}",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "db_path": {db_path},
   "fact_tables": [
 {facts}
@@ -366,12 +365,12 @@ fn render_proxy_config(m: &ConversionModel) -> String {
 }}"##,
         catalog = m.catalog,
         cube = m.cube,
-        source = malloy_name(&ft.ssas_name),
-        table = malloy_name(&ft.name),
+        source = normalize_ident(&ft.ssas_name),
+        table = normalize_ident(&ft.name),
         db_path = if m.date_roles.is_empty() {
             "null".to_string()
         } else {
-            format!("\"data/{}.db\"", malloy_name(&m.cube))
+            format!("\"data/{}.db\"", normalize_ident(&m.cube))
         },
         facts = facts,
         rels = rels,
@@ -449,8 +448,8 @@ fn render_fact_table_configs(m: &ConversionModel) -> String {
       "table_name": "{tn}",
       "measure_group_name": "{cube}"
     }}}}"##,
-        sn = malloy_name(&ft.ssas_name),
-        tn = malloy_name(&ft.name),
+        sn = normalize_ident(&ft.ssas_name),
+        tn = normalize_ident(&ft.name),
         cube = m.cube,
     )
     .replace("{{", "{")
@@ -482,10 +481,10 @@ fn render_relationships(m: &ConversionModel) -> String {
       "dim_table": "{dt}",
       "dim_column": "{dc}"
     }}}}"##,
-                    fc = malloy_name(&rel.from_column),
+                    fc = normalize_ident(&rel.from_column),
                     did = dim_id,
-                    dt = malloy_name(&rel.to_table),
-                    dc = malloy_name(&rel.to_column),
+                    dt = normalize_ident(&rel.to_table),
+                    dc = normalize_ident(&rel.to_column),
                 )
                 .replace("{{", "{")
                 .replace("}}", "}"),
@@ -508,7 +507,7 @@ fn render_time_intelligence_block(m: &ConversionModel) -> String {
     format!(
         "\n  \"time_intelligence\": {{{{\n    \"date_dimension\": {{{{\n      \"dimension_id\": \"{did}\",\n      \"table_name\": \"{tn}\",\n      \"date_key_column\": \"date_key\",\n      \"full_date_column\": \"full_date\",\n      \"flag_columns\": {{{{\n        \"year_column\": \"year\",\n        \"quarter_column\": \"quarter\",\n        \"month_column\": \"month\",\n        \"ytd_flag_column\": \"ytd_flag\",\n        \"prior_year_ytd_flag_column\": \"prior_year_ytd_flag\",\n        \"current_year_flag_column\": \"current_year_flag\",\n        \"qtd_flag_column\": \"qtd_flag\",\n        \"mtd_flag_column\": \"mtd_flag\"\n      }}}}\n    }}}}\n  }},\n",
         did = first.ssas_name,
-        tn = malloy_name(&first.name),
+        tn = normalize_ident(&first.name),
     ).replace("{{", "{").replace("}}", "}")
 }
 
@@ -536,8 +535,8 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
             .or_else(|| t.columns.iter().find(|c| !c.is_hidden))
             .or_else(|| t.columns.first());
         let physical = rep_col
-            .map(|c| malloy_name(&c.source_column))
-            .unwrap_or_else(|| malloy_name(&dim_name));
+            .map(|c| normalize_ident(&c.source_column))
+            .unwrap_or_else(|| normalize_ident(&dim_name));
         let ft_ref = if m.date_roles.iter().any(|d| d.name == t.name) {
             "default".to_string()
         } else {
@@ -563,12 +562,11 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
             ""
         };
 
-        let pf = format!("{}.{}", malloy_name(&t.name), physical);
+        let pf = format!("{}.{}", normalize_ident(&t.name), physical);
         out.push_str(
             &format!(
                 r##"    {{{{
       "id": "{id}",
-      "malloy_name": "{mn}",
       "physical_field": "{pf}",
       "caption": "{caption}",
       "description": "{desc}",
@@ -581,7 +579,6 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
           "cardinality_hint": 100{shared}{date_role_line}
     }}}}"##,
                 id = t.ssas_name,
-                mn = malloy_name(&t.ssas_name),
                 pf = pf,
                 caption = t.ssas_name,
                 desc = t.description.replace('\"', "\\\""),
@@ -643,8 +640,8 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         };
         let sql = if !time_class.is_empty() {
             let inner = extract_ti_inner(dax_expr);
-            let malloy = dax_to_malloy_expr(&inner);
-            malloy_to_sql(&malloy).unwrap_or_else(|| "null".to_string())
+            let expr = dax_to_expr(&inner);
+            expr_to_sql(&expr).unwrap_or_else(|| "null".to_string())
         } else {
             dax_to_sql_hint(dax_expr, &meas.classification).unwrap_or_else(|| "null".to_string())
         };
@@ -657,22 +654,10 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         } else {
             meas.classification.as_str()
         };
-        let pe = if effective_class == "simple"
-            || effective_class == "time_ytd"
-            || effective_class == "time_prior_year"
-        {
-            if !time_class.is_empty() {
-                dax_to_malloy_expr(&extract_ti_inner(dax_expr))
-            } else {
-                dax_to_malloy_expr(dax_expr)
-            }
-        } else {
-            String::new()
-        };
         let fb_line = if effective_class == "sql_fallback" {
             format!(
                 ",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"",
-                malloy_name(&meas.name)
+                normalize_ident(&meas.name)
             )
         } else if !time_class.is_empty() {
             format!(
@@ -688,8 +673,6 @@ fn render_measure_configs(m: &ConversionModel) -> String {
                 r##"    {{{{
       "id": "{id}",
       "fact_table": "default",
-      "malloy_name": "{mn}",
-      "physical_expr": "{pe}",
       "sql_expr": "{sql}",
       "caption": "{caption}",
       "display_name": "{dn}",
@@ -701,8 +684,6 @@ fn render_measure_configs(m: &ConversionModel) -> String {
       "measure_group_name": "{cube}"{fb}
     }}}}"##,
                 id = meas.name,
-                mn = malloy_name(&meas.name),
-                pe = json_escape(&pe),
                 sql = sql,
                 caption = meas.name,
                 dn = meas.name,
@@ -728,24 +709,24 @@ fn json_escape(s: &str) -> String {
 fn dax_to_sql_hint(expr: &str, class: &str) -> Option<String> {
     match class {
         "simple" => {
-            let malloy = dax_to_malloy_expr(expr);
-            malloy_to_sql(&malloy)
+            let expr = dax_to_expr(expr);
+            expr_to_sql(&expr)
         }
         _ => Some("null".to_string()),
     }
 }
 
-fn malloy_to_sql(malloy: &str) -> Option<String> {
+fn expr_to_sql(expr: &str) -> Option<String> {
     // Only return SQL for patterns the converter can truly lower.
     // Numeric constants are the only safe case; all aggregate/expression
     // patterns must be explicitly handwritten as fallback SQL.
-    if let Ok(v) = malloy.trim().parse::<f64>() {
+    if let Ok(v) = expr.trim().parse::<f64>() {
         return Some(format!("{}", v));
     }
     None
 }
 
-fn dax_to_malloy_expr(dax: &str) -> String {
+fn dax_to_expr(dax: &str) -> String {
     let dax = normalize_dax(dax);
     let dax = dax.as_str();
     let upper = dax.to_uppercase();
@@ -759,28 +740,28 @@ fn dax_to_malloy_expr(dax: &str) -> String {
     if let Some(inner) = extract_dax_unary(&upper, "DISTINCTCOUNT(")
         && let Some(col) = extract_col(&inner)
     {
-        return format!("{}.count(distinct true)", malloy_name(&col));
+        return format!("{}.count(distinct true)", normalize_ident(&col));
     }
 
     // COUNT('table'[col]) → col.count()
     if let Some(inner) = extract_dax_unary(&upper, "COUNT(")
         && let Some(col) = extract_col(&inner)
     {
-        return format!("{}.count()", malloy_name(&col));
+        return format!("{}.count()", normalize_ident(&col));
     }
 
     // AVERAGE('table'[col]) → col.avg()
     if let Some(inner) = extract_dax_unary(&upper, "AVERAGE(")
         && let Some(col) = extract_col(&inner)
     {
-        return format!("{}.avg()", malloy_name(&col));
+        return format!("{}.avg()", normalize_ident(&col));
     }
 
     // SUM('table'[col]) → col.sum()
     if let Some(inner) = extract_dax_unary(&upper, "SUM(")
         && let Some(col) = extract_col(&inner)
     {
-        return format!("{}.sum()", malloy_name(&col));
+        return format!("{}.sum()", normalize_ident(&col));
     }
 
     // DIVIDE(a, b) → a / b
@@ -790,8 +771,8 @@ fn dax_to_malloy_expr(dax: &str) -> String {
         let upper_parts = split_args(inner);
         let orig_parts = split_args(orig_inner);
         if upper_parts.len() >= 2 {
-            let a = dax_to_malloy_expr(&orig_parts[0]);
-            let b = dax_to_malloy_expr(&orig_parts[1]);
+            let a = dax_to_expr(&orig_parts[0]);
+            let b = dax_to_expr(&orig_parts[1]);
             return format!("{a} / {b}");
         }
     }
@@ -800,7 +781,7 @@ fn dax_to_malloy_expr(dax: &str) -> String {
     if let Some(inner) = upper.strip_prefix("CALCULATE(") {
         let parts = split_args(inner);
         if parts.len() >= 2 {
-            let base = dax_to_malloy_expr(&parts[0]);
+            let base = dax_to_expr(&parts[0]);
             let filter = extract_calculate_filter(&parts[1]);
             if let Some(f) = filter {
                 return format!("{base} {{ where: {f} }}");
@@ -818,22 +799,22 @@ fn dax_to_malloy_expr(dax: &str) -> String {
             return base;
         }
         if parts.len() == 1 {
-            return dax_to_malloy_expr(&parts[0]);
+            return dax_to_expr(&parts[0]);
         }
     }
 
     // Reference to another measure: [Measure Name]
     if upper.starts_with('[') && upper.ends_with(']') {
         let name = &upper[1..upper.len() - 1];
-        return malloy_name(name);
+        return normalize_ident(name);
     }
 
     // Compound expression like a / b
     if upper.contains("/") && !upper.contains('(') {
         let parts: Vec<&str> = dax.split('/').collect();
         if parts.len() == 2 {
-            let a = dax_to_malloy_expr(parts[0].trim());
-            let b = dax_to_malloy_expr(parts[1].trim());
+            let a = dax_to_expr(parts[0].trim());
+            let b = dax_to_expr(parts[1].trim());
             return format!("{a} / {b}");
         }
     }
@@ -940,10 +921,10 @@ fn extract_calculate_filter(dax: &str) -> Option<String> {
             .trim_matches('"')
             .trim_matches('\'');
         let val = val.trim_end_matches(')');
-        return Some(format!("{} {op} '{val}'", malloy_name(&col)));
+        return Some(format!("{} {op} '{val}'", normalize_ident(&col)));
     }
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        return Some(malloy_name(&trimmed[1..trimmed.len() - 1]));
+        return Some(normalize_ident(&trimmed[1..trimmed.len() - 1]));
     }
     None
 }
@@ -1051,11 +1032,11 @@ fn generate_fallback_sql_recursive(
         && let Some(col_expr) = extract_dax_unary(&upper_one, "MEDIAN(")
         && let Some(col) = extract_col(&col_expr)
     {
-        let fact_table = malloy_name(&model.fact_table.name);
+        let fact_table = normalize_ident(&model.fact_table.name);
         return format!(
             "-- Auto-generated from DAX: {dax}\n-- DuckDB supports MEDIAN() natively.\n\nSELECT MEDIAN({col}) FROM {fact_table};\n",
             dax = dax,
-            col = malloy_name(&col),
+            col = normalize_ident(&col),
             fact_table = fact_table,
         );
     }
@@ -1114,17 +1095,17 @@ fn generate_cumulative_sql(
     let is_prior_year = upper.contains("YEAR(TODAY())-1") || upper.contains("YEAR(TODAY()) - 1");
     let base_meas = extract_base_measure(dax);
 
-    let cal_malloy = cal_table
+    let cal_name = cal_table
         .as_deref()
-        .map(malloy_name)
+        .map(normalize_ident)
         .unwrap_or_else(|| "calendar".into());
     let period_col_name = period_col
         .as_deref()
-        .map(malloy_name)
+        .map(normalize_ident)
         .unwrap_or_else(|| "period".into());
     let year_col_name = year_col
         .as_deref()
-        .map(malloy_name)
+        .map(normalize_ident)
         .unwrap_or_else(|| "year".into());
 
     let join_col = cal_table
@@ -1137,8 +1118,8 @@ fn generate_cumulative_sql(
                 .map(|r| r.from_column.clone())
         })
         .unwrap_or_default();
-    let join_col_name = malloy_name(&join_col);
-    let fact_table = malloy_name(&model.fact_table.name);
+    let join_col_name = normalize_ident(&join_col);
+    let fact_table = normalize_ident(&model.fact_table.name);
     let year_expr = if is_prior_year {
         "EXTRACT(YEAR FROM CURRENT_DATE) - 1"
     } else {
@@ -1148,7 +1129,7 @@ fn generate_cumulative_sql(
     format!(
         r#"-- Cumulative YTD for: {name}
 -- Original DAX: {dax}
--- Calendar: {cal_malloy}, Period: {period}, Year: {year}
+-- Calendar: {cal_name}, Period: {period}, Year: {year}
 -- Base measure: {base_meas}
 -- Join: f.{join_col} = c.{join_col}
 
@@ -1166,14 +1147,14 @@ FROM (
     c.{year},
     COUNT(DISTINCT f.remissnummer) AS base_count
   FROM {fact_table} f
-  JOIN {cal_malloy} c ON f.{join_col} = c.{join_col}
+  JOIN {cal_name} c ON f.{join_col} = c.{join_col}
   WHERE c.{year} = {year_expr}
   GROUP BY c.{period}, c.{year}
 );
 "#,
         name = meas.name,
         dax = dax,
-        cal_malloy = cal_malloy,
+        cal_name = cal_name,
         period = period_col_name,
         year = year_col_name,
         base_meas = base_meas,
@@ -1239,7 +1220,7 @@ fn generate_sumx_filter_related(
     _upper: &str,
     model: &ConversionModel,
 ) -> Option<String> {
-    let fact = malloy_name(&model.fact_table.name);
+    let fact = normalize_ident(&model.fact_table.name);
     let filter_parts = extract_filter_eq(dax)?;
     let filter_col_raw = &filter_parts.0;
     let filter_col = resolve_source_column(filter_col_raw, model);
@@ -1247,13 +1228,13 @@ fn generate_sumx_filter_related(
     let qty_col_raw = extract_first_mul_col(dax)?;
     let qty_col = resolve_source_column(&qty_col_raw, model);
     let related = extract_related_ref(dax)?;
-    let dim_table = malloy_name(&related.0);
+    let dim_table = normalize_ident(&related.0);
     let dim_col_raw = &related.1;
     let dim_col = resolve_source_column(dim_col_raw, model);
     let join_col = model
         .relationships
         .iter()
-        .find(|r| malloy_name(&r.to_table) == dim_table)
+        .find(|r| normalize_ident(&r.to_table) == dim_table)
         .map(|r| {
             // Resolve SSAS column ref to actual sourceColumn
             let raw = r.from_column.clone();
@@ -1356,7 +1337,7 @@ fn resolve_source_column(ssas_name: &str, model: &ConversionModel) -> String {
         }
     }
     // Fallback: lowercase with underscores
-    malloy_name(ssas_name)
+    normalize_ident(ssas_name)
 }
 fn parse_dax_col_ref(s: &str) -> Option<(String, String)> {
     let s = s.trim();
@@ -1378,7 +1359,7 @@ fn parse_dax_col_ref(s: &str) -> Option<(String, String)> {
 }
 
 fn generate_calculate_sum(dax: &str, _upper: &str, model: &ConversionModel) -> Option<String> {
-    let fact = malloy_name(&model.fact_table.name);
+    let fact = normalize_ident(&model.fact_table.name);
     let sum_col_raw = extract_aggregate_col(dax, "SUM")?;
     let sum_col_name = resolve_source_column(&sum_col_raw, model);
     let filter_info = extract_calculate_filter_eq(dax)?;
@@ -1604,11 +1585,11 @@ fn render_schema(m: &ConversionModel) -> String {
 }
 
 fn render_create_table(t: &TableInfo, is_fact: bool) -> String {
-    let table_name = malloy_name(&t.name);
+    let table_name = normalize_ident(&t.name);
     let mut out = format!("CREATE TABLE IF NOT EXISTS {table_name} (\n");
     let visible_cols: Vec<&ColumnInfo> = t.columns.iter().collect();
     for (i, c) in visible_cols.iter().enumerate() {
-        let col_name = malloy_name(&c.source_column);
+        let col_name = normalize_ident(&c.source_column);
         let dt = duckdb_type(&c.data_type);
         let comma = if i < visible_cols.len() - 1 { "," } else { "" };
         out.push_str(&format!("    {col_name} {dt}{comma}\n"));
@@ -1677,12 +1658,12 @@ fn render_report(m: &ConversionModel) -> String {
     }
     out.push('\n');
 
-    out.push_str("## Simple measures (Malloy)\n\n");
-    out.push_str("| Measure | DAX | Malloy |\n|---|---|---|\n");
+    out.push_str("## Simple measures\n\n");
+    out.push_str("| Measure | DAX | SQL |\n|---|---|---|\n");
     for m in &simple {
         let dax = m.expression.as_str();
-        let malloy = dax_to_malloy_expr(dax);
-        out.push_str(&format!("| {} | {} | {} |\n", m.name, dax, malloy));
+        let sql = expr_to_sql(&dax_to_expr(dax)).unwrap_or_default();
+        out.push_str(&format!("| {} | {} | {} |\n", m.name, dax, sql));
     }
 
     out.push_str("\n## SQL fallback measures\n\n");
@@ -1693,7 +1674,7 @@ fn render_report(m: &ConversionModel) -> String {
             "| {} | {} | sql_fallback/{}.sql |\n",
             m.name,
             dax,
-            malloy_name(&m.name)
+            normalize_ident(&m.name)
         ));
     }
 
@@ -1726,7 +1707,7 @@ fn render_report(m: &ConversionModel) -> String {
     }
 
     out.push_str("### Quick start\n\n");
-    let cube_db = format!("{}.db", malloy_name(&m.cube));
+    let cube_db = format!("{}.db", normalize_ident(&m.cube));
     out.push_str(&format!(
         "```\nduckdb data/{cube_db} < bootstrap.sql\n```\n\n\
          This creates the schema, seeds `date_dim` (if needed), and loads dummy data.\n\
@@ -1737,19 +1718,22 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str("### Tables to load\n\n");
     out.push_str(&format!(
         "- [ ] `{}` (fact)\n",
-        malloy_name(&m.fact_table.name)
+        normalize_ident(&m.fact_table.name)
     ));
     for t in &m.dimensions {
-        out.push_str(&format!("- [ ] `{}` (dimension)\n", malloy_name(&t.name)));
+        out.push_str(&format!(
+            "- [ ] `{}` (dimension)\n",
+            normalize_ident(&t.name)
+        ));
     }
     for t in &m.date_roles {
         out.push_str(&format!(
             "- [ ] `{}` (date-role, seeded by seed_date_dim.sql)\n",
-            malloy_name(&t.name)
+            normalize_ident(&t.name)
         ));
     }
     for t in &m.lookup_tables {
-        out.push_str(&format!("- [ ] `{}` (lookup)\n", malloy_name(&t.name)));
+        out.push_str(&format!("- [ ] `{}` (lookup)\n", normalize_ident(&t.name)));
     }
 
     if !m.roles.is_empty() {

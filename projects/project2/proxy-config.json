@@ -4,11 +4,9 @@
   "source_name": "sales_data",
   "table_name": "faktatabell",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "dimensions": [
     {
       "id": "Category",
-      "malloy_name": "produktkategori",
       "physical_field": "produktkategori",
       "caption": "Category",
       "description": "Product category",
@@ -22,7 +20,6 @@
     },
     {
       "id": "Territory",
-      "malloy_name": "region",
       "physical_field": "region",
       "caption": "Territory",
       "description": "Sales territory",
@@ -38,8 +35,6 @@
   "measures": [
     {
       "id": "Revenue",
-      "malloy_name": "revenue",
-      "physical_expr": "sales.sum()",
       "sql_expr": "SUM(sales)",
       "caption": "Revenue",
       "display_name": "Revenue",

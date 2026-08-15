@@ -235,8 +235,8 @@ pub fn ssas_name_to_id(name: &str) -> String {
     name.replace([' ', '-'], "_").to_uppercase()
 }
 
-/// Convert name to Malloy-style lowercase identifier.
-pub fn malloy_name(name: &str) -> String {
+/// Convert a name to a lowercase, underscore-separated SQL identifier.
+pub fn normalize_ident(name: &str) -> String {
     name.to_lowercase().replace([' ', '-'], "_")
 }
 

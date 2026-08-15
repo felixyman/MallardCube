@@ -4,7 +4,6 @@
   "source_name": "dw_fys_f_undersökning",
   "table_name": "dw_fys_f_undersökning",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "db_path": "../data/generated.db",
   "fact_tables": [
     {
@@ -137,7 +136,6 @@
   "dimensions": [
     {
       "id": "dw_fys D_Beställare",
-      "malloy_name": "dw_fys_d_beställare",
       "physical_field": "dw_fys_d_beställare.beställarekod",
       "caption": "dw_fys D_Beställare",
       "description": "Beställare av undersökningar",
@@ -151,7 +149,6 @@
     },
     {
       "id": "dw_fys D_Fakturamottagare",
-      "malloy_name": "dw_fys_d_fakturamottagare",
       "physical_field": "dw_fys_d_fakturamottagare.fakturamottagarekod",
       "caption": "dw_fys D_Fakturamottagare",
       "description": "Fakturamottagare av undersökning",
@@ -165,7 +162,6 @@
     },
     {
       "id": "dw_fys D_Patient",
-      "malloy_name": "dw_fys_d_patient",
       "physical_field": "dw_fys_d_patient.patientid",
       "caption": "dw_fys D_Patient",
       "description": "Patient som undersöks, av GDPR-skäl döljs personuppgifter",
@@ -179,7 +175,6 @@
     },
     {
       "id": "dw_fys D_Produkt",
-      "malloy_name": "dw_fys_d_produkt",
       "physical_field": "dw_fys_d_produkt.bis_kod",
       "caption": "dw_fys D_Produkt",
       "description": "Debitterbar produkt samt information som kopplas till detta",
@@ -193,7 +188,6 @@
     },
     {
       "id": "dw_fys D_Remissgrupp",
-      "malloy_name": "dw_fys_d_remissgrupp",
       "physical_field": "dw_fys_d_remissgrupp.remissgruppkod",
       "caption": "dw_fys D_Remissgrupp",
       "description": "Remissgruppering",
@@ -207,7 +201,6 @@
     },
     {
       "id": "dw_fys D_Remisskoder",
-      "malloy_name": "dw_fys_d_remisskoder",
       "physical_field": "dw_fys_d_remisskoder.remisskoderkod",
       "caption": "dw_fys D_Remisskoder",
       "description": "Olika koder/attribut kopplade till remiss, t.ex. akut, modifieringsattribut, undersökningsstatus, utebliven",
@@ -221,7 +214,6 @@
     },
     {
       "id": "dw_fys D_Remisstatus",
-      "malloy_name": "dw_fys_d_remisstatus",
       "physical_field": "dw_fys_d_remisstatus.remisstatuskod",
       "caption": "dw_fys D_Remisstatus",
       "description": "Status på remissen",
@@ -235,7 +227,6 @@
     },
     {
       "id": "dw_fys D_Signerare",
-      "malloy_name": "dw_fys_d_signerare",
       "physical_field": "dw_fys_d_signerare.signerarekod",
       "caption": "dw_fys D_Signerare",
       "description": "Personal som signerar undersökning",
@@ -249,7 +240,6 @@
     },
     {
       "id": "dw_fys D_Utförare",
-      "malloy_name": "dw_fys_d_utförare",
       "physical_field": "dw_fys_d_utförare.utförarekod",
       "caption": "dw_fys D_Utförare",
       "description": "Personal som utför undersökning",
@@ -263,7 +253,6 @@
     },
     {
       "id": "dw_fys Kalender_Beställningsdatum",
-      "malloy_name": "dw_fys_kalender_beställningsdatum",
       "physical_field": "dw_fys_kalender_beställningsdatum.dagnamn",
       "caption": "dw_fys Kalender_Beställningsdatum",
       "description": "Kalender kopplad till beställningsdatum, hämtas fryn Fysweb om data saknas i Fyspaf",
@@ -278,7 +267,6 @@
     },
     {
       "id": "dw_fys Kalender_Bokningsdatum",
-      "malloy_name": "dw_fys_kalender_bokningsdatum",
       "physical_field": "dw_fys_kalender_bokningsdatum.dagnamn",
       "caption": "dw_fys Kalender_Bokningsdatum",
       "description": "Kalender för bokningsdatum",
@@ -293,7 +281,6 @@
     },
     {
       "id": "dw_fys Kalender_Måldatum",
-      "malloy_name": "dw_fys_kalender_måldatum",
       "physical_field": "dw_fys_kalender_måldatum.dagnamn",
       "caption": "dw_fys Kalender_Måldatum",
       "description": "",
@@ -308,7 +295,6 @@
     },
     {
       "id": "dw_fys Kalender_Remissdatum",
-      "malloy_name": "dw_fys_kalender_remissdatum",
       "physical_field": "dw_fys_kalender_remissdatum.dagnamn",
       "caption": "dw_fys Kalender_Remissdatum",
       "description": "Kalender för när remiss skickades",
@@ -323,7 +309,6 @@
     },
     {
       "id": "dw_fys Kalender_Signeringsdatum",
-      "malloy_name": "dw_fys_kalender_signeringsdatum",
       "physical_field": "dw_fys_kalender_signeringsdatum.dagnamn",
       "caption": "dw_fys Kalender_Signeringsdatum",
       "description": "Kalender för när undersökning signerades",
@@ -338,7 +323,6 @@
     },
     {
       "id": "dw_fys Kalender_Undersökningsslut",
-      "malloy_name": "dw_fys_kalender_undersökningsslut",
       "physical_field": "dw_fys_kalender_undersökningsslut.dagnamn",
       "caption": "dw_fys Kalender_Undersökningsslut",
       "description": "Kalender för när undersökning avslutades",
@@ -353,7 +337,6 @@
     },
     {
       "id": "dw_fys Kalender_Undersökningsstart",
-      "malloy_name": "dw_fys_kalender_undersökningsstart",
       "physical_field": "dw_fys_kalender_undersökningsstart.dagnamn",
       "caption": "dw_fys Kalender_Undersökningsstart",
       "description": "Kalender för när undersökning startades",
@@ -368,7 +351,6 @@
     },
     {
       "id": "CARMAe",
-      "malloy_name": "carmae",
       "physical_field": "carmae.namn",
       "caption": "CARMAe",
       "description": "",
@@ -386,8 +368,6 @@
     {
       "id": "Andel signerade DVT Under två timmar",
       "fact_table": "default",
-      "malloy_name": "andel_signerade_dvt_under_två_timmar",
-      "physical_expr": "antal_signerade_dvt_remisser { where: beställning_till_signering <= '0.083333' } / antal_signerade_dvt_remisser",
       "sql_expr": "SUM(1)",
       "caption": "Andel signerade DVT Under två timmar",
       "display_name": "Andel signerade DVT Under två timmar",
@@ -401,8 +381,6 @@
     {
       "id": "Andel under fyra timmar",
       "fact_table": "default",
-      "malloy_name": "andel_under_fyra_timmar",
-      "physical_expr": "antal_remisser_akuta_inneliggande_(under_fyra_timmar) / antal_remisser_akuta_inneliggande",
       "sql_expr": "SUM(1)",
       "caption": "Andel under fyra timmar",
       "display_name": "Andel under fyra timmar",
@@ -416,8 +394,6 @@
     {
       "id": "Antal bokade remisser",
       "fact_table": "default",
-      "malloy_name": "antal_bokade_remisser",
-      "physical_expr": "antal_remisser { where: remisstatus = 'TID' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal bokade remisser",
       "display_name": "Antal bokade remisser",
@@ -431,8 +407,6 @@
     {
       "id": "Antal obokade remisser",
       "fact_table": "default",
-      "malloy_name": "antal_obokade_remisser",
-      "physical_expr": "antal_remisser { where: remisstatus = 'EJ TID' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal obokade remisser",
       "display_name": "Antal obokade remisser",
@@ -446,8 +420,6 @@
     {
       "id": "Antal osignerade utförda undersökningar",
       "fact_table": "default",
-      "malloy_name": "antal_osignerade_utförda_undersökningar",
-      "physical_expr": "antal_undersökningar { where: signeringsstatus = 'OSIGNERAD' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal osignerade utförda undersökningar",
       "display_name": "Antal osignerade utförda undersökningar",
@@ -461,8 +433,6 @@
     {
       "id": "Antal patienter",
       "fact_table": "default",
-      "malloy_name": "antal_patienter",
-      "physical_expr": "patientid.count(distinct true)",
       "sql_expr": "COUNT(DISTINCT ...)",
       "caption": "Antal patienter",
       "display_name": "Antal patienter",
@@ -476,8 +446,6 @@
     {
       "id": "Antal remisser",
       "fact_table": "default",
-      "malloy_name": "antal_remisser",
-      "physical_expr": "remissnummer.count(distinct true)",
       "sql_expr": "COUNT(DISTINCT ...)",
       "caption": "Antal remisser",
       "display_name": "Antal remisser",
@@ -491,8 +459,6 @@
     {
       "id": "Antal remisser akuta inneliggande",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_akuta_inneliggande",
-      "physical_expr": "remissnummer.count(distinct true) { where: flagga_akuten = '1' }",
       "sql_expr": "COUNT(DISTINCT ...)",
       "caption": "Antal remisser akuta inneliggande",
       "display_name": "Antal remisser akuta inneliggande",
@@ -506,8 +472,6 @@
     {
       "id": "Antal remisser akuta inneliggande (Under fyra timmar)",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_akuta_inneliggande_(under_fyra_timmar)",
-      "physical_expr": "antal_remisser_akuta_inneliggande { where: undersökningsslut_till_signering <= '0.1666667' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remisser akuta inneliggande (Under fyra timmar)",
       "display_name": "Antal remisser akuta inneliggande (Under fyra timmar)",
@@ -521,8 +485,6 @@
     {
       "id": "Antal remisser i urval",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_i_urval",
-      "physical_expr": "antal_remisser { where: akut = 'JA' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remisser i urval",
       "display_name": "Antal remisser i urval",
@@ -536,8 +498,6 @@
     {
       "id": "Antal remisser som väntat %3e30 dagar",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_som_väntat_%3e30_dagar",
-      "physical_expr": "antal_obokade_remisser { where: remiss_till_idag > '30' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remisser som väntat %3e30 dagar",
       "display_name": "Antal remisser som väntat %3e30 dagar",
@@ -551,8 +511,6 @@
     {
       "id": "Antal remisser som väntat %3e60 dagar",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_som_väntat_%3e60_dagar",
-      "physical_expr": "antal_obokade_remisser { where: remiss_till_idag > '60' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remisser som väntat %3e60 dagar",
       "display_name": "Antal remisser som väntat %3e60 dagar",
@@ -566,8 +524,6 @@
     {
       "id": "Antal remisser som väntat %3e90 dagar",
       "fact_table": "default",
-      "malloy_name": "antal_remisser_som_väntat_%3e90_dagar",
-      "physical_expr": "antal_obokade_remisser { where: remiss_till_idag > '90' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remisser som väntat %3e90 dagar",
       "display_name": "Antal remisser som väntat %3e90 dagar",
@@ -581,8 +537,6 @@
     {
       "id": "Antal remissiser med tid inom 4 veckor",
       "fact_table": "default",
-      "malloy_name": "antal_remissiser_med_tid_inom_4_veckor",
-      "physical_expr": "antal_undersökningar { where: remiss_till_bokning <= '28' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal remissiser med tid inom 4 veckor",
       "display_name": "Antal remissiser med tid inom 4 veckor",
@@ -596,8 +550,6 @@
     {
       "id": "Antal saknade remisser i underlag",
       "fact_table": "default",
-      "malloy_name": "antal_saknade_remisser_i_underlag",
-      "physical_expr": "antal_remisser { where: akut = 'JA' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal saknade remisser i underlag",
       "display_name": "Antal saknade remisser i underlag",
@@ -611,8 +563,6 @@
     {
       "id": "Antal signerade DVT-remisser",
       "fact_table": "default",
-      "malloy_name": "antal_signerade_dvt_remisser",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal signerade DVT-remisser",
       "display_name": "Antal signerade DVT-remisser",
@@ -627,8 +577,6 @@
     {
       "id": "Antal undersökningar",
       "fact_table": "default",
-      "malloy_name": "antal_undersökningar",
-      "physical_expr": "undersökningid.count()",
       "sql_expr": "COUNT(...)",
       "caption": "Antal undersökningar",
       "display_name": "Antal undersökningar",
@@ -642,8 +590,6 @@
     {
       "id": "Antal uteblivna remisser",
       "fact_table": "default",
-      "malloy_name": "antal_uteblivna_remisser",
-      "physical_expr": "antal_remisser { where: utebliven = 'JA' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal uteblivna remisser",
       "display_name": "Antal uteblivna remisser",
@@ -657,8 +603,6 @@
     {
       "id": "Antal utförda remisser",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser",
-      "physical_expr": "antal_remisser { where: undersökningsstatus = 'UTFÖRD' }",
       "sql_expr": "SUM(1)",
       "caption": "Antal utförda remisser",
       "display_name": "Antal utförda remisser",
@@ -672,8 +616,6 @@
     {
       "id": "Antal utförda remisser (ack Kvartal) CY",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_kvartal)_cy",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack Kvartal) CY",
       "display_name": "Antal utförda remisser (ack Kvartal) CY",
@@ -689,8 +631,6 @@
     {
       "id": "Antal utförda remisser (ack Kvartal) CY-1",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_kvartal)_cy_1",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack Kvartal) CY-1",
       "display_name": "Antal utförda remisser (ack Kvartal) CY-1",
@@ -706,8 +646,6 @@
     {
       "id": "Antal utförda remisser (ack Månad) CY-1",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_månad)_cy_1",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack Månad) CY-1",
       "display_name": "Antal utförda remisser (ack Månad) CY-1",
@@ -723,8 +661,6 @@
     {
       "id": "Antal utförda remisser (ack månad) CY",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_månad)_cy",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack månad) CY",
       "display_name": "Antal utförda remisser (ack månad) CY",
@@ -740,8 +676,6 @@
     {
       "id": "Antal utförda remisser (ack vecka) CY",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_vecka)_cy",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack vecka) CY",
       "display_name": "Antal utförda remisser (ack vecka) CY",
@@ -757,8 +691,6 @@
     {
       "id": "Antal utförda remisser (ack vecka) CY-1",
       "fact_table": "default",
-      "malloy_name": "antal_utförda_remisser_(ack_vecka)_cy_1",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Antal utförda remisser (ack vecka) CY-1",
       "display_name": "Antal utförda remisser (ack vecka) CY-1",
@@ -774,8 +706,6 @@
     {
       "id": "Medeltid Undersökningsslut till signering (ej akut)",
       "fact_table": "default",
-      "malloy_name": "medeltid_undersökningsslut_till_signering_(ej_akut)",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Medeltid Undersökningsslut till signering (ej akut)",
       "display_name": "Medeltid Undersökningsslut till signering (ej akut)",
@@ -790,8 +720,6 @@
     {
       "id": "Medeltid registrering till signering",
       "fact_table": "default",
-      "malloy_name": "medeltid_registrering_till_signering",
-      "physical_expr": "registrering_till_signering.avg()",
       "sql_expr": "AVG(...)",
       "caption": "Medeltid registrering till signering",
       "display_name": "Medeltid registrering till signering",
@@ -805,8 +733,6 @@
     {
       "id": "Medeltid undersökningsslut till signering",
       "fact_table": "default",
-      "malloy_name": "medeltid_undersökningsslut_till_signering",
-      "physical_expr": "undersökningsslut_till_signering.avg()",
       "sql_expr": "AVG(...)",
       "caption": "Medeltid undersökningsslut till signering",
       "display_name": "Medeltid undersökningsslut till signering",
@@ -820,8 +746,6 @@
     {
       "id": "Median beställning till undersökning",
       "fact_table": "default",
-      "malloy_name": "median_beställning_till_undersökning",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Median beställning till undersökning",
       "display_name": "Median beställning till undersökning",
@@ -836,8 +760,6 @@
     {
       "id": "Median beställning till undersökning (Akut & timmar)",
       "fact_table": "default",
-      "malloy_name": "median_beställning_till_undersökning_(akut_&_timmar)",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Median beställning till undersökning (Akut & timmar)",
       "display_name": "Median beställning till undersökning (Akut & timmar)",
@@ -852,8 +774,6 @@
     {
       "id": "Median beställning till undersökning (Akut)",
       "fact_table": "default",
-      "malloy_name": "median_beställning_till_undersökning_(akut)",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Median beställning till undersökning (Akut)",
       "display_name": "Median beställning till undersökning (Akut)",
@@ -868,8 +788,6 @@
     {
       "id": "Referens DVT remiss",
       "fact_table": "default",
-      "malloy_name": "referens_dvt_remiss",
-      "physical_expr": "0.8",
       "sql_expr": "0.8",
       "caption": "Referens DVT remiss",
       "display_name": "Referens DVT remiss",
@@ -883,8 +801,6 @@
     {
       "id": "Tid inom 4 veckor från skickad remiss",
       "fact_table": "default",
-      "malloy_name": "tid_inom_4_veckor_från_skickad_remiss",
-      "physical_expr": "antal_undersökningar { where: remiss_till_bokning <= '28' }",
       "sql_expr": "SUM(1)",
       "caption": "Tid inom 4 veckor från skickad remiss",
       "display_name": "Tid inom 4 veckor från skickad remiss",

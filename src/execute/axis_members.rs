@@ -599,7 +599,6 @@ mod tests {
     fn date_dim_with_levels() -> crate::engine::model::DimensionDef {
         crate::engine::model::DimensionDef {
             id: "Date".into(),
-            semantic_name: "date".into(),
             physical_field: "full_date".into(),
             table_name: Some("date_dim".into()),
             shared: false,

@@ -4,7 +4,6 @@
   "source_name": "sales",
   "table_name": "sales",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "db_path": "data/sales.db",
   "fact_tables": [
     {
@@ -96,7 +95,6 @@
   "dimensions": [
     {
       "id": "Customer",
-      "malloy_name": "customer",
       "physical_field": "customer.address_line_1",
       "caption": "Customer",
       "description": "",
@@ -111,7 +109,6 @@
     },
     {
       "id": "Date",
-      "malloy_name": "date",
       "physical_field": "date.date",
       "caption": "Date",
       "description": "",
@@ -126,7 +123,6 @@
     },
     {
       "id": "Metric",
-      "malloy_name": "metric",
       "physical_field": "metric.name",
       "caption": "Metric",
       "description": "",
@@ -141,7 +137,6 @@
     },
     {
       "id": "Product",
-      "malloy_name": "product",
       "physical_field": "product.brand",
       "caption": "Product",
       "description": "",
@@ -156,7 +151,6 @@
     },
     {
       "id": "Promotion",
-      "malloy_name": "promotion",
       "physical_field": "promotion.promotion",
       "caption": "Promotion",
       "description": "",
@@ -171,7 +165,6 @@
     },
     {
       "id": "Store",
-      "malloy_name": "store",
       "physical_field": "store.address_line_1",
       "caption": "Store",
       "description": "",
@@ -186,7 +179,6 @@
     },
     {
       "id": "Time Intelligence",
-      "malloy_name": "time_intelligence",
       "physical_field": "time_intelligence.name",
       "caption": "Time Intelligence",
       "description": "",
@@ -201,7 +193,6 @@
     },
     {
       "id": "Info",
-      "malloy_name": "info",
       "physical_field": "info.label",
       "caption": "Info",
       "description": "",
@@ -219,8 +210,6 @@
     {
       "id": "Cost",
       "fact_table": "default",
-      "malloy_name": "cost",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Cost",
       "display_name": "Cost",
@@ -235,8 +224,6 @@
     {
       "id": "Margin",
       "fact_table": "default",
-      "malloy_name": "margin",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Margin",
       "display_name": "Margin",
@@ -251,8 +238,6 @@
     {
       "id": "Sales Amount",
       "fact_table": "default",
-      "malloy_name": "sales_amount",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Sales Amount",
       "display_name": "Sales Amount",
@@ -267,8 +252,6 @@
     {
       "id": "Sales Quantity",
       "fact_table": "default",
-      "malloy_name": "sales_quantity",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Sales Quantity",
       "display_name": "Sales Quantity",
@@ -283,8 +266,6 @@
     {
       "id": "Cylinder",
       "fact_table": "default",
-      "malloy_name": "cylinder",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Cylinder",
       "display_name": "Cylinder",
@@ -298,8 +279,6 @@
     {
       "id": "Faces",
       "fact_table": "default",
-      "malloy_name": "faces",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Faces",
       "display_name": "Faces",
@@ -313,8 +292,6 @@
     {
       "id": "Five Bars Colored",
       "fact_table": "default",
-      "malloy_name": "five_bars_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Five Bars Colored",
       "display_name": "Five Bars Colored",
@@ -328,8 +305,6 @@
     {
       "id": "Five Boxes Colored",
       "fact_table": "default",
-      "malloy_name": "five_boxes_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Five Boxes Colored",
       "display_name": "Five Boxes Colored",
@@ -343,8 +318,6 @@
     {
       "id": "Gauge",
       "fact_table": "default",
-      "malloy_name": "gauge",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Gauge",
       "display_name": "Gauge",
@@ -358,8 +331,6 @@
     {
       "id": "Gauge - Ascending",
       "fact_table": "default",
-      "malloy_name": "gauge___ascending",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Gauge - Ascending",
       "display_name": "Gauge - Ascending",
@@ -373,8 +344,6 @@
     {
       "id": "Gauge - Descending",
       "fact_table": "default",
-      "malloy_name": "gauge___descending",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Gauge - Descending",
       "display_name": "Gauge - Descending",
@@ -388,8 +357,6 @@
     {
       "id": "Reversed Gauge",
       "fact_table": "default",
-      "malloy_name": "reversed_gauge",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Reversed Gauge",
       "display_name": "Reversed Gauge",
@@ -403,8 +370,6 @@
     {
       "id": "Reversed status arrow",
       "fact_table": "default",
-      "malloy_name": "reversed_status_arrow",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Reversed status arrow",
       "display_name": "Reversed status arrow",
@@ -418,8 +383,6 @@
     {
       "id": "Road Signs",
       "fact_table": "default",
-      "malloy_name": "road_signs",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Road Signs",
       "display_name": "Road Signs",
@@ -433,8 +396,6 @@
     {
       "id": "Shapes",
       "fact_table": "default",
-      "malloy_name": "shapes",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Shapes",
       "display_name": "Shapes",
@@ -448,8 +409,6 @@
     {
       "id": "Smiley",
       "fact_table": "default",
-      "malloy_name": "smiley",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Smiley",
       "display_name": "Smiley",
@@ -463,8 +422,6 @@
     {
       "id": "Smiley Face",
       "fact_table": "default",
-      "malloy_name": "smiley_face",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Smiley Face",
       "display_name": "Smiley Face",
@@ -478,8 +435,6 @@
     {
       "id": "Standard Arrow",
       "fact_table": "default",
-      "malloy_name": "standard_arrow",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Standard Arrow",
       "display_name": "Standard Arrow",
@@ -493,8 +448,6 @@
     {
       "id": "Status Arrow",
       "fact_table": "default",
-      "malloy_name": "status_arrow",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Status Arrow",
       "display_name": "Status Arrow",
@@ -508,8 +461,6 @@
     {
       "id": "Status Arrow - Ascending",
       "fact_table": "default",
-      "malloy_name": "status_arrow___ascending",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Status Arrow - Ascending",
       "display_name": "Status Arrow - Ascending",
@@ -523,8 +474,6 @@
     {
       "id": "Status Arrow - Descending",
       "fact_table": "default",
-      "malloy_name": "status_arrow___descending",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Status Arrow - Descending",
       "display_name": "Status Arrow - Descending",
@@ -538,8 +487,6 @@
     {
       "id": "Thermometer",
       "fact_table": "default",
-      "malloy_name": "thermometer",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Thermometer",
       "display_name": "Thermometer",
@@ -553,8 +500,6 @@
     {
       "id": "Three Circles Colored",
       "fact_table": "default",
-      "malloy_name": "three_circles_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Three Circles Colored",
       "display_name": "Three Circles Colored",
@@ -568,8 +513,6 @@
     {
       "id": "Three Flags Colored",
       "fact_table": "default",
-      "malloy_name": "three_flags_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Three Flags Colored",
       "display_name": "Three Flags Colored",
@@ -583,8 +526,6 @@
     {
       "id": "Three Stars Colored",
       "fact_table": "default",
-      "malloy_name": "three_stars_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Three Stars Colored",
       "display_name": "Three Stars Colored",
@@ -598,8 +539,6 @@
     {
       "id": "Three Symbols Uncircled Colored",
       "fact_table": "default",
-      "malloy_name": "three_symbols_uncircled_colored",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Three Symbols Uncircled Colored",
       "display_name": "Three Symbols Uncircled Colored",
@@ -613,8 +552,6 @@
     {
       "id": "Three Triangles",
       "fact_table": "default",
-      "malloy_name": "three_triangles",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Three Triangles",
       "display_name": "Three Triangles",
@@ -628,8 +565,6 @@
     {
       "id": "Traffic Light",
       "fact_table": "default",
-      "malloy_name": "traffic_light",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Traffic Light",
       "display_name": "Traffic Light",
@@ -643,8 +578,6 @@
     {
       "id": "Traffic Light - Multiple",
       "fact_table": "default",
-      "malloy_name": "traffic_light___multiple",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Traffic Light - Multiple",
       "display_name": "Traffic Light - Multiple",
@@ -658,8 +591,6 @@
     {
       "id": "Traffic Light - Single",
       "fact_table": "default",
-      "malloy_name": "traffic_light___single",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Traffic Light - Single",
       "display_name": "Traffic Light - Single",
@@ -673,8 +604,6 @@
     {
       "id": "Variance Arrow",
       "fact_table": "default",
-      "malloy_name": "variance_arrow",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Variance Arrow",
       "display_name": "Variance Arrow",
@@ -688,8 +617,6 @@
     {
       "id": "Branch",
       "fact_table": "default",
-      "malloy_name": "branch",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Branch",
       "display_name": "Branch",
@@ -703,8 +630,6 @@
     {
       "id": "Build Number",
       "fact_table": "default",
-      "malloy_name": "build_number",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Build Number",
       "display_name": "Build Number",
@@ -718,8 +643,6 @@
     {
       "id": "Build Reason",
       "fact_table": "default",
-      "malloy_name": "build_reason",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Build Reason",
       "display_name": "Build Reason",
@@ -733,8 +656,6 @@
     {
       "id": "Commit ID",
       "fact_table": "default",
-      "malloy_name": "commit_id",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Commit ID",
       "display_name": "Commit ID",
@@ -748,8 +669,6 @@
     {
       "id": "Data Updated (UTC)",
       "fact_table": "default",
-      "malloy_name": "data_updated_(utc)",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Data Updated (UTC)",
       "display_name": "Data Updated (UTC)",
@@ -763,8 +682,6 @@
     {
       "id": "Dataset Version",
       "fact_table": "default",
-      "malloy_name": "dataset_version",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Dataset Version",
       "display_name": "Dataset Version",
@@ -778,8 +695,6 @@
     {
       "id": "Environment",
       "fact_table": "default",
-      "malloy_name": "environment",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Environment",
       "display_name": "Environment",
@@ -793,8 +708,6 @@
     {
       "id": "Hello World",
       "fact_table": "default",
-      "malloy_name": "hello_world",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Hello World",
       "display_name": "Hello World",

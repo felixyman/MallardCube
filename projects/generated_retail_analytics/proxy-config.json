@@ -4,7 +4,6 @@
   "source_name": "sales",
   "table_name": "sales",
   "dialect": "duckdb",
-  "malloy_model_file": "model.malloy",
   "db_path": "data/sales.db",
   "fact_tables": [
     {
@@ -73,7 +72,6 @@
   "dimensions": [
     {
       "id": "Dates",
-      "malloy_name": "dates",
       "physical_field": "dates.fulldate",
       "caption": "Dates",
       "description": "",
@@ -89,7 +87,6 @@
     },
     {
       "id": "Customers",
-      "malloy_name": "customers",
       "physical_field": "customers.age",
       "caption": "Customers",
       "description": "",
@@ -104,7 +101,6 @@
     },
     {
       "id": "Products",
-      "malloy_name": "products",
       "physical_field": "products.brand",
       "caption": "Products",
       "description": "",
@@ -119,7 +115,6 @@
     },
     {
       "id": "Promotions",
-      "malloy_name": "promotions",
       "physical_field": "promotions.budget",
       "caption": "Promotions",
       "description": "",
@@ -134,7 +129,6 @@
     },
     {
       "id": "Stores",
-      "malloy_name": "stores",
       "physical_field": "stores.annualrentcost",
       "caption": "Stores",
       "description": "",
@@ -152,8 +146,6 @@
     {
       "id": "Gross Margin %",
       "fact_table": "default",
-      "malloy_name": "gross_margin_%",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Gross Margin %",
       "display_name": "Gross Margin %",
@@ -168,8 +160,6 @@
     {
       "id": "Gross Profit",
       "fact_table": "default",
-      "malloy_name": "gross_profit",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Gross Profit",
       "display_name": "Gross Profit",
@@ -184,8 +174,6 @@
     {
       "id": "Total COGS",
       "fact_table": "default",
-      "malloy_name": "total_cogs",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Total COGS",
       "display_name": "Total COGS",
@@ -200,8 +188,6 @@
     {
       "id": "Total Revenue",
       "fact_table": "default",
-      "malloy_name": "total_revenue",
-      "physical_expr": "",
       "sql_expr": "null",
       "caption": "Total Revenue",
       "display_name": "Total Revenue",

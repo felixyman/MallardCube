@@ -164,8 +164,8 @@ Three distinct name types flow through the proxy. Never conflate them.
 | Concept | Config field | Runtime field | Example | Purpose |
 |---------|-------------|---------------|---------|---------|
 | Internal ID | `id` | `QueryPlan` fields, `plan_key` | `"Category"` | Stable key for routing, caching, lookups |
-| Semantic name | `malloy_name` (deprecated) | `semantic_name` | `"category"` | Legacy field, kept for backward compat |
 | Excel label | `caption` | `caption` | `"Category"` | Human-readable, appears in PivotTable |
+| DuckDB column | `physical_field` | `physical_field` | `"category"` | Physical column backing a dimension |
 
 See `docs/naming-contract.md` for full rules.
 
@@ -278,7 +278,6 @@ Every field in `proxy-config.json`, with descriptions and defaults.
 | `source_name` | string | required | Legacy source name (informational; no longer consumed by the runtime) |
 | `table_name` | string | required | DuckDB table name (single-fact mode) |
 | `dialect` | string | required | Backend dialect (`"duckdb"`) |
-| `malloy_model_file` | string | required | Deprecated — no longer consumed by the runtime |
 | `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with synthetic in-memory data |
 | `fact_tables` | array | `[]` | Fact table definitions (multi-fact mode) |
 | `relationships` | array | `[]` | Dimension-to-fact table relationship definitions |
@@ -303,7 +302,6 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `id` | string | required | Internal identifier for QueryPlan/plan_key |
-| `malloy_name` | string | required | Deprecated legacy field (no longer consumed) |
 | `physical_field` | string | required | DuckDB column name (may include `table.column` syntax) |
 | `caption` | string | required | Excel-visible label |
 | `description` | string | `""` | Human-readable description |
@@ -329,8 +327,6 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 |---|---|---|---|
 | `id` | string | required | Internal identifier for QueryPlan/plan_key |
 | `fact_table` | string\|null | `null` | Which fact table this measure belongs to (multi-fact mode). Required when `fact_tables` is non-empty |
-| `malloy_name` | string | required | Deprecated legacy field (no longer consumed) |
-| `physical_expr` | string | required | Deprecated legacy Malloy expression (no longer consumed) |
 | `sql_expr` | string | required | DuckDB SQL expression (e.g. `"SUM(revenue)"`) — the actual runtime path |
 | `caption` | string | required | Excel-visible measure name |
 | `display_name` | string | required | Longer Excel label |

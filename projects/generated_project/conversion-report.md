@@ -30,32 +30,32 @@
 | Måldatum_från | dw_fys Kalender_Måldatum | Måldatum |
 | FakturamottagareId | dw_fys D_Fakturamottagare | FakturamottagareId |
 
-## Simple measures (Malloy)
+## Simple measures
 
-| Measure | DAX | Malloy |
+| Measure | DAX | SQL |
 |---|---|---|
-| Andel signerade DVT Under två timmar |  DIVIDE(CALCULATE([Antal signerade DVT-remisser],'dw_fys F_Undersökning'[Beställning till signering]<=0.083333),[Antal signerade DVT-remisser]) | antal_signerade_dvt_remisser { where: beställning_till_signering <= '0.083333' } / antal_signerade_dvt_remisser |
-| Andel under fyra timmar |  DIVIDE([Antal remisser akuta inneliggande (Under fyra timmar)],[Antal remisser akuta inneliggande]) | antal_remisser_akuta_inneliggande_(under_fyra_timmar) / antal_remisser_akuta_inneliggande |
-| Antal bokade remisser | CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]="Tid") | antal_remisser { where: remisstatus = 'TID' } |
-| Antal obokade remisser | CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]="Ej tid") | antal_remisser { where: remisstatus = 'EJ TID' } |
-| Antal osignerade utförda undersökningar | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Signeringsstatus]="Osignerad",'dw_fys D_Remisskoder'[Undersökningsstatus]="Utförd") | antal_undersökningar { where: signeringsstatus = 'OSIGNERAD' } |
-| Antal patienter | DISTINCTCOUNT('dw_fys F_Undersökning'[PatientId]) | patientid.count(distinct true) |
-| Antal remisser | DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer]) | remissnummer.count(distinct true) |
-| Antal remisser akuta inneliggande |  CALCULATE(DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer]),'dw_fys F_Undersökning'[Flagga Akuten]=1) | remissnummer.count(distinct true) { where: flagga_akuten = '1' } |
-| Antal remisser akuta inneliggande (Under fyra timmar) |  CALCULATE([Antal remisser akuta inneliggande], 'dw_fys F_Undersökning'[Undersökningsslut till signering]<=0.1666667) | antal_remisser_akuta_inneliggande { where: undersökningsslut_till_signering <= '0.1666667' } |
-| Antal remisser i urval | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] ="Ja",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]<> BLANK()) | antal_remisser { where: akut = 'JA' } |
-| Antal remisser som väntat %3e30 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 30, 'dw_fys F_Undersökning'[Remiss till idag] <=60) | antal_obokade_remisser { where: remiss_till_idag > '30' } |
-| Antal remisser som väntat %3e60 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 60, 'dw_fys F_Undersökning'[Remiss till idag] <= 90) | antal_obokade_remisser { where: remiss_till_idag > '60' } |
-| Antal remisser som väntat %3e90 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 90) | antal_obokade_remisser { where: remiss_till_idag > '90' } |
-| Antal remissiser med tid inom 4 veckor | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28) | antal_undersökningar { where: remiss_till_bokning <= '28' } |
-| Antal saknade remisser i underlag | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] ="Ja",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]= BLANK()) | antal_remisser { where: akut = 'JA' } |
-| Antal undersökningar | COUNT('dw_fys F_Undersökning'[UndersökningId]) | undersökningid.count() |
-| Antal uteblivna remisser | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Utebliven]="Ja") | antal_remisser { where: utebliven = 'JA' } |
-| Antal utförda remisser | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Undersökningsstatus]="Utförd") | antal_remisser { where: undersökningsstatus = 'UTFÖRD' } |
-| Medeltid registrering till signering | AVERAGE('dw_fys F_Undersökning'[Registrering till signering]) | registrering_till_signering.avg() |
-| Medeltid undersökningsslut till signering | AVERAGE('dw_fys F_Undersökning'[Undersökningsslut till signering]) | undersökningsslut_till_signering.avg() |
+| Andel signerade DVT Under två timmar |  DIVIDE(CALCULATE([Antal signerade DVT-remisser],'dw_fys F_Undersökning'[Beställning till signering]<=0.083333),[Antal signerade DVT-remisser]) | SUM(1) |
+| Andel under fyra timmar |  DIVIDE([Antal remisser akuta inneliggande (Under fyra timmar)],[Antal remisser akuta inneliggande]) | SUM(1) |
+| Antal bokade remisser | CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]="Tid") | SUM(1) |
+| Antal obokade remisser | CALCULATE([Antal remisser],'dw_fys D_Remisstatus'[Remisstatus]="Ej tid") | SUM(1) |
+| Antal osignerade utförda undersökningar | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Signeringsstatus]="Osignerad",'dw_fys D_Remisskoder'[Undersökningsstatus]="Utförd") | SUM(1) |
+| Antal patienter | DISTINCTCOUNT('dw_fys F_Undersökning'[PatientId]) | COUNT(DISTINCT ...) |
+| Antal remisser | DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer]) | COUNT(DISTINCT ...) |
+| Antal remisser akuta inneliggande |  CALCULATE(DISTINCTCOUNT('dw_fys F_Undersökning'[Remissnummer]),'dw_fys F_Undersökning'[Flagga Akuten]=1) | COUNT(DISTINCT ...) |
+| Antal remisser akuta inneliggande (Under fyra timmar) |  CALCULATE([Antal remisser akuta inneliggande], 'dw_fys F_Undersökning'[Undersökningsslut till signering]<=0.1666667) | SUM(1) |
+| Antal remisser i urval | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] ="Ja",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]<> BLANK()) | SUM(1) |
+| Antal remisser som väntat %3e30 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 30, 'dw_fys F_Undersökning'[Remiss till idag] <=60) | SUM(1) |
+| Antal remisser som väntat %3e60 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 60, 'dw_fys F_Undersökning'[Remiss till idag] <= 90) | SUM(1) |
+| Antal remisser som väntat %3e90 dagar |  CALCULATE([Antal obokade remisser], 'dw_fys F_Undersökning'[Remiss till idag] > 90) | SUM(1) |
+| Antal remissiser med tid inom 4 veckor | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28) | SUM(1) |
+| Antal saknade remisser i underlag | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Akut] ="Ja",  'dw_fys F_Undersökning'[Beställning till undersökningsstart]= BLANK()) | SUM(1) |
+| Antal undersökningar | COUNT('dw_fys F_Undersökning'[UndersökningId]) | COUNT(...) |
+| Antal uteblivna remisser | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Utebliven]="Ja") | SUM(1) |
+| Antal utförda remisser | CALCULATE([Antal remisser],'dw_fys D_Remisskoder'[Undersökningsstatus]="Utförd") | SUM(1) |
+| Medeltid registrering till signering | AVERAGE('dw_fys F_Undersökning'[Registrering till signering]) | AVG(...) |
+| Medeltid undersökningsslut till signering | AVERAGE('dw_fys F_Undersökning'[Undersökningsslut till signering]) | AVG(...) |
 | Referens DVT remiss |  0.8 | 0.8 |
-| Tid inom 4 veckor från skickad remiss | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28)/[Antal undersökningar] | antal_undersökningar { where: remiss_till_bokning <= '28' } |
+| Tid inom 4 veckor från skickad remiss | CALCULATE([Antal undersökningar],'dw_fys F_Undersökning'[Remiss till bokning] <= 28)/[Antal undersökningar] | SUM(1) |
 
 ## SQL fallback measures
 
