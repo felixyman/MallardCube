@@ -186,7 +186,6 @@ Sample projects live at the repo root.
 | `projects/project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
 | `projects/project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
 | `projects/generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
-| `projects/generated_project/` | Large healthcare model (Swedish): ~50 dims, ~80 measures. Qualifies PARTIAL (roles without auth config). |
 | `projects/generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
 
 ## Converting SSAS Tabular models
@@ -255,7 +254,6 @@ For detailed documentation:
 - Structured fallback SQL with capability gates (6 generic DAX-lowering patterns)
 - Qualify migration readiness gate (READY / PARTIAL / BLOCKED)
 - Compatibility gate: discover + execute + replay validation
-- Three converted models proven (retail, healthcare, Contoso)
 - AutoModel: zero-config semantic model from any DuckDB file (`MALLARDCUBE_DB` / `auto-model` CLI)
 
 **Partial:**
