@@ -1,0 +1,79 @@
+---
+title: Installation
+description: Build and run MallardCube
+---
+
+## Prerequisites
+
+- A Rust toolchain, recent enough for the 2024 edition.
+- A DuckDB database file, for anything beyond the bundled sample.
+
+MallardCube is a single binary. Building it produces `target/release/mallard`.
+
+## Build
+
+```bash
+git clone git@github.com:felixyman/MallardCube.git
+cd MallardCube
+cargo build --release
+```
+
+The binary is `target/release/mallard`. Building takes a while on the first
+run because DuckDB is compiled in.
+
+## Run
+
+The `serve` subcommand starts the XMLA server. It is the default subcommand, so
+`mallard` and `mallard serve` are equivalent.
+
+```bash
+./target/release/mallard serve
+```
+
+The server listens on `127.0.0.1:8080` by default and exposes the XMLA
+endpoint at `/xmla`. To reach it from another machine, bind to all interfaces:
+
+```bash
+BIND_ADDRESS=0.0.0.0:8080 ./target/release/mallard serve
+```
+
+Requests are limited to 1 MB by default.
+
+## Choosing a data source
+
+Three ways to point the server at data:
+
+| Method | How |
+|---|---|
+| Sample project | Run with no configuration. Loads the bundled synthetic data. |
+| Model file | Set `PROXY_CONFIG` to a `proxy-config.json` path. |
+| AutoModel | Set `MALLARDCUBE_DB` to a DuckDB file. MallardCube detects a model at startup. |
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `PROXY_CONFIG` | Path to `proxy-config.json`. |
+| `MALLARDCUBE_DB` | DuckDB file for AutoModel detection. Overrides `PROXY_CONFIG`. |
+| `MALLARDCUBE_FACT` | Table name to use as the fact table when `MALLARDCUBE_DB` is set. |
+| `BIND_ADDRESS` | Bind address, for example `0.0.0.0:8080`. Default `127.0.0.1:8080`. |
+| `MALLARDCUBE_AGG_CACHE` | Path to the aggregation sidecar. Enables the rollup layer. |
+| `MALLARDCUBE_POOL_SIZE` | Number of pooled DuckDB connections. Default is the CPU count. |
+| `MALLARDCUBE_DEBUG` | Set to `1` to write a verbose request log to `debug-last-run.log`. |
+| `XMLA_TRACE` | Set to `1` to record every request and response as NDJSON in `xmla-trace.jsonl`. |
+
+## Command line
+
+| Command | Purpose |
+|---|---|
+| `serve` | Run the XMLA server (default). |
+| `auto-model <db>` | Write a `proxy-config.json` detected from a DuckDB file. |
+| `convert-tabular <src> <out>` | Convert a Tabular Editor export to a project. |
+| `qualify [config]` | Check a project for Excel readiness. |
+| `trace-replay [trace]` | Replay a recorded `xmla-trace.jsonl` through the pipeline. |
+| `load-replay [args]` | Replay a trace against a live server, with concurrency. |
+| `inventory <src>` | Build a report of a Tabular Editor export. |
+| `seed-generated-db` | Seed test databases. |
+| `seed-sql` | Print SQL that creates the demo fact tables. |
+
+Run `mallard --help` for the current list and flags.

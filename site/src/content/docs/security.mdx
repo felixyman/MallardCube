@@ -1,0 +1,140 @@
+---
+title: Security and roles
+description: Authentication and row-level security
+---
+
+MallardCube maps an authenticated identity to roles, and roles enforce
+row-level security (RLS) and object-level security (OLS). Authentication has
+two supported modes.
+
+Every path fails closed. When the identity cannot be established, the request
+is denied. There is no fallback to full access.
+
+## Authentication modes
+
+### Trusted reverse proxy
+
+The standard setup. An authenticating reverse proxy (IIS, nginx, Envoy,
+`oauth2-proxy`, Entra App Proxy) terminates TLS, authenticates the user, and
+sets a header with the user name. MallardCube reads that header:
+
+```jsonc
+{
+  "auth": {
+    "trusted_proxy": true,
+    "trusted_header": "X-User"
+  }
+}
+```
+
+A missing header denies the request. The header is only as trustworthy as the
+link that sets it, so the proxy must terminate TLS and overwrite the header
+instead of forwarding whatever the client sent.
+
+### OIDC
+
+For deployments without a reverse proxy, MallardCube can validate an OIDC
+access token itself. The client sends `Authorization: Bearer <token>`:
+
+```jsonc
+{
+  "auth": {
+    "oidc": {
+      "issuer": "https://login.microsoftonline.com/{tenant}/v2.0",
+      "audience": "<client-id>",
+      "user_claim": "preferred_username",
+      "group_claim": "groups"
+    }
+  }
+}
+```
+
+| Field | Purpose |
+|---|---|
+| `issuer` | Expected `iss` claim. |
+| `audience` | Expected `aud` claim, usually the client ID. |
+| `jwks_uri` | Optional. Signing keys URI. Discovered from the issuer when omitted. |
+| `user_claim` | Claim holding the user name. Default `sub`. |
+| `group_claim` | Optional. Claim holding group names, an array or a string. |
+| `role_claim` | Optional. Claim holding role names. |
+
+The token signature, issuer, audience, and expiry are checked against the
+issuer's signing keys. Signing keys are fetched once and cached.
+
+## Roles
+
+A role grants access and, optionally, restricts rows:
+
+```jsonc
+{
+  "roles": [
+    {
+      "name": "EU_Sales",
+      "model_permission": "read",
+      "members": [
+        { "member_name": "jsmith", "member_type": "user" },
+        { "member_name": "EU-Sales", "member_type": "group" }
+      ],
+      "table_permissions": [
+        {
+          "table": "sales_fact",
+          "filter_expression": "f.territory = 'EU'",
+          "metadata_permission": "read"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`members` matches against the authenticated user name or group list. A user
+belongs to every role whose member list matches.
+
+### Row-level security
+
+`filter_expression` is a DuckDB SQL fragment placed in the `WHERE` clause of
+every query that reads that table. Table aliases are fixed:
+
+| Table | Alias |
+|---|---|
+| Fact table | `f` |
+| Dimension table | `_<dimension_id>`, for example `_territory` |
+
+The fragment `"f.territory = 'EU'"` restricts the fact table. A fragment on a
+joined dimension, `"_territory.region = 'EU'"`, is cascaded through the
+relationship.
+
+### Object-level security
+
+`metadata_permission` with the value `none` hides the table from metadata and
+from queries. This is OLS at the table level.
+
+### Model permission
+
+`model_permission` sets the ceiling for a role:
+
+| Value | Effect |
+|---|---|
+| `read` | Subject to RLS and OLS. |
+| `administrator` | Bypasses RLS and OLS. |
+| `none` | Denied. |
+
+## How access resolves
+
+| Situation | Result |
+|---|---|
+| User matches several roles | Union of the roles, most permissive wins. |
+| User matches no role | Denied. |
+| No `auth` block in the config | Admin default, all data visible. |
+| Role has no `table_permission` for a table | Full access to that table. |
+| `model_permission` is `administrator` | Bypasses RLS and OLS. |
+| `metadata_permission` is `none` | Table hidden. |
+
+When `auth` is absent, the server runs in an admin default mode for local
+development. Roles are parsed but not enforced.
+
+## What is not enforced
+
+Column-level OLS, dynamic `USERNAME()` substitution in filters, and native
+Kerberos are not implemented. Authentication is terminated by the reverse proxy
+or by OIDC, as described above.

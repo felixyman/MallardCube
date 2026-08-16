@@ -1,0 +1,60 @@
+---
+title: Connect Excel
+description: Point Excel at MallardCube
+---
+
+Excel connects to MallardCube the same way it connects to Analysis Services,
+through the MSOLAP provider and the XMLA protocol.
+
+## Connect
+
+1. Start the server (see [Installation](/installation)).
+2. In Excel, open **Data > Get Data > From Database > From Analysis Services**.
+3. Enter the server name. Use `localhost` when Excel and the server are on the
+   same machine, or the host name when they are not.
+4. Leave the credentials at **Use Windows Authentication** for the sample
+   project. When you run behind an authenticating reverse proxy, Excel sends
+   Windows credentials to that proxy and the proxy passes the identity through.
+5. Pick the cube from the list and finish.
+
+The PivotTable field list then shows the dimensions and measures from your
+model. Filtering, drilldown, and crossjoin work through the normal Excel
+controls.
+
+## Repeat connections with an ODC file
+
+An Office Data Connection file stores the connection so users do not re-enter
+it. Save the following as `mallardcube.odc` and double-click it in Explorer:
+
+```xml
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="Content-Type" content="text/x-ms-odc; charset=utf-8"/>
+</head>
+<body>
+<o:ConnectionProperties>
+  <o:Name>MallardCube</o:Name>
+  <o:ConnectionString>Provider=MSOLAP;Data Source=http://localhost:8080/xmla;Initial Catalog=SALES_ANALYTICS</o:ConnectionString>
+  <o:CommandType>Cube</o:CommandType>
+  <o:CommandText>Sales</o:CommandText>
+</o:ConnectionProperties>
+</body>
+</html>
+```
+
+Replace `SALES_ANALYTICS` with your catalog and `Sales` with your cube name,
+both from `proxy-config.json`.
+
+## Cube formulas
+
+Excel can read individual cells with `CUBEMEMBER` and `CUBEVALUE` formulas,
+which is how report sheets pin specific numbers. These formulas send MDX to the
+same endpoint, so anything a PivotTable can express works in a formula too:
+
+```
+=CUBEVALUE("Connection Name","[Measures].[Revenue]","[Category].[Category].&[Electronics]")
+```
+
+The connection name is the name Excel shows in its connection list, not the
+catalog from the config.
