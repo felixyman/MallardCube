@@ -482,10 +482,10 @@ mod tests {
                 let source = source.clone();
                 handles.push(std::thread::spawn(move || {
                     with_project3(|| {
-                        let backend = source.checkout().expect("checkout backend");
+                        let backend = source.checkout();
                         crate::execute_builders::get_execute_cellset_response_with_backend(
                             mdx,
-                            &backend,
+                            backend.as_ref(),
                             &crate::proxy_project::project().model,
                         )
                     })

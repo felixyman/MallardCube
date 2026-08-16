@@ -1,19 +1,63 @@
-use duckdb::{Connection, params};
+use duckdb::{AccessMode, Config, Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct Backend {
     conn: Mutex<Connection>,
 }
 
+/// A fixed set of pre-opened, read-only DuckDB connections shared across
+/// requests. Opening a connection per request (the previous behaviour) pays the
+/// catalog-load cost on every request and, worse, serializes on DuckDB's file
+/// lock when several read-write connections open the same file concurrently.
+pub struct BackendPool {
+    backends: Arc<[Arc<Backend>]>,
+    next: AtomicUsize,
+}
+
+impl std::fmt::Debug for BackendPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BackendPool(len={})", self.backends.len())
+    }
+}
+
+impl Clone for BackendPool {
+    fn clone(&self) -> Self {
+        BackendPool {
+            backends: self.backends.clone(),
+            next: AtomicUsize::new(0),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BackendSource {
-    File { path: PathBuf },
-    Demo { path: PathBuf },
+    File { path: PathBuf, pool: BackendPool },
+    Demo { path: PathBuf, pool: BackendPool },
 }
 
 static DEMO_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of pooled connections. Overridable via `MALLARDCUBE_POOL_SIZE`; the
+/// proxy is read-only, so a handful of connections saturates most workloads.
+fn pool_size() -> usize {
+    std::env::var("MALLARDCUBE_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(1, 32)
+        })
+}
+
+fn open_read_only(path: &Path) -> Result<Connection, duckdb::Error> {
+    let config = Config::default().access_mode(AccessMode::ReadOnly)?;
+    Connection::open_with_flags(path, config)
+}
 
 // ---- backend trait ----
 
@@ -28,8 +72,10 @@ pub trait QueryBackend {
 }
 
 impl BackendSource {
-    pub fn file(path: impl Into<PathBuf>) -> Self {
-        Self::File { path: path.into() }
+    pub fn file(path: impl Into<PathBuf>) -> Result<Self, duckdb::Error> {
+        let path = path.into();
+        let pool = BackendPool::open(&path)?;
+        Ok(Self::File { path, pool })
     }
 
     pub fn demo() -> Result<Self, duckdb::Error> {
@@ -47,19 +93,45 @@ impl BackendSource {
             })?;
         }
         Backend::create_demo_file(&path)?;
-        Ok(Self::Demo { path })
+        let pool = BackendPool::open(&path)?;
+        Ok(Self::Demo { path, pool })
     }
 
-    pub fn checkout(&self) -> Result<Backend, duckdb::Error> {
+    /// Check out a pooled connection (round-robin). The pool is pre-opened, so
+    /// this never fails; concurrent requests are spread across connections,
+    /// each serialized by the per-connection mutex.
+    pub fn checkout(&self) -> Arc<Backend> {
         match self {
-            Self::File { path } | Self::Demo { path } => Backend::open(path),
+            Self::File { pool, .. } | Self::Demo { pool, .. } => pool.checkout(),
         }
     }
 
     pub fn path(&self) -> &Path {
         match self {
-            Self::File { path } | Self::Demo { path } => path,
+            Self::File { path, .. } | Self::Demo { path, .. } => path,
         }
+    }
+}
+
+impl BackendPool {
+    fn open(path: &Path) -> Result<Self, duckdb::Error> {
+        let size = pool_size();
+        let mut backends = Vec::with_capacity(size);
+        for _ in 0..size {
+            let conn = open_read_only(path)?;
+            backends.push(Arc::new(Backend {
+                conn: Mutex::new(conn),
+            }));
+        }
+        Ok(BackendPool {
+            backends: backends.into(),
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    fn checkout(&self) -> Arc<Backend> {
+        let i = self.next.fetch_add(1, Ordering::Relaxed) % self.backends.len();
+        self.backends[i].clone()
     }
 }
 
@@ -382,7 +454,7 @@ pub fn init_backend(db_path: Option<&str>) -> Result<(), duckdb::Error> {
 
 pub fn init_backend_source(db_path: Option<&str>) -> Result<BackendSource, duckdb::Error> {
     match db_path {
-        Some(path) => Ok(BackendSource::file(path)),
+        Some(path) => BackendSource::file(path),
         None => BackendSource::demo(),
     }
 }
@@ -786,12 +858,12 @@ mod tests {
         let expected = db.query_scalar("SELECT SUM(revenue) FROM sales_fact");
         drop(db);
 
-        let source = BackendSource::file(path.clone());
+        let source = BackendSource::file(path.clone()).expect("open pooled source");
         let mut handles = Vec::new();
         for _ in 0..8 {
             let source = source.clone();
             handles.push(std::thread::spawn(move || {
-                let backend = source.checkout().expect("checkout backend");
+                let backend = source.checkout();
                 backend.query_scalar("SELECT SUM(revenue) FROM sales_fact")
             }));
         }
@@ -807,14 +879,13 @@ mod tests {
         let source = BackendSource::demo().expect("create demo source");
         let expected = source
             .checkout()
-            .expect("checkout expected backend")
             .query_scalar("SELECT SUM(revenue) FROM sales_fact");
 
         let mut handles = Vec::new();
         for _ in 0..8 {
             let source = source.clone();
             handles.push(std::thread::spawn(move || {
-                let backend = source.checkout().expect("checkout backend");
+                let backend = source.checkout();
                 backend.query_count("SELECT COUNT(*) FROM sales_fact") as u64
                     + backend.query_scalar("SELECT SUM(revenue) FROM sales_fact") as u64
             }));

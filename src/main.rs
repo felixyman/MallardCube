@@ -99,13 +99,27 @@ enum Command {
 
 static DEBUG_LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
+/// Human-readable debug logging is opt-in (`MALLARDCUBE_DEBUG=1`). It writes
+/// full request/response bodies to `debug-last-run.log` and flushes per call,
+/// which serializes every request on the log file — a hard bottleneck under
+/// concurrency, so it must stay off by default.
+fn debug_log_enabled() -> bool {
+    std::env::var("MALLARDCUBE_DEBUG").is_ok_and(|v| v == "1")
+}
+
 fn init_debug_log() {
+    if !debug_log_enabled() {
+        return;
+    }
     let file =
         std::fs::File::create("debug-last-run.log").expect("failed to create debug-last-run.log");
     *DEBUG_LOG.lock().unwrap() = Some(file);
 }
 
 fn debug_write(text: &str) {
+    if !debug_log_enabled() {
+        return;
+    }
     if let Ok(mut guard) = DEBUG_LOG.lock()
         && let Some(ref mut file) = *guard
     {
@@ -414,13 +428,11 @@ async fn handle_xmla(
                 .map(|end| body_for_worker[after..after + end].to_string())
         });
         mallardcube::response::set_session_id(session_id);
-        let backend = backend_source
-            .checkout()
-            .expect("failed to checkout DuckDB backend");
+        let backend = backend_source.checkout();
         route_request(
             &request_for_worker,
             &body_for_worker,
-            &backend,
+            backend.as_ref(),
             &user_ctx,
             &cfg,
         )
