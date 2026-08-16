@@ -1,0 +1,224 @@
+---
+title: Model reference
+description: The proxy-config.json format
+---
+
+The model file `proxy-config.json` describes the cube. It maps tables and
+columns in DuckDB to the dimensions, measures, and roles that Excel sees. It is
+the only file a project requires.
+
+Here is a working model for a small sales database:
+
+```jsonc
+{
+  "catalog": "SALES_ANALYTICS",
+  "cube": "Sales",
+  "table_name": "sales_fact",
+  "dialect": "duckdb",
+  "db_path": "sales.db",
+
+  "dimensions": [
+    {
+      "id": "Category",
+      "physical_field": "category",
+      "caption": "Category",
+      "hierarchy_name": "Category",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Category",
+      "ordinal": 1,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50
+    }
+  ],
+
+  "measures": [
+    {
+      "id": "Revenue",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue",
+      "display_name": "Revenue (USD)",
+      "format_string": "#,##0.00",
+      "ordinal": 1,
+      "visible": true,
+      "measure_group_name": "Sales"
+    }
+  ]
+}
+```
+
+## Top-level fields
+
+| Field | Purpose |
+|---|---|
+| `catalog` | Name Excel shows as the database. Used in the ODC `Initial Catalog`. |
+| `cube` | Name Excel shows as the cube. |
+| `table_name` | The fact table in DuckDB. |
+| `dialect` | Set to `"duckdb"`. |
+| `db_path` | Path to the DuckDB file, relative to the config file. Omit to use the bundled sample data. |
+| `dimensions` | Array of dimension definitions. |
+| `measures` | Array of measure definitions. |
+| `relationships` | Optional. Joins between fact columns and dimension tables. |
+| `roles` | Optional. Security roles (see [Security and roles](/security)). |
+| `auth` | Optional. Authentication mode (see [Security and roles](/security)). |
+| `fact_tables` | Optional. Multiple fact tables. |
+| `time_intelligence` | Optional. Date dimension metadata for time functions. |
+
+## Dimensions
+
+A dimension is a column or table that groups rows. The minimal dimension is a
+single column on the fact table, as in the example above.
+
+Fields:
+
+| Field | Purpose |
+|---|---|
+| `id` | Internal identifier, unique, no spaces. Used in logs and caching. |
+| `physical_field` | The column this dimension reads. |
+| `caption` | Label shown in Excel. |
+| `hierarchy_name` | Hierarchy name in XMLA. Usually the same as the caption. |
+| `all_level_name` | Label of the "(All)" member. |
+| `leaf_level_name` | Label of the leaf level. |
+| `ordinal` | Sort order in the field list. |
+| `visible` | Whether Excel shows the dimension. |
+| `has_all` | Whether an "(All)" member exists. |
+| `cardinality_hint` | Approximate member count. Shown in metadata. |
+
+### Dimensions from a separate table
+
+When the dimension lives in its own table, add a relationship and a
+`physical_field` that names the dimension column. The `Date` dimension below is
+an example: the fact table stores `date_key`, and the levels come from
+`date_dim`.
+
+### Multi-level hierarchies
+
+A dimension with levels supports drilldown. Levels are listed in `hierarchy_levels`,
+coarsest first:
+
+```jsonc
+{
+  "id": "Date",
+  "physical_field": "full_date",
+  "caption": "Date",
+  "hierarchy_name": "Date",
+  "all_level_name": "(All)",
+  "leaf_level_name": "Date",
+  "ordinal": 5,
+  "visible": true,
+  "has_all": true,
+  "cardinality_hint": 5000,
+  "is_date_role": true,
+  "hierarchy_levels": [
+    { "name": "Year",    "column": "year",    "level_number": 0, "cardinality": 11 },
+    { "name": "Quarter", "column": "quarter", "level_number": 1, "cardinality": 44 },
+    { "name": "Month",   "column": "month",   "level_number": 2, "cardinality": 132 },
+    { "name": "Date",    "column": "full_date", "level_number": 3, "cardinality": 4018 }
+  ]
+}
+```
+
+Each level names the column in the dimension table that holds that level's
+value. `is_date_role: true` marks this dimension as the calendar used by
+time-intelligence measures.
+
+## Measures
+
+A measure is an aggregation over the fact table.
+
+| Field | Purpose |
+|---|---|
+| `id` | Internal identifier, unique. |
+| `sql_expr` | DuckDB expression, for example `SUM(revenue)` or `SUM(units)`. |
+| `caption` | Name shown in Excel. |
+| `display_name` | Optional longer label. |
+| `format_string` | Excel number format, for example `#,##0.00`. |
+| `ordinal` | Sort order in the measures list. |
+| `visible` | Whether Excel shows the measure. |
+| `measure_group_name` | Group label. Usually the fact table name. |
+
+`sql_expr` is the only runtime. There is no DAX or measure formula language:
+each measure is a SQL aggregate expression that DuckDB evaluates.
+
+### Time-intelligence measures
+
+A measure can filter by a date flag column for year-to-date or similar
+semantics:
+
+```jsonc
+{
+  "id": "RevenueYTD",
+  "sql_expr": "SUM(revenue)",
+  "caption": "Revenue YTD",
+  "format_string": "#,##0.00",
+  "ordinal": 3,
+  "visible": true,
+  "measure_group_name": "Sales",
+  "time_intelligence": {
+    "dimension_id": "Date",
+    "flag_column": "ytd_flag"
+  }
+}
+```
+
+`flag_column` is a boolean column in the date dimension table. The query adds a
+filter that keeps only rows whose flag is true. The `date_dim` table generated
+by AutoModel ships with `ytd_flag`, `qtd_flag`, `mtd_flag`, and
+`prior_year_ytd_flag` columns.
+
+## Relationships
+
+A relationship joins a fact column to a dimension table column:
+
+```jsonc
+{
+  "relationships": [
+    {
+      "fact_table": "default",
+      "fact_column": "date_key",
+      "dimension_id": "Date",
+      "dim_table": "date_dim",
+      "dim_column": "date_key"
+    }
+  ]
+}
+```
+
+`fact_table` is `"default"` for the single-fact case. The join becomes
+`sales_fact.date_key = date_dim.date_key` at query time.
+
+## Date dimension metadata
+
+The `time_intelligence` block tells the proxy which columns make up the date
+dimension:
+
+```jsonc
+{
+  "time_intelligence": {
+    "date_dimension": {
+      "dimension_id": "Date",
+      "table_name": "date_dim",
+      "date_key_column": "date_key",
+      "full_date_column": "full_date",
+      "flag_columns": {
+        "year_column": "year",
+        "quarter_column": "quarter",
+        "month_column": "month",
+        "ytd_flag_column": "ytd_flag",
+        "qtd_flag_column": "qtd_flag",
+        "mtd_flag_column": "mtd_flag"
+      }
+    }
+  }
+}
+```
+
+This block is required for time-intelligence measures and for date drilldown.
+
+## Multiple fact tables
+
+For models with more than one fact table, list them in `fact_tables` and scope
+each dimension and measure with a `fact_table` field. See the `projects/project4/`
+sample for a two-fact model.
+
+[Security and roles](/security) covers the `roles` and `auth` sections.

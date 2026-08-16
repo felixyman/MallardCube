@@ -1,0 +1,55 @@
+---
+title: Introduction
+description: Excel and XMLA frontend for DuckDB
+---
+
+# MallardCube
+
+MallardCube is a small HTTP server that makes a DuckDB database behave like a
+SQL Server Analysis Services cube. Excel connects to it as a data source and
+gets a working PivotTable over your data, including filtering, drilldown, and
+crossjoin.
+
+The entire query path is SQL. MallardCube parses the MDX that Excel sends,
+turns it into a DuckDB query, runs it, and returns the result as an XMLA
+cellset. There is no intermediate engine.
+
+## What you need
+
+- A DuckDB file with at least one fact table.
+- Rust, to build the binary.
+- Excel with the Analysis Services connector.
+
+## Quick start
+
+The bundled sample project loads synthetic data, so you can try MallardCube
+without a database of your own:
+
+```bash
+cargo run
+```
+
+The server starts at `http://127.0.0.1:8080/xmla`. In Excel, open
+**Data > Get Data > From Database > From Analysis Services**, enter
+`localhost` as the server, and accept the defaults. The `Sales` cube shows up
+in the PivotTable field list.
+
+To serve your own data, write a model file and point the server at it:
+
+```bash
+PROXY_CONFIG=/path/to/proxy-config.json BIND_ADDRESS=0.0.0.0:8080 cargo run
+```
+
+If you want to start before writing a model file, AutoModel can build one from
+your database:
+
+```bash
+MALLARDCUBE_DB=/path/to/data.duckdb cargo run
+```
+
+## Where to go next
+
+- [Installation](/installation) covers building, running, and the command line.
+- [Connect Excel](/connect-excel) covers the connection and the optional `.odc` file.
+- [Model reference](/model) explains the `proxy-config.json` format.
+- [AutoModel](/automodel) explains zero-config model detection.

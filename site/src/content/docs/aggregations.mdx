@@ -1,0 +1,68 @@
+---
+title: Aggregations
+description: Rollup tables for large fact tables
+---
+
+Every measure query MallardCube runs is an aggregation over the fact table.
+On a large fact table, a year drilldown still reads every row to compute a
+dozen values. The aggregation layer pre-computes rollup tables so those
+queries read a few thousand rows instead.
+
+## Enable
+
+Set `MALLARDCUBE_AGG_CACHE` to the path of a sidecar database:
+
+```bash
+MALLARDCUBE_AGG_CACHE=/var/cache/mallardcube/agg.duckdb \
+  PROXY_CONFIG=/path/to/proxy-config.json \
+  cargo run
+```
+
+On startup the server builds rollup tables into the sidecar, then attaches it
+read-only. The sidecar is a separate DuckDB file. MallardCube never writes to
+your database.
+
+## What gets rolled up
+
+For each multi-level dimension in the model, MallardCube builds one rollup per
+level. The sample `Date` dimension has Year, Quarter, and Month levels, so it
+produces:
+
+| Table | Grain |
+|---|---|
+| `agg_year` | year, plus each leaf dimension |
+| `agg_quarter` | year, quarter, plus each leaf dimension |
+| `agg_month` | year, quarter, month, plus each leaf dimension |
+
+Each rollup stores the pre-summed measures at that grain. A year drilldown then
+reads `agg_year` instead of scanning the fact table.
+
+## When a rollup is used
+
+A query uses a rollup when all of these hold:
+
+- The measure is an additive `SUM`.
+- The query groups at the rollup's grain or coarser.
+- Every filter is on a column the rollup contains.
+- The user has no row-level security filter.
+
+Everything else reads the fact table as usual. Queries for time-intelligence
+measures, leaf-level drilldown, or role-filtered users fall back to the fact.
+
+## How it stays correct
+
+Rollups are rebuilt when the source changes. The sidecar stores a stamp of the
+source file size and modified time, and skips the rebuild when the stamp
+matches. After every build, MallardCube checks that each rollup sums to the
+same total as the fact table. A mismatch discards the rollups and the server
+continues on the fact path.
+
+To force a rebuild, delete the sidecar file.
+
+## Limitations
+
+- Only `SUM` measures use rollups. `COUNT`, `MIN`, `MAX`, and expressions do not.
+- Row-level security disables rollups for the affected user, because a rollup
+  built from the full fact would otherwise leak rows.
+- The build scans the fact table once at startup. On a very large table the
+  first start takes a few seconds while the rollups are built.

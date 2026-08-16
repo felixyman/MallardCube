@@ -1,0 +1,61 @@
+---
+title: Migrate from SSAS
+description: Convert a Tabular model to MallardCube
+---
+
+MallardCube can convert an existing Analysis Services Tabular model into a
+DuckDB project. The source is a Tabular Editor export, either a `.bim` file or
+a TMDL folder.
+
+## Convert
+
+```bash
+mallard convert-tabular /path/to/tabular-export /path/to/output
+```
+
+The converter writes:
+
+| File | Purpose |
+|---|---|
+| `proxy-config.json` | The model. |
+| `schema.sql` | DuckDB tables for the fact and dimension data. |
+| `sql_fallback/` | SQL for measures that do not map to a simple aggregate. |
+| A report | What converted and what needs manual work. |
+
+`--dummy-rows` controls how many synthetic rows the schema is seeded with for
+local testing. The default is 10,000.
+
+## Check readiness
+
+The `qualify` command checks a converted project for Excel compatibility:
+
+```bash
+mallard qualify /path/to/output/proxy-config.json
+```
+
+The result is `READY`, `PARTIAL`, or `BLOCKED`. A `READY` project completes the
+Excel discovery handshake and executes queries with the expected shape.
+
+`inventory` lists what is in a Tabular export before converting:
+
+```bash
+mallard inventory /path/to/tabular-export
+```
+
+## Replay a captured session
+
+`XMLA_TRACE=1` records a real Excel session to `xmla-trace.jsonl`. Replay it
+against the converted project to check that the same requests return the same
+shapes:
+
+```bash
+mallard trace-replay xmla-trace.jsonl --project /path/to/output/proxy-config.json
+```
+
+## What converts
+
+Straightforward models convert fully: dimensions, measures with simple
+aggregates, relationships, and single-level or multi-level hierarchies.
+Composite DAX measures become SQL fallback files for the patterns the converter
+recognizes, and honest stubs for the ones it does not. Calculation groups and
+complex DAX need manual work.

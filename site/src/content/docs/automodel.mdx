@@ -1,0 +1,65 @@
+---
+title: AutoModel
+description: Zero-config model detection
+---
+
+AutoModel builds a `proxy-config.json` from a DuckDB file, so you can start
+before writing a model by hand. It picks a fact table, turns numeric columns
+into measures, and turns the rest into dimensions.
+
+## Run without a model file
+
+Set `MALLARDCUBE_DB` and the server detects the model at startup:
+
+```bash
+MALLARDCUBE_DB=/path/to/data.duckdb cargo run
+```
+
+The cube is named `AutoModel`. If detection picks the wrong fact table, override
+it:
+
+```bash
+MALLARDCUBE_DB=/path/to/data.duckdb MALLARDCUBE_FACT=orders cargo run
+```
+
+## Generate a model file
+
+To get a config you can edit, write it to a project directory instead of
+re-detecting on every start:
+
+```bash
+mallard auto-model /path/to/data.duckdb --output my-project/
+```
+
+This writes `my-project/proxy-config.json`. Run it the usual way:
+
+```bash
+PROXY_CONFIG=my-project/proxy-config.json cargo run
+```
+
+## What AutoModel detects
+
+| Data shape | Result |
+|---|---|
+| Largest table | The fact table. |
+| Numeric columns | Measures, as `SUM(<column>)`. |
+| String columns | Dimensions. |
+| Foreign key columns | Relationships to a dimension table. |
+| `DATE` columns | A `date_dim` table with Year, Quarter, Month, and Date levels. |
+
+AutoModel seeds a `date_dim` calendar table (2020 through 2030) with
+year-to-date, quarter-to-date, and month-to-date flag columns, so
+time-intelligence measures work without any setup on your side.
+
+## When to hand-write the model
+
+AutoModel is a starting point. Write the model yourself when you need any of
+the following:
+
+- Specific `sql_expr` beyond `SUM`, such as `SUM(revenue - cost)`.
+- Number formats and captions that differ from the column names.
+- Security roles with row filters.
+- More than one fact table.
+- A custom date range or calendar table.
+
+[Model reference](/model) covers the full config format.

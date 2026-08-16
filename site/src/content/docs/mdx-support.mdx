@@ -1,0 +1,58 @@
+---
+title: MDX support
+description: The MDX that MallardCube understands
+---
+
+MallardCube speaks MDX, the query language Excel uses for Analysis Services
+cubes. This page lists what works and what does not.
+
+## What Excel sends
+
+Excel PivotTables issue MDX `SELECT` statements. The shapes MallardCube handles:
+
+- Measures on columns or rows, for example `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]`.
+- Slicers in the `WHERE` clause, including level-qualified members such as
+  `[Date].[Date].[Year].&[2024]`.
+- Drilldown with `DrilldownLevel` and `DrilldownMember`.
+- Crossjoin of two dimensions with `CrossJoin`.
+- Multiple measures in one query.
+- Set functions `Order`, `Filter`, `TopCount`, `BottomCount`, and `TopPercent`.
+- Batched cube formulas, where several cells with different slicers arrive as
+  one query.
+
+DRILLTHROUGH is also supported, so double-clicking a cell returns the filtered
+source rows.
+
+## Time intelligence
+
+Measures can carry year-to-date, quarter-to-date, and month-to-date semantics
+through flag columns on the date dimension. See [Model reference](/model) for
+the `time_intelligence` field.
+
+## Known limitations
+
+- **No DAX.** Power BI is a DAX client; MallardCube is MDX only. Excel is the
+  supported client.
+- **No writeback.** MallardCube is read-only.
+- **No calculation groups or named sets.**
+- **Aggregations cover `SUM` measures only.** Other measures always scan the
+  fact table. See [Aggregations](/aggregations).
+- **DuckDB only.** Attached data sources such as Postgres, SQL Server, or S3
+  are not wired up.
+- **One model per server.** The server serves a single `proxy-config.json`.
+
+## Supported MDX, by feature
+
+| Feature | Status |
+|---|---|
+| PivotTable filtering, drilldown, crossjoin, collapse | Works |
+| Multi-level date hierarchy drilldown | Works |
+| Level-qualified slicers | Works |
+| Multiple measures | Works |
+| Set functions (`TopCount`, `Order`, `Filter`) | Works |
+| Batched `CUBEVALUE` with different slicers | Works |
+| DRILLTHROUGH | Works |
+| Time intelligence (`YTD`, `QTD`, `MTD`) | Works |
+| DAX queries | Not supported |
+| Writeback | Not supported |
+| Calculation groups | Not supported |

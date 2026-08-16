@@ -1,0 +1,67 @@
+---
+title: Deployment
+description: Running MallardCube in production
+---
+
+MallardCube is a single binary with no runtime dependencies. The two things to
+sort out for production are the reverse proxy and the data directory.
+
+## Reverse proxy
+
+Put an authenticating reverse proxy in front of the server. The proxy
+terminates TLS and handles authentication, then forwards to the local bind
+address.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name cube.example.com;
+
+    # TLS certificate configuration here.
+
+    location /xmla {
+        proxy_pass http://127.0.0.1:8080;
+
+        # Overwrite the header from the authenticated identity. Never forward a
+        # client-supplied header, or a client could claim any user name.
+        proxy_set_header X-User $remote_user;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Run the server bound to localhost only:
+
+```bash
+BIND_ADDRESS=127.0.0.1:8080 cargo run
+```
+
+TLS terminates at the proxy. MallardCube itself does not handle TLS.
+
+## Logs
+
+MallardCube writes to standard output and standard error. Set `MALLARDCUBE_DEBUG=1`
+to add a verbose request log at `debug-last-run.log`. Set `XMLA_TRACE=1` to
+record every request and response as NDJSON, which the `trace-replay` and
+`load-replay` commands can play back.
+
+## Performance
+
+A query's cost is a full scan of the fact table, so scale is mostly about
+storage and memory:
+
+- Enable [aggregations](/aggregations) for coarse pivots on large fact tables.
+- Keep the DuckDB file on fast local storage.
+- Set `MALLARDCUBE_POOL_SIZE` if you want a different number of connections
+  than the CPU count.
+
+The repository ships a benchmark harness in `scripts/bench.sh` that generates a
+large Parquet fact table and measures latency and throughput against a live
+server.
+
+## Containerization
+
+There is no official Docker image yet. For now, build the binary and copy it
+into a minimal image, for example based on `debian:bookworm-slim` or
+`alpine`. DuckDB is statically linked, so the binary has no shared library
+requirements.
