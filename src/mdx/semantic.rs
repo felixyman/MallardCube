@@ -5,7 +5,9 @@
 ///
 /// Classification is now driven by `ParsedMdx` — structural flags
 /// set by the nom parser — instead of bare `contains(...)` chains.
-use crate::mdx_parser::{CChildrenTarget, CalculatedMembersPat, DimRef, MemberRef, ParsedMdx};
+use crate::mdx_parser::{
+    AxisSetOp, CChildrenTarget, CalculatedMembersPat, DimRef, MemberRef, ParsedMdx,
+};
 
 pub fn is_dax(statement: &str) -> bool {
     let trimmed = statement.trim_start();
@@ -233,6 +235,8 @@ pub struct SemanticQuery {
     pub metadata_probe_properties: Vec<String>,
     /// Dimension member UName strings for MemberOnlyProbe (e.g. "[Category].[Category].&[Kategori A]").
     pub member_only_unames: Vec<String>,
+    /// Axis set function (TopCount/Order/Filter) to apply to the row set.
+    pub axis_set_op: Option<AxisSetOp>,
 }
 
 // ---- main classification entry point ----
@@ -340,6 +344,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             metadata_probe_targets: targets,
             metadata_probe_properties: props,
             member_only_unames: vec![],
+            axis_set_op: None,
         };
     }
 
@@ -468,6 +473,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         metadata_probe_targets: vec![],
         metadata_probe_properties: vec![],
         member_only_unames,
+        axis_set_op: parsed.axis_set_op.clone(),
     }
 }
 

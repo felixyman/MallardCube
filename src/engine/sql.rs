@@ -44,6 +44,7 @@ pub fn sql_for_query_plan_with_context(
             group_by,
             filters,
             group_level,
+            ..
         } => {
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
@@ -418,6 +419,7 @@ mod tests {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
             group_level: None,
+            set_op: None,
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -433,6 +435,7 @@ mod tests {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into(), "Region".into()],
             group_level: None,
+            set_op: None,
             filters: vec![],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -448,6 +451,7 @@ mod tests {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
             group_level: None,
+            set_op: None,
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
                 level: None,
@@ -588,6 +592,7 @@ mod tests {
                 measure: "Revenue".into(),
                 group_by: vec!["Product".into()],
                 group_level: None,
+                set_op: None,
                 filters: vec![],
             },
         );
@@ -719,6 +724,7 @@ mod tests {
                 measure: "Stock".into(),
                 group_by: vec!["Category".into()],
                 group_level: None,
+                set_op: None,
                 filters: vec![],
             },
         );
@@ -845,6 +851,7 @@ mod tests {
             group_by: vec!["Date".into()],
             filters: vec![],
             group_level: Some(0),
+            set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);
         assert!(
@@ -867,6 +874,7 @@ mod tests {
                 time_flag: None,
             }],
             group_level: Some(1),
+            set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);
         assert!(
@@ -887,6 +895,7 @@ mod tests {
             group_by: vec!["Date".into()],
             filters: vec![],
             group_level: None,
+            set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);
         assert!(

@@ -122,6 +122,7 @@ mod tests {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into(), "Region".into()],
             group_level: None,
+            set_op: None,
             filters: vec![],
         };
         assert_eq!(
@@ -136,6 +137,7 @@ mod tests {
             measure: "TotalSales".into(),
             group_by: vec!["Produktkategori".into()],
             group_level: None,
+            set_op: None,
             filters: vec![
                 TypedDimensionFilter {
                     dimension: "Region".into(),

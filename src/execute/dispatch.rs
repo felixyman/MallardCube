@@ -1934,6 +1934,50 @@ mod tests {
         });
     }
 
+    // Regression: axis set functions (TopCount/Order/Filter) must actually
+    // transform the row set instead of being ignored.
+    #[test]
+    fn topcount_returns_top_n_sorted_by_measure() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT TopCount([Category].[Category].Members, 3, [Measures].[Revenue]) ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            );
+            assert_eq!(
+                cell_values(&xml),
+                vec![28_502_160.0, 27_702_858.0, 27_242_512.0],
+                "top 3 categories by revenue, descending"
+            );
+        });
+    }
+
+    #[test]
+    fn order_by_measure_sorts_rows() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT Order([Category].[Category].Members, [Measures].[Revenue], DESC) ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 20, "all 20 categories");
+            assert_eq!(values[0], 28_502_160.0, "first is the max");
+            assert_eq!(values[19], 24_440_800.0, "last is the min");
+        });
+    }
+
+    #[test]
+    fn filter_by_measure_keeps_matching_rows() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT Filter([Category].[Category].Members, [Measures].[Revenue] > 26000000) ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            );
+            let values = cell_values(&xml);
+            assert!(!values.is_empty(), "some categories exceed 26M");
+            assert!(
+                values.iter().all(|v| *v > 26_000_000.0),
+                "all rows must exceed the filter threshold: {values:?}"
+            );
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {

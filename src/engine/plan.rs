@@ -4,6 +4,7 @@ use crate::engine::model::{
     effective_table_filter,
 };
 use crate::engine::sql::sql_for_query_plan_with_context;
+use crate::mdx_parser::{AxisSetOp, CmpOp};
 /// Backend-neutral query plan.
 ///
 /// Describes what to compute, not how to format the XML response.
@@ -64,6 +65,8 @@ pub enum QueryPlan {
         /// The SQL emitter uses the level's `column` instead of the dimension's
         /// `physical_field`.  None = use the leaf physical_field.
         group_level: Option<usize>,
+        /// Axis set function (TopCount/Order/Filter) applied to the grouped rows.
+        set_op: Option<AxisSetOp>,
     },
 
     /// Multiple measures on the SELECT axis with no row dimension (e.g. batched
@@ -141,6 +144,43 @@ fn filters_with_time_flag(
         });
     }
     result
+}
+
+/// Apply an axis set function (TopCount/Order/Filter) to the grouped rows.
+fn apply_set_op(rows: &mut Vec<(String, f64)>, op: &Option<AxisSetOp>) {
+    let Some(op) = op else { return };
+    match op {
+        AxisSetOp::TopCount { n, desc } => {
+            sort_by_value(rows, *desc);
+            rows.truncate(*n);
+        }
+        AxisSetOp::TopPercent { p } => {
+            let n = ((rows.len() as f64) * (*p / 100.0)).ceil() as usize;
+            sort_by_value(rows, true);
+            rows.truncate(n);
+        }
+        AxisSetOp::Order { desc } => sort_by_value(rows, *desc),
+        AxisSetOp::Filter { op, value } => {
+            rows.retain(|(_, v)| match op {
+                CmpOp::Gt => *v > *value,
+                CmpOp::Ge => *v >= *value,
+                CmpOp::Lt => *v < *value,
+                CmpOp::Le => *v <= *value,
+                CmpOp::Eq => (*v - *value).abs() < 1e-9,
+                CmpOp::Ne => (*v - *value).abs() >= 1e-9,
+            });
+        }
+    }
+}
+
+fn sort_by_value(rows: &mut [(String, f64)], desc: bool) {
+    rows.sort_by(|a, b| {
+        if desc {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
 }
 
 /// Resolve an MDX-axis string to a model dimension ID, falling back
@@ -358,6 +398,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                             &typed_filters(&query.filters),
                         ),
                         group_level: query.drilldown_level,
+                        set_op: query.axis_set_op.clone(),
                     }
                 }
             } else {
@@ -366,6 +407,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                     group_by,
                     filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
                     group_level: query.drilldown_level,
+                    set_op: query.axis_set_op.clone(),
                 }
             }
         }
@@ -402,11 +444,15 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     }
     match plan {
         QueryPlan::Total { .. } => QueryResult::Scalar(backend.query_scalar(sql)),
-        QueryPlan::GroupBy { group_by, .. } => {
+        QueryPlan::GroupBy {
+            group_by, set_op, ..
+        } => {
             if group_by.len() >= 2 {
                 QueryResult::Pairs(backend.query_pairs(sql))
             } else {
-                QueryResult::Grouped(backend.query_grouped_1d(sql))
+                let mut rows = backend.query_grouped_1d(sql);
+                apply_set_op(&mut rows, set_op);
+                QueryResult::Grouped(rows)
             }
         }
         QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
@@ -461,6 +507,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
                 group_by: group_by.clone(),
                 filters: filters_with_time_flag(model, measure, filters),
                 group_level: *group_level,
+                set_op: None,
             };
             match execute_plan_with_backend_and_context(
                 &per_measure_plan,
@@ -577,12 +624,15 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
 
         QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
 
-        QueryPlan::GroupBy { group_by, .. } => {
+        QueryPlan::GroupBy {
+            group_by, set_op, ..
+        } => {
             if group_by.len() >= 2 {
                 let pairs = backend.query_pairs(&sql);
                 QueryResult::Pairs(pairs)
             } else {
-                let rows = backend.query_grouped_1d(&sql);
+                let mut rows = backend.query_grouped_1d(&sql);
+                apply_set_op(&mut rows, set_op);
                 QueryResult::Grouped(rows)
             }
         }
