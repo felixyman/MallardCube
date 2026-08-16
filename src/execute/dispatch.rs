@@ -1978,6 +1978,27 @@ mod tests {
         });
     }
 
+    // Regression: two row fields × two measures (a 3-axis cellset). The proxy
+    // must emit one cell per (pair, measure), not empty.
+    #[test]
+    fn multi_measure_two_dim_crossjoin_returns_cells() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT CrossJoin([Category].[Category].Members, [Territory].[Territory].Members) ON ROWS, {[Measures].[Revenue],[Measures].[Units]} ON COLUMNS FROM [Sales]",
+            );
+            let values = cell_values(&xml);
+            // Demo data has 40 distinct (category, territory) pairs; 2 measures.
+            assert_eq!(values.len(), 80, "40 pairs × 2 measures");
+            let revenue: f64 = values.iter().step_by(2).sum();
+            let units: f64 = values.iter().skip(1).step_by(2).sum();
+            assert!(
+                (revenue - 521_586_767.0).abs() < 1.0,
+                "revenue column: {revenue}"
+            );
+            assert!((units - 4_931_640.0).abs() < 1.0, "units column: {units}");
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {

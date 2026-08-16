@@ -106,6 +106,9 @@ pub enum QueryResult {
     Multi(Vec<f64>),
     /// One entry per group; `Vec<f64>` is one value per measure, in order.
     MultiGrouped(Vec<(String, Vec<f64>)>),
+    /// Two-dimensional: one entry per (dim0, dim1) pair; `Vec<f64>` is one
+    /// value per measure, in order.
+    MultiGrouped2(Vec<(String, String, Vec<f64>)>),
     Empty,
 }
 
@@ -500,6 +503,56 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         group_level,
     } = plan
     {
+        // Two-dimensional cross-join: N measures × (dim0, dim1) pairs.
+        if group_by.len() >= 2 {
+            let mut per_measure: Vec<Vec<(String, String, f64)>> =
+                Vec::with_capacity(measures.len());
+            for measure in measures {
+                let per_measure_plan = QueryPlan::GroupBy {
+                    measure: measure.clone(),
+                    group_by: group_by.clone(),
+                    filters: filters_with_time_flag(model, measure, filters),
+                    group_level: *group_level,
+                    set_op: None,
+                };
+                match execute_plan_with_backend_and_context(
+                    &per_measure_plan,
+                    model,
+                    backend,
+                    user,
+                    config,
+                ) {
+                    QueryResult::Pairs(rows) => per_measure.push(rows),
+                    _ => per_measure.push(Vec::new()),
+                }
+            }
+
+            let mut order: Vec<(String, String)> = Vec::new();
+            let mut columns: Vec<std::collections::HashMap<(String, String), f64>> =
+                vec![std::collections::HashMap::new(); measures.len()];
+            for (mi, rows) in per_measure.iter().enumerate() {
+                for (a, b, value) in rows {
+                    let key = (a.clone(), b.clone());
+                    if !order.contains(&key) {
+                        order.push(key.clone());
+                    }
+                    columns[mi].insert(key, *value);
+                }
+            }
+            order.sort();
+            let merged: Vec<(String, String, Vec<f64>)> = order
+                .iter()
+                .map(|(a, b)| {
+                    let vals = columns
+                        .iter()
+                        .map(|col| col.get(&(a.clone(), b.clone())).copied().unwrap_or(0.0))
+                        .collect();
+                    (a.clone(), b.clone(), vals)
+                })
+                .collect();
+            return QueryResult::MultiGrouped2(merged);
+        }
+
         let mut per_measure: Vec<Vec<(String, f64)>> = Vec::with_capacity(measures.len());
         for measure in measures {
             let per_measure_plan = QueryPlan::GroupBy {

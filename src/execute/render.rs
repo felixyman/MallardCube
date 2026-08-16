@@ -451,6 +451,71 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
     )
 }
 
+/// Render a multi-measure × two-dimension cross-join (measures on Axis0, a
+/// (dim0, dim1) pair on Axis1). Cells are ordered row-major.
+fn build_multi_measure_crossjoin<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let merged = match result {
+        QueryResult::MultiGrouped2(rows) => rows.clone(),
+        _ => return empty_cellset(query, backend),
+    };
+    let project = crate::proxy_project::project();
+    let dims = &query.axis_dimensions;
+
+    let mut measure_members = Vec::new();
+    let mut measure_ids = Vec::new();
+    for name in &query.measures {
+        if let Some(m) = project.model.lookup_measure(name) {
+            measure_members.push(measures_member(&m.measure_unique_name(), &m.display_name));
+            measure_ids.push(m.id.clone());
+        }
+    }
+
+    let d0 = dims.first().map(|s| s.as_str()).unwrap_or("");
+    let d1 = dims.get(1).map(|s| s.as_str()).unwrap_or("");
+
+    let mut hierarchies = Vec::new();
+    for dim in dims {
+        hierarchies.push(hierarchy_for(dim, &query.dim_props));
+    }
+
+    let mut tuples = Vec::new();
+    for (a, b, _values) in &merged {
+        let m0 = leaf_member_for(d0, a, &query.dim_props);
+        let m1 = leaf_member_for(d1, b, &query.dim_props);
+        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+    }
+
+    let n_measures = measure_ids.len();
+    let mut cells = Vec::new();
+    for (pi, (_a, _b, values)) in merged.iter().enumerate() {
+        for (mi, measure_id) in measure_ids.iter().enumerate() {
+            let value = values.get(mi).copied().unwrap_or(0.0);
+            let ordinal = (pi * n_measures + mi) as u32;
+            cells.push(measurement_cell_for(ordinal, value, measure_id));
+        }
+    }
+
+    let axis1 = crate::cellset::AxisConfig {
+        name: "Axis1".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", measures_hierarchy(), measure_members),
+            axis1,
+            dims_only_slicer_axis_with_backend(query, backend),
+        ],
+        cells,
+        &query.cell_props,
+    )
+}
+
 pub(crate) fn build_slicer_all_and_measure<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
@@ -651,6 +716,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     }
     if matches!(result, QueryResult::MultiGrouped(_)) {
         return build_multi_measure_by_category(query, result, backend);
+    }
+    if matches!(result, QueryResult::MultiGrouped2(_)) {
+        return build_multi_measure_crossjoin(query, result, backend);
     }
     match query.kind {
         SemanticQueryKind::ChildrenCountForAll => build_cchildren_for_all(query, result, backend),
