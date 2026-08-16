@@ -265,10 +265,17 @@ async fn run_server() {
             std::env::var("MALLARDCUBE_AGG_CACHE").ok(),
             db_path.as_deref(),
         ) {
-            mallardcube::engine::aggregate::ensure_aggregations(db, &agg_cache)
-                .unwrap_or_else(|e| panic!("failed to build aggregations: {e}"));
-            println!("📊 Aggregations: {agg_cache}");
-            debug_write(&format!("Aggregations: {agg_cache}"));
+            match mallardcube::engine::aggregate::ensure_aggregations(db, &agg_cache, &p.model) {
+                Ok(()) => {
+                    println!("📊 Aggregations: {agg_cache}");
+                    debug_write(&format!("Aggregations: {agg_cache}"));
+                }
+                Err(e) => {
+                    // Serve without aggregations (queries fall back to the fact).
+                    eprintln!("⚠️  Aggregations disabled (build failed): {e}");
+                    debug_write(&format!("Aggregations disabled (build failed): {e}"));
+                }
+            }
         }
 
         let backend_source = match db_path {

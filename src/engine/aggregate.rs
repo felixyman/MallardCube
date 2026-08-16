@@ -41,7 +41,11 @@ pub struct Aggregation {
 static AGGREGATIONS: OnceLock<Vec<Aggregation>> = OnceLock::new();
 
 pub fn enable(aggs: Vec<Aggregation>) {
-    let _ = AGGREGATIONS.set(aggs);
+    // Routing is only active when a sidecar is configured (MALLARDCUBE_AGG_CACHE).
+    // Tests build rollups without that env var and must not flip global routing.
+    if cache_path().is_some() {
+        let _ = AGGREGATIONS.set(aggs);
+    }
 }
 
 pub fn aggregations() -> &'static [Aggregation] {
@@ -121,10 +125,19 @@ pub fn design_aggregations(model: &SemanticModel) -> Vec<Aggregation> {
     aggs
 }
 
+/// Bump this when the rollup layout changes, so a sidecar built by an older
+/// version is rebuilt rather than served stale.
+const AGG_SCHEMA_VERSION: &str = "1";
+
 /// Build the rollup tables into `agg_path` by scanning the user's `source_path`
-/// once. Idempotent: a stamp (source size + mtime) in the sidecar skips rebuilds.
-pub fn ensure_aggregations(source_path: &str, agg_path: &str) -> Result<(), duckdb::Error> {
-    let model = &crate::proxy_project::project().model;
+/// once. Idempotent: a stamp (source size + mtime + schema version) in the
+/// sidecar skips rebuilds. Rollups are validated against the fact before use;
+/// any mismatch returns `Err` (callers should then serve without aggregations).
+pub fn ensure_aggregations(
+    source_path: &str,
+    agg_path: &str,
+    model: &SemanticModel,
+) -> Result<(), duckdb::Error> {
     let aggs = design_aggregations(model);
 
     let stamp = source_stamp(source_path);
@@ -140,6 +153,7 @@ pub fn ensure_aggregations(source_path: &str, agg_path: &str) -> Result<(), duck
         conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};", table = agg.table))?;
         conn.execute_batch(&sql)?;
     }
+    validate_rollups(&conn, model, &aggs)?;
     conn.execute_batch("DETACH src;")?;
     write_stamp(&conn, &stamp)?;
     enable(aggs);
@@ -165,12 +179,20 @@ fn source_stamp(path: &str) -> (u64, u64) {
 }
 
 fn sidecar_current(conn: &Connection, stamp: &(u64, u64)) -> bool {
-    let Ok(meta) = conn.query_row("SELECT size, mtime FROM agg_meta LIMIT 1", [], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-    }) else {
+    let Ok(meta) = conn.query_row(
+        "SELECT size, mtime, version FROM agg_meta LIMIT 1",
+        [],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        },
+    ) else {
         return false;
     };
-    meta.0 as u64 == stamp.0 && meta.1 as u64 == stamp.1
+    meta.0 as u64 == stamp.0 && meta.1 as u64 == stamp.1 && meta.2 == AGG_SCHEMA_VERSION
 }
 
 fn table_exists(conn: &Connection, table: &str) -> bool {
@@ -183,11 +205,45 @@ fn table_exists(conn: &Connection, table: &str) -> bool {
 }
 
 fn write_stamp(conn: &Connection, stamp: &(u64, u64)) -> Result<(), duckdb::Error> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS agg_meta (size BIGINT, mtime BIGINT);")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agg_meta (size BIGINT, mtime BIGINT, version VARCHAR);",
+    )?;
     conn.execute_batch(&format!(
-        "DELETE FROM agg_meta; INSERT INTO agg_meta VALUES ({}, {});",
-        stamp.0, stamp.1
+        "DELETE FROM agg_meta; INSERT INTO agg_meta VALUES ({}, {}, '{}');",
+        stamp.0, stamp.1, AGG_SCHEMA_VERSION
     ))?;
+    Ok(())
+}
+
+/// Verify every rollup's measure sums match the source fact (relative tolerance
+/// 1e-6 for floating-point aggregation-order differences). A mismatch means the
+/// rollup is wrong (bad join, wrong fact, missing dimension) — never serve it.
+fn validate_rollups(
+    conn: &Connection,
+    model: &SemanticModel,
+    aggs: &[Aggregation],
+) -> Result<(), duckdb::Error> {
+    let fact = &model.fact_table(0).table_name;
+    for agg in aggs {
+        for base in agg.measure_columns.values() {
+            let fact_total: f64 =
+                conn.query_row(&format!("SELECT SUM({base}) FROM src.{fact}"), [], |r| {
+                    r.get(0)
+                })?;
+            let rollup_total: f64 = conn.query_row(
+                &format!("SELECT SUM({base}) FROM {table}", table = agg.table),
+                [],
+                |r| r.get(0),
+            )?;
+            let denom = fact_total.abs().max(rollup_total.abs()).max(1.0);
+            if (fact_total - rollup_total).abs() > denom * 1e-6 {
+                return Err(duckdb::Error::InvalidParameterName(format!(
+                    "aggregation validation failed: {}.{base} sum {rollup_total} != fact {fact_total}",
+                    agg.table
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -406,5 +462,72 @@ mod tests {
             filters: vec![],
         };
         assert!(agg_for_plan_with(&model, &aggs, &ytd).is_none());
+    }
+
+    #[test]
+    fn ensure_aggregations_builds_correct_rollups() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mallardcube-agg-src-{}.duckdb", std::process::id()));
+        let agg_path = dir.join(format!(
+            "mallardcube-agg-sidecar-{}.duckdb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&agg_path);
+
+        crate::backend::Backend::create_demo_file(&path).expect("create demo file");
+        let model = project3_model();
+
+        ensure_aggregations(path.to_str().unwrap(), agg_path.to_str().unwrap(), &model)
+            .expect("build aggregations");
+
+        let fact = crate::backend::Backend::open(&path).expect("open fact");
+        let fact_total = fact.query_scalar("SELECT SUM(revenue) FROM sales_fact");
+        drop(fact);
+
+        let sidecar = Connection::open(&agg_path).expect("open sidecar");
+        let rollup_total: f64 = sidecar
+            .query_row("SELECT SUM(revenue) FROM agg_year", [], |r| r.get(0))
+            .expect("rollup sum");
+        assert!(
+            (fact_total - rollup_total).abs() <= fact_total.abs().max(1.0) * 1e-6,
+            "rollup total {rollup_total} != fact total {fact_total}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&agg_path);
+    }
+
+    #[test]
+    fn validate_rollups_detects_mismatch() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mallardcube-agg-val-{}.duckdb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        crate::backend::Backend::create_demo_file(&path).expect("create demo file");
+        let model = project3_model();
+        let aggs = design_aggregations(&model);
+        let year = &aggs[0];
+
+        let conn = Connection::open_in_memory().expect("in-memory sidecar");
+        conn.execute_batch(&format!(
+            "ATTACH '{}' AS src (READ_ONLY);",
+            path.to_str().unwrap()
+        ))
+        .expect("attach source");
+
+        // A wrong rollup (all zeros) must fail validation.
+        conn.execute_batch("CREATE TABLE agg_year (year BIGINT, revenue DOUBLE, units DOUBLE)")
+            .expect("create wrong rollup");
+        conn.execute_batch("INSERT INTO agg_year VALUES (0, 0.0, 0.0)")
+            .expect("insert wrong rollup");
+        assert!(validate_rollups(&conn, &model, std::slice::from_ref(year)).is_err());
+
+        // The real rollup must pass.
+        conn.execute_batch("DROP TABLE agg_year").expect("drop");
+        conn.execute_batch(&build_sql(&model, year))
+            .expect("build correct rollup");
+        assert!(validate_rollups(&conn, &model, std::slice::from_ref(year)).is_ok());
+
+        let _ = std::fs::remove_file(&path);
     }
 }

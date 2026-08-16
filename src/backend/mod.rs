@@ -120,8 +120,12 @@ impl BackendPool {
         for _ in 0..size {
             let conn = open_read_only(path)?;
             // Aggregation sidecar: attached read-only so rollup queries share the
-            // pooled connection (built by main.rs before the pool opens).
-            if let Ok(agg) = std::env::var("MALLARDCUBE_AGG_CACHE") {
+            // pooled connection. Only attach when routing was actually enabled
+            // (build succeeded and MALLARDCUBE_AGG_CACHE is set); a failed build
+            // must degrade to the fact path, not fail the pool.
+            if !crate::engine::aggregate::aggregations().is_empty()
+                && let Ok(agg) = std::env::var("MALLARDCUBE_AGG_CACHE")
+            {
                 conn.execute_batch(&format!(
                     "ATTACH '{agg}' AS {} (READ_ONLY);",
                     crate::engine::aggregate::AGG_ALIAS
