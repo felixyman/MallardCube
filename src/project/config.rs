@@ -209,10 +209,40 @@ pub struct AuthConfig {
     pub trusted_proxy: bool,
     #[serde(default = "default_trusted_header")]
     pub trusted_header: String,
+    /// OIDC (JWT Bearer) validation. When set, requests must carry a valid
+    /// `Authorization: Bearer <token>` from this issuer; the token's claims map
+    /// to a user identity + groups that resolve against the configured roles.
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
 }
 
 fn default_trusted_header() -> String {
     "X-User".into()
+}
+
+/// OIDC / JWT Bearer authentication configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    /// Token issuer (`iss` claim), e.g. `https://login.microsoftonline.com/{tenant}/v2.0`.
+    pub issuer: String,
+    /// Expected audience (`aud` claim), usually the client ID.
+    pub audience: String,
+    /// JWKS URI. When omitted, discovered from `{issuer}/.well-known/openid-configuration`.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// Claim holding the user identity (default "sub").
+    #[serde(default = "default_user_claim")]
+    pub user_claim: String,
+    /// Optional claim holding group names (array or string).
+    #[serde(default)]
+    pub group_claim: Option<String>,
+    /// Optional claim holding role names (array or string).
+    #[serde(default)]
+    pub role_claim: Option<String>,
+}
+
+fn default_user_claim() -> String {
+    "sub".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
