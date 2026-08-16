@@ -40,15 +40,21 @@ TLS terminates at the proxy. MallardCube itself does not handle TLS.
 
 ## Docker
 
-A `Dockerfile` builds the binary and packages it in a minimal image:
+Published images are on GitHub Container Registry:
+
+```bash
+docker run -p 8080:8080 ghcr.io/felixyman/mallardcube:latest
+```
+
+To build the image yourself, a `Dockerfile` is in the repository root:
 
 ```bash
 docker build -t mallardcube .
 docker run -p 8080:8080 mallardcube
 ```
 
-The image includes the bundled sample project, so `docker run` alone serves the
-demo. To serve your own model, mount a config directory:
+The image includes the bundled sample project, so it serves the demo without a
+config. To serve your own model, mount a config directory:
 
 ```bash
 docker run -p 8080:8080 \
