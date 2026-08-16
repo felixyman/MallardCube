@@ -28,6 +28,14 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             format!("count|dim={}", dimension)
         }
 
+        QueryPlan::TupleSet { cells } => {
+            let m: Vec<String> = cells
+                .iter()
+                .map(|c| c.measure.clone() + &filter_suffix(&c.filters))
+                .collect();
+            format!("tupleset|{}", m.join(";"))
+        }
+
         QueryPlan::MultiMeasure { measures, filters } => {
             format!(
                 "multi|measures={}|{}",

@@ -1,9 +1,9 @@
 use crate::axis_members::{
     all_member_for_with_backend, cchildren_member, count_cell, dims_only_slicer_axis_with_backend,
     empty_member_list_axis, full_slicer_axis_with_backend, hierarchy_for, leaf_member_for,
-    leaf_members_from, measurement_cell_for, measurement_cell_for_query, measures_axis_for_query,
-    measures_hierarchy, measures_member, measures_total_member, member_list_axis, render_response,
-    row_dim, single_member_axis,
+    leaf_member_for_level, leaf_members_from, measurement_cell_for, measurement_cell_for_query,
+    measures_axis_for_query, measures_hierarchy, measures_member, measures_total_member,
+    member_list_axis, render_response, row_dim, single_member_axis,
 };
 use crate::backend::QueryBackend;
 use crate::cellset;
@@ -82,6 +82,75 @@ fn build_multi_measure<B: QueryBackend + ?Sized>(
             member_list_axis("Axis0", measures_hierarchy(), members),
             dims_only_slicer_axis_with_backend(query, backend),
         ],
+        cells,
+        &query.cell_props,
+    )
+}
+
+/// Render a set of arbitrary tuples on the axis (batched CUBEVALUE with
+/// different slicers). Each input tuple is `(measure, member slicers)` and
+/// produces one Axis0 tuple and one cell.
+fn build_tuple_set<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let values = match result {
+        QueryResult::Multi(v) => v.clone(),
+        _ => return empty_cellset(query, backend),
+    };
+    let project = crate::proxy_project::project();
+
+    let mut hierarchies = vec![measures_hierarchy()];
+    let mut seen_dims: Vec<String> = Vec::new();
+    let mut tuples = Vec::new();
+    let mut measure_ids: Vec<String> = Vec::new();
+
+    for t in &query.axis_tuples {
+        let mut members = Vec::new();
+        let measure_id = match &t.measure {
+            Some(name) => project.model.lookup_measure(name).map(|m| {
+                members.push(measures_member(&m.measure_unique_name(), &m.display_name));
+                m.id.clone()
+            }),
+            None => None,
+        };
+        measure_ids.push(measure_id.unwrap_or_default());
+        for f in &t.filters {
+            if let Some(dim) = project.model.dim_def_opt(&f.dimension) {
+                if !seen_dims.contains(&dim.id) {
+                    seen_dims.push(dim.id.clone());
+                    hierarchies.push(hierarchy_for(&dim.id, &query.dim_props));
+                }
+                for key in &f.members {
+                    members.push(leaf_member_for_level(
+                        &f.dimension,
+                        key,
+                        &query.dim_props,
+                        f.level.as_deref(),
+                    ));
+                }
+            }
+        }
+        tuples.push(crate::cellset::TupleConfig { members });
+    }
+
+    let mut cells = Vec::new();
+    for (i, value) in values.iter().enumerate() {
+        let measure_id = measure_ids.get(i).map(|s| s.as_str()).unwrap_or("");
+        if !measure_id.is_empty() {
+            cells.push(measurement_cell_for(i as u32, *value, measure_id));
+        }
+    }
+
+    let axis = crate::cellset::AxisConfig {
+        name: "Axis0".into(),
+        hierarchies,
+        tuples,
+    };
+
+    render_response(
+        vec![axis, dims_only_slicer_axis_with_backend(query, backend)],
         cells,
         &query.cell_props,
     )
@@ -741,6 +810,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         SemanticQueryKind::MeasureByCategory => build_measure_by_category(query, result, backend),
         SemanticQueryKind::DrilldownCategories => build_drilldown(query, result, backend),
         SemanticQueryKind::SlicerOnly => match result {
+            QueryResult::Multi(_) if query.axis_tuples.len() > 1 => {
+                build_tuple_set(query, result, backend)
+            }
             QueryResult::Multi(_) => build_multi_measure(query, result, backend),
             _ => build_slicer_only(query, result, backend),
         },

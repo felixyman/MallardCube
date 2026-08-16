@@ -1999,6 +1999,27 @@ mod tests {
         });
     }
 
+    // Regression: batched CUBEVALUE cells with different level slicers produce a
+    // multi-tuple query where each tuple has its own filter. Previously all
+    // tuples shared the first tuple's filter.
+    #[test]
+    fn batched_multi_tuple_slicers_return_per_tuple_values() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {([Measures].[Revenue],[Date].[Date].[Year].&[2024]),([Measures].[Revenue],[Date].[Date].[Month].&[6]),([Measures].[Revenue],[Date].[Date].[Quarter].&[2])} ON 0 FROM [Sales]",
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 3, "one cell per tuple");
+            assert_eq!(values[0], 46_223_804.0, "Year 2024");
+            assert!(
+                values.iter().all(|v| *v > 0.0),
+                "all tuples non-zero: {values:?}"
+            );
+            assert_ne!(values[0], values[1], "Month 6 must differ from Year 2024");
+            assert_ne!(values[0], values[2], "Quarter 2 must differ from Year 2024");
+        });
+    }
+
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {
