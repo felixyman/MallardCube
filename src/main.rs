@@ -336,6 +336,31 @@ fn build_user_context(headers: &HeaderMap, config: &ProxyConfig) -> UserContext 
     let Some(auth) = &config.auth else {
         return UserContext::admin_default();
     };
+    // OIDC (JWT Bearer): validate the token and resolve roles from its claims.
+    // Fails closed — no/missing/invalid token means deny-all.
+    if let Some(oidc) = &auth.oidc {
+        let token = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "));
+        return match token {
+            Some(t) => {
+                match mallardcube::auth::validate_and_resolve(t, oidc, mallardcube::auth::cache()) {
+                    Ok(identity) => {
+                        resolve_user_context(config, &identity.user_id, &identity.groups)
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  OIDC authentication failed: {e}");
+                        UserContext::deny_all()
+                    }
+                }
+            }
+            None => {
+                eprintln!("⚠️  OIDC configured but no Bearer token present — denying");
+                UserContext::deny_all()
+            }
+        };
+    }
     if auth.trusted_proxy {
         let header_name = HeaderName::from_bytes(auth.trusted_header.as_bytes())
             .unwrap_or_else(|_| HeaderName::from_static("x-user"));

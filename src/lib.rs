@@ -5,6 +5,7 @@
 ///   use crate::project::project as proxy_project;
 ///   use crate::mdx::semantic as mdx_semantic;
 ///   etc.
+pub mod auth;
 pub mod backend;
 pub mod engine;
 pub mod execute;
