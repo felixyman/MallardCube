@@ -1,3 +1,4 @@
+use crate::engine::aggregate::{self, AGG_ALIAS, Aggregation};
 use crate::engine::model::{SemanticModel, TableAccess, UserContext, effective_table_filter};
 /// SQL emitter — converts a `QueryPlan` into DuckDB SQL.
 ///
@@ -32,6 +33,11 @@ pub fn sql_for_query_plan_with_context(
 ) -> String {
     match plan {
         QueryPlan::Total { measure, filters } => {
+            if aggregation_safe(model, user, config)
+                && let Some(agg) = aggregate::agg_for_plan(model, plan)
+            {
+                return agg_total_sql(model, agg, measure, filters);
+            }
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
             let mut joined: HashSet<String> = HashSet::new();
@@ -46,6 +52,11 @@ pub fn sql_for_query_plan_with_context(
             group_level,
             ..
         } => {
+            if aggregation_safe(model, user, config)
+                && let Some(agg) = aggregate::agg_for_plan(model, plan)
+            {
+                return agg_groupby_sql(model, agg, measure, group_by, group_level, filters);
+            }
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
 
@@ -145,6 +156,106 @@ pub fn sql_for_query_plan_with_context(
 
 /// Return the role-filter SQL predicate for a table, or empty string when the
 /// user has unfettered access (`Full` or `Hidden` — gating handled in plan.rs).
+///
+/// Rollups are built from the full fact, so they cannot be used when any role
+/// filter is active — that would bypass RLS.
+fn aggregation_safe(model: &SemanticModel, user: &UserContext, config: &ProxyConfig) -> bool {
+    for ft in &model.fact_tables {
+        if matches!(
+            effective_table_filter(config, user, &ft.table_name),
+            TableAccess::Filtered(_)
+        ) {
+            return false;
+        }
+    }
+    for rel in &model.relationships {
+        if matches!(
+            effective_table_filter(config, user, &rel.dim_table),
+            TableAccess::Filtered(_)
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+/// WHERE clause for a rollup query: filters map to the rollup's direct columns.
+fn agg_where(model: &SemanticModel, agg: &Aggregation, filters: &[TypedDimensionFilter]) -> String {
+    let mut parts = Vec::new();
+    for f in filters {
+        let col = if f.dimension == agg.date_dim_id {
+            let lvl = aggregate::filter_level(model, &agg.date_dim_id, f);
+            agg.date_columns.get(lvl).cloned()
+        } else {
+            agg.leaf_columns.get(&f.dimension).cloned()
+        };
+        if let Some(col) = col {
+            let vals: Vec<String> = f
+                .members
+                .iter()
+                .map(|m| format!("'{}'", m.replace('\'', "''")))
+                .collect();
+            if !vals.is_empty() {
+                parts.push(format!("{} IN ({})", col, vals.join(", ")));
+            }
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", parts.join(" AND "))
+    }
+}
+
+fn agg_total_sql(
+    model: &SemanticModel,
+    agg: &Aggregation,
+    measure: &str,
+    filters: &[TypedDimensionFilter],
+) -> String {
+    let meas = model.meas_def(measure);
+    let wc = agg_where(model, agg, filters);
+    format!(
+        "SELECT {} FROM {}.{}{}",
+        meas.sql_expr, AGG_ALIAS, agg.table, wc
+    )
+}
+
+fn agg_groupby_sql(
+    model: &SemanticModel,
+    agg: &Aggregation,
+    measure: &str,
+    group_by: &[String],
+    group_level: &Option<usize>,
+    filters: &[TypedDimensionFilter],
+) -> String {
+    let meas = model.meas_def(measure);
+    let mut cols = Vec::new();
+    for dim in group_by {
+        let col = if *dim == agg.date_dim_id {
+            agg.date_columns.get(group_level.unwrap_or(0)).cloned()
+        } else {
+            agg.leaf_columns.get(dim).cloned()
+        };
+        cols.push(format!(
+            "CAST({} AS VARCHAR)",
+            col.unwrap_or_else(|| "1".into())
+        ));
+    }
+    let wc = agg_where(model, agg, filters);
+    let nums: Vec<String> = (1..=cols.len()).map(|i| i.to_string()).collect();
+    format!(
+        "SELECT {}, {} FROM {}.{} {} GROUP BY {} ORDER BY {}",
+        cols.join(", "),
+        meas.sql_expr,
+        AGG_ALIAS,
+        agg.table,
+        wc,
+        nums.join(", "),
+        nums.join(", "),
+    )
+}
+
 fn role_filter_predicate_for_table(
     config: &ProxyConfig,
     user: &UserContext,
