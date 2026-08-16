@@ -1,0 +1,13 @@
+services:
+  mallardcube:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      BIND_ADDRESS: 0.0.0.0:8080
+      PROXY_CONFIG: /config/proxy-config.json
+      MALLARDCUBE_AGG_CACHE: /cache/agg.duckdb
+    volumes:
+      - ./config:/config
+      - ./cache:/cache
+    restart: unless-stopped

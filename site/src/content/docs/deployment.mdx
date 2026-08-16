@@ -38,6 +38,35 @@ BIND_ADDRESS=127.0.0.1:8080 cargo run
 
 TLS terminates at the proxy. MallardCube itself does not handle TLS.
 
+## Docker
+
+A `Dockerfile` builds the binary and packages it in a minimal image:
+
+```bash
+docker build -t mallardcube .
+docker run -p 8080:8080 mallardcube
+```
+
+The image includes the bundled sample project, so `docker run` alone serves the
+demo. To serve your own model, mount a config directory:
+
+```bash
+docker run -p 8080:8080 \
+  -e PROXY_CONFIG=/config/proxy-config.json \
+  -v "$(pwd)/config:/config" \
+  mallardcube
+```
+
+A `docker-compose.yml` is included that wires up the config and aggregation
+cache directories. DuckDB is statically linked, so the runtime image has no
+shared library requirements.
+
+## Prebuilt binaries
+
+Releases publish binaries for Linux x86_64, macOS arm64, and Windows x86_64.
+Download the binary for your platform from the GitHub releases page and run it
+directly; there are no runtime dependencies.
+
 ## Logs
 
 MallardCube writes to standard output and standard error. Set `MALLARDCUBE_DEBUG=1`
@@ -58,10 +87,3 @@ storage and memory:
 The repository ships a benchmark harness in `scripts/bench.sh` that generates a
 large Parquet fact table and measures latency and throughput against a live
 server.
-
-## Containerization
-
-There is no official Docker image yet. For now, build the binary and copy it
-into a minimal image, for example based on `debian:bookworm-slim` or
-`alpine`. DuckDB is statically linked, so the binary has no shared library
-requirements.
