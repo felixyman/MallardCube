@@ -1,0 +1,15 @@
+target
+.git
+.github
+site
+.agents
+opencode.json
+*.db
+data/contoso
+data/retailanalytics*
+data/generated.db
+data/sales.db
+data/seed_generated.sql
+projects/generated_contoso
+projects/generated_project
+projects/generated_retail_analytics

@@ -5,10 +5,26 @@ description: Build and run MallardCube
 
 ## Prerequisites
 
-- A Rust toolchain, recent enough for the 2024 edition.
+- A Rust toolchain, recent enough for the 2024 edition, or Docker.
 - A DuckDB database file, for anything beyond the bundled sample.
 
 MallardCube is a single binary. Building it produces `target/release/mallard`.
+
+## Docker
+
+The quickest way to run it is the container image:
+
+```bash
+docker build -t mallardcube .
+docker run -p 8080:8080 mallardcube
+```
+
+See [Deployment](./deployment/) for mounting your own config and data.
+
+## Prebuilt binaries
+
+Releases publish binaries for Linux x86_64, macOS arm64, and Windows x86_64.
+Download one from the GitHub releases page and run it directly.
 
 ## Build
 
