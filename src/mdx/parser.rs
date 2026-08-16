@@ -279,6 +279,33 @@ fn find_select_tuple_members(input: &str) -> Vec<MemberRef> {
     results
 }
 
+/// Parse a `{ (tuple), (tuple), ... }` set of parenthesized tuples.
+fn select_set(input: &str) -> IResult<&str, Vec<Vec<MemberRef>>> {
+    let (input, _) = ws(input)?;
+    let (input, _) = char('{')(input)?;
+    let (input, _) = ws(input)?;
+    let (input, tuples) = separated_list0(delimited(ws, char(','), ws), paren_members)(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = char('}')(input)?;
+    Ok((input, tuples))
+}
+
+/// Find a set of parenthesized tuples on the SELECT axis, one `Vec<MemberRef>`
+/// per tuple. Batched CUBEVALUE cells with different slicers produce
+/// `SELECT {([M],[D].[L].&[k1]),([M],[D].[L2].&[k2])} ON 0`.
+fn find_select_tuples(input: &str) -> Vec<Vec<MemberRef>> {
+    let mut results = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = input[search_from..].find("SELECT {") {
+        let after_brace = &input[search_from + pos + "SELECT ".len()..];
+        if let Ok((_, tuples)) = select_set(after_brace) {
+            results.extend(tuples);
+        }
+        search_from += pos + "SELECT ".len();
+    }
+    results
+}
+
 // ---- axis detection ----
 
 /// Find the first non-Measures bracketed identifier in the MDX text.
@@ -634,6 +661,9 @@ pub struct ParsedMdx {
     pub where_members: Vec<MemberRef>,
     pub subquery_members: Vec<MemberRef>,
     pub select_members: Vec<MemberRef>,
+    /// Tuples on the SELECT axis, one `Vec<MemberRef>` per tuple (e.g. batched
+    /// CUBEVALUE with different slicers).
+    pub select_tuples: Vec<Vec<MemberRef>>,
     pub main_dim: DimRef,
     pub cchildren_target: CChildrenTarget,
     pub calculated_members_pat: CalculatedMembersPat,
@@ -815,6 +845,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
 
     let select_members = find_select_tuple_members(input);
+    let select_tuples = find_select_tuples(input);
 
     // All measures referenced in the SELECT clause, in order. A single cell
     // holds one measure; batched CUBEVALUE cells produce several.
@@ -843,6 +874,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         where_members,
         subquery_members,
         select_members,
+        select_tuples,
         main_dim: detect_axis_dimension(before_from),
         cchildren_target: detect_cchildren_target(input),
         calculated_members_pat: detect_calculated_members_pat(input),

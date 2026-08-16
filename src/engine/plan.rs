@@ -76,6 +76,13 @@ pub enum QueryPlan {
         filters: Vec<TypedDimensionFilter>,
     },
 
+    /// A set of arbitrary tuples on the axis — each tuple is a (measure, member
+    /// slicers) cell computed independently (e.g. batched CUBEVALUE cells with
+    /// different level slicers: `SELECT {([M],[D].[L].&[k1]),([M],[D2].[L2].&[k2])} ON 0`).
+    TupleSet {
+        cells: Vec<TupleCell>,
+    },
+
     /// Multiple measures cross-joined with one or more row dimensions (e.g. a
     /// PivotTable with several measures in Values and a dimension on Rows).
     MultiGroupBy {
@@ -95,6 +102,13 @@ pub enum QueryPlan {
 // ---------------------------------------------------------------------------
 // Query result (unchanged)
 // ---------------------------------------------------------------------------
+
+/// One tuple cell: an independent measure + slicer computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TupleCell {
+    pub measure: MeasId,
+    pub filters: Vec<TypedDimensionFilter>,
+}
 
 #[derive(Debug, Clone)]
 pub enum QueryResult {
@@ -269,6 +283,16 @@ pub fn plan_from_semantic_with_model_and_context(
                 }
             }
         }
+        QueryPlan::TupleSet { cells } => {
+            for cell in cells {
+                let fact_table = model.fact_table_for_measure(&cell.measure);
+                if effective_table_filter(config, user, &fact_table.table_name)
+                    == TableAccess::Hidden
+                {
+                    return QueryPlan::Empty;
+                }
+            }
+        }
         QueryPlan::Count { dimension } => {
             let table = model.dim_table_for_discovery(dimension);
             if effective_table_filter(config, user, table) == TableAccess::Hidden {
@@ -331,6 +355,24 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         | SemanticQueryKind::MemberOnlyProbe => QueryPlan::Empty,
 
         SemanticQueryKind::SlicerAllAndMeasure | SemanticQueryKind::SlicerOnly => {
+            // Multi-tuple axis: each tuple is an independent (measure, slicers)
+            // cell (e.g. batched CUBEVALUE with different level slicers).
+            if query.axis_tuples.len() > 1 {
+                let cells: Vec<TupleCell> = query
+                    .axis_tuples
+                    .iter()
+                    .filter_map(|t| {
+                        let m = t.measure.as_deref().and_then(|n| model.lookup_measure(n));
+                        m.map(|m| TupleCell {
+                            measure: m.id.clone(),
+                            filters: typed_filters(&t.filters),
+                        })
+                    })
+                    .collect();
+                if cells.len() > 1 {
+                    return QueryPlan::TupleSet { cells };
+                }
+            }
             if query.measures.len() > 1 {
                 let measures: Vec<MeasId> = query
                     .measures
@@ -458,7 +500,9 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
                 QueryResult::Grouped(rows)
             }
         }
-        QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
+        QueryPlan::MultiMeasure { .. }
+        | QueryPlan::MultiGroupBy { .. }
+        | QueryPlan::TupleSet { .. } => QueryResult::Empty,
         QueryPlan::Count { .. } => QueryResult::Count(backend.query_count(sql)),
         QueryPlan::Empty => QueryResult::Empty,
     }
@@ -492,7 +536,21 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         return QueryResult::Multi(values);
     }
 
-    // Multi-measure cross-join: N measures × M groups. Execute each measure's
+    // Tuple set: each tuple is an independent (measure, slicers) cell.
+    if let QueryPlan::TupleSet { cells } = plan {
+        let mut values = Vec::with_capacity(cells.len());
+        for cell in cells {
+            let per_cell = QueryPlan::Total {
+                measure: cell.measure.clone(),
+                filters: filters_with_time_flag(model, &cell.measure, &cell.filters),
+            };
+            match execute_plan_with_backend_and_context(&per_cell, model, backend, user, config) {
+                QueryResult::Scalar(v) => values.push(v),
+                _ => values.push(0.0),
+            }
+        }
+        return QueryResult::Multi(values);
+    }
     // GroupBy (each with its own time-flag/filter resolution) and merge by group
     // label, so a time-flag measure that filters rows still aligns with the
     // unfiltered measures' groups (missing groups get 0.0).
@@ -675,7 +733,9 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             QueryResult::Scalar(total)
         }
 
-        QueryPlan::MultiMeasure { .. } | QueryPlan::MultiGroupBy { .. } => QueryResult::Empty,
+        QueryPlan::MultiMeasure { .. }
+        | QueryPlan::MultiGroupBy { .. }
+        | QueryPlan::TupleSet { .. } => QueryResult::Empty,
 
         QueryPlan::GroupBy {
             group_by, set_op, ..

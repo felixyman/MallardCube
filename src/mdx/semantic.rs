@@ -51,6 +51,36 @@ pub struct DimensionFilter {
     pub level: Option<String>,
 }
 
+/// One tuple on the SELECT axis (measure + member slicers), e.g. batched
+/// CUBEVALUE cells with different slicers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AxisTuple {
+    pub measure: Option<String>,
+    pub filters: Vec<DimensionFilter>,
+}
+
+/// Build per-tuple filters from a tuple's members (the Leaf members only).
+fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
+    let mut result: Vec<DimensionFilter> = Vec::new();
+    for m in members {
+        if let MemberRef::Leaf { dim, key, level } = m {
+            let dim_str = dim_ref_str(dim);
+            if let Some(df) = result.iter_mut().find(|f| f.dimension == dim_str) {
+                if !df.members.contains(key) {
+                    df.members.push(key.clone());
+                }
+            } else {
+                result.push(DimensionFilter {
+                    dimension: dim_str,
+                    members: vec![key.clone()],
+                    level: level.clone(),
+                });
+            }
+        }
+    }
+    result
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlicerSelection {
     pub dimension: String,
@@ -237,6 +267,9 @@ pub struct SemanticQuery {
     pub member_only_unames: Vec<String>,
     /// Axis set function (TopCount/Order/Filter) to apply to the row set.
     pub axis_set_op: Option<AxisSetOp>,
+    /// Tuples on the SELECT axis (measure + member slicers), for multi-tuple
+    /// CUBEVALUE batches. Empty unless the axis is a set of parenthesized tuples.
+    pub axis_tuples: Vec<AxisTuple>,
 }
 
 // ---- main classification entry point ----
@@ -345,6 +378,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             metadata_probe_properties: props,
             member_only_unames: vec![],
             axis_set_op: None,
+            axis_tuples: vec![],
         };
     }
 
@@ -474,6 +508,17 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         metadata_probe_properties: vec![],
         member_only_unames,
         axis_set_op: parsed.axis_set_op.clone(),
+        axis_tuples: parsed
+            .select_tuples
+            .iter()
+            .map(|tuple| AxisTuple {
+                measure: tuple.iter().find_map(|m| match m {
+                    MemberRef::Measure(name) => Some(name.clone()),
+                    _ => None,
+                }),
+                filters: filters_from_tuple_members(tuple),
+            })
+            .collect(),
     }
 }
 

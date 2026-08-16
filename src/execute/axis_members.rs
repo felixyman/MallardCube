@@ -489,6 +489,21 @@ pub(crate) fn leaf_member_for(
     }
 }
 
+/// Leaf member for a specific hierarchy level (e.g. `[Date].[Date].[Year].&[2024]`).
+pub(crate) fn leaf_member_for_level(
+    dim: &str,
+    name: &str,
+    requested: &[String],
+    level_name: Option<&str>,
+) -> cellset::MemberConfig {
+    let d = match dim_def(dim) {
+        Some(d) => d,
+        None => return unknown_dim_member(dim, name),
+    };
+    let level_idx = level_name.and_then(|ln| d.levels.iter().position(|l| l.name == ln));
+    leaf_member_for_dim(d, name, requested, level_idx, None)
+}
+
 pub(crate) fn all_member_for_with_backend<B: QueryBackend + ?Sized>(
     dim: &str,
     requested: &[String],
