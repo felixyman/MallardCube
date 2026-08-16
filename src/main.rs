@@ -257,6 +257,20 @@ async fn run_server() {
             .or_else(|| std::env::var("MALLARDCUBE_DB").ok())
             .unwrap_or_else(|| "projects/project3/proxy-config.json".into());
         let db_path = proxy_project::resolve_db_path(&config_dir, p.config.db_path.as_deref());
+
+        // Build the aggregation sidecar (rollups) before opening the read-only
+        // pool, so each pooled connection can ATTACH it. The user's database is
+        // only read during the build; the rollups land in the sidecar file.
+        if let (Some(agg_cache), Some(db)) = (
+            std::env::var("MALLARDCUBE_AGG_CACHE").ok(),
+            db_path.as_deref(),
+        ) {
+            mallardcube::engine::aggregate::ensure_aggregations(db, &agg_cache)
+                .unwrap_or_else(|e| panic!("failed to build aggregations: {e}"));
+            println!("📊 Aggregations: {agg_cache}");
+            debug_write(&format!("Aggregations: {agg_cache}"));
+        }
+
         let backend_source = match db_path {
             Some(path) => {
                 let source = backend::init_backend_source(Some(&path))

@@ -119,6 +119,14 @@ impl BackendPool {
         let mut backends = Vec::with_capacity(size);
         for _ in 0..size {
             let conn = open_read_only(path)?;
+            // Aggregation sidecar: attached read-only so rollup queries share the
+            // pooled connection (built by main.rs before the pool opens).
+            if let Ok(agg) = std::env::var("MALLARDCUBE_AGG_CACHE") {
+                conn.execute_batch(&format!(
+                    "ATTACH '{agg}' AS {} (READ_ONLY);",
+                    crate::engine::aggregate::AGG_ALIAS
+                ))?;
+            }
             backends.push(Arc::new(Backend {
                 conn: Mutex::new(conn),
             }));

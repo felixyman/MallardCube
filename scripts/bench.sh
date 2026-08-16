@@ -3,6 +3,7 @@
 # throughput. Establishes a repeatable "is the proxy the bottleneck?" baseline.
 #
 # Usage:
+#   AGG=1 bash scripts/bench.sh ...   enable rollup aggregations
 #   ROWS=500000000 BENCH_DIR=/path bash scripts/bench.sh [trace.jsonl]
 #
 # ROWS controls the fact-table size (default 5M); BENCH_DIR should point at
@@ -66,8 +67,14 @@ echo "==> building release binary"
 (cd "$REPO_ROOT" && cargo build --release >/dev/null 2>&1)
 pkill -x mallard 2>/dev/null || true
 sleep 1
+AGG_ENV=""
+if [ "${AGG:-0}" = "1" ]; then
+  AGG_ENV="MALLARDCUBE_AGG_CACHE=$BENCH_DIR/agg.duckdb"
+  rm -f "$BENCH_DIR/agg.duckdb"
+  echo "==> aggregations enabled (sidecar: $BENCH_DIR/agg.duckdb)"
+fi
 echo "==> starting proxy on 0.0.0.0:8080"
-PROXY_CONFIG="$CFG" BIND_ADDRESS=0.0.0.0:8080 \
+PROXY_CONFIG="$CFG" BIND_ADDRESS=0.0.0.0:8080 $AGG_ENV \
   setsid nohup "$REPO_ROOT/target/release/mallard" serve \
   > "$BENCH_DIR/proxy.log" 2>&1 < /dev/null &
 for _ in $(seq 1 30); do

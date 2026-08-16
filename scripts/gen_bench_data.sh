@@ -46,13 +46,13 @@ duckdb :memory: "COPY (
 echo "==> sales_fact.parquet ($ROWS rows)"
 duckdb :memory: "COPY (
   SELECT
-    list_value('Electronics','Clothing','Food','Furniture','Sports','Books','Toys','Automotive','Health','Music','Garden','Office','Pet Supplies','Jewelry','Home','Baby','Tools','Beauty','Shoes','Outdoors')[(i % 20 + 1)::INTEGER] AS category,
-    list_value('North','South','East','West','Central','Northeast','Southeast','Northwest')[(i % 8 + 1)::INTEGER] AS territory,
-    list_value('Online','Retail','Wholesale','Direct')[(i % 4 + 1)::INTEGER] AS channel,
-    list_value('Consumer','Business','Government','Education','Non-Profit')[(i % 5 + 1)::INTEGER] AS segment,
-    ((i % 50000) + 1000)::DOUBLE AS revenue,
-    (i % 500)::DOUBLE AS units,
-    strftime(DATE '2020-01-01' + (i % 4018)::INTEGER, '%Y%m%d')::INTEGER AS date_key
+    list_value('Electronics','Clothing','Food','Furniture','Sports','Books','Toys','Automotive','Health','Music','Garden','Office','Pet Supplies','Jewelry','Home','Baby','Tools','Beauty','Shoes','Outdoors')[(hash(i) % 20 + 1)::INTEGER] AS category,
+    list_value('North','South','East','West','Central','Northeast','Southeast','Northwest')[(hash(i + 1) % 8 + 1)::INTEGER] AS territory,
+    list_value('Online','Retail','Wholesale','Direct')[(hash(i + 2) % 4 + 1)::INTEGER] AS channel,
+    list_value('Consumer','Business','Government','Education','Non-Profit')[(hash(i + 3) % 5 + 1)::INTEGER] AS segment,
+    ((hash(i + 4) % 50000) + 1000)::DOUBLE AS revenue,
+    (hash(i + 5) % 500)::DOUBLE AS units,
+    strftime(DATE '2020-01-01' + (hash(i + 6) % 4018)::INTEGER, '%Y%m%d')::INTEGER AS date_key
   FROM range($ROWS) t(i)
 ) TO '$FACT' (FORMAT PARQUET);"
 
