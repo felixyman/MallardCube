@@ -7,6 +7,8 @@ use crate::backend::QueryBackend;
 use crate::cellset;
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, includes_prop};
 use crate::proxy_project;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const MEASURES_HIER: &str = "[Measures]";
 const MEASURES_LEVEL: &str = "[Measures].[MeasuresLevel]";
@@ -37,13 +39,29 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
     proxy_project::project().model.dim_def_opt(dim)
 }
 
+/// Process-wide cache of `COUNT(DISTINCT col)` per dimension, keyed by catalog
+/// so different projects don't collide. The cardinality of a dimension is
+/// immutable during a serve session, but the render path calls this once per
+/// visible dimension on every request — an O(rows) scan that is pure waste.
 fn dim_children_count<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     backend: &B,
 ) -> u32 {
+    static CACHE: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+    let key = format!("{}:{}", proxy_project::project().config.catalog, dim.id);
+    {
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(v) = cache.lock().unwrap().get(&key) {
+            return *v;
+        }
+    }
     let table = proxy_project::project().model.dim_table(&dim.id);
     let sql = format!("SELECT COUNT(DISTINCT {}) FROM {table}", dim.physical_field);
-    backend.query_count(&sql)
+    let count = backend.query_count(&sql);
+    if let Some(cache) = CACHE.get() {
+        cache.lock().unwrap().insert(key, count);
+    }
+    count
 }
 
 fn dim_props_leaf(
