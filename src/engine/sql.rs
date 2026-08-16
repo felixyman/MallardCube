@@ -33,9 +33,7 @@ pub fn sql_for_query_plan_with_context(
 ) -> String {
     match plan {
         QueryPlan::Total { measure, filters } => {
-            if aggregation_safe(model, user, config)
-                && let Some(agg) = aggregate::agg_for_plan(model, plan)
-            {
+            if let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config) {
                 return agg_total_sql(model, agg, measure, filters);
             }
             let meas = model.meas_def(measure);
@@ -52,9 +50,7 @@ pub fn sql_for_query_plan_with_context(
             group_level,
             ..
         } => {
-            if aggregation_safe(model, user, config)
-                && let Some(agg) = aggregate::agg_for_plan(model, plan)
-            {
+            if let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config) {
                 return agg_groupby_sql(model, agg, measure, group_by, group_level, filters);
             }
             let meas = model.meas_def(measure);
@@ -179,6 +175,22 @@ fn aggregation_safe(model: &SemanticModel, user: &UserContext, config: &ProxyCon
     true
 }
 
+/// The single aggregation routing decision: only route to a rollup when no role
+/// filter is active (rollups are built from the full fact and would bypass RLS)
+/// AND a rollup can answer the plan. Tested directly by the RLS test.
+fn route_plan<'a>(
+    model: &SemanticModel,
+    aggs: &'a [Aggregation],
+    plan: &QueryPlan,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Option<&'a Aggregation> {
+    if !aggregation_safe(model, user, config) {
+        return None;
+    }
+    aggregate::agg_for_plan_with(model, aggs, plan)
+}
+
 /// WHERE clause for a rollup query: filters map to the rollup's direct columns.
 fn agg_where(model: &SemanticModel, agg: &Aggregation, filters: &[TypedDimensionFilter]) -> String {
     let mut parts = Vec::new();
@@ -196,7 +208,7 @@ fn agg_where(model: &SemanticModel, agg: &Aggregation, filters: &[TypedDimension
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
             if !vals.is_empty() {
-                parts.push(format!("{} IN ({})", col, vals.join(", ")));
+                parts.push(format!("CAST({col} AS VARCHAR) IN ({})", vals.join(", ")));
             }
         }
     }
@@ -401,7 +413,7 @@ fn sql_where_with_cols(
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
             parts.push(format!(
-                "f.{} IN (SELECT {} FROM {} WHERE {} IN ({}))",
+                "f.{} IN (SELECT {} FROM {} WHERE CAST({} AS VARCHAR) IN ({}))",
                 rel.fact_column,
                 rel.dim_column,
                 rel.dim_table,
@@ -423,7 +435,7 @@ fn sql_where_with_cols(
                 .iter()
                 .map(|m| format!("'{}'", m.replace('\'', "''")))
                 .collect();
-            parts.push(format!("{} IN ({})", col, vals.join(", ")));
+            parts.push(format!("CAST({col} AS VARCHAR) IN ({})", vals.join(", ")));
         }
     }
 
@@ -523,7 +535,7 @@ mod tests {
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
         assert!(sql.contains("SELECT SUM(sales) FROM faktatabell f"));
-        assert!(sql.contains("WHERE region IN ('North')"));
+        assert!(sql.contains("WHERE CAST(region AS VARCHAR) IN ('North')"));
     }
 
     #[test]
@@ -573,7 +585,7 @@ mod tests {
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
-        assert!(sql.contains("WHERE region IN ('North')"));
+        assert!(sql.contains("WHERE CAST(region AS VARCHAR) IN ('North')"));
         assert!(sql.contains("GROUP BY 1"));
     }
 
@@ -609,8 +621,10 @@ mod tests {
             ],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
-        assert!(sql.contains("WHERE region IN ('North')"));
-        assert!(sql.contains("AND produktkategori IN ('Kategori A', 'Kategori B')"));
+        assert!(sql.contains("WHERE CAST(region AS VARCHAR) IN ('North')"));
+        assert!(
+            sql.contains("AND CAST(produktkategori AS VARCHAR) IN ('Kategori A', 'Kategori B')")
+        );
     }
 
     // ---- star-schema join ----
@@ -693,7 +707,7 @@ mod tests {
         );
         assert!(sql.contains("FROM fact_table f"));
         assert!(sql.contains("JOIN dim_product _product ON f.product_id = _product.product_id"));
-        assert!(sql.contains("WHERE _product.product_name IN ('Widget')"));
+        assert!(sql.contains("WHERE CAST(_product.product_name AS VARCHAR) IN ('Widget')"));
     }
 
     #[test]
@@ -995,7 +1009,7 @@ mod tests {
             "should group by quarter: {sql}"
         );
         assert!(
-            sql.contains("_date.year IN ('2024')"),
+            sql.contains("CAST(_date.year AS VARCHAR) IN ('2024')"),
             "should filter by year: {sql}"
         );
     }
@@ -1014,6 +1028,63 @@ mod tests {
         assert!(
             sql.contains("CAST(_date.full_date AS VARCHAR)"),
             "should group by physical_field: {sql}"
+        );
+    }
+
+    // Security: a role-filtered user must never be routed to a rollup (rollups
+    // are built from the full fact and would bypass RLS). Admin users may route.
+    #[test]
+    fn rls_blocks_aggregation_routing() {
+        let model =
+            crate::project::project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3")
+                .model;
+        let aggs = crate::engine::aggregate::design_aggregations(&model);
+        assert!(!aggs.is_empty(), "project3 should design rollups");
+
+        let cfg: ProxyConfig = serde_json::from_str(
+            r#"{
+                "catalog": "SALES_ANALYTICS", "cube": "Sales",
+                "source_name": "sales_fact", "table_name": "sales_fact",
+                "dialect": "duckdb", "dimensions": [], "measures": [],
+                "auth": { "trusted_proxy": true },
+                "roles": [{
+                    "name": "TerritoryNorth",
+                    "model_permission": "read",
+                    "members": [{"member_name": "user1", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "sales_fact",
+                        "filter_expression": "territory = 'North'"
+                    }]
+                }]
+            }"#,
+        )
+        .expect("parse config");
+
+        let plan = QueryPlan::Total {
+            measure: "Revenue".into(),
+            filters: vec![],
+        };
+
+        let admin = UserContext::admin_default();
+        assert!(
+            route_plan(&model, &aggs, &plan, &admin, &cfg).is_some(),
+            "admin should route to a rollup"
+        );
+
+        let filtered = crate::engine::model::resolve_user_context(&cfg, "user1", &[]);
+        assert!(!filtered.is_administrator);
+        assert!(
+            route_plan(&model, &aggs, &plan, &filtered, &cfg).is_none(),
+            "role-filtered user must never route to a rollup"
+        );
+
+        // End-to-end: the generated SQL for the filtered user has no rollup table.
+        let sql = sql_for_query_plan_with_context(&model, &plan, &filtered, &cfg);
+        assert!(!sql.contains("agg."), "RLS SQL must not use rollups: {sql}");
+        assert!(
+            sql.contains("FROM sales_fact"),
+            "RLS SQL should scan the fact: {sql}"
         );
     }
 }

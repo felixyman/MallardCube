@@ -338,7 +338,7 @@ pub fn agg_for_plan(model: &SemanticModel, plan: &QueryPlan) -> Option<&'static 
     agg_for_plan_with(model, aggregations(), plan)
 }
 
-fn agg_for_plan_with<'a>(
+pub(crate) fn agg_for_plan_with<'a>(
     model: &SemanticModel,
     aggs: &'a [Aggregation],
     plan: &QueryPlan,
