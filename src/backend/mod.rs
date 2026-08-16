@@ -723,28 +723,42 @@ impl Backend {
 
     pub fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(sql).expect("prepare query_grouped_1d");
-        let rows = stmt
-            .query_map([], |row| {
-                let label = row.get::<_, String>(0)?;
-                let value = value_to_f64(&row.get::<_, duckdb::types::Value>(1)?).unwrap_or(0.0);
-                Ok((label, value))
-            })
-            .expect("query_map query_grouped_1d");
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            eprintln!("query_grouped_1d: prepare failed: {sql}");
+            return Vec::new();
+        };
+        let rows = match stmt.query_map([], |row| {
+            let label = row.get::<_, String>(0)?;
+            let value = value_to_f64(&row.get::<_, duckdb::types::Value>(1)?).unwrap_or(0.0);
+            Ok((label, value))
+        }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("query_grouped_1d: query failed: {e}");
+                return Vec::new();
+            }
+        };
         rows.filter_map(|r| r.ok()).collect()
     }
 
     pub fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(sql).expect("prepare query_pairs");
-        let rows = stmt
-            .query_map([], |row| {
-                let a = row.get::<_, String>(0)?;
-                let b = row.get::<_, String>(1)?;
-                let value = value_to_f64(&row.get::<_, duckdb::types::Value>(2)?).unwrap_or(0.0);
-                Ok((a, b, value))
-            })
-            .expect("query_map query_pairs");
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            eprintln!("query_pairs: prepare failed: {sql}");
+            return Vec::new();
+        };
+        let rows = match stmt.query_map([], |row| {
+            let a = row.get::<_, String>(0)?;
+            let b = row.get::<_, String>(1)?;
+            let value = value_to_f64(&row.get::<_, duckdb::types::Value>(2)?).unwrap_or(0.0);
+            Ok((a, b, value))
+        }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("query_pairs: query failed: {e}");
+                return Vec::new();
+            }
+        };
         rows.filter_map(|r| r.ok()).collect()
     }
 
@@ -756,11 +770,18 @@ impl Backend {
 
     pub fn query_strings(&self, sql: &str) -> Vec<String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(sql).expect("prepare query_strings");
-        stmt.query_map([], |row| row.get::<_, String>(0))
-            .expect("query_map query_strings")
-            .filter_map(|r| r.ok())
-            .collect()
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            eprintln!("query_strings: prepare failed: {sql}");
+            return Vec::new();
+        };
+        let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("query_strings: query failed: {e}");
+                return Vec::new();
+            }
+        };
+        rows.filter_map(|r| r.ok()).collect()
     }
 
     pub fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
@@ -772,9 +793,12 @@ impl Backend {
         let table = after_from.split_whitespace().next().unwrap_or("?");
         let pragma = format!("SELECT count(*) FROM pragma_table_info('{table}')");
         let col_count: usize = conn.query_row(&pragma, [], |r| r.get(0)).unwrap_or(0);
-        let mut stmt = conn.prepare(sql).expect("prepare query_rows");
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            eprintln!("query_rows: prepare failed: {sql}");
+            return Vec::new();
+        };
         if col_count > 0 {
-            stmt.query_map([], move |row| {
+            let rows = match stmt.query_map([], move |row| {
                 let mut cols = Vec::with_capacity(col_count);
                 for i in 0..col_count {
                     cols.push(
@@ -784,10 +808,14 @@ impl Backend {
                     );
                 }
                 Ok(cols)
-            })
-            .expect("query_map query_rows")
-            .filter_map(|r| r.ok())
-            .collect()
+            }) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    eprintln!("query_rows: query failed: {e}");
+                    return Vec::new();
+                }
+            };
+            rows.filter_map(|r| r.ok()).collect()
         } else {
             vec![]
         }
@@ -800,16 +828,25 @@ impl Backend {
         let after_from = &sql[from_pos + 5..].trim();
         let table = after_from.split_whitespace().next().unwrap_or("?");
         let pragma = format!("SELECT name FROM pragma_table_info('{table}') ORDER BY cid");
-        let mut stmt = conn.prepare(&pragma).expect("prepare pragma_table_info");
-        stmt.query_map([], |r| r.get::<_, String>(0))
-            .expect("query_map pragma")
-            .filter_map(|r| r.ok())
-            .collect()
+        let Ok(mut stmt) = conn.prepare(&pragma) else {
+            eprintln!("query_column_names: prepare failed: {pragma}");
+            return Vec::new();
+        };
+        let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("query_column_names: query failed: {e}");
+                return Vec::new();
+            }
+        };
+        rows.filter_map(|r| r.ok()).collect()
     }
 
     pub fn execute_ddl(&self, sql: &str) {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch(sql).expect("execute_ddl");
+        if let Err(e) = conn.execute_batch(sql) {
+            eprintln!("execute_ddl failed: {e}");
+        }
     }
 
     // ---- metadata helpers (used by members.rs) ----
@@ -901,6 +938,21 @@ mod tests {
         assert!((grouped[0].1 - 18.01).abs() < 1e-9);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn query_methods_do_not_panic_on_bad_sql() {
+        let backend = Backend::new().expect("create in-memory backend");
+        // Malformed SQL / missing tables must degrade to empty/default, not panic.
+        assert!(
+            backend
+                .query_grouped_1d("SELECT FROM nonexistent")
+                .is_empty()
+        );
+        assert!(backend.query_strings("NOT VALID SQL AT ALL").is_empty());
+        assert!(backend.query_pairs("SELECT FROM nothing").is_empty());
+        assert_eq!(backend.query_scalar("SELECT * FROM no_such_table"), 0.0);
+        assert!(backend.query_rows("SELECT * FROM no_such_table").is_empty());
     }
 
     #[test]
