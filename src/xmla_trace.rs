@@ -4,13 +4,21 @@
 /// Output: `xmla-trace.jsonl` in the working directory.
 ///
 /// Each line is a self-contained JSON record suitable for replay testing.
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 static TRACE_FILE: Mutex<Option<File>> = Mutex::new(None);
 static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// Wall-clock start of the request, set on the blocking worker thread just
+    /// before backend checkout, so `trace_request` can record total latency.
+    static REQ_START: Cell<Option<Instant>> = const { Cell::new(None) };
+}
 
 pub fn init_trace() {
     if std::env::var("XMLA_TRACE").is_ok_and(|v| v == "1") {
@@ -22,6 +30,12 @@ pub fn init_trace() {
 
 pub fn trace_enabled() -> bool {
     TRACE_FILE.lock().unwrap().is_some()
+}
+
+/// Mark the start of a request on the blocking worker thread. Called before
+/// backend checkout so the recorded `wall_us` includes connection-open time.
+pub fn mark_request_start() {
+    REQ_START.with(|c| c.set(Some(Instant::now())));
 }
 
 pub fn trace_request(
@@ -36,12 +50,21 @@ pub fn trace_request(
 
     let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
 
+    let wall_us = REQ_START.with(|c| {
+        let start = c.take();
+        start.map(|s| s.elapsed().as_micros() as u64)
+    });
+
     let mut rec = serde_json::json!({
         "seq": seq,
         "request_kind": request_kind,
         "request_xml": request_xml,
         "response_xml": response_xml,
     });
+
+    if let Some(w) = wall_us {
+        rec["wall_us"] = serde_json::Value::from(w);
+    }
 
     if let Some(m) = mdx {
         rec["mdx"] = serde_json::Value::String(m.to_string());
