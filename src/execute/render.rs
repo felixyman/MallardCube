@@ -110,7 +110,10 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         QueryResult::Grouped(data) => data.clone(),
         _ => unreachable!(),
     };
-    data.sort_by(|a, b| a.0.cmp(&b.0));
+    // A set_op (TopCount/Order/Filter) already ordered the rows; keep that order.
+    if query.axis_set_op.is_none() {
+        data.sort_by(|a, b| a.0.cmp(&b.0));
+    }
     let parent_uname: Option<String> = query.drilldown_level.and_then(|dl| {
         if dl == 0 {
             return None;

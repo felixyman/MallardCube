@@ -212,24 +212,41 @@ fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
     results
 }
 
-/// Extract every `[Measures].[name]` reference in the SELECT clause, in order.
+/// Extract every `[Measures].[name]` reference on the COLUMNS axis, in order.
 /// Batched CUBEVALUE cells produce a multi-measure tuple set like
-/// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`.
+/// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`. Set-function
+/// sort/filter expressions (TopCount/Order/Filter on ROWS) are not axis
+/// measures and are excluded.
 fn find_all_select_measures(input: &str) -> Vec<String> {
-    let select_pos = input.find("SELECT").unwrap_or(0);
-    let from_pos = input[select_pos..]
+    let upper = input.to_uppercase();
+    let select_pos = upper.find("SELECT").unwrap_or(0);
+    let from_pos = upper[select_pos..]
         .find("FROM")
         .map(|i| select_pos + i)
         .unwrap_or(input.len());
-    let clause = &input[select_pos..from_pos];
+    let clause = &upper[select_pos..from_pos];
+
+    // The COLUMNS axis is the expression directly before "ON COLUMNS"/"ON 0".
+    let on_cols = clause
+        .find("ON COLUMNS")
+        .or_else(|| clause.find("ON 0"))
+        .unwrap_or(clause.len());
+    let before = &clause[..on_cols];
+    let cols_start = before
+        .rfind("ON ROWS")
+        .map(|i| i + "ON ROWS".len())
+        .or_else(|| before.rfind("ON 1").map(|i| i + "ON 1".len()))
+        .unwrap_or(0);
+    let cols_expr = &input[select_pos + cols_start..select_pos + on_cols];
+
     let mut result = Vec::new();
     let mut pos = 0;
-    while let Some(i) = clause[pos..].find("[Measures].[") {
+    while let Some(i) = cols_expr[pos..].find("[Measures].[") {
         let start = pos + i + "[Measures].[".len();
-        let Some(end) = clause[start..].find(']') else {
+        let Some(end) = cols_expr[start..].find(']') else {
             break;
         };
-        result.push(clause[start..start + end].to_string());
+        result.push(cols_expr[start..start + end].to_string());
         pos = start + end + 1;
     }
     result
@@ -464,6 +481,122 @@ fn has_measures_in_where_or_cols(input: &str) -> bool {
     input.to_uppercase().contains("[MEASURES]")
 }
 
+/// An axis set function that transforms the row set (sort / limit / filter).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AxisSetOp {
+    /// `TopCount(set, n, expr)` (desc=true) / `BottomCount(...)` (desc=false).
+    TopCount { n: usize, desc: bool },
+    /// `TopPercent(set, p, expr)` — top p percent of members by expr.
+    TopPercent { p: f64 },
+    /// `Order(set, expr, DESC|ASC)`.
+    Order { desc: bool },
+    /// `Filter(set, [Measures].[X] OP value)` — value filter.
+    Filter { op: CmpOp, value: f64 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CmpOp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+/// Detect an axis set function (TopCount/BottomCount/Order/Filter) in the outer
+/// SELECT clause. Only measure-based sorts/filters are supported (label filters
+/// and TopPercent/BottomPercent are not).
+pub fn detect_axis_set_op(input: &str) -> Option<AxisSetOp> {
+    let upper = input.to_uppercase();
+    let select_pos = upper.find("SELECT").unwrap_or(0);
+    let from_pos = upper[select_pos..]
+        .find("FROM")
+        .map(|i| select_pos + i)
+        .unwrap_or(input.len());
+    let clause = &input[select_pos..from_pos];
+    let up = clause.to_uppercase();
+
+    if let Some(pos) = up.find("TOPCOUNT(") {
+        let after = &clause[pos + "TopCount(".len()..];
+        let comma = after.find(',')?;
+        let n: usize = after[comma + 1..]
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()?;
+        return Some(AxisSetOp::TopCount { n, desc: true });
+    }
+    if let Some(pos) = up.find("BOTTOMCOUNT(") {
+        let after = &clause[pos + "BottomCount(".len()..];
+        let comma = after.find(',')?;
+        let n: usize = after[comma + 1..]
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()?;
+        return Some(AxisSetOp::TopCount { n, desc: false });
+    }
+    if let Some(pos) = up.find("TOPPERCENT(") {
+        let after = &clause[pos + "TopPercent(".len()..];
+        let comma = after.find(',')?;
+        let p: f64 = after[comma + 1..]
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect::<String>()
+            .parse()
+            .ok()?;
+        return Some(AxisSetOp::TopPercent { p });
+    }
+    if let Some(pos) = up.find("ORDER(") {
+        let after = &clause[pos + "Order(".len()..];
+        let desc = after.to_uppercase().contains("DESC");
+        return Some(AxisSetOp::Order { desc });
+    }
+    if let Some(pos) = up.find("FILTER(") {
+        let after = &clause[pos + "Filter(".len()..];
+        if let Some((op, value)) = parse_filter_condition(after) {
+            return Some(AxisSetOp::Filter { op, value });
+        }
+    }
+    None
+}
+
+/// Parse `[Measures].[X] OP value` from a Filter() condition.
+fn parse_filter_condition(s: &str) -> Option<(CmpOp, f64)> {
+    let measure_pos = s.find("[Measures].[")?;
+    let after_measure = &s[measure_pos + "[Measures].[".len()..];
+    let name_end = after_measure.find(']')?;
+    let after_name = after_measure[name_end + 1..].trim_start();
+    let (op, rest) = if let Some(r) = after_name.strip_prefix(">=") {
+        (CmpOp::Ge, r)
+    } else if let Some(r) = after_name.strip_prefix("<=") {
+        (CmpOp::Le, r)
+    } else if let Some(r) = after_name.strip_prefix("<>") {
+        (CmpOp::Ne, r)
+    } else if let Some(r) = after_name.strip_prefix('>') {
+        (CmpOp::Gt, r)
+    } else if let Some(r) = after_name.strip_prefix('<') {
+        (CmpOp::Lt, r)
+    } else if let Some(r) = after_name.strip_prefix('=') {
+        (CmpOp::Eq, r)
+    } else {
+        return None;
+    };
+    let value: f64 = rest
+        .trim()
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .next()?
+        .parse()
+        .ok()?;
+    Some((op, value))
+}
+
 /// True when the WHERE clause contains exactly one cube-dimension
 /// member (All or Leaf) and one measure member.
 fn is_slicer_all_measure(input: &str) -> bool {
@@ -523,6 +656,8 @@ pub struct ParsedMdx {
     pub excluded_members: Vec<(String, String)>,
     /// The dimension token following the DrilldownMember exclusion set.
     pub drilldown_member_hierarchy: Option<String>,
+    /// Axis set function (TopCount/Order/Filter) wrapping the row set, if any.
+    pub axis_set_op: Option<AxisSetOp>,
 }
 
 /// Extract dimension IDs from the select clause in positional order.
@@ -717,6 +852,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         axis_dimension_ids,
         excluded_members,
         drilldown_member_hierarchy,
+        axis_set_op: detect_axis_set_op(input),
     }
 }
 
