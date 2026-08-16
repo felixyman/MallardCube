@@ -610,10 +610,9 @@ fn parse_filter_condition(s: &str) -> Option<(CmpOp, f64)> {
         (CmpOp::Gt, r)
     } else if let Some(r) = after_name.strip_prefix('<') {
         (CmpOp::Lt, r)
-    } else if let Some(r) = after_name.strip_prefix('=') {
-        (CmpOp::Eq, r)
     } else {
-        return None;
+        let r = after_name.strip_prefix('=')?;
+        (CmpOp::Eq, r)
     };
     let value: f64 = rest
         .trim()
