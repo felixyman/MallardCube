@@ -406,6 +406,7 @@ async fn handle_xmla(
     let cfg = config.clone();
     let backend_source = state.backend_source.clone();
     let response_body = tokio::task::spawn_blocking(move || {
+        mallardcube::xmla_trace::mark_request_start();
         let session_id = body_for_worker.find("SessionId=\"").and_then(|start| {
             let after = start + 11;
             body_for_worker[after..]
@@ -538,13 +539,17 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             debug_write("REQUEST XML:");
             debug_write(body);
 
-            let resp = if mdx_semantic::is_drillthrough(mdx) {
-                execute::dispatch::get_execute_drillthrough_response(mdx)
-            } else {
-                execute_builders::get_execute_cellset_response_with_backend_and_context(
-                    mdx, backend, user, config,
+            let (resp, timings) = if mdx_semantic::is_drillthrough(mdx) {
+                (
+                    execute::dispatch::get_execute_drillthrough_response(mdx),
+                    None,
                 )
-                .0
+            } else {
+                let (r, t) =
+                    execute_builders::get_execute_cellset_response_with_backend_and_context(
+                        mdx, backend, user, config,
+                    );
+                (r, Some(t))
             };
 
             debug_write("RESPONSE XML:");
@@ -554,7 +559,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
                 body,
                 &resp,
                 Some(mdx),
-                None,
+                timings.as_ref(),
             );
             resp
         }
