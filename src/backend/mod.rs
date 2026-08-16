@@ -503,6 +503,37 @@ impl QueryBackend for Backend {
     }
 }
 
+/// Convert a DuckDB value to f64 for measure/scalar reads, preserving decimal
+/// fractions. The naive `row.get::<_, f64>()` rounds a DECIMAL to an integer
+/// (dropping the fraction), which silently corrupted any measure over a decimal
+/// column. Returns None for NULL or non-numeric values.
+fn value_to_f64(v: &duckdb::types::Value) -> Option<f64> {
+    use duckdb::types::Value;
+    Some(match v {
+        Value::Null => return None,
+        Value::Boolean(b) => {
+            if *b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        Value::TinyInt(i) => *i as f64,
+        Value::SmallInt(i) => *i as f64,
+        Value::Int(i) => *i as f64,
+        Value::BigInt(i) => *i as f64,
+        Value::HugeInt(i) => *i as f64,
+        Value::UTinyInt(i) => *i as f64,
+        Value::USmallInt(i) => *i as f64,
+        Value::UInt(i) => *i as f64,
+        Value::UBigInt(i) => *i as f64,
+        Value::Float(f) => *f as f64,
+        Value::Double(f) => *f,
+        Value::Decimal(d) => d.mantissa() as f64 / 10f64.powi(d.scale() as i32),
+        _ => return None,
+    })
+}
+
 impl Backend {
     pub fn get() -> &'static Self {
         instance()
@@ -684,8 +715,10 @@ impl Backend {
 
     pub fn query_scalar(&self, sql: &str) -> f64 {
         let conn = self.conn.lock().unwrap();
-        conn.query_row(sql, [], |row| row.get::<_, f64>(0))
-            .unwrap_or(0.0)
+        conn.query_row(sql, [], |row| {
+            Ok(value_to_f64(&row.get::<_, duckdb::types::Value>(0)?).unwrap_or(0.0))
+        })
+        .unwrap_or(0.0)
     }
 
     pub fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
@@ -693,7 +726,9 @@ impl Backend {
         let mut stmt = conn.prepare(sql).expect("prepare query_grouped_1d");
         let rows = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                let label = row.get::<_, String>(0)?;
+                let value = value_to_f64(&row.get::<_, duckdb::types::Value>(1)?).unwrap_or(0.0);
+                Ok((label, value))
             })
             .expect("query_map query_grouped_1d");
         rows.filter_map(|r| r.ok()).collect()
@@ -704,11 +739,10 @@ impl Backend {
         let mut stmt = conn.prepare(sql).expect("prepare query_pairs");
         let rows = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, f64>(2)?,
-                ))
+                let a = row.get::<_, String>(0)?;
+                let b = row.get::<_, String>(1)?;
+                let value = value_to_f64(&row.get::<_, duckdb::types::Value>(2)?).unwrap_or(0.0);
+                Ok((a, b, value))
             })
             .expect("query_map query_pairs");
         rows.filter_map(|r| r.ok()).collect()
@@ -835,6 +869,38 @@ mod tests {
             std::process::id(),
             TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn query_scalar_and_grouped_read_integer_and_decimal_columns() {
+        let path = temp_db_path("numeric-coercion");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = duckdb::Connection::open(&path).expect("open temp db");
+            conn.execute_batch(
+                "CREATE TABLE t (i INTEGER, b BIGINT, d DECIMAL(10,2));
+                 INSERT INTO t VALUES (5, 7000000000, 12.34), (7, 8000000000, 5.67);",
+            )
+            .expect("seed");
+        }
+        let backend = Backend::open(&path).expect("open backend");
+
+        // Integer / BIGINT SUM columns are HUGEINT; must coerce, not zero out.
+        assert_eq!(backend.query_scalar("SELECT SUM(i) FROM t"), 12.0);
+        assert_eq!(
+            backend.query_scalar("SELECT SUM(b) FROM t"),
+            15_000_000_000.0
+        );
+
+        // DECIMAL SUM must keep its fraction (18.01), not round to 18.0.
+        let dec = backend.query_scalar("SELECT SUM(d) FROM t");
+        assert!((dec - 18.01).abs() < 1e-9, "decimal fraction lost: {dec}");
+
+        let grouped = backend.query_grouped_1d("SELECT 'x', SUM(d) FROM t GROUP BY 1");
+        assert_eq!(grouped.len(), 1);
+        assert!((grouped[0].1 - 18.01).abs() < 1e-9);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
