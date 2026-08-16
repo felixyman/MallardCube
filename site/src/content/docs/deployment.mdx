@@ -50,7 +50,7 @@ record every request and response as NDJSON, which the `trace-replay` and
 A query's cost is a full scan of the fact table, so scale is mostly about
 storage and memory:
 
-- Enable [aggregations](/aggregations) for coarse pivots on large fact tables.
+- Enable [aggregations](./aggregations/) for coarse pivots on large fact tables.
 - Keep the DuckDB file on fast local storage.
 - Set `MALLARDCUBE_POOL_SIZE` if you want a different number of connections
   than the CPU count.

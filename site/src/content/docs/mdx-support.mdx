@@ -26,7 +26,7 @@ source rows.
 ## Time intelligence
 
 Measures can carry year-to-date, quarter-to-date, and month-to-date semantics
-through flag columns on the date dimension. See [Model reference](/model) for
+through flag columns on the date dimension. See [Model reference](./model/) for
 the `time_intelligence` field.
 
 ## Known limitations
@@ -36,7 +36,7 @@ the `time_intelligence` field.
 - **No writeback.** MallardCube is read-only.
 - **No calculation groups or named sets.**
 - **Aggregations cover `SUM` measures only.** Other measures always scan the
-  fact table. See [Aggregations](/aggregations).
+  fact table. See [Aggregations](./aggregations/).
 - **DuckDB only.** Attached data sources such as Postgres, SQL Server, or S3
   are not wired up.
 - **One model per server.** The server serves a single `proxy-config.json`.

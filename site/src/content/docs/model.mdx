@@ -59,8 +59,8 @@ Here is a working model for a small sales database:
 | `dimensions` | Array of dimension definitions. |
 | `measures` | Array of measure definitions. |
 | `relationships` | Optional. Joins between fact columns and dimension tables. |
-| `roles` | Optional. Security roles (see [Security and roles](/security)). |
-| `auth` | Optional. Authentication mode (see [Security and roles](/security)). |
+| `roles` | Optional. Security roles (see [Security and roles](./security/)). |
+| `auth` | Optional. Authentication mode (see [Security and roles](./security/)). |
 | `fact_tables` | Optional. Multiple fact tables. |
 | `time_intelligence` | Optional. Date dimension metadata for time functions. |
 
@@ -221,4 +221,4 @@ For models with more than one fact table, list them in `fact_tables` and scope
 each dimension and measure with a `fact_table` field. See the `projects/project4/`
 sample for a two-fact model.
 
-[Security and roles](/security) covers the `roles` and `auth` sections.
+[Security and roles](./security/) covers the `roles` and `auth` sections.
