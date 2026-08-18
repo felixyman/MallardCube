@@ -7,8 +7,6 @@ use crate::backend::QueryBackend;
 use crate::cellset;
 use crate::mdx_semantic::{DimensionFilter, SemanticQuery, includes_prop};
 use crate::proxy_project;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 const MEASURES_HIER: &str = "[Measures]";
 const MEASURES_LEVEL: &str = "[Measures].[MeasuresLevel]";
@@ -39,34 +37,10 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
     proxy_project::project().model.dim_def_opt(dim)
 }
 
-/// Process-wide cache of `COUNT(DISTINCT col)` per dimension, keyed by catalog
-/// so different projects don't collide. The cardinality of a dimension is
-/// immutable during a serve session, but the render path calls this once per
-/// visible dimension on every request — an O(rows) scan that is pure waste.
-fn dim_children_count<B: QueryBackend + ?Sized>(
-    dim: &crate::engine::model::DimensionDef,
-    backend: &B,
-) -> u32 {
-    static CACHE: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
-    let key = format!("{}:{}", proxy_project::project().config.catalog, dim.id);
-    {
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        if let Some(v) = cache.lock().unwrap().get(&key) {
-            return *v;
-        }
-    }
-    let table = proxy_project::project().model.dim_table(&dim.id);
-    let sql = format!("SELECT COUNT(DISTINCT {}) FROM {table}", dim.physical_field);
-    let count = backend.query_count(&sql);
-    if let Some(cache) = CACHE.get() {
-        cache.lock().unwrap().insert(key, count);
-    }
-    count
-}
-
 fn dim_props_leaf(
     dim: &crate::engine::model::DimensionDef,
     name: &str,
+    member_key: &str,
     requested: &[String],
     parent_uname: Option<&str>,
 ) -> Vec<(String, String)> {
@@ -80,12 +54,11 @@ fn dim_props_leaf(
             ),
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), name.to_string()),
-            ("MEMBER_KEY".into(), name.to_string()),
+            ("MEMBER_KEY".into(), member_key.to_string()),
             ("MEMBER_TYPE".into(), "1".into()),
             ("MEMBER_VALUE".into(), name.to_string()),
             ("PARENT_LEVEL".into(), "0".into()),
             ("PARENT_COUNT".into(), "1".into()),
-            ("CHILDREN_CARDINALITY".into(), "0".into()),
         ],
         requested,
     )
@@ -94,9 +67,8 @@ fn dim_props_leaf(
 fn dim_props_all<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
-    backend: &B,
+    _backend: &B,
 ) -> Vec<(String, String)> {
-    let count = dim_children_count(dim, backend);
     filter_dim_props(
         vec![
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
@@ -106,7 +78,6 @@ fn dim_props_all<B: QueryBackend + ?Sized>(
             ("MEMBER_VALUE".into(), "All".into()),
             ("PARENT_LEVEL".into(), "0".into()),
             ("PARENT_COUNT".into(), "0".into()),
-            ("CHILDREN_CARDINALITY".into(), count.to_string()),
         ],
         requested,
     )
@@ -155,11 +126,6 @@ fn dim_decls(dim: &crate::engine::model::DimensionDef) -> Vec<(String, String, S
             format!("{p}.[PARENT_COUNT]"),
             "xsd:int".into(),
         ),
-        (
-            "CHILDREN_CARDINALITY".into(),
-            format!("{p}.[CHILDREN_CARDINALITY]"),
-            "xsd:unsignedInt".into(),
-        ),
     ]
 }
 
@@ -180,15 +146,21 @@ fn leaf_member_for_dim(
     drilldown_level: Option<usize>,
     parent_uname: Option<&str>,
 ) -> cellset::MemberConfig {
+    // A member at a deeper level needs a key unique within the hierarchy, so
+    // prefix its ancestor path (e.g. a quarter under 2026 is &[2026]&[1]).
+    let member_key = parent_uname
+        .and_then(key_from_member_uname)
+        .map(|path| format!("{path}|{name}"))
+        .unwrap_or_else(|| name.to_string());
     let (u_name, l_name, l_num) =
         if let (Some(level_idx), true) = (drilldown_level, !dim.levels.is_empty()) {
             if let Some(level) = dim.levels.get(level_idx) {
                 (
                     format!(
-                        "{}.[{}].&amp;[{}]",
+                        "{}.[{}].{}",
                         dim.hierarchy_unique_name(),
                         level.name,
-                        name
+                        member_key_suffix(&member_key)
                     ),
                     format!("{}.[{}]", dim.hierarchy_unique_name(), level.name),
                     (level_idx + 1) as i32,
@@ -216,8 +188,33 @@ fn leaf_member_for_dim(
         l_num,
         display_info: if cc > 0 { 131075 } else { 3 },
         children_cardinality: cc,
-        dim_props: dim_props_leaf(dim, name, requested, parent_uname),
+        dim_props: dim_props_leaf(dim, name, &member_key, requested, parent_uname),
     }
+}
+
+/// Extract the key path from a member UName (compound aware), e.g.
+/// `[Date].[Date].[Year].&[2026]` -> `2026`.
+fn key_from_member_uname(uname: &str) -> Option<String> {
+    let start = uname.rfind(".&amp;[")? + 7;
+    let mut rest = &uname[start..];
+    let mut parts = Vec::new();
+    loop {
+        let end = rest.find(']')?;
+        parts.push(rest[..end].to_string());
+        rest = &rest[end + 1..];
+        if let Some(next) = rest.strip_prefix("&amp;[") {
+            rest = next;
+        } else {
+            break;
+        }
+    }
+    Some(parts.join("|"))
+}
+
+fn member_key_suffix(key: &str) -> String {
+    key.split('|')
+        .map(|part| format!("&amp;[{}]", part))
+        .collect()
 }
 
 fn all_member_for_dim<B: QueryBackend + ?Sized>(

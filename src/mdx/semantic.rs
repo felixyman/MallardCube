@@ -313,7 +313,19 @@ fn third_bracket(s: &str) -> Option<String> {
 
 pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
     let idx = s.find(".&[")?;
-    Some(s[idx + 3..].split(']').next()?.to_string())
+    let mut rest = &s[idx + 3..];
+    let mut parts = Vec::new();
+    loop {
+        let end = rest.find(']')?;
+        parts.push(rest[..end].to_string());
+        rest = &rest[end + 1..];
+        if let Some(next) = rest.strip_prefix("&[") {
+            rest = next;
+        } else {
+            break;
+        }
+    }
+    Some(parts.join("|"))
 }
 
 fn extract_strtomember_targets(mdx: &str) -> Vec<String> {
@@ -446,7 +458,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         extra_filters.push(DimensionFilter {
             dimension: dim_name,
             members: vec![key],
-            level: None,
+            level: Some(level_name),
         });
         // Route to the single-dimension drilldown renderer,
         // not the DrilldownMemberProbe 2-dimension path.

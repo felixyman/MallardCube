@@ -275,56 +275,96 @@ fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(
 /// Parses filter like `[Date].[Date].[Year].&[2025]`, resolves the next
 /// level's column, and queries DuckDB directly.  Returns None if the
 /// filter doesn't match a multi-level dimension.
+fn key_suffix(key: &str) -> String {
+    key.split('|').map(|part| format!("&[{}]", part)).collect()
+}
+
 fn query_level_children<B: QueryBackend + ?Sized>(
     filter: &str,
     _existing_rows: &[MemberRow],
     backend: &B,
 ) -> Option<Vec<MemberRow>> {
     let decoded = filter.replace("&amp;", "&");
-    // Parse [Hier].[Hier].[Level].&[key] format
-    // Extract: hier_path, level_name, key
+    // Parse [Hier].[Hier].[Level].&[key] — the key may be compound
+    // (&[2026]&[4]) to carry the ancestor path for a non-unique level.
     let (hier_path, level_name, key) = parse_level_member(&decoded)?;
     let project = proxy_project::project();
     let model = &project.model;
-    // Find the dimension whose hierarchy matches
     let dim = model
         .dimensions
         .iter()
         .find(|d| d.hierarchy_unique_name() == hier_path)?;
-    // Find the current level
     let level_idx = dim.levels.iter().position(|l| l.name == level_name)?;
-    // Get the next level (children)
     let next_level = dim.levels.get(level_idx + 1)?;
-    // Build SQL: SELECT DISTINCT next_level.column FROM table
-    // WHERE current_level.column = 'key' ORDER BY 1
     let table = model.dim_table_for_discovery(&dim.id);
-    let parent_col = &dim.levels[level_idx].column;
-    // First get the parent member to compute its cardinality
+
+    // Scope by the ancestor path carried in the key. A quarter's key 2026|4
+    // must filter both year=2026 and quarter=4, not all years' Q4s. Align the
+    // key to the end of the level chain (a bare key applies to the level it is
+    // on).
+    let key_parts: Vec<&str> = key.split('|').collect();
+    let start = level_idx + 1 - key_parts.len();
+    let conditions: Vec<String> = key_parts
+        .iter()
+        .enumerate()
+        .filter_map(|(j, v)| {
+            let l = dim.levels.get(start + j)?;
+            Some(format!(
+                "CAST({} AS VARCHAR) = '{}'",
+                l.column,
+                v.replace('\'', "''")
+            ))
+        })
+        .collect();
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
     let count_sql = format!(
-        "SELECT COUNT(DISTINCT {}) FROM {} WHERE CAST({} AS VARCHAR) = '{}'",
-        next_level.column, table, parent_col, key
+        "SELECT COUNT(DISTINCT {}) FROM {}{}",
+        next_level.column, table, where_sql
     );
     let child_count = backend.query_count(&count_sql);
-    let child_cardinality = if level_idx + 2 < dim.levels.len() {
-        dim.levels[level_idx + 2].cardinality.max(1)
-    } else {
-        0
+    // Per-child cardinality: the number of children each returned member has
+    // (a quarter has 3 months, a month has its day count), not the global
+    // next-next level count, which Excel sees as inconsistent with the cellset.
+    let child_cc_map: std::collections::HashMap<String, u32> = match dim.levels.get(level_idx + 2) {
+        Some(nn) => {
+            let cc_sql = format!(
+                "SELECT CAST({} AS VARCHAR), COUNT(DISTINCT {}) FROM {}{} GROUP BY 1",
+                next_level.column, nn.column, table, where_sql
+            );
+            backend
+                .query_grouped_1d(&cc_sql)
+                .into_iter()
+                .map(|(k, v)| (k, v as u32))
+                .collect()
+        }
+        None => std::collections::HashMap::new(),
     };
     let sql = format!(
-        "SELECT DISTINCT CAST({} AS VARCHAR) FROM {} WHERE CAST({} AS VARCHAR) = '{}' ORDER BY 1",
-        next_level.column, table, parent_col, key
+        "SELECT DISTINCT CAST({} AS VARCHAR) FROM {}{} ORDER BY 1",
+        next_level.column, table, where_sql
     );
     let child_names = backend.query_strings(&sql);
     if child_names.is_empty() {
         return Some(vec![]);
     }
-    let parent_u = format!("{}.[{}].&[{}]", hier_path, level_name, key);
+    let parent_u = format!("{}.[{}].{}", hier_path, level_name, key_suffix(&key));
     let mut rows: Vec<MemberRow> = child_names
         .iter()
         .enumerate()
         .map(|(ord, name)| {
-            let child_u = format!("{}.[{}].&[{}]", hier_path, next_level.name, name);
+            let child_key = format!("{key}|{name}");
+            let child_u = format!(
+                "{}.[{}].{}",
+                hier_path,
+                next_level.name,
+                key_suffix(&child_key)
+            );
             let child_level_u = format!("{}.[{}]", hier_path, next_level.name);
+            let child_cc = child_cc_map.get(name).copied().unwrap_or(0);
             let xml = member_xml_for_discover(
                 &dim.dimension_unique_name(),
                 &dim.hierarchy_unique_name(),
@@ -334,7 +374,7 @@ fn query_level_children<B: QueryBackend + ?Sized>(
                 name,
                 &child_u,
                 name,
-                child_cardinality,
+                child_cc,
                 (level_idx + 1) as u32,
                 Some(&parent_u),
                 name,
@@ -347,22 +387,35 @@ fn query_level_children<B: QueryBackend + ?Sized>(
             }
         })
         .collect();
-    // Prepend the parent member
+    // Prepend the parent member, whose own parent is the ancestor level (not
+    // always the (All) member once a quarter carries a year).
     let parent_cardinality = child_count;
     let parent_level_u = format!("{}.[{}]", hier_path, level_name);
+    let parent_name = key.rsplit('|').next().unwrap_or(&key).to_string();
+    let parent_parent = if level_idx == 0 {
+        dim.all_member_unique_name()
+    } else {
+        let ancestor_key = key_parts[..key_parts.len() - 1].join("|");
+        format!(
+            "{}.[{}].{}",
+            hier_path,
+            dim.levels[level_idx - 1].name,
+            key_suffix(&ancestor_key)
+        )
+    };
     let parent_xml = member_xml_for_discover(
         &dim.dimension_unique_name(),
         &dim.hierarchy_unique_name(),
         &parent_level_u,
         (level_idx + 1) as u32,
         0,
-        &key,
+        &parent_name,
         &parent_u,
-        &key,
+        &parent_name,
         parent_cardinality,
         0,
-        Some(&dim.all_member_unique_name()),
-        &key,
+        Some(&parent_parent),
+        &parent_name,
     );
     rows.insert(
         0,
@@ -370,13 +423,14 @@ fn query_level_children<B: QueryBackend + ?Sized>(
             xml: parent_xml,
             dimension_id: dim.id.clone(),
             member_unique_name: parent_u.clone(),
-            parent_unique_name: Some(dim.all_member_unique_name()),
+            parent_unique_name: Some(parent_parent),
         },
     );
     Some(rows)
 }
 
-/// Try to parse `[Hier].[Hier].[Level].&[key]` into components.
+/// Try to parse `[Hier].[Hier].[Level].&[key]` (key may be compound, e.g.
+/// `&[2026]&[4]`) into (hier_path, level_name, key_path).
 fn parse_level_member(filter: &str) -> Option<(String, String, String)> {
     let rest = filter.strip_prefix('[')?;
     let close = rest.find(']')?;
@@ -390,9 +444,19 @@ fn parse_level_member(filter: &str) -> Option<(String, String, String)> {
     let close = rest.find(']')?;
     let level = &rest[..close];
     let rest = &rest[close + 1..];
-    let rest = rest.strip_prefix(".&[")?;
-    let close = rest.find(']')?;
-    let key = rest[..close].to_string();
+    let mut rest = rest.strip_prefix(".&[")?;
+    let mut parts = Vec::new();
+    loop {
+        let close = rest.find(']')?;
+        parts.push(rest[..close].to_string());
+        rest = &rest[close + 1..];
+        if let Some(next) = rest.strip_prefix("&[") {
+            rest = next;
+        } else {
+            break;
+        }
+    }
+    let key = parts.join("|");
     let hier_path = format!("[{}].[{}]", _dim, hier_part);
     Some((hier_path, level.to_string(), key))
 }
