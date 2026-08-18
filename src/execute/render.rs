@@ -209,6 +209,26 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         query.drilldown_level,
         parent_uname.as_deref(),
     );
+    // Report the real per-member child count so Excel's expand indicators stay
+    // consistent (a year has 4 quarters, a quarter has 3 months, a month has its
+    // day count). Without this, Excel shows a missing "+" on years and a
+    // mismatched expand state on quarters.
+    if let Some(dl) = query.drilldown_level {
+        let key_path = query
+            .filters
+            .iter()
+            .find(|f| f.dimension == *dim)
+            .and_then(|f| f.members.first())
+            .cloned()
+            .unwrap_or_default();
+        let cc_map = drill_children_cardinalities(backend, dim, dl, &key_path);
+        for m in &mut members {
+            if let Some(cc) = cc_map.get(&m.caption) {
+                m.children_cardinality = *cc;
+                m.display_info = if *cc > 0 { 131075 } else { 3 };
+            }
+        }
+    }
     // Prepend the parent member so Excel can establish the
     // parent-child link for multi-level hierarchy expandability.
     let mut inserted_parent = false;
@@ -238,9 +258,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     caption: key.clone(),
                     l_name: parent_lname,
                     l_num: dl as i32,
-                    display_info: 0,
-                    children_cardinality: 0,
-                    dim_props: vec![],
+                    display_info: if data.is_empty() { 3 } else { 131075 },
+                    children_cardinality: data.len() as u32,
+                    dim_props: vec![
+                        ("PARENT_UNIQUE_NAME".into(), def.all_member_unique_name()),
+                        ("HIERARCHY_UNIQUE_NAME".into(), def.hierarchy_unique_name()),
+                    ],
                 })
             } else {
                 None
@@ -277,6 +300,54 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         cells,
         &query.cell_props,
     )
+}
+
+/// Per-member child count at `level_idx` of `dim`, scoped by the ancestor path
+/// in `key_path` (e.g. `2026` for quarters under year 2026). Returns the number
+/// of distinct values at the next level beneath each member.
+fn drill_children_cardinalities<B: QueryBackend + ?Sized>(
+    backend: &B,
+    dim: &str,
+    level_idx: usize,
+    key_path: &str,
+) -> std::collections::HashMap<String, u32> {
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    let Some(dim_def) = model.dim_def_opt(dim) else {
+        return std::collections::HashMap::new();
+    };
+    let Some(level) = dim_def.levels.get(level_idx) else {
+        return std::collections::HashMap::new();
+    };
+    let Some(next) = dim_def.levels.get(level_idx + 1) else {
+        return std::collections::HashMap::new();
+    };
+    let table = model.dim_table_for_discovery(dim);
+    let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
+    let mut wc = String::new();
+    if key_parts.len() == level_idx && level_idx > 0 {
+        let conds: Vec<String> = dim_def.levels[..level_idx]
+            .iter()
+            .zip(key_parts.iter())
+            .map(|(l, v)| {
+                format!(
+                    "CAST({} AS VARCHAR) = '{}'",
+                    l.column,
+                    v.replace('\'', "''")
+                )
+            })
+            .collect();
+        wc = format!(" WHERE {}", conds.join(" AND "));
+    }
+    let sql = format!(
+        "SELECT CAST({} AS VARCHAR), COUNT(DISTINCT {}) FROM {}{} GROUP BY 1",
+        level.column, next.column, table, wc
+    );
+    backend
+        .query_grouped_1d(&sql)
+        .into_iter()
+        .map(|(name, count)| (name, count as u32))
+        .collect()
 }
 
 pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
