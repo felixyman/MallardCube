@@ -398,27 +398,46 @@ fn sql_where_with_cols(
             }
             continue;
         }
-        // Level-qualified filter (e.g. [Date].[Date].[Year].&[2024]): filter the
-        // hierarchy level's column via a subquery on the relationship's dim table.
+        // Level-qualified filter (e.g. [Date].[Date].[Year].&[2024], or a
+        // compound [Date].[Date].[Quarter].&[2026]&[4]): filter the hierarchy
+        // level's column via a subquery on the relationship's dim table. A
+        // compound key carries ancestor values, so every ancestor predicate is
+        // applied (year=2026 AND quarter=4) to scope correctly.
         if let Some(level_name) = &f.level
             && let (Some(d), Some(rel)) = (
                 model.dim_def_opt(&f.dimension),
                 model.rel_for_dimension(&f.dimension),
             )
-            && let Some(level) = d.levels.iter().find(|l| &l.name == level_name)
+            && let Some(level_idx) = d.levels.iter().position(|l| &l.name == level_name)
         {
-            let vals: Vec<String> = f
-                .members
-                .iter()
-                .map(|m| format!("'{}'", m.replace('\'', "''")))
-                .collect();
+            let mut ors: Vec<String> = Vec::new();
+            for key in &f.members {
+                let parts: Vec<&str> = key.split('|').collect();
+                // Align the key path to the end of the level chain: the last
+                // part matches the filter's level, earlier parts its ancestors
+                // (a single [Month].&[6] scopes month=6; [Quarter].&[2026]&[4]
+                // scopes year=2026 AND quarter=4).
+                let start = level_idx + 1 - parts.len();
+                let mut ands: Vec<String> = Vec::new();
+                for (j, v) in parts.iter().enumerate() {
+                    if let Some(l) = d.levels.get(start + j) {
+                        ands.push(format!(
+                            "CAST({} AS VARCHAR) = '{}'",
+                            l.column,
+                            v.replace('\'', "''")
+                        ));
+                    }
+                }
+                if !ands.is_empty() {
+                    ors.push(format!("({})", ands.join(" AND ")));
+                }
+            }
             parts.push(format!(
-                "f.{} IN (SELECT {} FROM {} WHERE CAST({} AS VARCHAR) IN ({}))",
+                "f.{} IN (SELECT {} FROM {} WHERE {})",
                 rel.fact_column,
                 rel.dim_column,
                 rel.dim_table,
-                level.column,
-                vals.join(", ")
+                ors.join(" OR ")
             ));
             continue;
         }

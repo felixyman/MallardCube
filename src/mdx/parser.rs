@@ -59,6 +59,19 @@ fn bracket_str(input: &str) -> IResult<&str, &str> {
     Ok((input, inner))
 }
 
+/// Parse one or more compound MDX key components: `&[2026]&[4]` becomes the
+/// internal path `2026|4`.
+fn composite_key(input: &str) -> IResult<&str, String> {
+    let (mut rest, first) = bracket_str(input)?;
+    let mut parts = vec![first.to_string()];
+    while rest.starts_with('&') {
+        let (next, part) = bracket_str(&rest[1..])?;
+        parts.push(part.to_string());
+        rest = next;
+    }
+    Ok((rest, parts.join("|")))
+}
+
 fn dim_hierarchy(input: &str) -> IResult<&str, (DimRef, String)> {
     let (input, dim) = bracket(dim_name)(input)?;
     let (input, _) = char('.')(input)?;
@@ -90,7 +103,7 @@ fn member_all(input: &str) -> IResult<&str, MemberRef> {
 fn member_leaf(input: &str) -> IResult<&str, MemberRef> {
     let (input, (dim, _hier)) = dim_hierarchy(input)?;
     let (input, _) = tag(".&")(input)?;
-    let (input, key) = bracket_str(input)?;
+    let (input, key) = composite_key(input)?;
     Ok((
         input,
         MemberRef::Leaf {
@@ -127,7 +140,7 @@ fn member_level_leaf(input: &str) -> IResult<&str, MemberRef> {
     let (input, _) = char('.')(input)?;
     let (input, level) = bracket_str(input)?;
     let (input, _) = tag(".&")(input)?;
-    let (input, key) = bracket_str(input)?;
+    let (input, key) = composite_key(input)?;
     Ok((
         input,
         MemberRef::Leaf {

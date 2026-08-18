@@ -1934,6 +1934,54 @@ mod tests {
         });
     }
 
+    // Regression: a compound quarter member (&[2026]&[4]) must scope its months
+    // to that year (not all years' Q4s), carry the year-encoded keys, and the
+    // correct per-month child counts.
+    #[test]
+    fn compound_quarter_drilldown_scopes_to_year() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                r##"SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Quarter],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Quarter].&[2026]&[4]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue])"##,
+            );
+            assert_eq!(
+                cell_values(&xml),
+                vec![
+                    12_834_084.0,
+                    12_834_084.0,
+                    12_834_084.0,
+                    4_051_532.0,
+                    4_180_160.0,
+                    4_602_392.0
+                ],
+                "(All), Year 2026, and Q4 2026 totals, then October, November, December"
+            );
+            assert!(
+                xml.contains("<UName>[Date].[Date].[Month].&amp;[2026]&amp;[4]&amp;[10]</UName>"),
+                "month must carry the compound year path"
+            );
+            // The full ancestor chain must be on the axis so Excel can resolve
+            // each member's parent (a quarter without its year crashes).
+            assert!(
+                xml.contains("<UName>[Date].[Date].[Year].&amp;[2026]</UName>"),
+                "the year ancestor must be on the axis"
+            );
+            assert!(
+                xml.contains("<UName>[Date].[Date].[All]</UName>"),
+                "the (All) ancestor must be on the axis"
+            );
+            assert!(
+                xml.contains(
+                    "<PARENT_UNIQUE_NAME>[Date].[Date].[Quarter].&amp;[2026]&amp;[4]</PARENT_UNIQUE_NAME>"
+                ),
+                "month parent must be the compound quarter"
+            );
+            assert!(
+                xml.contains("<Caption>4</Caption>"),
+                "quarter caption should be the bare value, not the path"
+            );
+        });
+    }
+
     // Regression: axis set functions (TopCount/Order/Filter) must actually
     // transform the row set instead of being ignored.
     #[test]
