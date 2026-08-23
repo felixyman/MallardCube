@@ -34,6 +34,8 @@ pub fn sql_for_query_plan_with_context(
     match plan {
         // The count is known at parse time; no SQL needed.
         QueryPlan::MetaCountLiteral(_) => String::new(),
+        // Measures render from the model; no SQL needed.
+        QueryPlan::MeasuresList(_) => String::new(),
         QueryPlan::SetMembers {
             dim,
             group_level,

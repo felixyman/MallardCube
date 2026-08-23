@@ -106,6 +106,9 @@ pub enum QueryPlan {
     /// Count of an explicit member list — known at parse time.
     MetaCountLiteral(u32),
 
+    /// The model's measures as a set ([Measures].Members probes).
+    MeasuresList(MeasId),
+
     /// CUBESET member enumeration: group by the set source's FULL level path
     /// (compound keys), aggregated over the default measure.
     SetMembers {
@@ -227,6 +230,20 @@ fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
         .unwrap_or(default)
 }
 
+/// Strip Head/Tail wrappers, returning the underlying set source.
+fn innermost_source(se: &crate::mdx_parser::SetExpr) -> &crate::mdx_parser::SetExpr {
+    let mut cur = se;
+    loop {
+        match cur {
+            crate::mdx_parser::SetExpr::Head(inner, _)
+            | crate::mdx_parser::SetExpr::Tail(inner, _) => {
+                cur = inner;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Resolve a set-expression source to (dimension id, group level index):
 /// `AllMembers` → level 0, `LevelMembers{Some(level)}` → that level's index,
 /// `LevelMembers{None}` → the physical grain (`None`).
@@ -237,6 +254,8 @@ fn resolve_set_source(
 ) -> (DimId, Option<usize>) {
     let (dim, level): (String, Option<&String>) = match se {
         crate::mdx_parser::SetExpr::MemberList { .. } => return (default.clone(), None),
+        // Measures sets are planned as MeasuresList before this runs.
+        crate::mdx_parser::SetExpr::Measures => return (default.clone(), None),
         crate::mdx_parser::SetExpr::AllMembers { dim } => (dim.clone(), None),
         crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.as_ref()),
         // Wrappers are pruned at render time; plan on their source.
@@ -342,6 +361,7 @@ pub fn plan_from_semantic_with_model_and_context(
                 }
             }
         }
+        QueryPlan::MeasuresList(_) => {}
         QueryPlan::Count { dimension } => {
             let table = model.dim_table_for_discovery(dimension);
             if effective_table_filter(config, user, table) == TableAccess::Hidden {
@@ -400,6 +420,9 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         if let crate::mdx_parser::SetExpr::MemberList { unames } = &cc.set {
             return QueryPlan::MetaCountLiteral(unames.len() as u32);
         }
+        if matches!(cc.set, crate::mdx_parser::SetExpr::Measures) {
+            return QueryPlan::MetaCountLiteral(model.measures.len() as u32);
+        }
         let (dim_id, group_level) = resolve_set_source(&cc.set, model, default_dim.clone());
         return QueryPlan::MetaCount {
             dim: dim_id,
@@ -414,10 +437,12 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
             let Some(se) = &query.set_probe else {
                 return QueryPlan::Empty;
             };
-            // Explicit member lists render straight from their unames; no
-            // fact aggregation required for set validation/counting.
-            if matches!(se, crate::mdx_parser::SetExpr::MemberList { .. }) {
-                return QueryPlan::Empty;
+            // Plan on the innermost source: explicit lists and measure lists
+            // need no fact aggregation regardless of Head/Tail wrappers.
+            match innermost_source(se) {
+                crate::mdx_parser::SetExpr::MemberList { .. } => return QueryPlan::Empty,
+                crate::mdx_parser::SetExpr::Measures => return QueryPlan::MeasuresList(meas),
+                _ => {}
             }
             let (dim_id, group_level) = resolve_set_source(se, model, default_dim.clone());
             QueryPlan::SetMembers {
@@ -579,6 +604,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     }
     match plan {
         QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
+        QueryPlan::MeasuresList(_) => QueryResult::Empty,
         QueryPlan::SetMembers { group_level: _, .. } => {
             let mut rows = backend.query_grouped_1d(sql);
             rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -829,6 +855,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
 
     match plan {
         QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
+        QueryPlan::MeasuresList(_) => QueryResult::Empty,
         QueryPlan::SetMembers { group_level: _, .. } => {
             let mut rows = backend.query_grouped_1d(&sql);
             rows.sort_by(|a, b| a.0.cmp(&b.0));

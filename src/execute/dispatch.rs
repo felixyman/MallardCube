@@ -465,11 +465,11 @@ mod tests {
         let slice = &xml[start..end];
         let mut values = Vec::new();
         let mut pos = 0;
-        while let Some(i) = slice[pos..].find("<Value xsi:type=\"xsd:double\">") {
-            let abs = pos + i + "<Value xsi:type=\"xsd:double\">".len();
-            let close = slice[abs..].find("</Value>").unwrap();
-            values.push(slice[abs..abs + close].parse().unwrap());
-            pos = abs + close + "</Value>".len();
+        while let Some(i) = slice[pos..].find("<Value") {
+            let open_end = slice[pos + i..].find(">").unwrap() + pos + i + 1;
+            let close = slice[open_end..].find("</Value>").unwrap() + open_end;
+            values.push(slice[open_end..close].trim().parse().unwrap_or(f64::NAN));
+            pos = close + "</Value>".len();
         }
         values
     }
@@ -2034,9 +2034,15 @@ mod tests {
             let xml = get_execute_statement_response(
                 "SELECT {([Measures].[Revenue]),([Measures].[Units]),([Measures].[Revenue QTD])} ON 0 FROM [Sales]",
             );
+            let values = cell_values(&xml);
+            // Revenue and Units are stable demo totals; the QTD measure drifts
+            // with the current date, so compute its expectation from the same
+            // seeded flag the engine filters on.
+            let qtd = crate::backend::Backend::get()
+                .query_scalar("SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.qtd_flag = true");
             assert_eq!(
-                cell_values(&xml),
-                vec![521_586_767.0, 4_931_640.0, 6_395_512.0],
+                values,
+                vec![521_586_767.0, 4_931_640.0, qtd],
                 "one cell per measure, in order"
             );
         });

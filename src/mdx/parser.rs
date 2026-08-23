@@ -550,6 +550,8 @@ pub enum CmpOp {
 /// validation: a member source optionally wrapped in Head/Tail/Subset.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetExpr {
+    /// `[Measures].Members` — every defined measure.
+    Measures,
     /// `[Dim].[Hier].[Level].Members` — level None means the leaf/physical
     /// grain (`[Dim].[Hier].Members`).
     LevelMembers { dim: String, level: Option<String> },
@@ -598,7 +600,14 @@ fn parse_set_source(text: &str) -> Option<SetExpr> {
         segs.push(after[..close].to_string());
         rest = &after[close + 1..];
     }
-    if segs.len() < 2 || segs.len() > 3 {
+    if segs.len() == 1 {
+        // `[Measures].Members`
+        if segs[0] == "Measures" && func.eq_ignore_ascii_case("Members") {
+            return Some(SetExpr::Measures);
+        }
+        return None;
+    }
+    if segs.len() > 3 {
         return None;
     }
     let dim = segs[0].clone();

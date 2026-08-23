@@ -335,6 +335,7 @@ fn measurement_cell_for_measure(
         back_color: String::new(),
         fore_color: String::new(),
         string_value: None,
+        int_value: None,
     }
 }
 
@@ -347,6 +348,7 @@ pub(crate) fn count_cell(ordinal: u32, value: u32) -> cellset::CellConfig {
         back_color: String::new(),
         fore_color: String::new(),
         string_value: None,
+        int_value: Some(value as i32),
     }
 }
 

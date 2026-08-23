@@ -42,6 +42,9 @@ pub struct CellConfig {
     pub fore_color: String,
     /// When set, emits `<Value xsi:type="xsd:string">` instead of numeric Value.
     pub string_value: Option<String>,
+    /// When set, emits `<Value xsi:type="xsd:int">` — Count() results are
+    /// integers in the MDX type system (Excel's CUBECOUNT expects this).
+    pub int_value: Option<i32>,
 }
 
 /// An axis description — name, hierarchy identity, and the member list.
@@ -183,6 +186,11 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
         if resp.include_value {
             if let Some(ref sv) = cell.string_value {
                 out.push_str(&format!("              <Value>{}</Value>\n", sv));
+            } else if let Some(iv) = cell.int_value {
+                // SSAS serializes Count() results as xsd:int, not double.
+                out.push_str(&format!(
+                    "              <Value xsi:type=\"xsd:int\">{iv}</Value>\n"
+                ));
             } else {
                 out.push_str(&format!(
                     r#"              <Value xsi:type="xsd:double">{val}</Value>

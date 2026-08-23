@@ -7,7 +7,12 @@
 - **Risk**: MEDIUM (classification order changes)
 - **Depends on**: none
 - **Category**: compatibility
-- **Status**: DONE (CUBECOUNT client-side quirk tracked separately)
+- **Status**: DONE
+- **Follow-up note**: `CUBECOUNT` is not part of Microsoft's documented Excel
+  function set (canonical: `CUBESETCOUNT`, which works). All server-side probe
+  shapes it triggers evaluate correctly; its residual #VALUE in one long-lived
+  workbook is client-side (fires correct probes, then errors without further
+  requests).
 
 ## Why this matters
 

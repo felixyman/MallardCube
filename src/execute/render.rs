@@ -1156,6 +1156,9 @@ fn build_set_members<B: QueryBackend + ?Sized>(
                 crate::mdx_parser::SetExpr::AllMembers { dim } => {
                     break (dim.clone(), Some(0), None);
                 }
+                crate::mdx_parser::SetExpr::Measures => {
+                    break (String::new(), None, None);
+                }
                 crate::mdx_parser::SetExpr::MemberList { unames } => {
                     break (String::new(), None, Some(unames.clone()));
                 }
@@ -1164,7 +1167,22 @@ fn build_set_members<B: QueryBackend + ?Sized>(
     };
 
     // Materialize (uname, caption, value) triples for the set's members.
-    let mut entries: Vec<(String, String, f64)> = if let Some(unames) = &member_list {
+    let is_measures = matches!(se, crate::mdx_parser::SetExpr::Measures);
+    let mut entries: Vec<(String, String, f64)> = if is_measures {
+        crate::proxy_project::project()
+            .model
+            .measures
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.measure_unique_name(),
+                    m.display_name.clone(),
+                    data.get(i).map(|(_, v)| *v).unwrap_or(0.0),
+                )
+            })
+            .collect()
+    } else if let Some(unames) = &member_list {
         let lookup: std::collections::HashMap<String, f64> = data.iter().cloned().collect();
         unames
             .iter()
@@ -1195,7 +1213,13 @@ fn build_set_members<B: QueryBackend + ?Sized>(
         }
     }
 
-    let (members, axis_hier) = if let Some(unames) = &member_list {
+    let (members, axis_hier) = if is_measures {
+        let ms: Vec<cellset::MemberConfig> = entries
+            .iter()
+            .map(|(uname, caption, _)| measures_member(uname, caption))
+            .collect();
+        (ms, measures_hierarchy())
+    } else if let Some(unames) = &member_list {
         // Render explicit members straight from their unique names.
         let dim_tok = unames
             .first()
@@ -1369,6 +1393,7 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
                 back_color: String::new(),
                 fore_color: String::new(),
                 string_value: Some(xml_escape(&val)),
+                int_value: None,
             });
             cell_ordinal += 1;
         }

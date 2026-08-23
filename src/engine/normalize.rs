@@ -36,6 +36,10 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             format!("metacountliteral|{n}")
         }
 
+        QueryPlan::MeasuresList(m) => {
+            format!("measureslist|{m}")
+        }
+
         QueryPlan::SetMembers {
             dim,
             group_level,
