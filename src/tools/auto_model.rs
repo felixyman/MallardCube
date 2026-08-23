@@ -464,6 +464,7 @@ fn dimension(id: &str, physical_field: &str, ordinal: u32, cardinality: u32) -> 
         shared: false,
         is_date_role: false,
         hierarchy_levels: vec![],
+        parent_child: None,
     }
 }
 

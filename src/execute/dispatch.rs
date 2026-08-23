@@ -1009,6 +1009,144 @@ mod tests {
         });
     }
 
+    // Parent-child hierarchy: org chart materialized into Level 01..NN
+    // columns at project load; probes, rollups and drilldown must behave like
+    // an explicit hierarchy (SSAS subtree-sum semantics).
+    #[test]
+    fn parent_child_org_chart_end_to_end() {
+        let dir = std::env::temp_dir().join(format!(
+            "mallardcube-pc-{}-{:#x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("org.duckdb");
+        {
+            let conn = duckdb::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE employee_dim (k INT, p INT, name VARCHAR);
+                 INSERT INTO employee_dim VALUES
+                   (1,NULL,'CEO'),(2,1,'CTO'),(3,1,'CFO'),
+                   (4,2,'DevA'),(5,2,'DevB'),(6,3,'FinA'),(9,NULL,'COO');
+                 CREATE TABLE fact_emp (employee_key INT, revenue DOUBLE);
+                 INSERT INTO fact_emp VALUES (1,1000),(2,10),(4,100),(5,50),(6,30),(9,20);",
+            )
+            .unwrap();
+        }
+        let cfg = serde_json::json!({
+            "catalog": "ORG",
+            "cube": "Org",
+            "source_name": "org",
+            "table_name": "fact_emp",
+            "dialect": "duckdb",
+            "db_path": "org.duckdb",
+            "relationships": [{
+                "fact_table": "default",
+                "fact_column": "employee_key",
+                "dimension_id": "Employee",
+                "dim_table": "employee_dim",
+                "dim_column": "k"
+            }],
+            "dimensions": [{
+                "id": "Employee",
+                "physical_field": "k",
+                "caption": "Employee",
+                "description": "",
+                "hierarchy_name": "Employee",
+                "all_level_name": "(All)",
+                "leaf_level_name": "Employee",
+                "ordinal": 1,
+                "visible": true,
+                "has_all": true,
+                "cardinality_hint": 10,
+                "parent_child": {"key_column": "k", "parent_column": "p"}
+            }],
+            "measures": [{
+                "id": "Revenue",
+                "sql_expr": "SUM(revenue)",
+                "caption": "Revenue",
+                "display_name": "Revenue",
+                "description": "",
+                "format_string": "0",
+                "units": "",
+                "ordinal": 1,
+                "visible": true,
+                "measure_group_name": "Org"
+            }]
+        });
+        std::fs::write(
+            dir.join("proxy-config.json"),
+            serde_json::to_string_pretty(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let p = crate::proxy_project::ProxyProject::load(
+            dir.join("proxy-config.json").to_str().unwrap(),
+        )
+        .expect("load pc project");
+
+        crate::project::project::with_test_project(p, || {
+            let project = crate::proxy_project::project();
+
+            // Model: synthetic levels injected from the recursion.
+            let emp = project.model.dim_def_opt("Employee").expect("Employee dim");
+            assert_eq!(emp.levels.len(), 3, "{:?}", emp.levels);
+            assert_eq!(emp.levels[0].name, "Level 01");
+            assert_eq!(emp.levels[0].column, "Employee__pc_l1");
+            assert_eq!(emp.levels[0].cardinality, 2, "roots CEO + COO");
+            assert_eq!(emp.levels[2].cardinality, 3, "leaves DevA/DevB/FinA");
+
+            let conn = duckdb::Connection::open(&db_path).unwrap();
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            // CUBECOUNT probe over Level 02 members.
+            let cnt = crate::execute_builders::get_execute_cellset_response_with_backend(
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Employee].[Employee].[Level 02].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Org] CELL PROPERTIES VALUE",
+                &backend,
+                &project.model,
+            );
+            assert!(cnt.contains(">2<"), "Level02 count=2: {cnt}");
+
+            // Drilldown from All: roots with SSAS subtree-rollup sums
+            // (root 1 subtree = 1000+10+100+50+30+? ; root 9 = 20).
+            let dd = crate::execute_builders::get_execute_cellset_response_with_backend(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Employee].[Employee].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Org] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
+                &backend,
+                &project.model,
+            );
+            assert!(
+                dd.contains("[Employee].[Employee].[Level 01].&amp;[1]"),
+                "compound root uname: {dd}"
+            );
+            let vals = cell_values(&dd);
+            // (All) branch total + one cell per root.
+            assert_eq!(
+                vals,
+                vec![1210.0, 1190.0, 20.0],
+                "(All)=1210; CEO subtree=1000+10+100+50+30? no—FinA(6) sits under CFO: 1000+10+100+50=1160+30=1190; COO=20 {dd}"
+            );
+
+            // SELF probe on a compound child member.
+            let self_xml = crate::xmla::discover::members::get_members_response_with_backend(
+                Some("[Employee].[Employee].[Level 02].&[1]&[2]"),
+                Some(8),
+                &backend,
+                &crate::engine::model::UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(self_xml.matches("<row>").count(), 1, "{self_xml}");
+            assert!(
+                self_xml.contains("CTO") || self_xml.contains(">2<"),
+                "child of root 1: {self_xml}"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn crossjoin_display_info_is_positionally_correct() {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);

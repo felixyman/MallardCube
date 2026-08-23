@@ -893,6 +893,74 @@ pub(crate) fn val_to_string(v: duckdb::types::Value) -> String {
     }
 }
 
+pub fn prepare_parent_child(
+    conn: &duckdb::Connection,
+    table: &str,
+    key_column: &str,
+    parent_column: &str,
+    prefix: &str,
+) -> Result<Vec<(String, String, u32)>, duckdb::Error> {
+    let dq = '"';
+    let q = |id: &str| format!("{dq}{}{dq}", id.replace(dq, "\"\""));
+    let (t, k, p) = (q(table), q(key_column), q(parent_column));
+    let tmp = q(&format!("{prefix}__pc"));
+    let path_col = q(&format!("{prefix}__pc_path"));
+    let depth_col = q(&format!("{prefix}__pc_depth"));
+
+    // Roots: NULL parent, empty parent, or self-reference (cycle guard).
+    conn.execute_batch(&format!(
+        r#"CREATE OR REPLACE TEMP TABLE {tmp} AS
+WITH RECURSIVE pc AS (
+  SELECT CAST({t}.{k} AS VARCHAR) AS k,
+     CAST({t}.{k} AS VARCHAR) AS path,
+     1 AS depth
+FROM {t}
+   WHERE {t}.{p} IS NULL
+  OR CAST({t}.{p} AS VARCHAR) = ''
+  OR CAST({t}.{p} AS VARCHAR) = CAST({t}.{k} AS VARCHAR)
+  UNION ALL
+  SELECT CAST(c.{k} AS VARCHAR), pc.path || '|' || CAST(c.{k} AS VARCHAR), pc.depth + 1
+FROM {t} c JOIN pc ON CAST(c.{p} AS VARCHAR) = pc.k
+   WHERE pc.depth < 64
+)
+SELECT k, path, depth FROM pc;"#
+    ))?;
+
+    conn.execute_batch(&format!(
+        "ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {path_col} VARCHAR; \
+         ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {depth_col} INTEGER;"
+    ))?;
+    conn.execute_batch(&format!(
+        r#"UPDATE {t} SET {path_col} = pc.path, {depth_col} = pc.depth
+             FROM {tmp} pc WHERE CAST({t}.{k} AS VARCHAR) = pc.k;"#
+    ))?;
+
+    let depth: usize = conn.query_row(
+        &format!("SELECT COALESCE(MAX(depth), 0) FROM {tmp}"),
+        [],
+        |r| r.get::<_, usize>(0),
+    )?;
+
+    let mut out = Vec::new();
+    for i in 1..=depth {
+        let col = q(&format!("{prefix}__pc_l{i}"));
+        conn.execute_batch(&format!(
+            "ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} VARCHAR;"
+        ))?;
+        conn.execute_batch(&format!(
+            r#"UPDATE {t} SET {col} = CASE WHEN pc.depth >= {i}
+                     THEN split_part(pc.path, '|', {i}) END
+                 FROM {tmp} pc WHERE CAST({t}.{k} AS VARCHAR) = pc.k;"#
+        ))?;
+        let card: u32 =
+            conn.query_row(&format!("SELECT COUNT(DISTINCT {col}) FROM {t}"), [], |r| {
+                r.get::<_, u32>(0)
+            })?;
+        out.push((format!("Level {i:02}"), format!("{prefix}__pc_l{i}"), card));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::backend::{Backend, BackendSource};
@@ -906,6 +974,46 @@ mod tests {
             std::process::id(),
             TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn parent_child_prepare_materializes_levels() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE emp (k INT, p INT);
+             INSERT INTO emp VALUES (1,NULL),(2,1),(3,1),(4,2),(5,2),(6,3),(9,NULL);",
+        )
+        .unwrap();
+        let levels = super::prepare_parent_child(&conn, "emp", "k", "p", "emp").unwrap();
+        assert_eq!(levels.len(), 3, "three depths: {levels:?}");
+        assert_eq!(levels[0].0, "Level 01");
+        assert_eq!(levels[0].1, "emp__pc_l1");
+        // L1 roots = {1, 9}; L2 = {2, 3}; L3 = {4, 5, 6}
+        assert_eq!(levels[0].2, 2, "{levels:?}");
+        assert_eq!(levels[1].2, 2, "{levels:?}");
+        assert_eq!(levels[2].2, 3, "{levels:?}");
+
+        // Ragged columns: depth-2 members have L3 NULL; depth-3 members don't.
+        let shallow: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM emp WHERE emp__pc_l1 = '1' AND emp__pc_l3 IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shallow, 3, "root + members 2,3 stop before depth 3");
+        let deep: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM emp WHERE emp__pc_l1 = '1' AND emp__pc_l3 = '4'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(deep, 1, "member 4 carries its full path");
+
+        // Idempotent: rerunning must not change results.
+        let again = super::prepare_parent_child(&conn, "emp", "k", "p", "emp").unwrap();
+        assert_eq!(again, levels);
     }
 
     #[test]

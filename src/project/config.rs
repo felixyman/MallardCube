@@ -267,6 +267,18 @@ pub struct DimensionConfig {
     pub is_date_role: bool,
     #[serde(default)]
     pub hierarchy_levels: Vec<HierarchyLevelConfig>,
+    /// Parent-child hierarchy: a self-referencing (key, parent) pair on this
+    /// dimension's table. When set, synthetic levels (`Level 01..NN`) are
+    /// materialized from the recursion at project-load time and
+    /// `hierarchy_levels` is ignored.
+    #[serde(default)]
+    pub parent_child: Option<ParentChildConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParentChildConfig {
+    pub key_column: String,
+    pub parent_column: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

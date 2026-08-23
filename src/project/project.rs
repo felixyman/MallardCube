@@ -156,6 +156,7 @@ impl ProxyProject {
                         shared: false,
                         is_date_role: false,
                         hierarchy_levels: Vec::new(),
+                        parent_child: None,
                     },
                     crate::proxy_config::DimensionConfig {
                         id: "Region".into(),
@@ -173,6 +174,7 @@ impl ProxyProject {
                         shared: false,
                         is_date_role: false,
                         hierarchy_levels: Vec::new(),
+                        parent_child: None,
                     },
                 ],
                 measures: vec![crate::proxy_config::MeasureConfig {
@@ -233,7 +235,7 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             .collect()
     };
 
-    let dimensions: Vec<DimensionDef> = config
+    let mut dimensions: Vec<DimensionDef> = config
         .dimensions
         .iter()
         .map(|dc| {
@@ -284,6 +286,79 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
             }
         })
         .collect();
+
+    // Parent-child dimensions: materialize synthetic levels from the
+    // recursion (recursive CTE + per-depth ancestor columns) before the
+    // model is assembled, so every consumer sees ordinary LevelDefs.
+    if config.dimensions.iter().any(|d| d.parent_child.is_some()) {
+        let db_file = config.db_path.as_ref().map(|db| {
+            let p = Path::new(db);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                config_dir.join(p)
+            }
+        });
+        match db_file {
+            Some(db_file) => match duckdb::Connection::open(&db_file) {
+                Ok(conn) => {
+                    for (dc, dd) in config.dimensions.iter().zip(dimensions.iter_mut()) {
+                        let Some(pc) = &dc.parent_child else { continue };
+                        // The hierarchy lives on the dimension's OWN table —
+                        // taken from its relationship (fact_table would be wrong).
+                        let table = config
+                            .relationships
+                            .iter()
+                            .find(|r| r.dimension_id == dc.id)
+                            .map(|r| r.dim_table.clone());
+                        let Some(table) = table else {
+                            eprintln!(
+                                "config: parent_child dimension '{}' has no relationship/table; treating as flat",
+                                dd.id
+                            );
+                            continue;
+                        };
+                        match crate::backend::prepare_parent_child(
+                            &conn,
+                            &table,
+                            &pc.key_column,
+                            &pc.parent_column,
+                            &dd.id,
+                        ) {
+                            Ok(levels) => {
+                                dd.levels = levels
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, (name, column, cardinality))| {
+                                        crate::engine::model::LevelDef {
+                                            name,
+                                            column,
+                                            level_number: i as u32,
+                                            cardinality,
+                                        }
+                                    })
+                                    .collect();
+                                dd.leaf_level_name = dc.leaf_level_name.clone();
+                            }
+                            Err(e) => eprintln!(
+                                "config: parent-child prepare failed for '{}': {e} — treating as flat",
+                                dd.id
+                            ),
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "config: parent-child dims present but DB '{}' unavailable: {e}",
+                        db_file.display()
+                    )
+                }
+            },
+            None => {
+                eprintln!("config: parent_child dimensions require db_path (file-backed projects)")
+            }
+        }
+    }
 
     let measures: Vec<MeasureDef> =
         config
