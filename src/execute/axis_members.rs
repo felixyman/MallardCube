@@ -400,7 +400,11 @@ pub(crate) fn render_response(
         cube_name: proxy_project::project().config.cube.clone(),
         axes,
         cells,
-        include_value: cell_props.is_empty() || includes_prop(cell_props, "VALUE"),
+        // SSAS always ships <Value> in every cell; CELL PROPERTIES controls
+        // extra properties. Omitting Value (e.g. when Excel asks for only
+        // CELL_ORDINAL during CUBESET validation) makes MSOLAP reject the
+        // cellset outright.
+        include_value: true,
         include_fmt_value: includes_prop(cell_props, "FORMATTED_VALUE"),
         include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
         include_back_color: includes_prop(cell_props, "BACK_COLOR"),

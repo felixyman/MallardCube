@@ -96,6 +96,24 @@ pub enum QueryPlan {
         dimension: DimId,
     },
 
+    /// Metadata count over a set source's level (Excel CUBECOUNT probe).
+    /// No fact table involved.
+    MetaCount {
+        dim: DimId,
+        group_level: Option<usize>,
+    },
+
+    /// Count of an explicit member list — known at parse time.
+    MetaCountLiteral(u32),
+
+    /// CUBESET member enumeration: group by the set source's FULL level path
+    /// (compound keys), aggregated over the default measure.
+    SetMembers {
+        dim: DimId,
+        group_level: Option<usize>,
+        measure: MeasId,
+    },
+
     Empty,
 }
 
@@ -209,6 +227,37 @@ fn resolve_dim(s: &str, model: &SemanticModel, default: DimId) -> DimId {
         .unwrap_or(default)
 }
 
+/// Resolve a set-expression source to (dimension id, group level index):
+/// `AllMembers` → level 0, `LevelMembers{Some(level)}` → that level's index,
+/// `LevelMembers{None}` → the physical grain (`None`).
+fn resolve_set_source(
+    se: &crate::mdx_parser::SetExpr,
+    model: &SemanticModel,
+    default: DimId,
+) -> (DimId, Option<usize>) {
+    let (dim, level): (String, Option<&String>) = match se {
+        crate::mdx_parser::SetExpr::MemberList { .. } => return (default.clone(), None),
+        crate::mdx_parser::SetExpr::AllMembers { dim } => (dim.clone(), None),
+        crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.as_ref()),
+        // Wrappers are pruned at render time; plan on their source.
+        crate::mdx_parser::SetExpr::Head(inner, _) | crate::mdx_parser::SetExpr::Tail(inner, _) => {
+            return resolve_set_source(inner, model, default);
+        }
+    };
+    let dim_id = resolve_dim(&dim, model, default);
+    let group_level = level.and_then(|name| {
+        model
+            .dim_def_opt(&dim_id)
+            .and_then(|d| d.levels.iter().position(|l| l.name == *name))
+    });
+    // AllMembers counts first-level members.
+    let group_level = match se {
+        crate::mdx_parser::SetExpr::AllMembers { .. } => Some(0),
+        _ => group_level,
+    };
+    (dim_id, group_level)
+}
+
 /// Return only the filters that are compatible with the selected measure.
 /// Unrelated dimension filters are silently ignored (matching SSAS behavior
 /// for unrelated dimensions).
@@ -299,6 +348,13 @@ pub fn plan_from_semantic_with_model_and_context(
                 return QueryPlan::Empty;
             }
         }
+        QueryPlan::SetMembers { dim, .. } | QueryPlan::MetaCount { dim, .. } => {
+            let table = model.dim_table_for_discovery(dim);
+            if effective_table_filter(config, user, table) == TableAccess::Hidden {
+                return QueryPlan::Empty;
+            }
+        }
+        QueryPlan::MetaCountLiteral(_) => {}
         QueryPlan::Empty => {}
     }
 
@@ -338,7 +394,38 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         .map(|s| s.as_str())
         .unwrap_or("");
 
+    // Excel CUBECOUNT probe: metadata count over a set's level — no fact
+    // table involved.
+    if let Some(cc) = &query.set_count {
+        if let crate::mdx_parser::SetExpr::MemberList { unames } = &cc.set {
+            return QueryPlan::MetaCountLiteral(unames.len() as u32);
+        }
+        let (dim_id, group_level) = resolve_set_source(&cc.set, model, default_dim.clone());
+        return QueryPlan::MetaCount {
+            dim: dim_id,
+            group_level,
+        };
+    }
+
     match query.kind {
+        SemanticQueryKind::SetProbe => {
+            // CUBESET validation: aggregate the set's level like a drilldown,
+            // then prune rows in the renderer per Head/Tail.
+            let Some(se) = &query.set_probe else {
+                return QueryPlan::Empty;
+            };
+            // Explicit member lists render straight from their unames; no
+            // fact aggregation required for set validation/counting.
+            if matches!(se, crate::mdx_parser::SetExpr::MemberList { .. }) {
+                return QueryPlan::Empty;
+            }
+            let (dim_id, group_level) = resolve_set_source(se, model, default_dim.clone());
+            QueryPlan::SetMembers {
+                dim: dim_id,
+                group_level,
+                measure: meas,
+            }
+        }
         SemanticQueryKind::ChildrenCountForAll | SemanticQueryKind::ChildrenCountLeafProduct => {
             let d = if dim.is_empty() {
                 default_dim
@@ -484,10 +571,19 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     sql: &str,
     backend: &B,
 ) -> QueryResult {
+    if let QueryPlan::MetaCountLiteral(n) = plan {
+        return QueryResult::Count(*n);
+    }
     if sql.is_empty() {
         return QueryResult::Empty;
     }
     match plan {
+        QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
+        QueryPlan::SetMembers { group_level: _, .. } => {
+            let mut rows = backend.query_grouped_1d(sql);
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            QueryResult::Grouped(rows)
+        }
         QueryPlan::Total { .. } => QueryResult::Scalar(backend.query_scalar(sql)),
         QueryPlan::GroupBy {
             group_by, set_op, ..
@@ -504,6 +600,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
         | QueryPlan::MultiGroupBy { .. }
         | QueryPlan::TupleSet { .. } => QueryResult::Empty,
         QueryPlan::Count { .. } => QueryResult::Count(backend.query_count(sql)),
+        QueryPlan::MetaCount { .. } => QueryResult::Count(backend.query_count(sql)),
         QueryPlan::Empty => QueryResult::Empty,
     }
 }
@@ -723,11 +820,20 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         .map(|s| s.to_string())
         .unwrap_or_else(|| sql_for_query_plan_with_context(model, plan, user, config));
 
+    if let QueryPlan::MetaCountLiteral(n) = plan {
+        return QueryResult::Count(*n);
+    }
     if sql.is_empty() {
         return QueryResult::Empty;
     }
 
     match plan {
+        QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
+        QueryPlan::SetMembers { group_level: _, .. } => {
+            let mut rows = backend.query_grouped_1d(&sql);
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            QueryResult::Grouped(rows)
+        }
         QueryPlan::Total { .. } => {
             let total = backend.query_scalar(&sql);
             QueryResult::Scalar(total)
@@ -751,6 +857,11 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         }
 
         QueryPlan::Count { .. } => {
+            let count = backend.query_count(&sql);
+            QueryResult::Count(count)
+        }
+
+        QueryPlan::MetaCount { .. } => {
             let count = backend.query_count(&sql);
             QueryResult::Count(count)
         }

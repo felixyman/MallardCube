@@ -1034,7 +1034,9 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     if matches!(result, QueryResult::Empty)
         && !matches!(
             query.kind,
-            SemanticQueryKind::MeasureMetadataProbe | SemanticQueryKind::MemberOnlyProbe
+            SemanticQueryKind::MeasureMetadataProbe
+                | SemanticQueryKind::MemberOnlyProbe
+                | SemanticQueryKind::SetProbe
         )
     {
         return empty_cellset(query, backend);
@@ -1078,7 +1080,177 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         },
         SemanticQueryKind::MeasureMetadataProbe => build_measure_metadata_probe(query, backend),
         SemanticQueryKind::MemberOnlyProbe => build_member_only_probe(query, backend),
+        SemanticQueryKind::SetProbe => {
+            if let Some(cc) = &query.set_count {
+                build_set_count(query, result, cc)
+            } else if let Some(se) = &query.set_probe {
+                build_set_members(query, result, se, backend)
+            } else {
+                empty_cellset(query, backend)
+            }
+        }
     }
+}
+
+/// Render an Excel CUBECOUNT probe: one `[Measures].[name]` member on Axis0
+/// with the set's member count as the single cell value.
+fn build_set_count(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    cc: &crate::mdx_parser::CalculatedCount,
+) -> String {
+    let count = match result {
+        QueryResult::Count(c) => *c,
+        _ => 0,
+    };
+    let member = measures_member(&format!("[Measures].[{}]", cc.member_name), &cc.member_name);
+    render_response(
+        vec![
+            single_member_axis("Axis0", measures_hierarchy(), member),
+            crate::axis_members::dims_only_slicer_axis_with_backend(
+                query,
+                crate::backend::Backend::get(),
+            ),
+        ],
+        vec![count_cell(0, count)],
+        &query.cell_props,
+    )
+}
+
+/// Render a CUBESET validation probe: the set's members on Axis0 with real
+/// values, pruned per Head/Tail wrappers.
+fn build_set_members<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    se: &crate::mdx_parser::SetExpr,
+    backend: &B,
+) -> String {
+    let data = match result {
+        QueryResult::Grouped(data) => data.clone(),
+        _ => vec![],
+    };
+    // Unwrap pruning wrappers, remembering their order; the innermost source
+    // defines the planned level (or an explicit member list).
+    let mut prunes: Vec<(usize, bool)> = Vec::new(); // (n, is_head)
+    let (dim, group_level, member_list) = {
+        let mut cursor = se;
+        loop {
+            match cursor {
+                crate::mdx_parser::SetExpr::Head(inner, n) => {
+                    prunes.push((*n, true));
+                    cursor = inner;
+                }
+                crate::mdx_parser::SetExpr::Tail(inner, n) => {
+                    prunes.push((*n, false));
+                    cursor = inner;
+                }
+                crate::mdx_parser::SetExpr::LevelMembers { dim, level } => {
+                    let gl = level.as_ref().and_then(|ln| {
+                        crate::proxy_project::project()
+                            .model
+                            .dim_def_opt(dim)
+                            .and_then(|def| def.levels.iter().position(|l| l.name == *ln))
+                    });
+                    break (dim.clone(), gl, None);
+                }
+                crate::mdx_parser::SetExpr::AllMembers { dim } => {
+                    break (dim.clone(), Some(0), None);
+                }
+                crate::mdx_parser::SetExpr::MemberList { unames } => {
+                    break (String::new(), None, Some(unames.clone()));
+                }
+            }
+        }
+    };
+
+    // Materialize (uname, caption, value) triples for the set's members.
+    let mut entries: Vec<(String, String, f64)> = if let Some(unames) = &member_list {
+        let lookup: std::collections::HashMap<String, f64> = data.iter().cloned().collect();
+        unames
+            .iter()
+            .map(|u| {
+                let decoded = u.replace("&amp;", "&");
+                let caption = decoded
+                    .rsplit("&[")
+                    .next()
+                    .unwrap_or(&decoded)
+                    .trim_end_matches(']')
+                    .to_string();
+                let v = lookup.get(&caption).copied().unwrap_or(0.0);
+                (decoded, caption, v)
+            })
+            .collect()
+    } else {
+        data.iter()
+            .map(|(n, v)| (n.clone(), n.clone(), *v))
+            .collect()
+    };
+    // Apply Head/Tail wrappers in reverse declaration order.
+    for (n, is_head) in prunes.into_iter().rev() {
+        if is_head {
+            entries.truncate(n);
+        } else {
+            let start = entries.len().saturating_sub(n);
+            entries = entries[start..].to_vec();
+        }
+    }
+
+    let (members, axis_hier) = if let Some(unames) = &member_list {
+        // Render explicit members straight from their unique names.
+        let dim_tok = unames
+            .first()
+            .and_then(|u| u.split(']').next())
+            .map(|d| format!("[{d}]"))
+            .unwrap_or_default();
+        let hier_tok = unames
+            .first()
+            .map(|u| {
+                u.trim_start_matches('[')
+                    .split("].[")
+                    .nth(1)
+                    .and_then(|h| h.split(']').next())
+                    .unwrap_or("")
+            })
+            .unwrap_or("");
+        let hier_u = format!("{dim_tok}.[{hier_tok}]");
+        let ms = entries
+            .iter()
+            .map(|(uname, caption, _)| cellset::MemberConfig {
+                hierarchy: hier_u.clone(),
+                u_name: xml_escape(uname),
+                caption: xml_escape(caption),
+                l_name: xml_escape(&format!("{hier_u}.[{hier_tok}]")),
+                l_num: 1,
+                display_info: 3,
+                children_cardinality: 0,
+                dim_props: vec![],
+            })
+            .collect();
+        let hc = cellset::HierarchyConfig {
+            name: hier_u,
+            dim_prop_decls: vec![],
+        };
+        (ms, hc)
+    } else {
+        let names: Vec<String> = entries.iter().map(|(_, c, _)| c.clone()).collect();
+        let ms = leaf_members_from(dim.as_str(), &names, &query.dim_props, group_level, None);
+        let hc = hierarchy_for(dim.as_str(), &query.dim_props);
+        (ms, hc)
+    };
+    let cells: Vec<cellset::CellConfig> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, v))| measurement_cell_for_query(query, i as u32, *v))
+        .collect();
+
+    render_response(
+        vec![
+            member_list_axis("Axis0", axis_hier, members),
+            full_slicer_axis_with_backend(query, backend),
+        ],
+        cells,
+        &query.cell_props,
+    )
 }
 
 fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, backend: &B) -> String {

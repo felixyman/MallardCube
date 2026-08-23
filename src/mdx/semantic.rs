@@ -6,7 +6,8 @@
 /// Classification is now driven by `ParsedMdx` — structural flags
 /// set by the nom parser — instead of bare `contains(...)` chains.
 use crate::mdx_parser::{
-    AxisSetOp, CChildrenTarget, CalculatedMembersPat, DimRef, MemberRef, ParsedMdx,
+    AxisSetOp, CChildrenTarget, CalculatedCount, CalculatedMembersPat, DimRef, MemberRef,
+    ParsedMdx, SetExpr,
 };
 
 pub fn is_dax(statement: &str) -> bool {
@@ -232,6 +233,9 @@ pub enum SemanticQueryKind {
     DrilldownMemberProbe,
     MeasureMetadataProbe,
     MemberOnlyProbe,
+    /// Excel CUBESET validation / CUBECOUNT probes. See `set_probe` /
+    /// `set_count` on the query for which one fired.
+    SetProbe,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -270,6 +274,10 @@ pub struct SemanticQuery {
     /// Tuples on the SELECT axis (measure + member slicers), for multi-tuple
     /// CUBEVALUE batches. Empty unless the axis is a set of parenthesized tuples.
     pub axis_tuples: Vec<AxisTuple>,
+    /// A CUBESET-style set expression on the SELECT axis (`SetProbe`).
+    pub set_probe: Option<SetExpr>,
+    /// A calculated `COUNT(<set>)` member referenced by the axis (`SetProbe`).
+    pub set_count: Option<CalculatedCount>,
 }
 
 // ---- main classification entry point ----
@@ -374,6 +382,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         let props = extract_strtomember_properties(mdx);
         return SemanticQuery {
             kind: SemanticQueryKind::MeasureMetadataProbe,
+            set_probe: None,
+            set_count: None,
             dim_props: vec![],
             cell_props: parsed.cell_props.clone(),
             filters: vec![],
@@ -470,6 +480,35 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let mut filters = filters_from_parsed(&parsed);
     filters.extend(extra_filters);
 
+    // Excel CUBESET / CUBECOUNT probes: a calculated COUNT member referenced
+    // by the axis, or a set expression (HEAD/TAIL/bare Members) on the axis.
+    let set_count = parsed
+        .calculated_counts
+        .iter()
+        .find(|cc| {
+            let clause_end = mdx.to_uppercase().find(" FROM ").unwrap_or(mdx.len());
+            mdx[..clause_end]
+                .to_uppercase()
+                .contains(&format!("[MEASURES].[{}]", cc.member_name.to_uppercase()))
+        })
+        .cloned();
+    let set_probe = if set_count.is_none()
+        && parsed.axis_set_expr.is_some()
+        && matches!(parsed.calculated_members_pat, CalculatedMembersPat::None)
+        && !parsed.has_drilldown
+        && !parsed.has_drilldown_member
+        && !parsed.has_crossjoin
+        && parsed.axis_set_op.is_none()
+        && parsed.select_tuples.is_empty()
+    {
+        parsed.axis_set_expr.clone()
+    } else {
+        None
+    };
+    if set_count.is_some() || set_probe.is_some() {
+        kind = SemanticQueryKind::SetProbe;
+    }
+
     let member_only_unames: Vec<String> = if kind == SemanticQueryKind::MemberOnlyProbe {
         parse_member_only_unames(mdx)
     } else {
@@ -520,6 +559,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         metadata_probe_properties: vec![],
         member_only_unames,
         axis_set_op: parsed.axis_set_op.clone(),
+        set_probe,
+        set_count,
         axis_tuples: parsed
             .select_tuples
             .iter()
@@ -548,6 +589,49 @@ fn parse_member_only_unames(mdx: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cubecount_probe_classifies_as_set_count() {
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let q = semantic_query_from_mdx(mdx);
+        assert_eq!(q.kind, SemanticQueryKind::SetProbe);
+        let cc = q.set_count.expect("set_count set");
+        assert_eq!(cc.member_name, "XL_SD");
+        assert_eq!(
+            cc.set,
+            crate::mdx_parser::SetExpr::LevelMembers {
+                dim: "Date".into(),
+                level: Some("Year".into())
+            }
+        );
+    }
+
+    #[test]
+    fn cubeset_probe_classifies_as_set_member_probe() {
+        let mdx = "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
+        let q = semantic_query_from_mdx(mdx);
+        assert_eq!(q.kind, SemanticQueryKind::SetProbe);
+        assert!(q.set_count.is_none());
+        assert!(matches!(
+            q.set_probe,
+            Some(crate::mdx_parser::SetExpr::Head(_, 1))
+        ));
+    }
+
+    #[test]
+    fn regular_queries_do_not_classify_as_set_probe() {
+        // DrilldownLevel pivot render
+        let q = semantic_query_from_mdx(
+            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+        );
+        assert_ne!(q.kind, SemanticQueryKind::SetProbe);
+        assert!(q.set_probe.is_none() && q.set_count.is_none());
+        // cchildren query (WITH MEMBER with non-COUNT body)
+        let q = semantic_query_from_mdx(
+            "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Channel].[Channel].currentmember.children).count' Set FilteredMembers As '{[Channel].[Channel].&[Wholesale]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Channel].[Channel].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Sales]",
+        );
+        assert_ne!(q.kind, SemanticQueryKind::SetProbe);
+    }
 
     #[test]
     fn extract_drillmember_year() {

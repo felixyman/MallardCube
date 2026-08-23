@@ -544,6 +544,238 @@ pub enum CmpOp {
     Ne,
 }
 
+// ---- set expressions (Excel CUBESET probes) ----
+
+/// A set expression on the SELECT axis, as Excel builds it for CUBESET
+/// validation: a member source optionally wrapped in Head/Tail/Subset.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetExpr {
+    /// `[Dim].[Hier].[Level].Members` — level None means the leaf/physical
+    /// grain (`[Dim].[Hier].Members`).
+    LevelMembers { dim: String, level: Option<String> },
+    /// `[Dim].[Hier].[(All)].Members` / `[Dim].[Hier].[All].Children` — the
+    /// first-level members under All.
+    AllMembers { dim: String },
+    /// An explicit member list like `{[D].[H].&[a],[D].[H].&[b]}` (outer
+    /// braces stripped by the caller). Unames may be XML-escaped.
+    MemberList { unames: Vec<String> },
+    /// `Head(set, n)` — first n members.
+    Head(Box<SetExpr>, usize),
+    /// `Tail(set, n)` — last n members.
+    Tail(Box<SetExpr>, usize),
+}
+
+/// A calculated member whose body is `COUNT(<set>)`, e.g. Excel's
+/// `WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)'`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalculatedCount {
+    pub member_name: String,
+    pub set: SetExpr,
+}
+
+/// Parse a set source like `[Date].[Date].[Year].Members`,
+/// `[Sales].[Sales].Children`, or `[Dim].[Dim].[All].Members` into a SetExpr.
+/// The closing `}` of an enclosing set may be present; it is ignored.
+fn parse_set_source(text: &str) -> Option<SetExpr> {
+    let t = text.trim().trim_end_matches('}').trim_end();
+    let dot = t.rfind('.')?;
+    let func = &t[dot + 1..];
+    let src = t[..dot].trim_end();
+    let members = func.eq_ignore_ascii_case("Members")
+        || func.eq_ignore_ascii_case("AllMembers")
+        || func.eq_ignore_ascii_case("Children");
+    if !members {
+        return None;
+    }
+    // Collect bracketed segments from the source reference. More than three
+    // segments means a member-qualified source (e.g. `[X].&[2024]&[2]`),
+    // which is not a supported set source.
+    let mut segs: Vec<String> = Vec::new();
+    let mut rest = src;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let close = after.find(']')?;
+        segs.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    if segs.len() < 2 || segs.len() > 3 {
+        return None;
+    }
+    let dim = segs[0].clone();
+    if segs.len() == 2 {
+        Some(SetExpr::LevelMembers { dim, level: None })
+    } else {
+        let level = &segs[segs.len() - 1];
+        if level == "(All)" || level == "All" {
+            Some(SetExpr::AllMembers { dim })
+        } else {
+            Some(SetExpr::LevelMembers {
+                dim,
+                level: Some(level.clone()),
+            })
+        }
+    }
+}
+
+/// Parse the SELECT-axis set expression: `{ HEAD(src, n) }`, `{ TAIL(src, n) }`,
+/// or a bare `{ src }`. Returns None when the axis isn't a simple set probe.
+pub fn parse_axis_set_expr(input: &str) -> Option<SetExpr> {
+    let upper = input.to_uppercase();
+    let select_pos = upper.find("SELECT")?;
+    let from_rel = upper[select_pos..].find("FROM")?;
+    let clause = &input[select_pos..select_pos + from_rel];
+
+    // Outermost braces around the axis set.
+    let open = clause.find('{')?;
+    let close = clause.rfind('}')?;
+    if close <= open {
+        return None;
+    }
+    let body = clause[open + 1..close].trim();
+
+    let up = body.to_uppercase();
+    // Explicit member list (bare): `[D].[H].&[a],[D].[H].&[b]` — braces are
+    // already stripped by the caller.
+    if let Some(unames) = parse_member_list(body) {
+        return Some(SetExpr::MemberList { unames });
+    }
+    for (fn_name, is_head) in [("HEAD(", true), ("TAIL(", false)] {
+        if let Some(p) = up.find(fn_name) {
+            let after = &body[p + fn_name.len()..];
+            // Split the count from the source: a brace-wrapped set ends at its
+            // closing brace; otherwise at the first top-level comma.
+            let trimmed = after.trim_start();
+            let (src_text, n_text) = if trimmed.starts_with('{') {
+                let close = trimmed.find('}')?;
+                (&trimmed[..=close], &trimmed[close + 1..])
+            } else {
+                let mut depth = 0i32;
+                let mut comma = None;
+                for (j, ch) in after.char_indices() {
+                    match ch {
+                        '[' | '(' => depth += 1,
+                        ']' | ')' => {
+                            depth -= 1;
+                            if ch == ')' && depth == 0 {
+                                break;
+                            }
+                        }
+                        ',' if depth == 0 => {
+                            comma = Some(j);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                let c = comma?;
+                (&after[..c], &after[c + 1..])
+            };
+            let n: usize = n_text
+                .trim()
+                .trim_start_matches(',')
+                .trim()
+                .trim_end_matches(')')
+                .trim()
+                .parse()
+                .ok()?;
+            let src_core = src_text.trim().strip_prefix('{').unwrap_or(src_text.trim());
+            let src_core = src_core.strip_suffix('}').unwrap_or(src_core);
+            let src = if src_text.contains("&[") || src_text.contains("&amp;[") {
+                let unames = parse_member_list(src_core)?;
+                SetExpr::MemberList { unames }
+            } else {
+                parse_set_source(src_core)?
+            };
+            return Some(if is_head {
+                SetExpr::Head(Box::new(src), n)
+            } else {
+                SetExpr::Tail(Box::new(src), n)
+            });
+        }
+    }
+    parse_set_source(body)
+}
+
+/// Split an explicit member list (`[D].[H].&[a],[D].[H].&[b]`) on commas that
+/// sit outside brackets. Returns None when the text isn't a member list.
+fn parse_member_list(text: &str) -> Option<Vec<String>> {
+    let t = text
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    if !t.starts_with('[') || !t.contains("&[") {
+        return None;
+    }
+    let mut pieces: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_bracket = false;
+    for ch in t.chars() {
+        match ch {
+            '[' => {
+                in_bracket = true;
+                cur.push(ch);
+            }
+            ']' => {
+                in_bracket = false;
+                cur.push(ch);
+            }
+            ',' if !in_bracket => {
+                pieces.push(cur.trim().to_string());
+                cur = String::new();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    pieces.push(cur.trim().to_string());
+    if !pieces.is_empty() && pieces.iter().all(|p| p.starts_with('[')) {
+        Some(pieces)
+    } else {
+        None
+    }
+}
+
+/// Find `WITH MEMBER [Measures].[name] AS '<expr>'` where expr is exactly
+/// `COUNT(<set>)`. Tolerates XML-escaped ampersands in member unames.
+pub fn parse_calculated_count(input: &str) -> Option<CalculatedCount> {
+    let up = input.to_uppercase();
+    let wm = up.find("WITH MEMBER ")?;
+    let rest = &input[wm + "WITH MEMBER ".len()..];
+    // Member reference: [Measures].[Name]
+    let open = rest.find("[Measures].")?;
+    let after = &rest[open + "[Measures].".len()..];
+    let b_open = after.find('[')?;
+    let b_close = after[b_open..].find(']')?;
+    let name = after[b_open + 1..b_open + b_close].to_string();
+
+    let as_pos = up[wm..].find(" AS '")?;
+    let expr_start = wm + as_pos + " AS '".len();
+    let expr_rest = &input[expr_start..];
+    let quote_end = expr_rest.find('\'')?;
+    let expr = &expr_rest[..quote_end];
+    let eup = expr.trim_start().to_uppercase();
+    // The body must be exactly COUNT(<set>) — other calculated-member
+    // expressions (cchildren etc.) are not handled here.
+    if !eup.starts_with("COUNT(") {
+        return None;
+    }
+    let cp = eup.find("COUNT(")?;
+    let set_text = expr[cp + "COUNT(".len()..]
+        .trim_end()
+        .strip_suffix(')')
+        .unwrap_or("")
+        .replace("&amp;", "&");
+    let set = if let Some(unames) = parse_member_list(&set_text) {
+        SetExpr::MemberList { unames }
+    } else {
+        parse_set_source(&set_text)?
+    };
+    Some(CalculatedCount {
+        member_name: name,
+        set,
+    })
+}
+
 /// Detect an axis set function (TopCount/BottomCount/Order/Filter) in the outer
 /// SELECT clause. Only measure-based sorts/filters are supported (label filters
 /// and TopPercent/BottomPercent are not).
@@ -700,6 +932,11 @@ pub struct ParsedMdx {
     pub drilldown_member_hierarchy: Option<String>,
     /// Axis set function (TopCount/Order/Filter) wrapping the row set, if any.
     pub axis_set_op: Option<AxisSetOp>,
+    /// A CUBESET-style set expression on the SELECT axis
+    /// (`{ HEAD(...,n) }`, bare `{ [...].Members }`), if any.
+    pub axis_set_expr: Option<SetExpr>,
+    /// Calculated members whose body is `COUNT(<set>)`, in declaration order.
+    pub calculated_counts: Vec<CalculatedCount>,
 }
 
 /// Extract dimension IDs from the select clause in positional order.
@@ -897,6 +1134,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         excluded_members,
         drilldown_member_hierarchy,
         axis_set_op: detect_axis_set_op(input),
+        axis_set_expr: parse_axis_set_expr(input),
+        calculated_counts: parse_calculated_count(input).into_iter().collect(),
     }
 }
 
@@ -1078,5 +1317,99 @@ mod tests {
             Some("Revenue"),
             "expected Revenue from columns"
         );
+    }
+}
+
+#[cfg(test)]
+mod set_expr_tests {
+
+    use super::*;
+
+    #[test]
+    fn parses_head_over_level_members() {
+        let mdx = "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
+        assert_eq!(
+            parse_axis_set_expr(mdx),
+            Some(SetExpr::Head(
+                Box::new(SetExpr::LevelMembers {
+                    dim: "Date".into(),
+                    level: Some("Year".into())
+                }),
+                1
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_bare_level_members() {
+        let mdx = "SELECT {[Date].[Date].[Year].Members} ON 0 FROM [Sales]";
+        assert_eq!(
+            parse_axis_set_expr(mdx),
+            Some(SetExpr::LevelMembers {
+                dim: "Date".into(),
+                level: Some("Year".into())
+            })
+        );
+    }
+
+    #[test]
+    fn parses_tail_and_all_members() {
+        let mdx = "SELECT {TAIL([Date].[Date].[(All)].Members,2)} ON 0 FROM [Sales]";
+        assert_eq!(
+            parse_axis_set_expr(mdx),
+            Some(SetExpr::Tail(
+                Box::new(SetExpr::AllMembers { dim: "Date".into() }),
+                2
+            ))
+        );
+    }
+
+    #[test]
+    fn ignores_non_set_axes() {
+        assert_eq!(
+            parse_axis_set_expr("SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]"),
+            None
+        );
+        assert_eq!(
+            parse_axis_set_expr(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_calculated_count() {
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let cc = parse_calculated_count(mdx).expect("calculated count");
+        assert_eq!(cc.member_name, "XL_SD");
+        assert_eq!(
+            cc.set,
+            SetExpr::LevelMembers {
+                dim: "Date".into(),
+                level: Some("Year".into())
+            }
+        );
+    }
+
+    #[test]
+    fn parses_calculated_count_over_explicit_list() {
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2020],[Date].[Date].[Year].&[2021]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let cc = parse_calculated_count(mdx).expect("calculated count");
+        assert_eq!(
+            cc.set,
+            SetExpr::MemberList {
+                unames: vec![
+                    "[Date].[Date].[Year].&[2020]".into(),
+                    "[Date].[Date].[Year].&[2021]".into()
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn calculated_count_ignores_non_count_bodies() {
+        let mdx = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Channel].[Channel].currentmember.children).count' Set FilteredMembers As '{[Channel].[Channel].&[Wholesale]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Channel].[Channel].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Sales]";
+        assert_eq!(parse_calculated_count(mdx), None);
     }
 }

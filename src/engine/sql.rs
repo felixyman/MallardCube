@@ -32,6 +32,53 @@ pub fn sql_for_query_plan_with_context(
     config: &ProxyConfig,
 ) -> String {
     match plan {
+        // The count is known at parse time; no SQL needed.
+        QueryPlan::MetaCountLiteral(_) => String::new(),
+        QueryPlan::SetMembers {
+            dim,
+            group_level,
+            measure,
+        } => {
+            // Mirror the GroupBy emitter (joins + OLS), but group by the FULL
+            // ancestor path so compound members stay distinct.
+            let d = model.dim_def(dim);
+            let meas = model.meas_def(measure);
+            let table = &model.fact_table(meas.fact_table_idx).table_name;
+            let mut joined: HashSet<String> = HashSet::new();
+            let (col_map, joins) =
+                resolve_group_cols(model, std::slice::from_ref(dim), &mut joined, user, config);
+            let alias_prefix = col_map
+                .get(dim.as_str())
+                .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
+                .unwrap_or("")
+                .to_string();
+            let qual = |col: &str| -> String {
+                if alias_prefix.is_empty() {
+                    col.to_string()
+                } else {
+                    format!("{alias_prefix}.{col}")
+                }
+            };
+            let path = match group_level.and_then(|i| d.levels.get(i)) {
+                Some(_) => {
+                    let depth = group_level.unwrap_or(0);
+                    let cols: Vec<String> = d.levels[..=depth]
+                        .iter()
+                        .map(|l| format!("CAST({} AS VARCHAR)", qual(&l.column)))
+                        .collect();
+                    if cols.len() == 1 {
+                        cols[0].clone()
+                    } else {
+                        format!("CONCAT_WS('|', {})", cols.join(", "))
+                    }
+                }
+                None => format!("CAST({} AS VARCHAR)", qual(&d.physical_field)),
+            };
+            format!(
+                "SELECT {path} AS __path, {} FROM {table} f{joins} GROUP BY 1 ORDER BY 1",
+                meas.sql_expr
+            )
+        }
         QueryPlan::Total { measure, filters } => {
             if let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config) {
                 return agg_total_sql(model, agg, measure, filters);
@@ -140,6 +187,32 @@ pub fn sql_for_query_plan_with_context(
                 format!("FROM {} f{}", table, joins)
             };
             format!("SELECT COUNT(DISTINCT {}) {}", col, from)
+        }
+
+        QueryPlan::MetaCount { dim, group_level } => {
+            let d = model.dim_def(dim);
+            let table = model.dim_table_for_discovery(dim);
+            // A level member is identified by its FULL ancestor path (Q1 of
+            // 2020 differs from Q1 of 2021), so count distinct paths.
+            match group_level.and_then(|i| d.levels.get(i)) {
+                Some(_) => {
+                    let depth = group_level.unwrap_or(0);
+                    let cols: Vec<String> = d.levels[..=depth]
+                        .iter()
+                        .map(|l| format!("CAST({} AS VARCHAR)", l.column))
+                        .collect();
+                    let path = if cols.len() == 1 {
+                        cols[0].clone()
+                    } else {
+                        format!("CONCAT_WS('|', {})", cols.join(", "))
+                    };
+                    format!("SELECT COUNT(DISTINCT {path}) FROM {table}")
+                }
+                None => format!(
+                    "SELECT COUNT(DISTINCT CAST({} AS VARCHAR)) FROM {table}",
+                    d.physical_field
+                ),
+            }
         }
 
         QueryPlan::MultiMeasure { .. }

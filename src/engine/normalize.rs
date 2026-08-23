@@ -28,6 +28,25 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             format!("count|dim={}", dimension)
         }
 
+        QueryPlan::MetaCount { dim, group_level } => {
+            format!("metacount|dim={}|level={:?}", dim, group_level)
+        }
+
+        QueryPlan::MetaCountLiteral(n) => {
+            format!("metacountliteral|{n}")
+        }
+
+        QueryPlan::SetMembers {
+            dim,
+            group_level,
+            measure,
+        } => {
+            format!(
+                "setmembers|dim={}|level={:?}|m={}",
+                dim, group_level, measure
+            )
+        }
+
         QueryPlan::TupleSet { cells } => {
             let m: Vec<String> = cells
                 .iter()

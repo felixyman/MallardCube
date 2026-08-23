@@ -965,6 +965,50 @@ mod tests {
         assert!(xml.contains("North"));
     }
 
+    // Excel CUBECOUNT: WITH MEMBER ... AS 'COUNT(<set>)' must evaluate to the
+    // set's member count, not fall into an aggregate grid.
+    #[test]
+    fn set_count_probe_returns_member_count() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+            );
+            assert_eq!(cell_values(&xml), vec![11.0]);
+            assert!(xml.contains("XL_SD"), "calculated member name on axis");
+        });
+    }
+
+    // Excel CUBESET validation probe: HEAD(set,1) must prune to exactly one
+    // level-qualified member (the first year).
+    #[test]
+    fn head_probe_returns_first_member_only() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 1, "HEAD(...,1) yields one tuple: {infos:?}");
+            assert!(
+                infos[0].1.contains("[Date].[Date].[Year].&amp;[2020]"),
+                "first year, level-qualified: {:?}",
+                infos[0]
+            );
+        });
+    }
+
+    #[test]
+    fn tail_probe_returns_last_members() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {TAIL([Date].[Date].[Year].Members,2)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 2, "TAIL(...,2) yields two tuples: {infos:?}");
+            assert!(infos[0].1.contains("&amp;[2029]"), "{infos:?}");
+            assert!(infos[1].1.contains("&amp;[2030]"), "{infos:?}");
+        });
+    }
+
     #[test]
     fn crossjoin_display_info_is_positionally_correct() {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
