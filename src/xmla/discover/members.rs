@@ -66,19 +66,25 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
         let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
+        // SSAS semantics: the (All) member's CHILDREN_CARDINALITY is the number
+        // of members at the first real level (its direct children), not the
+        // total leaf-row count. Keeps this rowset consistent with the axis
+        // DISPLAY_INFO low word for the same member.
+        let child_col = dim
+            .levels
+            .first()
+            .map(|l| l.column.as_str())
+            .unwrap_or(dim.physical_field.as_str());
         let cardinality = match &access {
             TableAccess::Filtered(sql) => {
                 let sql_count = format!(
                     "SELECT COUNT(DISTINCT {}) FROM {} WHERE {}",
-                    dim.physical_field, dim_table, sql
+                    child_col, dim_table, sql
                 );
                 backend.query_count(&sql_count)
             }
             _ => {
-                let sql = format!(
-                    "SELECT COUNT(DISTINCT {}) FROM {}",
-                    dim.physical_field, dim_table,
-                );
+                let sql = format!("SELECT COUNT(DISTINCT {}) FROM {}", child_col, dim_table);
                 backend.query_count(&sql)
             }
         };
@@ -119,6 +125,12 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
+        // Leveled dimensions enumerate their full hierarchy instead (see
+        // build_level_member_rows); a flat unqualified leaf list under (All)
+        // would contradict the level tree.
+        if !dim.levels.is_empty() {
+            continue;
+        }
         let dim_table = model.dim_table_for_discovery(&dim.id);
         let access = effective_table_filter(config, user, dim_table);
 
@@ -170,6 +182,130 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
                 member_unique_name: leaf_member_u,
                 parent_unique_name: Some(all_member_u.clone()),
             });
+        }
+    }
+    rows
+}
+
+/// Enumerate every hierarchy level of a multi-level dimension as real
+/// MDSCHEMA_MEMBERS rows (years, quarters, months, ...), each with its
+/// compound-key unique name, parent link, and live child count. This is what
+/// lets Excel resolve SELF probes and walk the field list for leveled dims —
+/// the axis emits `[Dim].[Dim].[Year].&[2024]`-style names, so the member
+/// rowset must speak the same tree.
+fn build_level_member_rows<B: QueryBackend + ?Sized>(
+    model: &crate::engine::model::SemanticModel,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    let mut rows = Vec::new();
+    for dim in &model.dimensions {
+        if dim.levels.is_empty() {
+            continue;
+        }
+        let dim_table = model.dim_table_for_discovery(&dim.id);
+        let access = effective_table_filter(config, user, dim_table);
+        if access == TableAccess::Hidden {
+            continue;
+        }
+        let where_sql = match &access {
+            TableAccess::Filtered(sql) => format!(" WHERE {sql}"),
+            _ => String::new(),
+        };
+
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        let all_member_u = dim.all_member_unique_name();
+        // Phase 1 — distinct full paths per level, one '|' pipe-delimited
+        // string per row (query_rows returns table-width rows, so a
+        // concatenated projection keeps the column mapping explicit).
+        let level_paths: Vec<Vec<Vec<String>>> = (0..dim.levels.len())
+            .map(|i| {
+                let exprs: Vec<String> = dim.levels[..=i]
+                    .iter()
+                    .map(|l| format!("CAST({} AS VARCHAR)", l.column))
+                    .collect();
+                let concat = if exprs.len() == 1 {
+                    exprs[0].clone()
+                } else {
+                    format!("({})", exprs.join(" || '|' || "))
+                };
+                let sql =
+                    format!("SELECT DISTINCT {concat} FROM {dim_table}{where_sql} ORDER BY 1");
+                backend
+                    .query_strings(&sql)
+                    .into_iter()
+                    .map(|s| s.split('|').map(|p| p.to_string()).collect())
+                    .collect()
+            })
+            .collect();
+        // Phase 2 — emit rows. A member's child count is the number of
+        // distinct next-level paths sharing its key as prefix.
+        let mut ordinal = 1u32; // 0 belongs to the All member
+        for (i, level) in dim.levels.iter().enumerate() {
+            let tuples = &level_paths[i];
+            let is_deepest = i + 1 == dim.levels.len();
+            let mut child_counts: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+            if !is_deepest {
+                for t in &level_paths[i + 1] {
+                    let prefix = t[..=i].join("|");
+                    *child_counts.entry(prefix).or_insert(0) += 1;
+                }
+            }
+            for t in tuples {
+                let key = t.join("|");
+                let name = t.last().cloned().unwrap_or_default();
+                let level_u = format!("{}.[{}]", hier_u, level.name);
+                let uname = format!("{level_u}.{}", key_suffix(&key));
+                let (parent_u, parent_level) = if i == 0 {
+                    (all_member_u.clone(), 0)
+                } else {
+                    let parent_key = t[..i].join("|");
+                    (
+                        format!(
+                            "{}.[{}].{}",
+                            hier_u,
+                            dim.levels[i - 1].name,
+                            key_suffix(&parent_key)
+                        ),
+                        i as u32,
+                    )
+                };
+                let cc = if is_deepest {
+                    0
+                } else {
+                    child_counts.get(&key).copied().unwrap_or(0)
+                };
+                let guid = Uuid::new_v5(&NAMESPACE, format!("level.{}.{key}", dim.id).as_bytes())
+                    .to_string();
+                rows.push(MemberRow {
+                    xml: xml_member_row(
+                        project,
+                        &dim_u,
+                        &hier_u,
+                        &level_u,
+                        i as u32 + 1,
+                        ordinal,
+                        &name,
+                        &uname,
+                        1,
+                        &guid,
+                        &name,
+                        cc,
+                        parent_level,
+                        Some(&parent_u),
+                        1,
+                        &name,
+                    ),
+                    dimension_id: dim.id.clone(),
+                    member_unique_name: uname,
+                    parent_unique_name: Some(parent_u),
+                });
+                ordinal += 1;
+            }
         }
     }
     rows
@@ -271,257 +407,17 @@ fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(
     build_leaf_member_rows(&project.model, backend, user, config)
 }
 
-/// Query children of a specific multi-level hierarchy member.
-/// Parses filter like `[Date].[Date].[Year].&[2025]`, resolves the next
-/// level's column, and queries DuckDB directly.  Returns None if the
-/// filter doesn't match a multi-level dimension.
-fn key_suffix(key: &str) -> String {
-    key.split('|').map(|part| format!("&[{}]", part)).collect()
-}
-
-fn query_level_children<B: QueryBackend + ?Sized>(
-    filter: &str,
-    _existing_rows: &[MemberRow],
+fn level_member_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
-) -> Option<Vec<MemberRow>> {
-    let decoded = filter.replace("&amp;", "&");
-    // Parse [Hier].[Hier].[Level].&[key] — the key may be compound
-    // (&[2026]&[4]) to carry the ancestor path for a non-unique level.
-    let (hier_path, level_name, key) = parse_level_member(&decoded)?;
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    let model = &project.model;
-    let dim = model
-        .dimensions
-        .iter()
-        .find(|d| d.hierarchy_unique_name() == hier_path)?;
-    let level_idx = dim.levels.iter().position(|l| l.name == level_name)?;
-    let next_level = dim.levels.get(level_idx + 1)?;
-    let table = model.dim_table_for_discovery(&dim.id);
-
-    // Scope by the ancestor path carried in the key. A quarter's key 2026|4
-    // must filter both year=2026 and quarter=4, not all years' Q4s. Align the
-    // key to the end of the level chain (a bare key applies to the level it is
-    // on).
-    let key_parts: Vec<&str> = key.split('|').collect();
-    let start = level_idx + 1 - key_parts.len();
-    let conditions: Vec<String> = key_parts
-        .iter()
-        .enumerate()
-        .filter_map(|(j, v)| {
-            let l = dim.levels.get(start + j)?;
-            Some(format!(
-                "CAST({} AS VARCHAR) = '{}'",
-                l.column,
-                v.replace('\'', "''")
-            ))
-        })
-        .collect();
-    let where_sql = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
-    };
-    let count_sql = format!(
-        "SELECT COUNT(DISTINCT {}) FROM {}{}",
-        next_level.column, table, where_sql
-    );
-    let child_count = backend.query_count(&count_sql);
-    // Per-child cardinality: the number of children each returned member has
-    // (a quarter has 3 months, a month has its day count), not the global
-    // next-next level count, which Excel sees as inconsistent with the cellset.
-    let child_cc_map: std::collections::HashMap<String, u32> = match dim.levels.get(level_idx + 2) {
-        Some(nn) => {
-            let cc_sql = format!(
-                "SELECT CAST({} AS VARCHAR), COUNT(DISTINCT {}) FROM {}{} GROUP BY 1",
-                next_level.column, nn.column, table, where_sql
-            );
-            backend
-                .query_grouped_1d(&cc_sql)
-                .into_iter()
-                .map(|(k, v)| (k, v as u32))
-                .collect()
-        }
-        None => std::collections::HashMap::new(),
-    };
-    let sql = format!(
-        "SELECT DISTINCT CAST({} AS VARCHAR) FROM {}{} ORDER BY 1",
-        next_level.column, table, where_sql
-    );
-    let child_names = backend.query_strings(&sql);
-    if child_names.is_empty() {
-        return Some(vec![]);
-    }
-    let parent_u = format!("{}.[{}].{}", hier_path, level_name, key_suffix(&key));
-    let mut rows: Vec<MemberRow> = child_names
-        .iter()
-        .enumerate()
-        .map(|(ord, name)| {
-            let child_key = format!("{key}|{name}");
-            let child_u = format!(
-                "{}.[{}].{}",
-                hier_path,
-                next_level.name,
-                key_suffix(&child_key)
-            );
-            let child_level_u = format!("{}.[{}]", hier_path, next_level.name);
-            let child_cc = child_cc_map.get(name).copied().unwrap_or(0);
-            let xml = member_xml_for_discover(
-                &dim.dimension_unique_name(),
-                &dim.hierarchy_unique_name(),
-                &child_level_u,
-                (level_idx + 2) as u32,
-                (ord + 1) as u32,
-                name,
-                &child_u,
-                name,
-                child_cc,
-                (level_idx + 1) as u32,
-                Some(&parent_u),
-                name,
-            );
-            MemberRow {
-                xml,
-                dimension_id: dim.id.clone(),
-                member_unique_name: child_u,
-                parent_unique_name: Some(parent_u.clone()),
-            }
-        })
-        .collect();
-    // Prepend the parent member, whose own parent is the ancestor level (not
-    // always the (All) member once a quarter carries a year).
-    let parent_cardinality = child_count;
-    let parent_level_u = format!("{}.[{}]", hier_path, level_name);
-    let parent_name = key.rsplit('|').next().unwrap_or(&key).to_string();
-    let parent_parent = if level_idx == 0 {
-        dim.all_member_unique_name()
-    } else {
-        let ancestor_key = key_parts[..key_parts.len() - 1].join("|");
-        format!(
-            "{}.[{}].{}",
-            hier_path,
-            dim.levels[level_idx - 1].name,
-            key_suffix(&ancestor_key)
-        )
-    };
-    let parent_xml = member_xml_for_discover(
-        &dim.dimension_unique_name(),
-        &dim.hierarchy_unique_name(),
-        &parent_level_u,
-        (level_idx + 1) as u32,
-        0,
-        &parent_name,
-        &parent_u,
-        &parent_name,
-        parent_cardinality,
-        0,
-        Some(&parent_parent),
-        &parent_name,
-    );
-    rows.insert(
-        0,
-        MemberRow {
-            xml: parent_xml,
-            dimension_id: dim.id.clone(),
-            member_unique_name: parent_u.clone(),
-            parent_unique_name: Some(parent_parent),
-        },
-    );
-    Some(rows)
+    build_level_member_rows(&project.model, backend, user, config)
 }
 
-/// Try to parse `[Hier].[Hier].[Level].&[key]` (key may be compound, e.g.
-/// `&[2026]&[4]`) into (hier_path, level_name, key_path).
-fn parse_level_member(filter: &str) -> Option<(String, String, String)> {
-    let rest = filter.strip_prefix('[')?;
-    let close = rest.find(']')?;
-    let _dim = &rest[..close];
-    let rest = &rest[close + 1..];
-    let rest = rest.strip_prefix(".[")?;
-    let close = rest.find(']')?;
-    let hier_part = &rest[..close];
-    let rest = &rest[close + 1..];
-    let rest = rest.strip_prefix(".[")?;
-    let close = rest.find(']')?;
-    let level = &rest[..close];
-    let rest = &rest[close + 1..];
-    let mut rest = rest.strip_prefix(".&[")?;
-    let mut parts = Vec::new();
-    loop {
-        let close = rest.find(']')?;
-        parts.push(rest[..close].to_string());
-        rest = &rest[close + 1..];
-        if let Some(next) = rest.strip_prefix("&[") {
-            rest = next;
-        } else {
-            break;
-        }
-    }
-    let key = parts.join("|");
-    let hier_path = format!("[{}].[{}]", _dim, hier_part);
-    Some((hier_path, level.to_string(), key))
-}
-
-#[allow(clippy::too_many_arguments)] // XML row assembly mirrors the flat MDSCHEMA_MEMBERS column list
-fn member_xml_for_discover(
-    dim_u: &str,
-    hier_u: &str,
-    level_u: &str,
-    level_num: u32,
-    member_ordinal: u32,
-    member_name: &str,
-    member_unique_name: &str,
-    member_caption: &str,
-    children_cardinality: u32,
-    parent_level: u32,
-    parent_unique_name: Option<&str>,
-    member_key: &str,
-) -> String {
-    let project = proxy_project::project();
-    let pun = parent_unique_name
-        .map(|p| {
-            format!(
-                "            <PARENT_UNIQUE_NAME>{}</PARENT_UNIQUE_NAME>\n",
-                xml_escape(p)
-            )
-        })
-        .unwrap_or_default();
-    let parent_count = if parent_unique_name.is_some() { 1 } else { 0 };
-    format!(
-        r#"          <row>
-            <CATALOG_NAME>{catalog}</CATALOG_NAME>
-            <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{dim_e}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>{hier_e}</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>{level_e}</LEVEL_UNIQUE_NAME>
-            <LEVEL_NUMBER>{ln}</LEVEL_NUMBER>
-            <MEMBER_ORDINAL>{mo}</MEMBER_ORDINAL>
-            <MEMBER_NAME>{mn}</MEMBER_NAME>
-            <MEMBER_UNIQUE_NAME>{mu}</MEMBER_UNIQUE_NAME>
-            <MEMBER_TYPE>1</MEMBER_TYPE>
-            <MEMBER_GUID>{guid}</MEMBER_GUID>
-            <MEMBER_CAPTION>{mc}</MEMBER_CAPTION>
-            <CHILDREN_CARDINALITY>{cc}</CHILDREN_CARDINALITY>
-            <PARENT_LEVEL>{pl}</PARENT_LEVEL>{pun}
-            <PARENT_COUNT>{pc}</PARENT_COUNT>
-            <MEMBER_KEY>{mk}</MEMBER_KEY>
-          </row>
-"#,
-        catalog = project.config.catalog,
-        cube = project.config.cube,
-        dim_e = xml_escape(dim_u),
-        hier_e = xml_escape(hier_u),
-        level_e = xml_escape(level_u),
-        ln = level_num,
-        mo = member_ordinal,
-        mn = xml_escape(member_name),
-        mu = xml_escape(member_unique_name),
-        mc = xml_escape(member_caption),
-        cc = children_cardinality,
-        pl = parent_level,
-        pc = parent_count,
-        mk = xml_escape(member_key),
-        guid = Uuid::new_v5(&Uuid::NAMESPACE_OID, member_unique_name.as_bytes()),
-    )
+fn key_suffix(key: &str) -> String {
+    key.split('|').map(|part| format!("&[{part}]")).collect()
 }
 
 fn all_rows_with_backend<B: QueryBackend + ?Sized>(
@@ -530,6 +426,9 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
     config: &ProxyConfig,
 ) -> Vec<MemberRow> {
     let mut rows = all_member_rows_with_backend(backend, user, config);
+    // Multi-level hierarchies enumerate their full level tree (years under
+    // All, quarters under years, ...); flat dims keep the plain leaf list.
+    rows.extend(level_member_rows_with_backend(backend, user, config));
     rows.append(&mut leaf_member_rows_with_backend(backend, user, config));
     rows
 }
@@ -573,22 +472,23 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
-    let mut rows = all_rows_with_backend(backend, user, config);
+    let rows = all_rows_with_backend(backend, user, config);
 
     let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
-        (Some(filter), Some(1) | Some(8)) => {
-            if let Some(extra) = query_level_children(filter, &rows, backend) {
-                rows.extend(extra);
-            }
-            // Now search in the extended rows
-            let mut children = find_children(&rows, filter);
+        (Some(filter), Some(8)) => {
+            // 0x08 = SELF — return only the member itself, no children
+            find_member(&rows, filter).into_iter().collect()
+        }
+        (Some(filter), Some(1)) => {
+            // 0x01 = CHILDREN — the member plus its direct children. The
+            // rowset now enumerates every hierarchy level up front, so both
+            // are always present in the static set.
+            let mut result: Vec<&MemberRow> = Vec::new();
             if let Some(parent) = find_member(&rows, filter) {
-                let mut result: Vec<&MemberRow> = vec![parent];
-                result.append(&mut children);
-                result
-            } else {
-                children
+                result.push(parent);
             }
+            result.extend(find_children(&rows, filter));
+            result
         }
         (Some(filter), Some(2)) => {
             // 0x02 = SIBLINGS — children of the parent of the filtered member
@@ -644,6 +544,7 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::project::with_test_project;
 
     fn all_rows() -> Vec<MemberRow> {
         let project = proxy_project::project();
@@ -652,6 +553,27 @@ mod tests {
             &UserContext::admin_default(),
             &project.config,
         )
+    }
+
+    /// Rows under project3, whose Date dimension carries a real
+    /// Year→Quarter→Month→Date hierarchy.
+    fn project3_rows() -> Vec<MemberRow> {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            all_rows_with_backend(
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            )
+        })
+    }
+
+    fn find_row<'a>(rows: &'a [MemberRow], uname: &str) -> &'a MemberRow {
+        rows.iter()
+            .find(|r| r.member_unique_name == uname)
+            .unwrap_or_else(|| panic!("missing row {uname}"))
     }
 
     fn extract_tag(xml: &str, tag: &str) -> Option<String> {
@@ -731,5 +653,219 @@ mod tests {
                 r.member_unique_name,
             );
         }
+    }
+
+    #[test]
+    fn tree_op_self_returns_only_the_member() {
+        // 0x08 = SELF must return exactly the requested member — no children.
+        let xml = get_members_response(Some("[Region].[Region].[All]"), Some(8));
+        assert_eq!(
+            xml.matches("<row>").count(),
+            1,
+            "SELF returns one row, got: {xml}"
+        );
+        assert!(
+            xml.contains(">All</MEMBER_CAPTION>"),
+            "SELF returns the All member itself"
+        );
+        assert!(
+            !xml.contains("&amp;[North]"),
+            "SELF must not include children"
+        );
+
+        // 0x01 = CHILDREN keeps returning member + children.
+        let xml = get_members_response(Some("[Region].[Region].[All]"), Some(1));
+        assert!(
+            xml.contains("&amp;[North]"),
+            "CHILDREN returns the child rows, got: {xml}"
+        );
+    }
+
+    #[test]
+    fn all_member_cardinality_counts_direct_children() {
+        // SSAS semantics: the (All) member's CHILDREN_CARDINALITY is the number
+        // of members at its first real level — not the total leaf-row count.
+        let project = proxy_project::project();
+        let rows = all_rows();
+        assert!(!rows.is_empty());
+        for dim in &project.model.dimensions {
+            let Some(row) = rows
+                .iter()
+                .find(|r| r.member_unique_name == dim.all_member_unique_name())
+            else {
+                continue;
+            };
+            let cc: u32 = extract_tag(&row.xml, "CHILDREN_CARDINALITY")
+                .unwrap_or_default()
+                .parse()
+                .unwrap_or(0);
+            let table = project.model.dim_table_for_discovery(&dim.id);
+            let col = dim
+                .levels
+                .first()
+                .map(|l| l.column.as_str())
+                .unwrap_or(dim.physical_field.as_str());
+            let expected =
+                Backend::get().query_count(&format!("SELECT COUNT(DISTINCT {col}) FROM {table}"));
+            assert_eq!(
+                cc, expected,
+                "(All) of {} must report direct-children count ({col})",
+                dim.id
+            );
+        }
+    }
+
+    #[test]
+    fn leveled_dim_enumerates_every_level() {
+        let rows = project3_rows();
+        let years: Vec<&MemberRow> = rows
+            .iter()
+            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Year].&["))
+            .collect();
+        assert_eq!(years.len(), 11, "one row per demo year");
+        let quarters: Vec<&MemberRow> = rows
+            .iter()
+            .filter(|r| {
+                r.member_unique_name
+                    .starts_with("[Date].[Date].[Quarter].&[")
+            })
+            .collect();
+        let months = rows
+            .iter()
+            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Month].&["))
+            .count();
+        let days = rows
+            .iter()
+            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Date].&["))
+            .count();
+        assert!(!quarters.is_empty() && quarters.len().is_multiple_of(4));
+        assert!(months > quarters.len());
+        assert!(days > months);
+
+        // No flat unqualified Date leaves may survive next to the level tree.
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.member_unique_name.starts_with("[Date].[Date].&[")),
+            "unqualified Date leaves contradict the level tree"
+        );
+
+        // A year: level 1, parented by (All), four quarter children.
+        let year = find_row(&rows, "[Date].[Date].[Year].&[2024]");
+        assert_eq!(extract_tag(&year.xml, "LEVEL_NUMBER").as_deref(), Some("1"));
+        assert_eq!(
+            extract_tag(&year.xml, "PARENT_UNIQUE_NAME").as_deref(),
+            Some("[Date].[Date].[All]")
+        );
+        assert_eq!(extract_tag(&year.xml, "PARENT_LEVEL").as_deref(), Some("0"));
+        assert_eq!(
+            extract_tag(&year.xml, "CHILDREN_CARDINALITY").as_deref(),
+            Some("4")
+        );
+
+        // A compound-key quarter: level 2, parented by its year.
+        let quarter = find_row(&rows, "[Date].[Date].[Quarter].&[2024]&[2]");
+        assert_eq!(
+            extract_tag(&quarter.xml, "LEVEL_NUMBER").as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            extract_tag(&quarter.xml, "PARENT_UNIQUE_NAME").as_deref(),
+            Some("[Date].[Date].[Year].&amp;[2024]")
+        );
+        assert_eq!(
+            extract_tag(&quarter.xml, "PARENT_LEVEL").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            extract_tag(&quarter.xml, "CHILDREN_CARDINALITY").as_deref(),
+            Some("3")
+        );
+
+        // Non-leveled dims keep their plain leaf list.
+        assert!(
+            rows.iter()
+                .any(|r| r.member_unique_name == "[Territory].[Territory].&[Northwest]"),
+            "flat dims keep unqualified leaves"
+        );
+    }
+
+    #[test]
+    fn tree_ops_resolve_leveled_members() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let year_u = "[Date].[Date].[Year].&[2024]";
+            let quarter_u = "[Date].[Date].[Quarter].&[2024]&[2]";
+            let project = proxy_project::project();
+
+            // SELF on a year: exactly one row.
+            let xml = get_members_response_with_backend(
+                Some(year_u),
+                Some(8),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 1, "SELF year: {xml}");
+            assert!(
+                xml.contains("[Year].&amp;[2024]</MEMBER_UNIQUE_NAME>"),
+                "self row is the level-qualified year: {xml}"
+            );
+
+            // CHILDREN on a year: self + 4 quarters.
+            let xml = get_members_response_with_backend(
+                Some(year_u),
+                Some(1),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 5, "CHILDREN year: {xml}");
+
+            // SELF on a compound quarter.
+            let xml = get_members_response_with_backend(
+                Some(quarter_u),
+                Some(8),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 1, "SELF quarter: {xml}");
+
+            // SIBLINGS of a quarter: all four under 2024.
+            let xml = get_members_response_with_backend(
+                Some(quarter_u),
+                Some(2),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 4, "SIBLINGS quarter: {xml}");
+
+            // PARENT of a quarter: the year row itself.
+            let xml = get_members_response_with_backend(
+                Some(quarter_u),
+                Some(4),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 1, "PARENT quarter: {xml}");
+            assert!(
+                xml.contains("[Year].&amp;[2024]</MEMBER_UNIQUE_NAME>"),
+                "parent is the year row: {xml}"
+            );
+
+            // Unknown key fails closed.
+            let xml = get_members_response_with_backend(
+                Some("[Date].[Date].[Year].&[1999]"),
+                Some(8),
+                Backend::get(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 0);
+        });
     }
 }
