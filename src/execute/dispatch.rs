@@ -238,6 +238,47 @@ mod tests {
         &xml[block_start..member_start + block_end + "</Member>".len()]
     }
 
+    fn tag_value(block: &str, tag: &str) -> String {
+        let open = format!("<{tag}>");
+        block
+            .find(&open)
+            .map(|i| i + open.len())
+            .and_then(|start| {
+                block[start..]
+                    .find(&format!("</{tag}>"))
+                    .map(|end| block[start..start + end].to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    /// `(caption, uname, display_info, children_cardinality)` per `<Member>`
+    /// on Axis0, in tuple order.
+    fn axis0_member_infos(xml: &str) -> Vec<(String, String, u32, u32)> {
+        let start = xml.find("<Axis name=\"Axis0\">").expect("missing Axis0");
+        let end = xml[start..]
+            .find("</Axis>")
+            .map(|i| start + i)
+            .unwrap_or(xml.len());
+        let slice = &xml[start..end];
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while let Some(i) = slice[pos..].find("<Member Hierarchy=") {
+            let abs = pos + i;
+            let close = abs + slice[abs..].find("</Member>").unwrap() + "</Member>".len();
+            let block = &slice[abs..close];
+            out.push((
+                tag_value(block, "Caption"),
+                tag_value(block, "UName"),
+                tag_value(block, "DisplayInfo").parse().unwrap_or(0),
+                tag_value(block, "CHILDREN_CARDINALITY")
+                    .parse()
+                    .unwrap_or(0),
+            ));
+            pos = close;
+        }
+        out
+    }
+
     fn with_project3<T>(f: impl FnOnce() -> T) -> T {
         let project =
             ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
@@ -922,6 +963,71 @@ mod tests {
         let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
         assert!(xml.contains("Category A"));
         assert!(xml.contains("North"));
+    }
+
+    #[test]
+    fn crossjoin_display_info_is_positionally_correct() {
+        let xml = get_execute_statement_response(MDX_CROSSJOIN_PROBE);
+        let members = axis0_member_infos(&xml);
+        assert!(members.len() >= 4, "expected crossjoin tuples: {members:?}");
+        // Both dimensions are single-level: every axis member is a leaf, so
+        // nothing may claim children (the old static value claimed 3) and no
+        // member claims a child on the axis.
+        for (caption, _, di, cc) in &members {
+            assert_eq!(*cc, 0, "{caption} is a leaf");
+            assert_eq!(di & 0xFFFF, 0, "{caption} must not claim children");
+            assert_eq!(di & 0x10000, 0, "{caption} must not claim drilled-down");
+        }
+        // All members share the (All) parent: PARENT_SAME_AS_PREV on every
+        // tuple after the first two members, never on the first tuple.
+        for (i, (caption, _, di, _)) in members.iter().enumerate() {
+            assert_eq!(
+                di & 0x20000 != 0,
+                i >= 2,
+                "{caption} at position {i}: PARENT_SAME_AS_PREV wrong (di={di})"
+            );
+        }
+    }
+
+    #[test]
+    fn crossjoin_leveled_first_dim_emits_level_qualified_members() {
+        with_project3(|| {
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Territory].[Territory].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Date].[Date].[Date]MEMBER_CAPTION,[Date].[Date].[Date]MEMBER_UNIQUE_NAME,[Date].[Date].[Date]LEVEL_NUMBER,[Date].[Date].[Date]LEVEL_UNIQUE_NAME,[Date].[Date].[Date]PARENT_LEVEL,[Date].[Date].[Date]CHILDREN_CARDINALITY,[Territory].[Territory].[Territory]MEMBER_CAPTION,[Territory].[Territory].[Territory]MEMBER_UNIQUE_NAME ON COLUMNS  FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING"#;
+            let xml = get_execute_statement_response(mdx);
+            let members = axis0_member_infos(&xml);
+            assert!(
+                members.len() >= 2,
+                "expected year x territory tuples: {members:?}"
+            );
+
+            // Slot 0 = Date years: level-qualified unique names matching the
+            // grouped data grain, real quarter child counts in the DISPLAY_INFO
+            // low word, no drilled-down claim.
+            for (caption, uname, di, cc) in members.iter().step_by(2) {
+                assert!(
+                    uname.contains("[Date].[Date].[Year].&amp;["),
+                    "year uname must be level-qualified: {uname}"
+                );
+                assert!(*cc > 0, "a year reports its quarter count: {caption}");
+                assert_eq!(di & 0xFFFF, *cc, "{caption}: low word carries cc");
+                assert_eq!(di & 0x10000, 0, "{caption}: no child follows on axis");
+            }
+
+            // Slot 1 = territories: plain leaves, no phantom "+".
+            for (caption, _, di, cc) in members.iter().skip(1).step_by(2) {
+                assert_eq!(*cc, 0, "{caption} is a territory leaf");
+                assert_eq!(di & 0xFFFF, 0, "{caption} must not claim children");
+            }
+
+            // The first year's parent metadata points at the (All) root.
+            let (ycap, _, _, _) = members.first().expect("non-empty axis");
+            let block = member_block(&xml, ycap);
+            assert_eq!(tag_value(block, "PARENT_LEVEL"), "0");
+            assert_eq!(
+                tag_value(block, "PARENT_UNIQUE_NAME"),
+                "[Date].[Date].[All]"
+            );
+        });
     }
 
     #[test]

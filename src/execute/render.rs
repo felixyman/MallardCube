@@ -456,6 +456,47 @@ fn member_child_count<B: QueryBackend + ?Sized>(
     backend.query_count(&sql)
 }
 
+/// Apply OLE DB for OLAP "Axis Rowsets" DISPLAY_INFO conventions across an
+/// axis of tuples (crossjoin shapes). The low 16 bits carry the member's child
+/// count; DRILLED_DOWN (0x10000) marks a member whose child appears in the
+/// next tuple at the same hierarchy position; PARENT_SAME_AS_PREV (0x20000)
+/// marks a member whose parent equals the previous tuple's member parent in
+/// the same position. Excel's MDDSAxis::MoveToHierProperty walks the axis on
+/// these fields; stale static values corrupt its hierarchy tree.
+pub(crate) fn apply_axis_display_info(tuples: &mut [cellset::TupleConfig]) {
+    fn parent_of(m: &cellset::MemberConfig) -> Option<String> {
+        m.dim_props
+            .iter()
+            .find(|(tag, _)| tag == "PARENT_UNIQUE_NAME")
+            .map(|(_, v)| v.clone())
+    }
+    let n = tuples.len();
+    let parents: Vec<Vec<Option<String>>> = tuples
+        .iter()
+        .map(|t| t.members.iter().map(parent_of).collect())
+        .collect();
+    let unames: Vec<Vec<String>> = tuples
+        .iter()
+        .map(|t| t.members.iter().map(|m| m.u_name.clone()).collect())
+        .collect();
+    for (i, tuple) in tuples.iter_mut().enumerate() {
+        for (s, m) in tuple.members.iter_mut().enumerate() {
+            let mut di = m.children_cardinality.min(65535);
+            // A child of this member occupies the same slot of the next tuple.
+            if i + 1 < n && matches!(parents[i + 1].get(s), Some(Some(p)) if *p == unames[i][s]) {
+                di |= 0x10000;
+            }
+            // Same parent as the previous tuple's member in this slot. Only
+            // compare real parents: two parentless (All) roots are not
+            // "same as previous" in a way Excel relies on.
+            if i > 0 && parents[i - 1].get(s) == parents[i].get(s) && parents[i].get(s).is_some() {
+                di |= 0x20000;
+            }
+            m.display_info = di;
+        }
+    }
+}
+
 pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
@@ -477,6 +518,29 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     let d0 = &dims[0];
     let d1 = &dims[1];
 
+    // group_level applies to group_by.first() only (see sql.rs), so d0 is
+    // grouped at its drilled hierarchy level while d1 stays at physical-field
+    // grain. Build each side's members at the matching level so unique names,
+    // level numbers and child counts agree with the grouped data.
+    let d0_filter_key = query
+        .filters
+        .iter()
+        .find(|f| f.dimension == *d0)
+        .and_then(|f| f.members.first())
+        .cloned()
+        .unwrap_or_default();
+    let d0_parent_uname: Option<String> = query.drilldown_level.and_then(|dl| {
+        if dl == 0 {
+            return None;
+        }
+        let project = crate::proxy_project::project();
+        let dim_def = project.model.dim_def_opt(d0)?;
+        Some(level_member_uname(dim_def, dl - 1, &d0_filter_key))
+    });
+    let cc_map = query
+        .drilldown_level
+        .map(|dl| drill_children_cardinalities(backend, d0, dl, &d0_filter_key));
+
     let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
@@ -489,12 +553,24 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
         {
             continue;
         }
-        let m0 = leaf_member_for(d0, first, &query.dim_props);
+        let mut m0 = leaf_members_from(
+            d0,
+            std::slice::from_ref(first),
+            &query.dim_props,
+            query.drilldown_level,
+            d0_parent_uname.as_deref(),
+        )
+        .remove(0);
+        if let Some(cc) = cc_map.as_ref().and_then(|m| m.get(first)) {
+            m0.children_cardinality = *cc;
+        }
         let m1 = leaf_member_for(d1, second, &query.dim_props);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
         cells.push(measurement_cell_for_query(query, ordinal, *value));
         ordinal += 1;
     }
+
+    apply_axis_display_info(&mut tuples);
 
     let axis = crate::cellset::AxisConfig {
         name: "Axis0".into(),
@@ -594,6 +670,8 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
         cells.push(measurement_cell_for_query(query, ordinal, *value));
         ordinal += 1;
     }
+
+    apply_axis_display_info(&mut tuples);
 
     let axis = crate::cellset::AxisConfig {
         name: "Axis0".into(),
@@ -734,6 +812,7 @@ fn build_multi_measure_crossjoin<B: QueryBackend + ?Sized>(
         let m1 = leaf_member_for(d1, b, &query.dim_props);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
     }
+    apply_axis_display_info(&mut tuples);
 
     let n_measures = measure_ids.len();
     let mut cells = Vec::new();

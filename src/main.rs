@@ -209,7 +209,31 @@ async fn main() {
     }
 }
 
+/// Log every Rust panic — message, location, and a forced backtrace — to
+/// stderr and to `mallard-crash.log`, so a crash leaves a forensic trail even
+/// when the operator's terminal isn't capturing output.
+fn install_panic_diagnostics() {
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let thread = std::thread::current();
+        let msg = format!(
+            "PANIC on thread {:?}: {info}\nbacktrace:\n{bt}\n",
+            thread.name().unwrap_or("<unnamed>")
+        );
+        eprintln!("!!! {msg}");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("mallard-crash.log")
+        {
+            use std::io::Write;
+            let _ = f.write_all(msg.as_bytes());
+        }
+    }));
+}
+
 async fn run_server() {
+    install_panic_diagnostics();
     init_debug_log();
     debug_write("===== SSAS-PROXY DEBUG LOG =====");
     mallardcube::xmla_trace::init_trace();
@@ -322,7 +346,20 @@ async fn run_server() {
         .expect("invalid BIND_ADDRESS (e.g. 127.0.0.1:8080 or 0.0.0.0:8080)");
     println!("🚀 SSAS Proxy running on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "❌ Cannot bind {}: address already in use.\n   Another mallardcube instance is probably still running — stop it first, or set BIND_ADDRESS to a different port.",
+                addr
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("❌ Cannot bind {addr}: {e}");
+            std::process::exit(1);
+        }
+    };
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -431,6 +468,27 @@ async fn handle_xmla(
     http_headers: HeaderMap,
     body: String,
 ) -> impl IntoResponse {
+    // Raw-request journal, written before anything can crash: if the process
+    // dies natively (DuckDB FFI, stack overflow), the last entry here is the
+    // request that killed it — the XMLA trace never sees those.
+    if std::env::var_os("MALLARD_REQUEST_JOURNAL").is_some()
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("mallard-last-requests.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            f,
+            "===== REQUEST {:?} =====",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        let _ = f.write_all(body.as_bytes());
+        let _ = writeln!(f);
+    }
     let request_type = body.find("<RequestType>").and_then(|start| {
         let after = start + 13;
         body[after..]
@@ -475,13 +533,42 @@ async fn handle_xmla(
         });
         mallardcube::response::set_session_id(session_id);
         let backend = backend_source.checkout();
-        route_request(
-            &request_for_worker,
-            &body_for_worker,
-            backend.as_ref(),
-            &user_ctx,
-            &cfg,
-        )
+        // A panic in request handling must not take the whole server down:
+        // log it (see install_panic_diagnostics) and answer with a SOAP fault
+        // so the client sees an error instead of a dead connection.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            route_request(
+                &request_for_worker,
+                &body_for_worker,
+                backend.as_ref(),
+                &user_ctx,
+                &cfg,
+            )
+        })) {
+            Ok(resp) => resp,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                eprintln!("!!! XMLA request handling panicked: {msg}");
+                mallardcube::xmla_trace::trace_request(
+                    "RequestPanic",
+                    &body_for_worker,
+                    &msg,
+                    None,
+                    None,
+                );
+                format!(
+                    "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+                     <soap:Body><soap:Fault><faultcode>XMLAnalysisError</faultcode>\
+                     <faultstring>Internal error: {}</faultstring></soap:Fault></soap:Body>\
+                     </soap:Envelope>",
+                    mallardcube::response::xml_escape(&msg)
+                )
+            }
+        }
     })
     .await
     .expect("XMLA worker task panicked");

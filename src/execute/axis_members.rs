@@ -43,7 +43,11 @@ fn dim_props_leaf(
     member_key: &str,
     requested: &[String],
     parent_uname: Option<&str>,
+    level_number: i32,
 ) -> Vec<(String, String)> {
+    // The parent sits one level above this member (a year at LEVEL_NUMBER 1
+    // has its (All) parent at level 0, a quarter's year parent at level 1).
+    let parent_level = (level_number - 1).max(0);
     filter_dim_props(
         vec![
             (
@@ -57,7 +61,7 @@ fn dim_props_leaf(
             ("MEMBER_KEY".into(), member_key.to_string()),
             ("MEMBER_TYPE".into(), "1".into()),
             ("MEMBER_VALUE".into(), name.to_string()),
-            ("PARENT_LEVEL".into(), "0".into()),
+            ("PARENT_LEVEL".into(), parent_level.to_string()),
             ("PARENT_COUNT".into(), "1".into()),
         ],
         requested,
@@ -188,7 +192,7 @@ fn leaf_member_for_dim(
         l_num,
         display_info: if cc > 0 { 131075 } else { 3 },
         children_cardinality: cc,
-        dim_props: dim_props_leaf(dim, name, &member_key, requested, parent_uname),
+        dim_props: dim_props_leaf(dim, name, &member_key, requested, parent_uname, l_num),
     }
 }
 
@@ -763,5 +767,27 @@ mod tests {
         let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
         assert!(pun.is_some());
         assert_eq!(pun.unwrap().1, "[Date].[Date].[All]");
+    }
+
+    #[test]
+    fn leaf_member_parent_level_matches_depth() {
+        let d = date_dim_with_levels();
+        let req: Vec<String> = vec!["PARENT_LEVEL".into()];
+        // Year at hierarchy level 1: its parent (All) sits at level 0.
+        let y = leaf_member_for_dim(&d, "2026", &req, Some(0), None);
+        let pl = y
+            .dim_props
+            .iter()
+            .find(|(k, _)| k == "PARENT_LEVEL")
+            .expect("PARENT_LEVEL requested");
+        assert_eq!(pl.1, "0");
+        // Quarter at hierarchy level 2: its parent (the year) sits at level 1.
+        let q = leaf_member_for_dim(&d, "2", &req, Some(1), None);
+        let pl = q
+            .dim_props
+            .iter()
+            .find(|(k, _)| k == "PARENT_LEVEL")
+            .expect("PARENT_LEVEL requested");
+        assert_eq!(pl.1, "1");
     }
 }
