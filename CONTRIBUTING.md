@@ -19,8 +19,12 @@ cargo build
 cargo run                       # demo project on http://localhost:8080/xmla
 ```
 
-Requirements: a stable Rust toolchain. DuckDB is compiled in — no external
-services. Excel on Windows is only needed for end-to-end checks.
+Requirements: Rust — the version is pinned by `rust-toolchain.toml` (rustup
+installs it automatically on the first `cargo` invocation). Bump the pin
+deliberately: update `rust-toolchain.toml`, the `dtolnay/rust-toolchain@…`
+refs in `.github/workflows/`, and the Dockerfile's `rust:<version>-bookworm`
+base together. DuckDB is compiled in — no external services. Excel on Windows
+is only needed for end-to-end checks.
 
 ## Tests
 

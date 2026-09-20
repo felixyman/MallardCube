@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # Build stage
-FROM rust:bookworm AS builder
+# Keep the base tag in sync with rust-toolchain.toml (pinned toolchain).
+FROM rust:1.98.0-bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src

@@ -1,0 +1,6 @@
+# Pinned toolchain: CI, contributors, and the Docker build must agree.
+# Bump deliberately — update this file, .github/workflows/{ci,release}.yml,
+# and the Dockerfile's `rust:1.98.0-bookworm` base together.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
