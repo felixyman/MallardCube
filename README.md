@@ -1,5 +1,9 @@
 # MallardCube
 
+[![CI](https://github.com/felixyman/MallardCube/actions/workflows/ci.yml/badge.svg)](https://github.com/felixyman/MallardCube/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-felixyman.github.io%2FMallardCube-2f6f4f)](https://felixyman.github.io/MallardCube/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Excel/XMLA frontend for DuckDB. Runs as a local HTTP
 server. Excel connects to it as a SSAS data source and gets PivotTable
 compatibility — filtering, drilldown, crossjoin, collapse — against your
@@ -46,6 +50,24 @@ To generate a project you can edit instead of re-detecting every startup:
 cargo run --bin mallard -- auto-model /path/to/data.duckdb --output my-project/
 # writes my-project/proxy-config.json (+ bootstrap.sql for the date dimension)
 ```
+
+### Docker
+
+```bash
+docker compose up --build     # bundled demo project on http://localhost:8080/xmla
+```
+
+To serve your own project, mount it and point `PROXY_CONFIG` at the config:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e PROXY_CONFIG=/config/proxy-config.json \
+  -v "$PWD/my-project:/config:ro" \
+  mallardcube:dev
+```
+
+Build the image first with `docker build -t mallardcube:dev .` (or use
+`docker compose build`).
 
 ## Connecting Excel
 
@@ -212,7 +234,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-410 tests covering MDX parsing, semantic classification, plan generation, SQL
+411 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -231,6 +253,7 @@ For detailed documentation:
 
 | File | Description |
 |------|-------------|
+| [Published docs](https://felixyman.github.io/MallardCube/) | This documentation, rendered (GitHub Pages) |
 | `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
 | `docs/converting-models.md` | SSAS Tabular conversion: intake loop, qualify, compatibility gate |
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
@@ -383,3 +406,10 @@ translate DAX to SQL using the aliases above.
 | Column-level OLS | No | Only table-level `metadata_permission` is supported |
 | Dynamic `USERNAME()` | No | `USERNAME()` and `USERPRINCIPALNAME()` are not substituted at runtime |
 | Native Kerberos | No | Authentication must be terminated by a reverse proxy |
+
+## Contributing
+
+See `CONTRIBUTING.md` for the development setup, the test and Excel
+verification workflow, and what to include when reporting a compatibility bug
+(a trace helps). Non-trivial work starts as a plan under `plans/` — the index
+is `plans/README.md`.

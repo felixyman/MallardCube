@@ -12,3 +12,8 @@ conversion-inventory.json
 conversion-inventory.md
 skills-lock.json
 .slim/deepwork/
+
+# Local agent tooling (installed per-developer, not part of the project)
+.opencode/
+opencode.json.backup
+.agents/skills/excel-mcp/

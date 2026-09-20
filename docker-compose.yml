@@ -5,9 +5,15 @@ services:
       - "8080:8080"
     environment:
       BIND_ADDRESS: 0.0.0.0:8080
-      PROXY_CONFIG: /config/proxy-config.json
-      MALLARDCUBE_AGG_CACHE: /cache/agg.duckdb
-    volumes:
-      - ./config:/config
-      - ./cache:/cache
+      # Serves the bundled demo project out of the box. For your own data,
+      # mount a project directory and point PROXY_CONFIG at its config:
+      #   docker compose run --rm -p 8080:8080 \
+      #     -v ./my-project:/config:ro \
+      #     -e PROXY_CONFIG=/config/proxy-config.json mallardcube
+      PROXY_CONFIG: ${PROXY_CONFIG:-/app/projects/project3/proxy-config.json}
+      # Optional rollup sidecar (only used when the project has a db_path):
+      # MALLARDCUBE_AGG_CACHE: /cache/agg.duckdb
+    # volumes:
+    #   - ./my-project:/config:ro
+    #   - ./cache:/cache
     restart: unless-stopped
