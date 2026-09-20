@@ -48,7 +48,7 @@ honor its STOP conditions, and update your row when done.
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
 | 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
 | 040  | YAML configuration and git-friendly config handling | P2 | M | — | TODO |
-| 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | TODO |
+| 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | IN PROGRESS |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
@@ -126,12 +126,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   `data/generated.db`, the CI seeding step) is gone; `convert-tabular`'s default
   output directory is now `converted-project`. References in plans 004–023 are
   historical.
-- 041 (data refresh lifecycle) written 2026-09-20: the proxy holds the DuckDB
-  file for its lifetime and never reopens, so load jobs fail with a lock error
-  and fresh data needs a restart (verified in both directions). Plan covers a
-  docs runbook, a lock-aware startup error, `/health` + `/status` with a data
-  stamp, and SIGHUP reload of pool + aggregations + result cache. Depends on
-  042 (now DONE).
+- 041 (data refresh lifecycle) **IN PROGRESS** 2026-09-20: Phase A+B landed —
+  README + site "Refreshing data" runbook (writer/reader exclusivity,
+  staging-file + rename + restart, aggregation-stamp note), a lock-aware
+  startup error (`fatal_db_open_error`) instead of a bare panic, and
+  `GET /health` + `GET /status` with a data stamp (`src/status.rs`,
+  auth-gated when `auth` is configured). Phase C (SIGHUP reload of pool +
+  aggregations + result cache, optional stamp watch) remains. Depends on 042
+  (DONE).
 
 ## Reconcile Status
 

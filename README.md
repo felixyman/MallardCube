@@ -199,6 +199,46 @@ file path relative to the config file:
 
 When `db_path` is `null` or omitted, demo mode is used.
 
+## Refreshing data
+
+MallardCube opens the DuckDB file through a pool of **read-only** connections
+and keeps them for the life of the process. DuckDB allows one writer or many
+readers on a file, never both, so:
+
+- A load job cannot write the file while the server is running (it fails with
+  `Could not set lock`); several MallardCube servers *can* share the file.
+- The server cannot start while a load job holds the file — startup says so
+  explicitly instead of failing with a raw lock error.
+- The server keeps serving the snapshot it opened until it restarts, so after
+  a load it must be restarted to pick up the new data.
+
+The refresh procedure:
+
+1. Build the new data into a **staging file** (`build.duckdb`) while the server
+   keeps serving.
+2. `mv build.duckdb live.duckdb` — an atomic rename; running servers keep
+   reading the old inode until they are restarted.
+3. Restart the service (`systemctl restart mallard`, `docker compose restart`).
+   Aggregation rollups are rebuilt on restart only when the source stamp
+   (size + mtime) changed.
+
+### Freshness and liveness
+
+`GET /status` reports what the server is serving and since when:
+
+```bash
+curl -s http://localhost:8080/status
+# {"catalog":"SALES_ANALYTICS","cube":"Sales","pool_size":8,
+#  "started_at_unix":...,"result_cache":true,
+#  "data":{"path":"...","size_bytes":...,"mtime_unix":...,"loaded_at_unix":...}}
+```
+
+`GET /health` answers `200 ok` for liveness probes. Both endpoints are
+auth-gated when `auth` is configured (trusted header or bearer token).
+
+Hot reload (SIGHUP without a restart) is planned in
+`plans/041-data-refresh-lifecycle.md`.
+
 ## Sample projects
 
 Sample projects live at the repo root.
@@ -234,7 +274,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-413 tests covering MDX parsing, semantic classification, plan generation, SQL
+417 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate

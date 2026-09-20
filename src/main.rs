@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderName, StatusCode, header},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
 };
 use clap::{Parser, Subcommand};
 use std::io::Write;
@@ -19,6 +19,8 @@ use mallardcube::*;
 #[derive(Clone)]
 struct AppState {
     backend_source: backend::BackendSource,
+    /// Catalog/cube/data-freshness facts for `GET /status` (plan 041).
+    status: mallardcube::status::StatusInfo,
 }
 
 // ---- CLI ----
@@ -223,6 +225,26 @@ fn install_panic_diagnostics() {
     }));
 }
 
+/// Exit with an actionable message when the DuckDB file cannot be opened.
+///
+/// The common case is a lock conflict: DuckDB allows one writer or many
+/// readers, never both, so a load job (or another server) holding the file
+/// makes startup fail. Say that plainly instead of a bare panic.
+fn fatal_db_open_error(path: &str, err: &duckdb::Error) -> ! {
+    let msg = err.to_string();
+    eprintln!("❌ Could not open DuckDB: {path}");
+    if msg.contains("Conflicting lock") || msg.contains("Could not set lock") {
+        eprintln!(
+            "   Another process holds the database file (a load job, or another\n   \
+             MallardCube). DuckDB allows one writer or many readers — never both.\n   \
+             Stop the writer and start again, or refresh via the staging-file +\n   \
+             rename runbook (README → \"Refreshing data\")."
+        );
+    }
+    eprintln!("   {msg}");
+    std::process::exit(1);
+}
+
 async fn run_server() {
     install_panic_diagnostics();
     init_debug_log();
@@ -296,21 +318,40 @@ async fn run_server() {
 
         let backend_source = match db_path {
             Some(path) => {
-                let source = backend::init_backend_source(Some(&path))
-                    .unwrap_or_else(|_| panic!("failed to configure DuckDB: {path}"));
+                let source = match backend::init_backend_source(Some(&path)) {
+                    Ok(source) => source,
+                    Err(e) => fatal_db_open_error(&path, &e),
+                };
                 println!("🗄️  DuckDB: {path}");
                 debug_write(&format!("DuckDB: {path}"));
                 source
             }
             None => {
-                let source =
-                    backend::init_backend_source(None).expect("failed to init demo DuckDB");
+                let source = match backend::init_backend_source(None) {
+                    Ok(source) => source,
+                    Err(e) => fatal_db_open_error("<demo>", &e),
+                };
                 println!("🧪 DuckDB: demo ({})", source.path().display());
                 debug_write(&format!("DuckDB: demo ({})", source.path().display()));
                 source
             }
         };
-        std::sync::Arc::new(AppState { backend_source })
+        let status = mallardcube::status::StatusInfo {
+            catalog: p.config.catalog.clone(),
+            cube: p.config.cube.clone(),
+            pool_size: backend::pool_size(),
+            started_at_unix: mallardcube::status::now_unix(),
+            data: mallardcube::status::DataStamp::capture(backend_source.path()),
+            result_cache: mallardcube::execute::cache::enabled(),
+        };
+        println!(
+            "📅 Data stamp: {} ({} bytes, modified {} unix)",
+            status.data.path, status.data.size_bytes, status.data.mtime_unix
+        );
+        std::sync::Arc::new(AppState {
+            backend_source,
+            status,
+        })
     };
 
     // Warn if roles are defined but no auth config (roles are not enforced).
@@ -331,6 +372,8 @@ async fn run_server() {
     let bind_addr = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let app = Router::new()
         .route("/xmla", post(handle_xmla))
+        .route("/health", get(health))
+        .route("/status", get(status))
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(1_048_576)); // 1 MB
     let addr: SocketAddr = bind_addr
@@ -451,6 +494,25 @@ fn log_discover_context(body: &str) {
             println!("⚙️  PropertyList:\n{}", inner);
         }
     }
+}
+
+// ---- operational endpoints (plan 041) ----
+
+/// Liveness probe: 200 whenever the process is serving.
+async fn health() -> impl IntoResponse {
+    (StatusCode::OK, "ok\n")
+}
+
+/// Freshness/ops payload. Auth-gated when `auth` is configured: the trusted
+/// header (or bearer token) must resolve to an identity, or the request is
+/// denied — the payload exposes the data path.
+async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+    let config = proxy_project::project().config.clone();
+    let user = build_user_context(&headers, &config);
+    if !mallardcube::status::authenticated(&user) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized\n".to_string());
+    }
+    (StatusCode::OK, state.status.to_json())
 }
 
 // ---- XMLA request handler ----

@@ -100,6 +100,9 @@ src/
       measure_groups.rs, measuregroup_dimensions.rs
       tmschema.rs                Tabular metadata rowsets
 
+  status.rs                      `/health` + `/status` payloads and the
+                                 data-freshness stamp (plan 041)
+
   xmla_trace.rs                  NDJSON trace capture (XMLA_TRACE=1)
 
   backend/                       Database backends
@@ -237,7 +240,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 413 tests covering MDX parsing, semantic classification, plan generation,
+- 417 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.

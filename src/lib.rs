@@ -11,6 +11,7 @@ pub mod engine;
 pub mod execute;
 pub mod mdx;
 pub mod project;
+pub mod status;
 pub mod test_support;
 pub mod tools;
 pub mod xmla;

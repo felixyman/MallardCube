@@ -69,6 +69,32 @@ of the box (`docker compose up --build`); for your own model, pass
 that file. DuckDB is statically linked, so the runtime image has no shared
 library requirements.
 
+## Refreshing data
+
+MallardCube keeps a pool of read-only connections open for the life of the
+process, and DuckDB allows one writer or many readers on a file — never both.
+So a load job cannot run while the server does, the server cannot start while
+a load job holds the file, and the server keeps serving the snapshot it opened
+until it restarts.
+
+1. Build the new data into a staging file (`build.duckdb`) while the server
+   keeps serving.
+2. Rename it over the live file: `mv build.duckdb live.duckdb`.
+3. Restart the service. Aggregation rollups rebuild on restart only when the
+   source stamp (size + mtime) changed.
+
+## Monitoring
+
+`GET /health` answers `200 ok` for liveness probes. `GET /status` reports the
+served file, its size and mtime, and when it was loaded:
+
+```bash
+curl -s http://localhost:8080/status
+```
+
+Both endpoints are auth-gated when `auth` is configured (trusted header or
+bearer token), and both expose no table data.
+
 ## Prebuilt binaries
 
 Releases publish binaries for Linux x86_64, macOS arm64, and Windows x86_64.

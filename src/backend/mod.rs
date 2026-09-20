@@ -41,7 +41,8 @@ static DEMO_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Number of pooled connections. Overridable via `MALLARDCUBE_POOL_SIZE`; the
 /// proxy is read-only, so a handful of connections saturates most workloads.
-fn pool_size() -> usize {
+/// Reported by `GET /status`.
+pub fn pool_size() -> usize {
     std::env::var("MALLARDCUBE_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
