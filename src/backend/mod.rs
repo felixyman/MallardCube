@@ -359,9 +359,18 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
         let seg = segments[rng.next() as usize % segments.len()];
         let revenue = 1_000.0 + (rng.next() as f64 % 50_000.0);
         let units = (rng.next() as f64 % 500.0).round();
-        let year = 2020 + (rng.next() % 11) as i32;
-        let month = (rng.next() % 12 + 1) as i32;
-        let day = (rng.next() % 28 + 1) as i32;
+        // The three date draws keep their position (non-date columns are
+        // unchanged) but are mixed into a day offset within
+        // [2020-01-01, today]: the demo never shows future revenue, and rows
+        // spread evenly across months instead of following the LCG's
+        // correlated low bits.
+        let d1 = rng.next();
+        let d2 = rng.next();
+        let d3 = rng.next();
+        const DEMO_START_DAYS: i64 = 18_262; // 2020-01-01 since epoch
+        let span = (today_epoch_days() - DEMO_START_DAYS + 1).max(1) as u64;
+        let offset = mix64(d1 ^ d2.rotate_left(21) ^ d3.rotate_left(42)) % span;
+        let (year, month, day) = ymd_from_epoch_days(DEMO_START_DAYS + offset as i64);
         let date_key = year * 10000 + month * 100 + day;
         rows.push(SalesFactRow {
             category: cat.to_string(),
@@ -374,6 +383,36 @@ pub fn generate_sales_fact_rows() -> Vec<SalesFactRow> {
         });
     }
     rows
+}
+
+/// Days since 1970-01-01 (UTC), used to bound demo dates to the past.
+fn today_epoch_days() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() / 86_400) as i64)
+        .unwrap_or(18_628)
+}
+
+/// Civil (year, month, day) from days since 1970-01-01 (Hinnant's algorithm).
+fn ymd_from_epoch_days(days: i64) -> (i32, i32, i32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y } as i32, m as i32, d as i32)
+}
+
+/// SplitMix64 finalizer: breaks up the LCG's correlated low bits.
+fn mix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 // ---- inventory demo data (project4) ----
@@ -1084,6 +1123,56 @@ mod tests {
             std::process::id(),
             TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    // The demo must look believable: no future-dated revenue, and every month
+    // from the start of the range through the current month has facts. The old
+    // LCG date draws left visible gaps and produced "revenue" years ahead.
+    #[test]
+    fn sales_fact_rows_stay_in_the_past_and_cover_every_month() {
+        use std::collections::BTreeSet;
+
+        let rows = super::generate_sales_fact_rows();
+        let (ty, tm, td) = super::ymd_from_epoch_days(super::today_epoch_days());
+        let today_key = ty * 10000 + tm * 100 + td;
+        assert_eq!(rows.len(), 20_000);
+        assert!(
+            rows.iter()
+                .all(|r| r.date_key >= 20_200_101 && r.date_key <= today_key),
+            "dates must lie in [2020-01-01, today]"
+        );
+
+        let mut months: BTreeSet<(i32, i32)> = BTreeSet::new();
+        let mut combos: BTreeSet<(String, (i32, i32))> = BTreeSet::new();
+        for r in &rows {
+            let y = r.date_key / 10000;
+            let m = (r.date_key / 100) % 100;
+            months.insert((y, m));
+            combos.insert((r.category.clone(), (y, m)));
+        }
+        for y in 2020..ty {
+            for m in 1..=12 {
+                assert!(months.contains(&(y, m)), "missing month {y}-{m:02}");
+            }
+        }
+        for m in 1..=tm {
+            assert!(months.contains(&(ty, m)), "missing month {ty}-{m:02}");
+        }
+        assert_eq!(
+            months.len(),
+            12 * (ty - 2020) as usize + tm as usize,
+            "every month in the range must have facts"
+        );
+
+        let categories: BTreeSet<&str> = rows.iter().map(|r| r.category.as_str()).collect();
+        let total = categories.len() * months.len();
+        let missing = total - combos.len();
+        // A uniform spread leaves ~12 rows per category-month, so gaps are
+        // essentially impossible; allow 1% for date-range drift over time.
+        assert!(
+            missing * 100 <= total,
+            "{missing} of {total} category-month combos have no facts"
+        );
     }
 
     #[test]

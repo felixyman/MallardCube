@@ -284,6 +284,84 @@ mod tests {
         axis_member_infos(xml, "Axis0")
     }
 
+    // ---- demo-data expectations ----
+    //
+    // The demo dates are bounded to the past (CURRENT_DATE) and spread evenly
+    // across months, so tests derive the data-bearing member sets and values
+    // from the seeded database instead of hardcoding year ranges.
+
+    fn demo_scalar(sql: &str) -> f64 {
+        crate::backend::Backend::get().query_scalar(sql)
+    }
+
+    fn demo_count(sql: &str) -> u32 {
+        crate::backend::Backend::get().query_count(sql)
+    }
+
+    /// Distinct years with facts, ascending.
+    fn data_year_keys() -> Vec<String> {
+        crate::backend::Backend::get().query_strings(
+            "SELECT DISTINCT CAST(d.year AS VARCHAR) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key ORDER BY d.year",
+        )
+    }
+
+    /// Distinct `year|quarter` paths with facts, ascending.
+    fn data_quarter_keys() -> Vec<String> {
+        crate::backend::Backend::get().query_strings(
+            "SELECT DISTINCT CAST(d.year AS VARCHAR) || '|' || CAST(d.quarter AS VARCHAR) \
+             FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key \
+             ORDER BY d.year, d.quarter",
+        )
+    }
+
+    /// Distinct `year|quarter|month` paths with facts, ascending.
+    fn data_month_keys() -> Vec<String> {
+        crate::backend::Backend::get().query_strings(
+            "SELECT DISTINCT CAST(d.year AS VARCHAR) || '|' || CAST(d.quarter AS VARCHAR) \
+             || '|' || CAST(d.month AS VARCHAR) \
+             FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key \
+             ORDER BY d.year, d.quarter, d.month",
+        )
+    }
+
+    fn demo_year_revenue(year: i32) -> f64 {
+        demo_scalar(&format!(
+            "SELECT COALESCE(SUM(f.revenue),0) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = {year}"
+        ))
+    }
+
+    fn demo_quarter_revenue(year: i32, quarter: i32) -> f64 {
+        demo_scalar(&format!(
+            "SELECT COALESCE(SUM(f.revenue),0) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key \
+             WHERE d.year = {year} AND d.quarter = {quarter}"
+        ))
+    }
+
+    fn demo_month_revenue(year: i32, month: i32) -> f64 {
+        demo_scalar(&format!(
+            "SELECT COALESCE(SUM(f.revenue),0) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key \
+             WHERE d.year = {year} AND d.month = {month}"
+        ))
+    }
+
+    fn demo_quarter_value_revenue(quarter: i32) -> f64 {
+        demo_scalar(&format!(
+            "SELECT COALESCE(SUM(f.revenue),0) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key WHERE d.quarter = {quarter}"
+        ))
+    }
+
+    fn demo_month_value_revenue(month: i32) -> f64 {
+        demo_scalar(&format!(
+            "SELECT COALESCE(SUM(f.revenue),0) FROM sales_fact f \
+             JOIN date_dim d ON f.date_key = d.date_key WHERE d.month = {month}"
+        ))
+    }
+
     fn with_project3<T>(f: impl FnOnce() -> T) -> T {
         let project =
             ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
@@ -1008,9 +1086,14 @@ mod tests {
                 "SELECT {TAIL([Date].[Date].[Year].Members,2)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
+            let years = data_year_keys();
             assert_eq!(infos.len(), 2, "TAIL(...,2) yields two tuples: {infos:?}");
-            assert!(infos[0].1.contains("&amp;[2029]"), "{infos:?}");
-            assert!(infos[1].1.contains("&amp;[2030]"), "{infos:?}");
+            let (last, prev) = (
+                years[years.len() - 1].clone(),
+                years[years.len() - 2].clone(),
+            );
+            assert!(infos[0].1.contains(&format!("&amp;[{prev}]")), "{infos:?}");
+            assert!(infos[1].1.contains(&format!("&amp;[{last}]")), "{infos:?}");
         });
     }
 
@@ -1274,7 +1357,7 @@ mod tests {
             let xml = get_execute_statement_response(
                 "SELECT {[Measures].[Revenue]} ON COLUMNS FROM (SELECT {[Date].[Date].[Year].&[2024]} ON COLUMNS FROM [Sales])",
             );
-            assert_eq!(cell_values(&xml), vec![46_223_804.0]);
+            assert_eq!(cell_values(&xml), vec![demo_year_revenue(2024)]);
         });
     }
 
@@ -1286,7 +1369,14 @@ mod tests {
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Date].[Quarter].AllMembers} ON ROWS FROM [Sales]",
             );
             let infos = axis_member_infos(&xml, "Axis1");
-            assert_eq!(infos.len(), 44, "{:?}", &infos[..2.min(infos.len())]);
+            // Level listings are data-driven today: only members with facts
+            // are listed (a known gap vs SSAS, which also lists empty members).
+            assert_eq!(
+                infos.len(),
+                data_quarter_keys().len(),
+                "{:?}",
+                &infos[..2.min(infos.len())]
+            );
             assert!(
                 infos[0]
                     .1
@@ -1306,7 +1396,11 @@ mod tests {
                 "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]}, [Date].[Date].[Quarter])}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
-            assert_eq!(infos.len(), 1 + 11 + 44, "(All) + years + quarters");
+            assert_eq!(
+                infos.len(),
+                1 + data_year_keys().len() + data_quarter_keys().len(),
+                "(All) + years + quarters"
+            );
             assert!(infos[0].1.contains("[Date].[Date].[All]"), "{:?}", infos[0]);
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
             assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2020]"));
@@ -1329,7 +1423,7 @@ mod tests {
             let infos = axis0_member_infos(&xml);
             assert_eq!(
                 infos.len(),
-                1 + 11 + 44 + 132,
+                1 + data_year_keys().len() + data_quarter_keys().len() + data_month_keys().len(),
                 "All + years + quarters + months"
             );
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
@@ -1372,7 +1466,11 @@ mod tests {
                 "SELECT {AddCalculatedMembers({[Date].[Date].[Year].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
-            assert_eq!(infos.len(), 11, "one row per demo year");
+            assert_eq!(
+                infos.len(),
+                data_year_keys().len(),
+                "one row per year with data"
+            );
             assert!(
                 infos[0].1.contains("[Date].[Date].[Year].&amp;[2020]"),
                 "level-qualified year: {}",
@@ -1385,8 +1483,8 @@ mod tests {
             );
             let leaf_infos = axis0_member_infos(&leaf);
             assert!(
-                leaf_infos[0].1.contains("[Date].[Date].&amp;[2020-01-04]"),
-                "leaf member: {}",
+                leaf_infos[0].1.contains("[Date].[Date].&amp;[20"),
+                "leaf member carries a date key: {}",
                 leaf_infos[0].1
             );
         });
@@ -1397,7 +1495,7 @@ mod tests {
     #[test]
     fn crossjoin_expand_entire_field_expands_every_parent() {
         with_project3(|| {
-            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2020],[Date].[Date].[Year].&[2021]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
             let xml = get_execute_statement_response(mdx);
             let infos = axis_member_infos(&xml, "Axis0");
             let date_unames: Vec<&str> = infos
@@ -1407,16 +1505,16 @@ mod tests {
                 .map(|(_, u, _, _)| u.as_str())
                 .collect();
             for year in [
-                "[Date].[Date].[Year].&amp;[2026]",
-                "[Date].[Date].[Year].&amp;[2027]",
+                "[Date].[Date].[Year].&amp;[2020]",
+                "[Date].[Date].[Year].&amp;[2021]",
             ] {
                 assert!(date_unames.contains(&year), "missing {year}");
             }
             for quarter in [
-                "[Date].[Date].[Quarter].&amp;[2026]&amp;[1]",
-                "[Date].[Date].[Quarter].&amp;[2026]&amp;[4]",
-                "[Date].[Date].[Quarter].&amp;[2027]&amp;[1]",
-                "[Date].[Date].[Quarter].&amp;[2027]&amp;[4]",
+                "[Date].[Date].[Quarter].&amp;[2020]&amp;[1]",
+                "[Date].[Date].[Quarter].&amp;[2020]&amp;[4]",
+                "[Date].[Date].[Quarter].&amp;[2021]&amp;[1]",
+                "[Date].[Date].[Quarter].&amp;[2021]&amp;[4]",
             ] {
                 assert!(date_unames.contains(&quarter), "missing {quarter}");
             }
@@ -1435,7 +1533,7 @@ mod tests {
                 pos = end;
             }
             for (u, p) in &pairs {
-                for year in ["2026", "2027"] {
+                for year in ["2020", "2021"] {
                     if u.contains(&format!("[Quarter].&amp;[{year}]")) {
                         assert_eq!(
                             p.as_deref(),
@@ -1452,14 +1550,14 @@ mod tests {
     fn single_dim_expand_two_years_lists_both_branches() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
+                "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2020],[Date].[Date].[Year].&[2021]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
             );
             let infos = axis0_member_infos(&xml);
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
-            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2026]"));
-            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2027]"));
-            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"));
-            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2027]&amp;[4]"));
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2020]"));
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2021]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2020]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2021]&amp;[4]"));
         });
     }
 
@@ -1469,27 +1567,33 @@ mod tests {
     fn deep_drill_with_year_slice_keeps_intermediate_levels() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                "SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Month],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Year].&[2026]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Month],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Year].&[2024]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
-            // The subselect slices the cube to 2026, so the input set
-            // (`DrilldownLevel({All})`) contains only 2026 plus the expanded
-            // branch: All + 2026 + 4 quarters + 12 months.
+            // The subselect slices the cube to 2024, so the input set
+            // (`DrilldownLevel({All})`) contains only 2024 plus the expanded
+            // branch: All + 2024 + its quarters + its months.
+            let quarters = demo_count(
+                "SELECT COUNT(DISTINCT d.quarter) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = 2024",
+            ) as usize;
+            let months = demo_count(
+                "SELECT COUNT(DISTINCT d.month) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = 2024",
+            ) as usize;
             assert_eq!(
                 infos.len(),
-                1 + 1 + 4 + 12,
-                "All + 2026 + its quarters + its months"
+                1 + 1 + quarters + months,
+                "All + 2024 + its quarters + its months"
             );
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
-            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2026]"));
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2024]"));
             assert!(
                 !unames.contains(&"[Date].[Date].[Year].&amp;[2020]"),
                 "years outside the slice are empty and omitted"
             );
-            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"));
-            assert!(unames.contains(&"[Date].[Date].[Month].&amp;[2026]&amp;[1]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2024]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Month].&amp;[2024]&amp;[1]&amp;[1]"));
             assert!(
-                !unames.iter().any(|u| u.matches("[2026]").count() > 1),
+                !unames.iter().any(|u| u.matches("[2024]").count() > 1),
                 "keys must not repeat the year: {unames:?}"
             );
         });
@@ -1644,8 +1748,12 @@ mod tests {
             let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,Hierarchy_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
             let xml = get_execute_statement_response(mdx);
             let members = axis0_member_infos(&xml);
-            // 20 categories x 11 years.
-            assert_eq!(members.len(), 20 * 11 * 2, "category x year tuples");
+            // 20 categories x (years with facts).
+            assert_eq!(
+                members.len(),
+                20 * data_year_keys().len() * 2,
+                "category x year tuples"
+            );
 
             for (caption, uname, _, _) in members.iter().step_by(2) {
                 assert!(
@@ -1670,7 +1778,12 @@ mod tests {
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Quarter].Members ON ROWS FROM [Sales]",
             );
             let infos = axis0_member_infos(&xml);
-            assert_eq!(infos.len(), 44, "11 years x 4 quarters");
+            let quarters = data_quarter_keys();
+            assert_eq!(
+                infos.len(),
+                quarters.len(),
+                "one member per quarter with facts"
+            );
             assert_eq!(infos[0].0, "1", "caption is the level value");
             assert!(
                 infos[0]
@@ -1679,14 +1792,18 @@ mod tests {
                 "compound unique name: {}",
                 infos[0].1
             );
+            let last = quarters.last().expect("at least one quarter");
+            let parts: Vec<&str> = last.split('|').collect();
+            let last_uname = &infos[infos.len() - 1].1;
             assert!(
-                infos[43]
-                    .1
-                    .contains("[Date].[Date].[Quarter].&amp;[2030]&amp;[4]"),
-                "last quarter: {}",
-                infos[43].1
+                last_uname.contains(&format!("&amp;[{}]&amp;[{}]", parts[0], parts[1])),
+                "last quarter: {last_uname}"
             );
-            assert_eq!(cell_values(&xml).len(), 44, "one value per quarter");
+            assert_eq!(
+                cell_values(&xml).len(),
+                quarters.len(),
+                "one value per quarter"
+            );
         });
     }
 
@@ -1697,12 +1814,22 @@ mod tests {
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Month].Members ON ROWS FROM [Sales]",
             );
             let infos = axis0_member_infos(&xml);
-            assert_eq!(infos.len(), 132, "11 years x 12 months");
+            assert_eq!(
+                infos.len(),
+                data_month_keys().len(),
+                "one member per month with facts"
+            );
             // Months order 1..12, not lexicographically ("1","10","11","12","2").
             assert!(
-                infos[11].1.ends_with("&amp;[12]</UName>") || infos[11].1.contains("&amp;[12]")
+                infos[11].1.contains("&amp;[12]"),
+                "12th member is the first year's month 12: {}",
+                infos[11].1
             );
-            assert!(infos[12].1.contains("[2021]") && infos[12].1.contains("&amp;[1]"));
+            assert!(
+                infos[12].1.contains("[2021]") && infos[12].1.contains("&amp;[1]"),
+                "13th member starts the next year: {}",
+                infos[12].1
+            );
         });
     }
 
@@ -2081,19 +2208,25 @@ mod tests {
             );
             let captions = axis_captions(&xml, "Axis0");
             let values = cell_values(&xml);
+            let years = data_year_keys();
             assert_eq!(
                 captions.len(),
-                12,
-                "expected All + 11 years on Axis0, got {captions:?}"
+                1 + years.len(),
+                "expected All + years with facts on Axis0, got {captions:?}"
             );
             assert_eq!(
                 values.len(),
                 captions.len(),
                 "must have one cell per axis member (off-by-one guard)"
             );
-            assert_eq!(values[0], 521_586_767.0, "[All] grand total");
-            assert_eq!(values[1], 47_536_588.0, "2020 must not be shifted");
-            assert_eq!(values[11], 45_853_856.0, "2030 must not be empty");
+            let total = demo_scalar("SELECT COALESCE(SUM(revenue),0) FROM sales_fact");
+            assert_eq!(values[0], total, "[All] grand total");
+            let first_year: i32 = years[0].parse().expect("year key");
+            assert_eq!(
+                values[1],
+                demo_year_revenue(first_year),
+                "first year must not be shifted"
+            );
             let sum_years: f64 = values[1..].iter().sum();
             assert!(
                 (values[0] - sum_years).abs() < 1.0,
@@ -2757,41 +2890,42 @@ mod tests {
             );
             assert_eq!(
                 cell_values(&xml),
-                vec![46_223_804.0],
+                vec![demo_year_revenue(2024)],
                 "2024 revenue, not the unfiltered total"
             );
         });
     }
 
-    // Regression: a compound quarter member (&[2026]&[4]) must scope its months
+    // Regression: a compound quarter member (&[2024]&[4]) must scope its months
     // to that year (not all years' Q4s), carry the year-encoded keys, and the
     // correct per-month child counts.
     #[test]
     fn compound_quarter_drilldown_scopes_to_year() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                r##"SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Quarter],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Quarter].&[2026]&[4]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue])"##,
+                r##"SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Quarter],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Quarter].&[2024]&[4]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue])"##,
             );
+            let q4 = demo_quarter_revenue(2024, 4);
             assert_eq!(
                 cell_values(&xml),
                 vec![
-                    12_834_084.0,
-                    12_834_084.0,
-                    12_834_084.0,
-                    4_051_532.0,
-                    4_180_160.0,
-                    4_602_392.0
+                    q4,
+                    q4,
+                    q4,
+                    demo_month_revenue(2024, 10),
+                    demo_month_revenue(2024, 11),
+                    demo_month_revenue(2024, 12)
                 ],
-                "(All), Year 2026, and Q4 2026 totals, then October, November, December"
+                "(All), Year 2024, and Q4 2024 totals, then October, November, December"
             );
             assert!(
-                xml.contains("<UName>[Date].[Date].[Month].&amp;[2026]&amp;[4]&amp;[10]</UName>"),
+                xml.contains("<UName>[Date].[Date].[Month].&amp;[2024]&amp;[4]&amp;[10]</UName>"),
                 "month must carry the compound year path"
             );
             // The full ancestor chain must be on the axis so Excel can resolve
             // each member's parent (a quarter without its year crashes).
             assert!(
-                xml.contains("<UName>[Date].[Date].[Year].&amp;[2026]</UName>"),
+                xml.contains("<UName>[Date].[Date].[Year].&amp;[2024]</UName>"),
                 "the year ancestor must be on the axis"
             );
             assert!(
@@ -2800,7 +2934,7 @@ mod tests {
             );
             assert!(
                 xml.contains(
-                    "<PARENT_UNIQUE_NAME>[Date].[Date].[Quarter].&amp;[2026]&amp;[4]</PARENT_UNIQUE_NAME>"
+                    "<PARENT_UNIQUE_NAME>[Date].[Date].[Quarter].&amp;[2024]&amp;[4]</PARENT_UNIQUE_NAME>"
                 ),
                 "month parent must be the compound quarter"
             );
@@ -2887,7 +3021,17 @@ mod tests {
             );
             let values = cell_values(&xml);
             assert_eq!(values.len(), 3, "one cell per tuple");
-            assert_eq!(values[0], 46_223_804.0, "Year 2024");
+            assert_eq!(values[0], demo_year_revenue(2024), "Year 2024");
+            assert_eq!(
+                values[1],
+                demo_month_value_revenue(6),
+                "Month 6 totals every year"
+            );
+            assert_eq!(
+                values[2],
+                demo_quarter_value_revenue(2),
+                "Quarter 2 totals every year"
+            );
             assert!(
                 values.iter().all(|v| *v > 0.0),
                 "all tuples non-zero: {values:?}"

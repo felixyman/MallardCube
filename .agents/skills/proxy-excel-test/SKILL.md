@@ -190,7 +190,11 @@ gives a surprising result, check the trace before concluding anything.
   - Bare single-member `WHERE (member)` slicers are honoured:
     `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])`
     → `24719896` (same as the tuple-on-axis form). Level-qualified slices work
-    too: `WHERE ([Date].[Date].[Year].&[2024])` → `46223804`.
+    too: `WHERE ([Date].[Date].[Year].&[2024])` must equal the raw-SQL
+    expectation for that year — the demo data is bounded to "today", so the
+    number shifts over time. Compare against
+    `SELECT SUM(revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = 2024`
+    instead of trusting a stale constant.
   - Tuple-on-axis, grouped-by-category, level-qualified CUBEVALUE members and
     the full discover handshake all work.
 - **Excel caches CUBE function results client-side.** If you write a formula
