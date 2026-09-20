@@ -1,3 +1,4 @@
+use crate::backend::ParentChildMode;
 use crate::engine::model::{
     Dialect, DimensionDef, FactTable, FallbackCapability, MeasureDef, RelationshipDef,
     SemanticModel,
@@ -67,10 +68,35 @@ pub fn init_project(config_path: Option<&str>) -> Result<(), String> {
         .map_err(|_| "project already initialised".into())
 }
 
+/// Serving variant of [`init_project`]: may materialize parent-child
+/// hierarchies (writes to the project database). The server uses this; tools
+/// use the read-only [`init_project`].
+pub fn init_project_for_serving(config_path: Option<&str>) -> Result<(), String> {
+    let p = match config_path {
+        Some(path) => ProxyProject::load_for_serving(path)?,
+        None => ProxyProject::default_(),
+    };
+    PROJECT
+        .set(p)
+        .map_err(|_| "project already initialised".into())
+}
+
 /// Initialize the project singleton from an in-memory `ProxyConfig` (e.g.
-/// AutoModel detection at startup via `MALLARDCUBE_DB`).
+/// AutoModel detection at startup via `MALLARDCUBE_DB`). Read-only.
 pub fn init_project_with_config(config: ProxyConfig, config_dir: &Path) -> Result<(), String> {
     let p = ProxyProject::from_config(config, config_dir)?;
+    PROJECT
+        .set(p)
+        .map_err(|_| "project already initialised".into())
+}
+
+/// Serving variant of [`init_project_with_config`]: may materialize
+/// parent-child hierarchies in the project database.
+pub fn init_project_with_config_for_serving(
+    config: ProxyConfig,
+    config_dir: &Path,
+) -> Result<(), String> {
+    let p = ProxyProject::from_config_for_serving(config, config_dir)?;
     PROJECT
         .set(p)
         .map_err(|_| "project already initialised".into())
@@ -101,25 +127,53 @@ pub struct ProxyProject {
 }
 
 impl ProxyProject {
+    /// Load for read-only use (tools, validation, replay). Never writes to the
+    /// project database — an unmaterialized parent-child dimension is left flat
+    /// with a warning. The server startup path uses [`Self::load_for_serving`].
     pub fn load(config_path: &str) -> Result<Self, String> {
+        Self::load_with_mode(config_path, ParentChildMode::ReadOnly)
+    }
+
+    /// Load for serving: materializes parent-child hierarchies when they are
+    /// not present yet (writes `{dim}__pc_*` columns to the project database).
+    pub fn load_for_serving(config_path: &str) -> Result<Self, String> {
+        Self::load_with_mode(config_path, ParentChildMode::Materialize)
+    }
+
+    fn load_with_mode(config_path: &str, pc_mode: ParentChildMode) -> Result<Self, String> {
         let config: ProxyConfig = {
             let text = fs::read_to_string(config_path)
                 .map_err(|e| format!("read config {config_path}: {e}"))?;
             serde_json::from_str(&text).map_err(|e| format!("parse config {config_path}: {e}"))?
         };
 
-        let model = build_semantic_model(
+        let model = build_semantic_model_with_mode(
             &config,
             Path::new(config_path).parent().unwrap_or(Path::new(".")),
+            pc_mode,
         );
 
         Ok(Self { config, model })
     }
 
     /// Build a project from an in-memory `ProxyConfig` (e.g. AutoModel output)
-    /// instead of a config file on disk.
+    /// instead of a config file on disk. Read-only, like [`Self::load`].
     pub fn from_config(config: ProxyConfig, config_dir: &Path) -> Result<Self, String> {
-        let model = build_semantic_model(&config, config_dir);
+        Self::from_config_with_mode(config, config_dir, ParentChildMode::ReadOnly)
+    }
+
+    /// Serving variant of [`Self::from_config`] — may materialize parent-child
+    /// hierarchies in the project database.
+    pub fn from_config_for_serving(config: ProxyConfig, config_dir: &Path) -> Result<Self, String> {
+        Self::from_config_with_mode(config, config_dir, ParentChildMode::Materialize)
+    }
+
+    fn from_config_with_mode(
+        config: ProxyConfig,
+        config_dir: &Path,
+        pc_mode: ParentChildMode,
+    ) -> Result<Self, String> {
+        let model = build_semantic_model_with_mode(&config, config_dir, pc_mode);
         Ok(Self { config, model })
     }
 
@@ -203,7 +257,19 @@ impl ProxyProject {
     }
 }
 
+/// Build the semantic model without touching the database (read-only).
+/// Test-only helper; production callers go through
+/// [`build_semantic_model_with_mode`].
+#[cfg(test)]
 fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticModel {
+    build_semantic_model_with_mode(config, config_dir, ParentChildMode::ReadOnly)
+}
+
+fn build_semantic_model_with_mode(
+    config: &ProxyConfig,
+    config_dir: &Path,
+    pc_mode: ParentChildMode,
+) -> SemanticModel {
     let dialect = match config.dialect.as_str() {
         "duckdb" => Dialect::DuckDB,
         other => panic!("unsupported dialect: {other}"),
@@ -287,9 +353,13 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
         })
         .collect();
 
-    // Parent-child dimensions: materialize synthetic levels from the
-    // recursion (recursive CTE + per-depth ancestor columns) before the
-    // model is assembled, so every consumer sees ordinary LevelDefs.
+    // Parent-child dimensions: synthetic levels come from a `(key, parent)`
+    // recursion materialized as per-depth ancestor columns on the dimension
+    // table. Materializing writes to the project's DuckDB file, so it only
+    // happens on the serving path (`ParentChildMode::Materialize`) or when the
+    // config asks for a refresh; read-only callers (`ProxyProject::load`,
+    // e.g. `qualify`/`trace-replay`) read back an existing materialization and
+    // otherwise leave the dimension flat.
     if config.dimensions.iter().any(|d| d.parent_child.is_some()) {
         let db_file = config.db_path.as_ref().map(|db| {
             let p = Path::new(db);
@@ -318,13 +388,27 @@ fn build_semantic_model(config: &ProxyConfig, config_dir: &Path) -> SemanticMode
                             );
                             continue;
                         };
+                        let mode = if pc.refresh {
+                            ParentChildMode::Refresh
+                        } else {
+                            pc_mode
+                        };
                         match crate::backend::prepare_parent_child(
                             &conn,
                             &table,
                             &pc.key_column,
                             &pc.parent_column,
                             &dd.id,
+                            mode,
                         ) {
+                            Ok(levels) if levels.is_empty() => {
+                                if pc_mode == ParentChildMode::ReadOnly {
+                                    eprintln!(
+                                        "config: parent_child dimension '{}' is not materialized; start the server to build it (or set parent_child.refresh) — treating as flat",
+                                        dd.id
+                                    );
+                                }
+                            }
                             Ok(levels) => {
                                 dd.levels = levels
                                     .into_iter()
@@ -1040,6 +1124,7 @@ mod tests {
         let query = SemanticQuery {
             set_probe: None,
             set_count: None,
+            drill_members: vec![],
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
             cell_props: vec![],
@@ -1054,7 +1139,8 @@ mod tests {
             measures: vec![],
             axis_set_op: None,
             axis_tuples: vec![],
-            drilldown_level: None,
+            drilldown_levels: vec![],
+            level_drag: false,
             metadata_probe_targets: vec![],
             metadata_probe_properties: vec![],
             member_only_unames: vec![],
@@ -1084,6 +1170,7 @@ mod tests {
         let query = SemanticQuery {
             set_probe: None,
             set_count: None,
+            drill_members: vec![],
             kind: SemanticQueryKind::DrilldownCategories,
             dim_props: vec![],
             cell_props: vec![],
@@ -1098,7 +1185,8 @@ mod tests {
             measures: vec![],
             axis_set_op: None,
             axis_tuples: vec![],
-            drilldown_level: None,
+            drilldown_levels: vec![],
+            level_drag: false,
             metadata_probe_targets: vec![],
             metadata_probe_properties: vec![],
             member_only_unames: vec![],
@@ -1125,6 +1213,7 @@ mod tests {
         let query = SemanticQuery {
             set_probe: None,
             set_count: None,
+            drill_members: vec![],
             kind: SemanticQueryKind::SlicerAllAndMeasure,
             dim_props: vec![],
             cell_props: vec![],
@@ -1143,7 +1232,8 @@ mod tests {
             measures: vec![],
             axis_set_op: None,
             axis_tuples: vec![],
-            drilldown_level: None,
+            drilldown_levels: vec![],
+            level_drag: false,
             metadata_probe_targets: vec![],
             metadata_probe_properties: vec![],
             member_only_unames: vec![],
@@ -1169,6 +1259,7 @@ mod tests {
         let query = SemanticQuery {
             set_probe: None,
             set_count: None,
+            drill_members: vec![],
             kind: SemanticQueryKind::SlicerAllAndMeasure,
             dim_props: vec![],
             cell_props: vec![],
@@ -1187,7 +1278,8 @@ mod tests {
             measures: vec![],
             axis_set_op: None,
             axis_tuples: vec![],
-            drilldown_level: None,
+            drilldown_levels: vec![],
+            level_drag: false,
             metadata_probe_targets: vec![],
             metadata_probe_properties: vec![],
             member_only_unames: vec![],

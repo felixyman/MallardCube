@@ -63,8 +63,9 @@ stable across runs):
 | Electronics (tuple on axis) | `SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0 FROM [Sales]` | `24719896` |
 | Category count | `SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]` | 20 categories, Electronics row = `24719896` |
 
-Do NOT assert YTD/QTD/MTD values — they are computed against `CURRENT_DATE`
-and change daily (and are currently broken, see "Known proxy bugs").
+Do NOT assert exact YTD/QTD/MTD values — they are computed against
+`CURRENT_DATE` and change daily. Assert a strict subset of the total instead
+(e.g. YTD < total revenue).
 
 ## Part B — Excel MCP CUBE-function test (the method that works)
 
@@ -179,15 +180,25 @@ gives a surprising result, check the trace before concluding anything.
 - **Cell value reads can be `null` if the formula didn't resolve.** Always
   `calculation_mode calculate` before `get-values`, and verify no `cellErrors`.
 
-## Known proxy bugs (current state — assert the right things)
+## Known proxy bugs (verified 2026-08-23 — assert the right things)
 
-- **Time-intelligence measures on an axis return full totals.** `SELECT {[Measures].[RevenueYTD]} ON COLUMNS FROM [Sales]` → `521586767` (should be a
-  2026-only subset). Grouped by Year, every year shows its full-year sum. This
-  is the important bug — it's the MDX shape Excel emits for a YTD measure.
-- **Bare single-member `WHERE (member)` slicers are ignored.** `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])` → full total. (Excel's CUBE functions don't emit this form;
-  they use tuple-on-axis, which works.)
-- **Works correctly**: tuple-on-axis `SELECT {([Measures].[X],[Dim].[Hier].&[key])} ON 0 FROM [cube]`, grouped-by-category, and the full discover
-  handshake (all 15+ rowsets answer in ~40ms).
+- **None of the previously listed axis/slicer bugs reproduce.** Verified against
+  the current build:
+  - Time-intelligence measures on an axis return the flag-filtered subset:
+    `SELECT {[Measures].[RevenueYTD]} ON COLUMNS FROM [Sales]` → `35714238`
+    (a strict subset of the `521586767` total). QTD → `10718936`, MTD → `2647528`.
+  - Bare single-member `WHERE (member)` slicers are honoured:
+    `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])`
+    → `24719896` (same as the tuple-on-axis form). Level-qualified slices work
+    too: `WHERE ([Date].[Date].[Year].&[2024])` → `46223804`.
+  - Tuple-on-axis, grouped-by-category, level-qualified CUBEVALUE members and
+    the full discover handshake all work.
+- **Excel caches CUBE function results client-side.** If you write a formula
+  whose text already exists in the workbook (or was queried earlier in the
+  Excel process), recalculation may not hit the server and `get-values` returns
+  a stale cached number. Before concluding anything, confirm the request in
+  `xmla-trace.jsonl`; if it's missing, write the formula to an unused cell with
+  different arguments to force a fresh query.
 
 ## Test workflow for a proxy change
 

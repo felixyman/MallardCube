@@ -252,9 +252,10 @@ mod tests {
     }
 
     /// `(caption, uname, display_info, children_cardinality)` per `<Member>`
-    /// on Axis0, in tuple order.
-    fn axis0_member_infos(xml: &str) -> Vec<(String, String, u32, u32)> {
-        let start = xml.find("<Axis name=\"Axis0\">").expect("missing Axis0");
+    /// on the named axis, in tuple order.
+    fn axis_member_infos(xml: &str, axis: &str) -> Vec<(String, String, u32, u32)> {
+        let marker = format!("<Axis name=\"{axis}\">");
+        let start = xml.find(&marker).expect("missing axis");
         let end = xml[start..]
             .find("</Axis>")
             .map(|i| start + i)
@@ -277,6 +278,10 @@ mod tests {
             pos = close;
         }
         out
+    }
+
+    fn axis0_member_infos(xml: &str) -> Vec<(String, String, u32, u32)> {
+        axis_member_infos(xml, "Axis0")
     }
 
     fn with_project3<T>(f: impl FnOnce() -> T) -> T {
@@ -1009,11 +1014,29 @@ mod tests {
         });
     }
 
-    // Parent-child hierarchy: org chart materialized into Level 01..NN
-    // columns at project load; probes, rollups and drilldown must behave like
-    // an explicit hierarchy (SSAS subtree-sum semantics).
+    // An unknown level in a set source must fail closed: counting the physical
+    // grain instead would silently return a plausible-but-wrong number.
     #[test]
-    fn parent_child_org_chart_end_to_end() {
+    fn unknown_set_level_fails_closed() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Bogus].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+            );
+            // The CellData block must be empty: counting the physical grain
+            // would emit a misleading cell value.
+            let start = xml.find("<CellData>").expect("CellData element") + "<CellData>".len();
+            let end = xml[start..].find("</CellData>").expect("closing CellData") + start;
+            assert!(
+                xml[start..end].trim().is_empty(),
+                "no cell may be emitted for an unknown level: {}",
+                &xml[start..end]
+            );
+        });
+    }
+
+    /// Temp project with a parent-child org chart. Returns `(dir, db_path)`;
+    /// the caller removes `dir`. The DB is NOT materialized.
+    fn parent_child_fixture() -> (std::path::PathBuf, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "mallardcube-pc-{}-{:#x}",
             std::process::id(),
@@ -1082,11 +1105,84 @@ mod tests {
             serde_json::to_string_pretty(&cfg).unwrap(),
         )
         .unwrap();
+        (dir, db_path)
+    }
 
-        let p = crate::proxy_project::ProxyProject::load(
-            dir.join("proxy-config.json").to_str().unwrap(),
+    /// Number of materialized `Employee__pc_*` columns on the dimension table.
+    fn pc_materialized_columns(db_path: &std::path::Path) -> u32 {
+        let conn = duckdb::Connection::open(db_path).unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('employee_dim') WHERE name LIKE 'Employee__pc%'",
+            [],
+            |r| r.get(0),
         )
-        .expect("load pc project");
+        .unwrap()
+    }
+
+    /// Read-only loads (`qualify`, replay) must never materialize; the serving
+    /// load builds the hierarchy once and later starts reuse it.
+    #[test]
+    fn parent_child_materializes_only_when_serving() {
+        let (dir, db_path) = parent_child_fixture();
+        let config_path = dir.join("proxy-config.json");
+        let config = config_path.to_str().unwrap();
+
+        // Read-only: no columns added, the dimension degrades to flat.
+        let p = crate::proxy_project::ProxyProject::load(config).expect("read-only load");
+        assert_eq!(pc_materialized_columns(&db_path), 0, "load must not write");
+        assert!(
+            p.model
+                .dim_def_opt("Employee")
+                .expect("Employee dim")
+                .levels
+                .is_empty(),
+            "an unmaterialized parent-child dimension stays flat"
+        );
+
+        // Serving: materializes the synthetic levels.
+        let p = crate::proxy_project::ProxyProject::load_for_serving(config).expect("serving load");
+        let levels = p
+            .model
+            .dim_def_opt("Employee")
+            .expect("Employee dim")
+            .levels
+            .clone();
+        assert_eq!(levels.len(), 3, "{levels:?}");
+        assert_eq!(
+            pc_materialized_columns(&db_path),
+            5,
+            "path + depth + l1..l3"
+        );
+
+        // Second serving start: read-back fast path returns identical levels.
+        let again = crate::proxy_project::ProxyProject::load_for_serving(config).expect("reload");
+        let again_levels: Vec<(String, String, u32)> = again
+            .model
+            .dim_def_opt("Employee")
+            .expect("Employee dim")
+            .levels
+            .iter()
+            .map(|l| (l.name.clone(), l.column.clone(), l.cardinality))
+            .collect();
+        let expected: Vec<(String, String, u32)> = levels
+            .iter()
+            .map(|l| (l.name.clone(), l.column.clone(), l.cardinality))
+            .collect();
+        assert_eq!(again_levels, expected);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Parent-child hierarchy: org chart materialized into Level 01..NN
+    // columns at project load; probes, rollups and drilldown must behave like
+    // an explicit hierarchy (SSAS subtree-sum semantics).
+    #[test]
+    fn parent_child_org_chart_end_to_end() {
+        let (dir, db_path) = parent_child_fixture();
+        let config_path = dir.join("proxy-config.json");
+
+        let p = crate::proxy_project::ProxyProject::load_for_serving(config_path.to_str().unwrap())
+            .expect("load pc project");
 
         crate::project::project::with_test_project(p, || {
             let project = crate::proxy_project::project();
@@ -1169,6 +1265,445 @@ mod tests {
                 "{caption} at position {i}: PARENT_SAME_AS_PREV wrong (di={di})"
             );
         }
+    }
+
+    // A subselect restricts the query like a slicer (SSAS semantics).
+    #[test]
+    fn subselect_restricts_slicer_axis() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS FROM (SELECT {[Date].[Date].[Year].&[2024]} ON COLUMNS FROM [Sales])",
+            );
+            assert_eq!(cell_values(&xml), vec![46_223_804.0]);
+        });
+    }
+
+    // Excel 2016 names a level directly with `.AllMembers`.
+    #[test]
+    fn all_members_level_set_returns_level_members() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Date].[Quarter].AllMembers} ON ROWS FROM [Sales]",
+            );
+            let infos = axis_member_infos(&xml, "Axis1");
+            assert_eq!(infos.len(), 44, "{:?}", &infos[..2.min(infos.len())]);
+            assert!(
+                infos[0]
+                    .1
+                    .contains("[Date].[Date].[Quarter].&amp;[2020]&amp;[1]"),
+                "compound quarter: {}",
+                infos[0].1
+            );
+        });
+    }
+
+    // `DrilldownLevel(set, <level>)` starts the drill at that level, with the
+    // intermediate levels present so every parent is reachable.
+    #[test]
+    fn drilldown_level_expression_starts_at_that_level() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]}, [Date].[Date].[Quarter])}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 1 + 11 + 44, "(All) + years + quarters");
+            assert!(infos[0].1.contains("[Date].[Date].[All]"), "{:?}", infos[0]);
+            let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2020]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2020]&amp;[1]"));
+            assert!(
+                !unames.iter().any(|u| u.contains("[Month]")),
+                "no months at a quarter-level drill"
+            );
+        });
+    }
+
+    // Whole-field "Expand to Month": the axis must include years and quarters
+    // (the months' parents), or Excel's hierarchy walk has dangling parents.
+    #[test]
+    fn nested_drill_to_month_keeps_intermediate_levels() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Month],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(
+                infos.len(),
+                1 + 11 + 44 + 132,
+                "All + years + quarters + months"
+            );
+            let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2020]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2020]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Month].&amp;[2020]&amp;[1]&amp;[1]"));
+
+            // Every member's parent must be on the axis.
+            let mut pairs: Vec<(String, Option<String>)> = Vec::new();
+            let mut pos = 0;
+            while let Some(i) = xml[pos..].find("<Member Hierarchy=\"[Date].[Date]\">") {
+                let start = pos + i;
+                let end = start + xml[start..].find("</Member>").unwrap();
+                let block = &xml[start..end];
+                let u = tag_value(block, "UName");
+                let p = tag_value(block, "PARENT_UNIQUE_NAME");
+                if !pairs.iter().any(|(u2, _)| *u2 == u) {
+                    pairs.push((u, if p.is_empty() { None } else { Some(p) }));
+                }
+                pos = end;
+            }
+            for (u, p) in &pairs {
+                if let Some(p) = p {
+                    assert!(
+                        unames.contains(&p.as_str()),
+                        "parent {p} of {u} must be on the axis"
+                    );
+                }
+            }
+        });
+    }
+
+    // Excel probes each level with `AddCalculatedMembers({[D].[H].[Level].Members})`
+    // while building the field list's level tree. The members must be
+    // level-qualified, or Excel can't place them and collapses to the top level.
+    #[test]
+    fn add_calculated_members_level_probe_is_level_qualified() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {AddCalculatedMembers({[Date].[Date].[Year].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 11, "one row per demo year");
+            assert!(
+                infos[0].1.contains("[Date].[Date].[Year].&amp;[2020]"),
+                "level-qualified year: {}",
+                infos[0].1
+            );
+
+            // An unqualified `.Members` set stays at the leaf grain.
+            let leaf = get_execute_statement_response(
+                "SELECT {AddCalculatedMembers({[Date].[Date].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            let leaf_infos = axis0_member_infos(&leaf);
+            assert!(
+                leaf_infos[0].1.contains("[Date].[Date].&amp;[2020-01-04]"),
+                "leaf member: {}",
+                leaf_infos[0].1
+            );
+        });
+    }
+
+    // "Expand Entire Field" expands every member at once — Excel sends all
+    // parent members in the DrilldownMember set.
+    #[test]
+    fn crossjoin_expand_entire_field_expands_every_parent() {
+        with_project3(|| {
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
+            let xml = get_execute_statement_response(mdx);
+            let infos = axis_member_infos(&xml, "Axis0");
+            let date_unames: Vec<&str> = infos
+                .iter()
+                .skip(1)
+                .step_by(2)
+                .map(|(_, u, _, _)| u.as_str())
+                .collect();
+            for year in [
+                "[Date].[Date].[Year].&amp;[2026]",
+                "[Date].[Date].[Year].&amp;[2027]",
+            ] {
+                assert!(date_unames.contains(&year), "missing {year}");
+            }
+            for quarter in [
+                "[Date].[Date].[Quarter].&amp;[2026]&amp;[1]",
+                "[Date].[Date].[Quarter].&amp;[2026]&amp;[4]",
+                "[Date].[Date].[Quarter].&amp;[2027]&amp;[1]",
+                "[Date].[Date].[Quarter].&amp;[2027]&amp;[4]",
+            ] {
+                assert!(date_unames.contains(&quarter), "missing {quarter}");
+            }
+            // Every quarter's parent must be its own year.
+            let mut pairs: Vec<(String, Option<String>)> = Vec::new();
+            let mut pos = 0;
+            while let Some(i) = xml[pos..].find("<Member Hierarchy=\"[Date].[Date]\">") {
+                let start = pos + i;
+                let end = start + xml[start..].find("</Member>").unwrap();
+                let block = &xml[start..end];
+                let u = tag_value(block, "UName");
+                let p = tag_value(block, "PARENT_UNIQUE_NAME");
+                if !pairs.iter().any(|(u2, _)| *u2 == u) {
+                    pairs.push((u, if p.is_empty() { None } else { Some(p) }));
+                }
+                pos = end;
+            }
+            for (u, p) in &pairs {
+                for year in ["2026", "2027"] {
+                    if u.contains(&format!("[Quarter].&amp;[{year}]")) {
+                        assert_eq!(
+                            p.as_deref(),
+                            Some(format!("[Date].[Date].[Year].&amp;[{year}]").as_str()),
+                            "quarter {u} must be parented by year {year}"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn single_dim_expand_two_years_lists_both_branches() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
+            );
+            let infos = axis0_member_infos(&xml);
+            let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2026]"));
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2027]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2027]&amp;[4]"));
+        });
+    }
+
+    // A deep drill scoped by a slicer/compound member ("Expand to Month" on a
+    // year) must also keep the intermediate quarters on the axis.
+    #[test]
+    fn deep_drill_with_year_slice_keeps_intermediate_levels() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Date].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Date].[Month],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Date].[Year].&[2026]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
+            );
+            let infos = axis0_member_infos(&xml);
+            // The subselect slices the cube to 2026, so the input set
+            // (`DrilldownLevel({All})`) contains only 2026 plus the expanded
+            // branch: All + 2026 + 4 quarters + 12 months.
+            assert_eq!(
+                infos.len(),
+                1 + 1 + 4 + 12,
+                "All + 2026 + its quarters + its months"
+            );
+            let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
+            assert!(unames.contains(&"[Date].[Date].[Year].&amp;[2026]"));
+            assert!(
+                !unames.contains(&"[Date].[Date].[Year].&amp;[2020]"),
+                "years outside the slice are empty and omitted"
+            );
+            assert!(unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Date].[Month].&amp;[2026]&amp;[1]&amp;[1]"));
+            assert!(
+                !unames.iter().any(|u| u.matches("[2026]").count() > 1),
+                "keys must not repeat the year: {unames:?}"
+            );
+        });
+    }
+
+    // The query Excel sends for "Expand to Month" on a year inside a crossjoin
+    // (trace seq 68 of a live session): nested DrilldownMember whose outer set
+    // mixes the year with its quarters. Used to panic on mixed-level keys.
+    #[test]
+    fn mixed_level_member_expand_to_month_inside_crossjoin() {
+        with_project3(|| {
+            let mdx = r##"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Segment].[Segment].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Quarter].&[2026]&[1],[Date].[Date].[Quarter].&[2026]&[2],[Date].[Date].[Quarter].&[2026]&[3],[Date].[Date].[Quarter].&[2026]&[4]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+            let xml = get_execute_statement_response(mdx);
+
+            let mut pairs: Vec<(String, Option<String>, u32)> = Vec::new();
+            let mut pos = 0;
+            while let Some(i) = xml[pos..].find("<Member Hierarchy=\"[Date].[Date]\">") {
+                let start = pos + i;
+                let end = start + xml[start..].find("</Member>").unwrap();
+                let block = &xml[start..end];
+                let u = tag_value(block, "UName");
+                let p = tag_value(block, "PARENT_UNIQUE_NAME");
+                let cc = tag_value(block, "CHILDREN_CARDINALITY")
+                    .parse()
+                    .unwrap_or(0);
+                if !pairs.iter().any(|(u2, _, _)| *u2 == u) {
+                    pairs.push((u, if p.is_empty() { None } else { Some(p) }, cc));
+                }
+                pos = end;
+            }
+            let unames: Vec<&str> = pairs.iter().map(|(u, _, _)| u.as_str()).collect();
+            assert!(
+                unames.contains(&"[Date].[Date].[Year].&amp;[2026]"),
+                "{unames:?}"
+            );
+            assert!(
+                unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"),
+                "{unames:?}"
+            );
+            assert!(
+                unames.contains(&"[Date].[Date].[Month].&amp;[2026]&amp;[1]&amp;[1]"),
+                "months are expanded: {unames:?}"
+            );
+            for (u, p, cc) in &pairs {
+                if let Some(p) = p {
+                    assert!(
+                        unames.contains(&p.as_str()),
+                        "parent {p} of {u} must be on the axis"
+                    );
+                }
+                // A month's children are days, never the static whole-level
+                // cardinality (a wrong count corrupts Excel's hierarchy tree).
+                if u.contains("[Month]") {
+                    assert!((1..=31).contains(cc), "month {u} claims {cc} children");
+                }
+            }
+        });
+    }
+
+    // Excel asks for member properties qualified by the level unique name
+    // (`[Category].[Category].[Category]MEMBER_CAPTION`); a hardcoded whitelist
+    // used to drop four of them, leaving requested properties missing.
+    #[test]
+    fn qualified_member_properties_are_emitted() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS, [Category].[Category].Members DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Category].[Category].[Category]MEMBER_CAPTION,[Category].[Category].[Category]MEMBER_UNIQUE_NAME,[Category].[Category].[Category]LEVEL_NUMBER,[Category].[Category].[Category]LEVEL_UNIQUE_NAME ON ROWS FROM [Sales]",
+            );
+            assert!(
+                xml.contains("<MEMBER_CAPTION>Automotive</MEMBER_CAPTION>"),
+                "MEMBER_CAPTION must be emitted when requested"
+            );
+            assert!(
+                xml.contains("<MEMBER_UNIQUE_NAME>[Category].[Category].&amp;[Automotive]</MEMBER_UNIQUE_NAME>"),
+                "MEMBER_UNIQUE_NAME must be emitted when requested"
+            );
+            assert!(
+                xml.contains("<LEVEL_NUMBER>1</LEVEL_NUMBER>"),
+                "LEVEL_NUMBER must be emitted when requested"
+            );
+            assert!(
+                xml.contains(
+                    "<LEVEL_UNIQUE_NAME>[Category].[Category].[Category]</LEVEL_UNIQUE_NAME>"
+                ),
+                "LEVEL_UNIQUE_NAME must be emitted when requested"
+            );
+        });
+    }
+
+    #[test]
+    fn crossjoin_expand_year_keeps_ancestor_chain() {
+        // The shape Excel sends when a year is expanded inside a crossjoin
+        // (trace seq 50 from a live session). Quarters must be keyed by their
+        // year and every parent must be present on the axis — a missing parent
+        // crashes Excel's MDDSAxis walk.
+        with_project3(|| {
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,Hierarchy_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
+            let xml = get_execute_statement_response(mdx);
+
+            let mut date_members: Vec<(String, Option<String>)> = Vec::new();
+            let mut pos = 0;
+            while let Some(i) = xml[pos..].find("<Member Hierarchy=\"[Date].[Date]\">") {
+                let start = pos + i;
+                let end = start + xml[start..].find("</Member>").unwrap();
+                let block = &xml[start..end];
+                let u = tag_value(block, "UName");
+                let p = tag_value(block, "PARENT_UNIQUE_NAME");
+                date_members.push((u, if p.is_empty() { None } else { Some(p) }));
+                pos = end;
+            }
+            let unames: Vec<&str> = date_members.iter().map(|(u, _)| u.as_str()).collect();
+            assert!(
+                unames.contains(&"[Date].[Date].[All]"),
+                "the (All) root is on the axis: {unames:?}"
+            );
+            assert!(
+                unames.contains(&"[Date].[Date].[Year].&amp;[2026]"),
+                "the expanded year is on the axis: {unames:?}"
+            );
+            assert!(
+                unames.contains(&"[Date].[Date].[Quarter].&amp;[2026]&amp;[1]"),
+                "quarters are keyed by their year: {unames:?}"
+            );
+            for (u, p) in &date_members {
+                if let Some(p) = p {
+                    assert!(
+                        unames.contains(&p.as_str()),
+                        "parent {p} of {u} must be on the axis"
+                    );
+                }
+            }
+            // The expanded year claims DRILLED_DOWN (a child follows it on the
+            // axis) so Excel renders the expand state instead of flat years.
+            let year_pos = xml
+                .find("<UName>[Date].[Date].[Year].&amp;[2026]</UName>")
+                .expect("year member");
+            let block_start = xml[..year_pos].rfind("<Member ").expect("member start");
+            let block_end = block_start + xml[block_start..].find("</Member>").unwrap();
+            let di: u32 = tag_value(&xml[block_start..block_end], "DisplayInfo")
+                .parse()
+                .unwrap_or(0);
+            assert_eq!(di & 0x10000, 0x10000, "year must be drilled down (di={di})");
+        });
+    }
+
+    #[test]
+    fn crossjoin_leveled_second_dim_is_at_top_level() {
+        // Excel emits the same CrossJoin(DrilldownLevel, DrilldownLevel) shape
+        // whatever the dimension order; a leveled dimension in the *second*
+        // slot must also be served at its top level (years), not the leaf grain.
+        with_project3(|| {
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,Hierarchy_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
+            let xml = get_execute_statement_response(mdx);
+            let members = axis0_member_infos(&xml);
+            // 20 categories x 11 years.
+            assert_eq!(members.len(), 20 * 11 * 2, "category x year tuples");
+
+            for (caption, uname, _, _) in members.iter().step_by(2) {
+                assert!(
+                    uname.contains("[Category].[Category].&amp;["),
+                    "{caption}: first slot must be a category, got {uname}"
+                );
+            }
+            for (caption, uname, _, cc) in members.iter().skip(1).step_by(2) {
+                assert!(
+                    uname.contains("[Date].[Date].[Year].&amp;["),
+                    "{caption}: second slot must be a year, got {uname}"
+                );
+                assert!(*cc > 0, "{caption}: year reports quarter children");
+            }
+        });
+    }
+
+    #[test]
+    fn quarter_level_drag_returns_compound_members() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Quarter].Members ON ROWS FROM [Sales]",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 44, "11 years x 4 quarters");
+            assert_eq!(infos[0].0, "1", "caption is the level value");
+            assert!(
+                infos[0]
+                    .1
+                    .contains("[Date].[Date].[Quarter].&amp;[2020]&amp;[1]"),
+                "compound unique name: {}",
+                infos[0].1
+            );
+            assert!(
+                infos[43]
+                    .1
+                    .contains("[Date].[Date].[Quarter].&amp;[2030]&amp;[4]"),
+                "last quarter: {}",
+                infos[43].1
+            );
+            assert_eq!(cell_values(&xml).len(), 44, "one value per quarter");
+        });
+    }
+
+    #[test]
+    fn month_level_drag_orders_numerically() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Month].Members ON ROWS FROM [Sales]",
+            );
+            let infos = axis0_member_infos(&xml);
+            assert_eq!(infos.len(), 132, "11 years x 12 months");
+            // Months order 1..12, not lexicographically ("1","10","11","12","2").
+            assert!(
+                infos[11].1.ends_with("&amp;[12]</UName>") || infos[11].1.contains("&amp;[12]")
+            );
+            assert!(infos[12].1.contains("[2021]") && infos[12].1.contains("&amp;[1]"));
+        });
     }
 
     #[test]

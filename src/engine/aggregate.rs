@@ -352,13 +352,13 @@ pub(crate) fn agg_for_plan_with<'a>(
             measure,
             group_by,
             filters,
-            group_level,
+            group_levels,
             ..
         } => {
             let gl = if group_by.is_empty() {
                 0
             } else {
-                group_level.unwrap_or(0)
+                group_levels.first().copied().flatten().unwrap_or(0)
             };
             (measure, group_by.as_slice(), gl, filters)
         }
@@ -424,7 +424,7 @@ mod tests {
             measure: "Revenue".into(),
             group_by: vec!["Date".into()],
             filters: vec![],
-            group_level: Some(0),
+            group_levels: vec![Some(0)],
             set_op: None,
         };
         assert_eq!(
@@ -436,7 +436,7 @@ mod tests {
             measure: "Revenue".into(),
             group_by: vec!["Date".into()],
             filters: vec![],
-            group_level: Some(2),
+            group_levels: vec![Some(2)],
             set_op: None,
         };
         assert_eq!(
@@ -451,7 +451,7 @@ mod tests {
             measure: "Revenue".into(),
             group_by: vec!["Date".into()],
             filters: vec![],
-            group_level: Some(3),
+            group_levels: vec![Some(3)],
             set_op: None,
         };
         assert!(agg_for_plan_with(&model, &aggs, &leaf_drill).is_none());

@@ -261,8 +261,12 @@ pub struct SemanticQuery {
     /// All measures requested on the SELECT axis, in order. Multiple entries
     /// mean a multi-measure query (batched CUBEVALUE cells).
     pub measures: Vec<String>,
-    /// When drilling a multi-level hierarchy, which level index to group by.
-    pub drilldown_level: Option<usize>,
+    /// When drilling a multi-level hierarchy, which level index to group by —
+    /// one entry per `axis_dimensions` entry (`None` = leaf/physical grain).
+    pub drilldown_levels: Vec<Option<usize>>,
+    /// True when the axis is an explicit level set
+    /// (`[Dim].[Hier].[Level].Members`) rather than a drilldown.
+    pub level_drag: bool,
     /// Measure/member names parsed from strtomember() probe (CUBEVALUE metadata query).
     pub metadata_probe_targets: Vec<String>,
     /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
@@ -278,43 +282,64 @@ pub struct SemanticQuery {
     pub set_probe: Option<SetExpr>,
     /// A calculated `COUNT(<set>)` member referenced by the axis (`SetProbe`).
     pub set_count: Option<CalculatedCount>,
+    /// Members named by a `DrilldownMember(...)` expansion, per dimension.
+    /// Distinguishes the drill filter from real slicers when re-querying the
+    /// hierarchy's input set.
+    pub drill_members: Vec<(String, Vec<String>)>,
+}
+
+impl SemanticQuery {
+    /// Level of the primary (first) axis dimension, if any.
+    pub fn drilldown_level(&self) -> Option<usize> {
+        self.drilldown_levels.first().copied().flatten()
+    }
 }
 
 // ---- main classification entry point ----
 
-fn extract_drill_member(mdx: &str) -> Option<(String, String, String)> {
-    let pos = mdx.rfind(".&[")?;
-    let prefix = &mdx[..pos];
-    let bracket_open = prefix.rfind("{[")?;
-    let member_ref = &mdx[bracket_open + 1..];
-    let close = member_ref.find('}')?;
-    let member = &member_ref[..close];
-    let dim = first_bracket(member)?;
-    let level = third_bracket(member).unwrap_or_default();
-    let key = parse_amp_key(member)?;
-    if key.is_empty() || dim.is_empty() {
+/// All members of a `DrilldownMember(<set>, {members}, ...)` expansion:
+/// `(dimension, level, keys)` in set order. Excel sends several members when
+/// the user runs "Expand Entire Field" / "Expand to <Level>".
+pub(crate) fn extract_drill_members(mdx: &str) -> Option<(String, String, Vec<String>)> {
+    let upper = mdx.to_uppercase();
+    let pos = upper.find("DRILLDOWNMEMBER(")?;
+    let open = pos + "DRILLDOWNMEMBER".len();
+    let close = crate::mdx_parser::matching_paren(mdx, open)?;
+    let args = crate::mdx_parser::split_top_level_args(&mdx[open + 1..close]);
+    let set = args.get(1)?.trim();
+    let inner = set
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    let mut dim: Option<String> = None;
+    let mut level = String::new();
+    let mut keys: Vec<String> = Vec::new();
+    for item in crate::mdx_parser::split_top_level_args(inner) {
+        let toks = crate::mdx_parser::bracket_tokens(&item, 3);
+        if toks.len() < 2 {
+            continue;
+        }
+        let Some(key) = parse_amp_key(&item) else {
+            continue;
+        };
+        if dim.is_none() {
+            dim = Some(toks[0].clone());
+            level = toks.get(2).cloned().unwrap_or_default();
+        }
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    let dim = dim?;
+    if keys.is_empty() {
         return None;
     }
-    Some((dim, level, key))
+    Some((dim, level, keys))
 }
 
 pub(crate) fn first_bracket(s: &str) -> Option<String> {
     let rest = s.strip_prefix('[')?;
-    let close = rest.find(']')?;
-    Some(rest[..close].to_string())
-}
-
-fn third_bracket(s: &str) -> Option<String> {
-    let mut rest = s.strip_prefix('[')?;
-    // skip [Dim]
-    let close = rest.find(']')?;
-    rest = &rest[close + 1..];
-    // skip .[Hier]
-    rest = rest.strip_prefix(".[")?;
-    let close = rest.find(']')?;
-    rest = &rest[close + 1..];
-    // extract [Level]
-    rest = rest.strip_prefix(".[")?;
     let close = rest.find(']')?;
     Some(rest[..close].to_string())
 }
@@ -384,6 +409,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             kind: SemanticQueryKind::MeasureMetadataProbe,
             set_probe: None,
             set_count: None,
+            drill_members: vec![],
             dim_props: vec![],
             cell_props: parsed.cell_props.clone(),
             filters: vec![],
@@ -395,7 +421,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             drilldown_member_hierarchy: None,
             measure: None,
             measures: vec![],
-            drilldown_level: None,
+            drilldown_levels: vec![],
+            level_drag: false,
             metadata_probe_targets: targets,
             metadata_probe_properties: props,
             member_only_unames: vec![],
@@ -450,24 +477,95 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let project = crate::proxy_project::project();
 
     let mut kind = kind;
-    let mut drilldown_level: Option<usize> = parsed
-        .axis_dimension_ids
-        .first()
-        .and_then(|id| project.model.dim_def_opt(id))
-        .filter(|d| !d.levels.is_empty())
-        .map(|_| 0);
+    let mut level_drag = false;
+
+    // A slicer/measure+member-tuple query has no real axis dimension: any
+    // dimension referenced in the select tuple must land in the SlicerAxis
+    // (as a filter), not be skipped as an axis dimension. (Kept identical to
+    // the construction below.)
+    let axis_dims: Vec<String> = if matches!(
+        kind,
+        SemanticQueryKind::SlicerOnly | SemanticQueryKind::SlicerAllAndMeasure
+    ) {
+        vec![]
+    } else {
+        parsed
+            .axis_dimension_ids
+            .iter()
+            .filter(|id| project.model.dim_def_opt(id).is_some())
+            .cloned()
+            .collect()
+    };
+
+    // Per-dimension hierarchy level: one entry per axis dimension.
+    let mut drilldown_levels: Vec<Option<usize>> = vec![None; axis_dims.len()];
+
+    // Explicit level sets (`[Dim].[Hier].[Level].Members`) — a field-list
+    // level drag. Excel sends the level's members directly, so serve exactly
+    // that level (compound keys where the level key isn't unique).
+    for (dim_name, level_name) in &parsed.axis_level_members {
+        if let Some(i) = axis_dims.iter().position(|d| d == dim_name)
+            && let Some(level_idx) = project
+                .model
+                .dim_def_opt(dim_name)
+                .and_then(|d| d.levels.iter().position(|l| l.name == *level_name))
+        {
+            drilldown_levels[i] = Some(level_idx);
+            level_drag = true;
+        }
+    }
+
+    // Whole-hierarchy drags (`DrilldownLevel({...All})`) start at the top
+    // level; Excel may instead name the level explicitly
+    // (`DrilldownLevel({...All}, [Date].[Date].[Quarter])` or `, , N`).
+    for target in &parsed.drilldown_targets {
+        let Some(i) = axis_dims.iter().position(|d| *d == target.dim) else {
+            continue;
+        };
+        let Some(def) = project.model.dim_def_opt(&target.dim) else {
+            continue;
+        };
+        if def.levels.is_empty() {
+            continue;
+        }
+        let level = target
+            .level
+            .as_ref()
+            .and_then(|name| def.levels.iter().position(|l| l.name == *name))
+            .or(target.index)
+            .unwrap_or(0)
+            .min(def.levels.len() - 1);
+        if drilldown_levels[i].is_none() {
+            drilldown_levels[i] = Some(level);
+        }
+    }
 
     let mut extra_filters: Vec<DimensionFilter> = Vec::new();
 
+    // Drilling into specific member(s) shows one level below them. Excel sends
+    // several members for "Expand Entire Field" / "Expand to <Level>", and the
+    // set may mix levels (a year plus its quarters). The drill target is one
+    // level below the *deepest* member: its key path length is that level's
+    // index + 1.
+    let mut drill_members: Vec<(String, Vec<String>)> = Vec::new();
     if (parsed.has_drilldown || parsed.has_drilldown_member)
-        && let Some((dim_name, level_name, key)) = extract_drill_member(mdx)
+        && let Some((dim_name, level_name, keys)) = extract_drill_members(mdx)
         && let Some(dim) = project.model.dim_def_opt(&dim_name)
-        && let Some(level_idx) = dim.levels.iter().position(|l| l.name == level_name)
+        && !dim.levels.is_empty()
     {
-        drilldown_level = Some(level_idx + 1);
+        let max_parts = keys.iter().map(|k| k.split('|').count()).max().unwrap_or(1);
+        let target = max_parts.min(dim.levels.len() - 1);
+        match axis_dims.iter().position(|d| *d == dim_name) {
+            Some(i) => drilldown_levels[i] = Some(target),
+            // No axis dimension captured (unusual shape): keep the level so
+            // the single-dimension path still drills.
+            None if drilldown_levels.is_empty() => drilldown_levels.push(Some(target)),
+            None => {}
+        }
+        drill_members.push((dim_name.clone(), keys.clone()));
         extra_filters.push(DimensionFilter {
             dimension: dim_name,
-            members: vec![key],
+            members: keys,
             level: Some(level_name),
         });
         // Route to the single-dimension drilldown renderer,
@@ -479,6 +577,30 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
     let mut filters = filters_from_parsed(&parsed);
     filters.extend(extra_filters);
+
+    // A drill scoped by a compound member (a slicer or subselect like
+    // `[Date].[Date].[Quarter].&[2026]&[4]`) starts one level below that
+    // member: expanding Q4-2026 shows its months, scoped to that year.
+    if parsed.has_drilldown || parsed.has_drilldown_member {
+        for f in &filters {
+            let Some(level_name) = &f.level else { continue };
+            if f.members.len() != 1 {
+                continue;
+            }
+            let Some(i) = axis_dims.iter().position(|d| *d == f.dimension) else {
+                continue;
+            };
+            let Some(def) = project.model.dim_def_opt(&f.dimension) else {
+                continue;
+            };
+            let Some(li) = def.levels.iter().position(|l| l.name == *level_name) else {
+                continue;
+            };
+            if drilldown_levels[i].is_none_or(|cur| li + 1 > cur) {
+                drilldown_levels[i] = Some(li + 1);
+            }
+        }
+    }
 
     // Excel CUBESET / CUBECOUNT probes: a calculated COUNT member referenced
     // by the axis, or a set expression (HEAD/TAIL/bare Members) on the axis.
@@ -526,22 +648,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .iter()
             .find(|id| project.model.dim_def_opt(id).is_some())
             .cloned(),
-        axis_dimensions: if matches!(
-            kind,
-            SemanticQueryKind::SlicerOnly | SemanticQueryKind::SlicerAllAndMeasure
-        ) {
-            // A slicer/measure+member-tuple query has no real axis dimension:
-            // any dimension referenced in the select tuple must land in the
-            // SlicerAxis (as a filter), not be skipped as an axis dimension.
-            vec![]
-        } else {
-            parsed
-                .axis_dimension_ids
-                .iter()
-                .filter(|id| project.model.dim_def_opt(id).is_some())
-                .cloned()
-                .collect()
-        },
+        axis_dimensions: axis_dims,
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parsed
             .excluded_members
@@ -554,13 +661,15 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
         measures: parsed.selected_measures.clone(),
-        drilldown_level,
+        drilldown_levels,
+        level_drag,
         metadata_probe_targets: vec![],
         metadata_probe_properties: vec![],
         member_only_unames,
         axis_set_op: parsed.axis_set_op.clone(),
         set_probe,
         set_count,
+        drill_members,
         axis_tuples: parsed
             .select_tuples
             .iter()
@@ -634,31 +743,76 @@ mod tests {
     }
 
     #[test]
-    fn extract_drillmember_year() {
+    fn level_members_set_records_explicit_level() {
+        // Dragging the Quarter level: the level qualifier must survive and be
+        // marked as a level set (not a drilldown).
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        crate::project::project::with_test_project(p, || {
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Quarter].Members ON ROWS FROM [Sales]";
+            let q = semantic_query_from_mdx(mdx);
+            assert_eq!(q.axis_dimensions, vec!["Date"]);
+            assert_eq!(q.drilldown_levels, vec![Some(1)], "Quarter is level 1");
+            assert!(q.level_drag);
+        });
+    }
+
+    #[test]
+    fn crossjoin_records_top_level_per_hierarchy_regardless_of_order() {
+        // The measure is listed first; the leveled dimension second. Both
+        // hierarchy drags must get level 0 (not the leaf grain).
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        crate::project::project::with_test_project(p, || {
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)})) ON ROWS FROM [Sales]";
+            let q = semantic_query_from_mdx(mdx);
+            assert_eq!(q.axis_dimensions, vec!["Category", "Date"]);
+            assert_eq!(q.drilldown_levels, vec![None, Some(0)]);
+            assert!(!q.level_drag);
+        });
+    }
+
+    #[test]
+    fn bare_hierarchy_members_stay_at_leaf_grain() {
+        // `[Date].[Date].Members` is the leaf level (individual dates), not the
+        // top level — only an explicit level or DrilldownLevel promotes it.
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        crate::project::project::with_test_project(p, || {
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].Members ON ROWS FROM [Sales]";
+            let q = semantic_query_from_mdx(mdx);
+            assert_eq!(q.axis_dimensions, vec!["Date"]);
+            assert_eq!(q.drilldown_levels, vec![None]);
+            assert!(!q.level_drag);
+        });
+    }
+
+    #[test]
+    fn extract_drillmembers_single_year() {
         let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
-        let r = extract_drill_member(mdx);
-        assert_eq!(r, Some(("Date".into(), "Year".into(), "2024".into())));
+        let r = extract_drill_members(mdx);
+        assert_eq!(r, Some(("Date".into(), "Year".into(), vec!["2024".into()])));
     }
 
     #[test]
-    fn extract_drillmember_quarter() {
-        let mdx = "{[Dim].[Hier].[Quarter].&[2]}";
-        let r = extract_drill_member(mdx);
-        assert_eq!(r, Some(("Dim".into(), "Quarter".into(), "2".into())));
+    fn extract_drillmembers_multiple_years() {
+        // "Expand Entire Field" sends every parent member in one set.
+        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+        let r = extract_drill_members(mdx);
+        assert_eq!(
+            r,
+            Some((
+                "Date".into(),
+                "Year".into(),
+                vec!["2026".into(), "2027".into()]
+            ))
+        );
     }
 
     #[test]
-    fn extract_drillmember_all_skips() {
+    fn extract_drillmembers_none_without_member_set() {
         let mdx = "DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)";
-        let r = extract_drill_member(mdx);
-        assert_eq!(r, None);
-    }
-
-    #[test]
-    fn extract_drillmember_no_amp() {
-        let mdx = "{[Date].[Date].[Year]}";
-        let r = extract_drill_member(mdx);
-        assert_eq!(r, None);
+        assert_eq!(extract_drill_members(mdx), None);
     }
 
     #[test]
@@ -672,19 +826,6 @@ mod tests {
     #[test]
     fn first_bracket_empty() {
         assert_eq!(first_bracket("no brackets"), None);
-    }
-
-    #[test]
-    fn third_bracket_level() {
-        assert_eq!(
-            third_bracket("[Dim].[Hier].[Level].&[key]"),
-            Some("Level".into())
-        );
-    }
-
-    #[test]
-    fn third_bracket_no_level() {
-        assert_eq!(third_bracket("[Dim].[Hier].&[key]"), None);
     }
 
     #[test]

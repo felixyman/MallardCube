@@ -151,6 +151,24 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
         partial.push("date-role dimensions present but no time_intelligence config: YTD/prior-year measures may not work".into());
     }
 
+    // --- check parent-child dimensions ---
+    // Qualify is read-only and never materializes. If the hierarchy has not
+    // been built yet (the server builds it on first start), say so instead of
+    // silently qualifying a flat dimension.
+    for dc in &p.config.dimensions {
+        let Some(pc) = &dc.parent_child else { continue };
+        let materialized = p
+            .model
+            .dim_def_opt(&dc.id)
+            .is_some_and(|d| !d.levels.is_empty());
+        if !materialized {
+            partial.push(format!(
+                "parent_child dimension '{}' ({} -> {}) is not materialized yet — start the server once to build its levels (or set \"refresh\": true)",
+                dc.id, pc.parent_column, pc.key_column
+            ));
+        }
+    }
+
     // --- check model health ---
     if p.model.dimensions.is_empty() || p.model.measures.is_empty() {
         blocked.push("model has no dimensions or no measures".into());
@@ -394,5 +412,90 @@ mod tests {
             label == "READY" || label == "PARTIAL" || label == "BLOCKED",
             "qualify with trace should return a verdict, not panic. Got: {label}"
         );
+    }
+
+    /// Qualify is read-only: an unmaterialized parent-child hierarchy must be
+    /// reported, not silently written into the user's database.
+    #[test]
+    fn parent_child_unmaterialized_is_reported_without_writes() {
+        let dir = std::env::temp_dir().join(format!(
+            "mallardcube-qualify-pc-{}-{:#x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("org.duckdb");
+        duckdb::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE employee_dim (k INT, p INT);
+                 INSERT INTO employee_dim VALUES (1,NULL),(2,1);",
+            )
+            .unwrap();
+        let cfg = serde_json::json!({
+            "catalog": "ORG",
+            "cube": "Org",
+            "source_name": "org",
+            "table_name": "employee_dim",
+            "dialect": "duckdb",
+            "db_path": "org.duckdb",
+            "relationships": [{
+                "fact_table": "default",
+                "fact_column": "k",
+                "dimension_id": "Employee",
+                "dim_table": "employee_dim",
+                "dim_column": "k"
+            }],
+            "dimensions": [{
+                "id": "Employee",
+                "physical_field": "k",
+                "caption": "Employee",
+                "description": "",
+                "hierarchy_name": "Employee",
+                "all_level_name": "(All)",
+                "leaf_level_name": "Employee",
+                "ordinal": 1,
+                "visible": true,
+                "has_all": true,
+                "cardinality_hint": 10,
+                "parent_child": {"key_column": "k", "parent_column": "p"}
+            }],
+            "measures": [{
+                "id": "Revenue",
+                "sql_expr": "SUM(k)",
+                "caption": "Revenue",
+                "display_name": "Revenue",
+                "description": "",
+                "format_string": "0",
+                "units": "",
+                "ordinal": 1,
+                "visible": true,
+                "measure_group_name": "Org"
+            }]
+        });
+        let config_path = dir.join("proxy-config.json");
+        std::fs::write(&config_path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        let v = qualify(config_path.to_str().unwrap(), None);
+        assert!(
+            v.reasons()
+                .iter()
+                .any(|r| r.contains("parent_child dimension 'Employee'")),
+            "unmaterialized parent-child dimension must be reported: {v:?}"
+        );
+        let cols: u32 = duckdb::Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('employee_dim') WHERE name LIKE 'Employee__pc%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 0, "qualify must not materialize");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

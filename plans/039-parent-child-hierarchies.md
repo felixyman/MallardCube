@@ -92,6 +92,7 @@ and finds the materialized columns. Demo in-memory DB: not wired for v1
 
 ## Done criteria
 
-- [ ] Org-chart fixture: browse levels, SELF probes, drilldown all correct
-- [ ] Idempotent startup (restart doesn't duplicate/dirty augmentation)
-- [ ] 385+ tests green
+- [x] Org-chart fixture: browse levels, SELF probes, drilldown all correct
+- [x] Idempotent startup (restart doesn't duplicate/dirty augmentation; an
+      existing materialization is read back, and read-only loads never write)
+- [x] 410 tests green

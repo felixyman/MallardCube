@@ -113,16 +113,14 @@ fn init_debug_log() {
     }
     let file =
         std::fs::File::create("debug-last-run.log").expect("failed to create debug-last-run.log");
-    *DEBUG_LOG.lock().unwrap() = Some(file);
+    *DEBUG_LOG.lock().unwrap_or_else(|e| e.into_inner()) = Some(file);
 }
 
 fn debug_write(text: &str) {
     if !debug_log_enabled() {
         return;
     }
-    if let Ok(mut guard) = DEBUG_LOG.lock()
-        && let Some(ref mut file) = *guard
-    {
+    if let Some(ref mut file) = *DEBUG_LOG.lock().unwrap_or_else(|e| e.into_inner()) {
         let _ = writeln!(file, "{}", text);
         let _ = file.flush();
     }
@@ -243,7 +241,7 @@ async fn run_server() {
 
     match (config_path, auto_db) {
         (Some(path), _) => {
-            proxy_project::init_project(Some(&path)).expect("init project");
+            proxy_project::init_project_for_serving(Some(&path)).expect("init project");
         }
         (None, Some(db)) => {
             // Zero-config AutoModel: detect a semantic model from the DuckDB
@@ -257,10 +255,11 @@ async fn run_server() {
             )
             .expect("AutoModel detection failed");
             let dir = abs_db.parent().unwrap_or(std::path::Path::new("."));
-            proxy_project::init_project_with_config(detected.config, dir).expect("init project");
+            proxy_project::init_project_with_config_for_serving(detected.config, dir)
+                .expect("init project");
         }
         (None, None) => {
-            proxy_project::init_project(Some("projects/project3/proxy-config.json"))
+            proxy_project::init_project_for_serving(Some("projects/project3/proxy-config.json"))
                 .expect("init project");
         }
     }

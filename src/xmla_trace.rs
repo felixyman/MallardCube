@@ -20,16 +20,23 @@ thread_local! {
     static REQ_START: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
+/// Lock the trace file, recovering from poisoning. Trace writes happen inside
+/// request handling, which catches panics; a poisoned mutex must not turn a
+/// once-failed request into a permanently trace-broken server.
+fn trace_file() -> std::sync::MutexGuard<'static, Option<File>> {
+    TRACE_FILE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn init_trace() {
     if std::env::var("XMLA_TRACE").is_ok_and(|v| v == "1") {
         let file = File::create("xmla-trace.jsonl").expect("failed to create xmla-trace.jsonl");
-        *TRACE_FILE.lock().unwrap() = Some(file);
+        *trace_file() = Some(file);
         eprintln!("[trace] XMLA trace enabled -> xmla-trace.jsonl");
     }
 }
 
 pub fn trace_enabled() -> bool {
-    TRACE_FILE.lock().unwrap().is_some()
+    trace_file().is_some()
 }
 
 /// Mark the start of a request on the blocking worker thread. Called before
@@ -45,7 +52,7 @@ pub fn trace_request(
     mdx: Option<&str>,
     timings: Option<&crate::engine::timing::Timings>,
 ) {
-    let mut guard = TRACE_FILE.lock().unwrap();
+    let mut guard = trace_file();
     let Some(ref mut file) = *guard else { return };
 
     let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed);

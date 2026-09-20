@@ -39,6 +39,7 @@ Airflow + sqlmesh + DuckDB — without your Excel users noticing.
 | Fallback SQL for composite DAX | 6 generic patterns; genuinely unsupported patterns emit honest stubs (measures return Empty, qualify flags as BLOCKED) |
 | SSAS converter | Handles common model shapes; needs manual intervention for calculation groups, column-mapped CSVs, and complex DAX |
 | Non-date multi-level hierarchies | Model/code generic (any dimension can define `hierarchy_levels`), only Date is tested end-to-end |
+| Deep hierarchy expansion in Excel | Expanding beyond the next level in one step (e.g. "Expand to Month" on a year) or expanding the deepest level (month → dates) can crash Excel 16.0.20326 (`EXCEL.EXE` access violation). Stepwise expansion works at every level; MSOLAP reads the cellsets fine, so the defect is believed to be client-side |
 
 ## Not yet
 

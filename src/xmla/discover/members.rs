@@ -298,7 +298,9 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                         parent_level,
                         Some(&parent_u),
                         1,
-                        &name,
+                        // Compound members carry the full pipe key, matching the
+                        // cellset's MEMBER_KEY (Excel correlates the two).
+                        &key,
                     ),
                     dimension_id: dim.id.clone(),
                     member_unique_name: uname,

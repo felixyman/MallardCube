@@ -212,7 +212,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-343 tests covering MDX parsing, semantic classification, plan generation, SQL
+410 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -259,6 +259,12 @@ For detailed documentation:
 **Partial:**
 - Fallback SQL for composite DAX — 6 generic patterns covered; genuinely unsupported patterns emit honest stubs
 - SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
+- Deep hierarchy expansion in Excel — expanding a whole field more than one level in a single step
+  (e.g. Year → "Expand to Month") or expanding the deepest level (Month → dates) can crash
+  Excel (native access violation in `EXCEL.EXE`). Stepwise expansion (Year → Quarter → Month)
+  works at every level. Verified: MSOLAP reads the cellsets without error and the responses
+  match SSAS axis conventions, so this is believed to be an Excel-side defect; workaround is to
+  expand one level at a time.
 
 **Not yet:**
 - Attached data sources (MSSQL, Postgres, S3) — DuckDB extensions exist, not wired

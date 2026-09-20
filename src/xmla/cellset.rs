@@ -10,6 +10,7 @@ use crate::response::wrap_in_soap_envelope;
 // ---------------------------------------------------------------------------
 
 /// One member on an axis.
+#[derive(Clone)]
 pub struct MemberConfig {
     pub hierarchy: String,
     pub u_name: String,
@@ -113,7 +114,13 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
 "#,
         ));
     }
+    // Requested member properties must not redeclare the standard ones
+    // (duplicate declarations confuse Excel's axis parser).
+    let declared: Vec<&str> = standard.iter().map(|(_, q, _)| *q).collect();
     for (tag, qname, typ) in &hier.dim_prop_decls {
+        if declared.contains(&qname.as_str()) {
+            continue;
+        }
         out.push_str(&format!(
             r#"                  <{tag} name="{qname}" type="{typ}"/>
 "#,

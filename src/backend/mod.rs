@@ -539,6 +539,18 @@ impl Backend {
         instance()
     }
 
+    /// Lock the connection, recovering from a poisoned mutex.
+    ///
+    /// Request handling catches panics so the server survives (`main.rs`). If a
+    /// panic unwound while this lock was held, a plain `lock().unwrap()` would
+    /// make every subsequent request panic on the poisoned lock — the server
+    /// stays up but serves faults forever. The DuckDB connection itself is
+    /// usable after a Rust-side panic, so recovering the guard is strictly
+    /// better than refusing to serve.
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Called once at startup. When `db_path` is `Some`, opens the file-based
     /// DuckDB database. When `None`, uses the demo in-memory database.
     pub fn init(db_path: Option<&str>) -> Result<(), duckdb::Error> {
@@ -662,7 +674,7 @@ impl Backend {
     }
 
     pub fn total_sales(&self) -> f64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COALESCE(SUM(sales), 0) FROM fact_table",
             [],
@@ -672,7 +684,7 @@ impl Backend {
     }
 
     pub fn total_sales_for(&self, category: &str) -> f64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COALESCE(SUM(sales), 0) FROM fact_table WHERE product_category = ?1",
             params![category],
@@ -682,7 +694,7 @@ impl Backend {
     }
 
     pub fn total_sales_for_region(&self, region: &str) -> f64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COALESCE(SUM(sales), 0) FROM fact_table WHERE region = ?1",
             params![region],
@@ -692,7 +704,7 @@ impl Backend {
     }
 
     pub fn category_count(&self) -> u32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COUNT(DISTINCT product_category) FROM fact_table",
             [],
@@ -702,7 +714,7 @@ impl Backend {
     }
 
     pub fn region_count(&self) -> u32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COUNT(DISTINCT region) FROM fact_table",
             [],
@@ -714,7 +726,7 @@ impl Backend {
     // ---- generic SQL execution (used by engine/plan via sql.rs) ----
 
     pub fn query_scalar(&self, sql: &str) -> f64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(sql, [], |row| {
             Ok(value_to_f64(&row.get::<_, duckdb::types::Value>(0)?).unwrap_or(0.0))
         })
@@ -722,7 +734,7 @@ impl Backend {
     }
 
     pub fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
             eprintln!("query_grouped_1d: prepare failed: {sql}");
             return Vec::new();
@@ -742,7 +754,7 @@ impl Backend {
     }
 
     pub fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
             eprintln!("query_pairs: prepare failed: {sql}");
             return Vec::new();
@@ -763,13 +775,13 @@ impl Backend {
     }
 
     pub fn query_count(&self, sql: &str) -> u32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(sql, [], |row| row.get::<_, u32>(0))
             .unwrap_or(0)
     }
 
     pub fn query_strings(&self, sql: &str) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
             eprintln!("query_strings: prepare failed: {sql}");
             return Vec::new();
@@ -785,7 +797,7 @@ impl Backend {
     }
 
     pub fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         // Get column count via pragma (avoids DuckDB's unexecuted-statement requirement)
         let upper = sql.to_uppercase();
         let from_pos = upper.find("FROM ").unwrap_or(0);
@@ -822,7 +834,7 @@ impl Backend {
     }
 
     pub fn query_column_names(&self, sql: &str) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let upper = sql.to_uppercase();
         let from_pos = upper.find("FROM ").unwrap_or(0);
         let after_from = &sql[from_pos + 5..].trim();
@@ -843,7 +855,7 @@ impl Backend {
     }
 
     pub fn execute_ddl(&self, sql: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         if let Err(e) = conn.execute_batch(sql) {
             eprintln!("execute_ddl failed: {e}");
         }
@@ -866,7 +878,7 @@ impl Backend {
 
     pub fn distinct_values_in(&self, table: &str, column: &str) -> Vec<String> {
         let sql = format!("SELECT DISTINCT {column} FROM {table} ORDER BY {column}");
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&sql).expect("prepare distinct_values");
         let rows: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))
@@ -893,13 +905,42 @@ pub(crate) fn val_to_string(v: duckdb::types::Value) -> String {
     }
 }
 
+/// How [`prepare_parent_child`] treats an existing materialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentChildMode {
+    /// Never write. Read back an existing materialization; an unmaterialized
+    /// dimension yields no levels so callers degrade to a flat dimension.
+    ReadOnly,
+    /// Write only when the dimension is not materialized yet; reuse otherwise.
+    Materialize,
+    /// Always recompute and rewrite (from `parent_child.refresh: true`).
+    Refresh,
+}
+
+/// Materialize (or read back) a parent-child hierarchy.
+///
+/// The write path runs a recursive CTE over the `(key, parent)` pair, adds one
+/// ancestor-key column per depth (`{prefix}__pc_l1..N`) plus path/depth, and
+/// returns `(level name, column, cardinality)` per depth.
+///
+/// `Materialize` and `ReadOnly` reuse an existing materialization: reading it
+/// back costs one `COUNT(DISTINCT ...)` per level and never touches the user's
+/// table. `Refresh` always recomputes. The writes are idempotent.
 pub fn prepare_parent_child(
     conn: &duckdb::Connection,
     table: &str,
     key_column: &str,
     parent_column: &str,
     prefix: &str,
+    mode: ParentChildMode,
 ) -> Result<Vec<(String, String, u32)>, duckdb::Error> {
+    if mode != ParentChildMode::Refresh {
+        let existing = read_materialized_parent_child(conn, table, prefix)?;
+        if !existing.is_empty() || mode == ParentChildMode::ReadOnly {
+            return Ok(existing);
+        }
+    }
+
     let dq = '"';
     let q = |id: &str| format!("{dq}{}{dq}", id.replace(dq, "\"\""));
     let (t, k, p) = (q(table), q(key_column), q(parent_column));
@@ -941,6 +982,18 @@ SELECT k, path, depth FROM pc;"#
         |r| r.get::<_, usize>(0),
     )?;
 
+    // A previous, deeper materialization may have left ancestor columns beyond
+    // the current depth; their values are stale and would resurface on the next
+    // read-back. Drop them before (re)building.
+    for (i, col) in parent_child_level_columns(conn, table, prefix)? {
+        if i as usize > depth {
+            conn.execute_batch(&format!(
+                "ALTER TABLE {t} DROP COLUMN IF EXISTS {};",
+                q(&col)
+            ))?;
+        }
+    }
+
     let mut out = Vec::new();
     for i in 1..=depth {
         let col = q(&format!("{prefix}__pc_l{i}"));
@@ -959,6 +1012,63 @@ SELECT k, path, depth FROM pc;"#
         out.push((format!("Level {i:02}"), format!("{prefix}__pc_l{i}"), card));
     }
     Ok(out)
+}
+
+/// Read back an existing parent-child materialization without writing: level
+/// columns are discovered from the table schema, cardinalities from live
+/// distinct counts. Empty when `{prefix}__pc_depth` is not present.
+fn read_materialized_parent_child(
+    conn: &duckdb::Connection,
+    table: &str,
+    prefix: &str,
+) -> Result<Vec<(String, String, u32)>, duckdb::Error> {
+    let dq = '"';
+    let q = |id: &str| format!("{dq}{}{dq}", id.replace(dq, "\"\""));
+    let depth_col = format!("{prefix}__pc_depth");
+    let escaped = table.replace('\'', "''");
+    let mut stmt = conn.prepare(&format!("SELECT name FROM pragma_table_info('{escaped}')"))?;
+    let has_depth = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .any(|n| n == depth_col);
+    if !has_depth {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for (i, col) in parent_child_level_columns(conn, table, prefix)? {
+        let card: u32 = conn.query_row(
+            &format!("SELECT COUNT(DISTINCT {}) FROM {}", q(&col), q(table)),
+            [],
+            |r| r.get::<_, u32>(0),
+        )?;
+        out.push((format!("Level {i:02}"), col, card));
+    }
+    Ok(out)
+}
+
+/// The `{prefix}__pc_lN` columns present on `table`, sorted by depth N.
+fn parent_child_level_columns(
+    conn: &duckdb::Connection,
+    table: &str,
+    prefix: &str,
+) -> Result<Vec<(u32, String)>, duckdb::Error> {
+    let level_prefix = format!("{prefix}__pc_l");
+    let escaped = table.replace('\'', "''");
+    let mut stmt = conn.prepare(&format!("SELECT name FROM pragma_table_info('{escaped}')"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut levels: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|n| {
+            n.strip_prefix(&level_prefix)
+                .and_then(|s| s.parse::<u32>().ok())
+                .map(|i| (i, n.clone()))
+        })
+        .collect();
+    levels.sort();
+    Ok(levels)
 }
 
 #[cfg(test)]
@@ -984,7 +1094,15 @@ mod tests {
              INSERT INTO emp VALUES (1,NULL),(2,1),(3,1),(4,2),(5,2),(6,3),(9,NULL);",
         )
         .unwrap();
-        let levels = super::prepare_parent_child(&conn, "emp", "k", "p", "emp").unwrap();
+        let levels = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::Materialize,
+        )
+        .unwrap();
         assert_eq!(levels.len(), 3, "three depths: {levels:?}");
         assert_eq!(levels[0].0, "Level 01");
         assert_eq!(levels[0].1, "emp__pc_l1");
@@ -1011,9 +1129,118 @@ mod tests {
             .unwrap();
         assert_eq!(deep, 1, "member 4 carries its full path");
 
-        // Idempotent: rerunning must not change results.
-        let again = super::prepare_parent_child(&conn, "emp", "k", "p", "emp").unwrap();
+        // Idempotent: rerunning must not change results. The second call takes
+        // the read-back fast path, so this also proves it matches the write path.
+        let again = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::Materialize,
+        )
+        .unwrap();
         assert_eq!(again, levels);
+    }
+
+    /// Read-only mode must never add or populate columns, and a dimension that
+    /// has not been materialized yields no levels (callers degrade to flat).
+    #[test]
+    fn parent_child_read_only_never_materializes() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE emp (k INT, p INT);
+             INSERT INTO emp VALUES (1,NULL),(2,1),(3,2);",
+        )
+        .unwrap();
+        let levels = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::ReadOnly,
+        )
+        .unwrap();
+        assert!(levels.is_empty(), "nothing to read back yet: {levels:?}");
+        let cols: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('emp') WHERE name LIKE 'emp__pc%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 0, "read-only mode must not add columns");
+    }
+
+    /// Refresh after the hierarchy shrinks must drop stale deeper level
+    /// columns so they cannot resurface on the next read-back.
+    #[test]
+    fn parent_child_refresh_drops_stale_deeper_levels() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE emp (k INT, p INT);
+             INSERT INTO emp VALUES (1,NULL),(2,1),(3,2);",
+        )
+        .unwrap();
+        let three = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::Refresh,
+        )
+        .unwrap();
+        assert_eq!(three.len(), 3, "{three:?}");
+
+        // Collapse the hierarchy to two levels and refresh.
+        conn.execute_batch("DELETE FROM emp WHERE k = 3;").unwrap();
+        let two = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::Refresh,
+        )
+        .unwrap();
+        assert_eq!(two.len(), 2, "stale Level 03 must be dropped: {two:?}");
+
+        // The read-back fast path sees exactly the same two levels.
+        let read_back = super::prepare_parent_child(
+            &conn,
+            "emp",
+            "k",
+            "p",
+            "emp",
+            super::ParentChildMode::Materialize,
+        )
+        .unwrap();
+        assert_eq!(read_back, two);
+    }
+
+    /// A panic while the connection lock is held must not brick the backend.
+    /// Request handling catches panics (`main.rs`); without poison recovery the
+    /// poisoned lock would turn that one failure into permanent SOAP faults.
+    #[test]
+    fn poisoned_connection_lock_recovers() {
+        let backend = Backend::new().unwrap();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = backend.conn.lock().unwrap();
+            panic!("simulated request panic while holding the connection lock");
+        }));
+        assert!(poisoned.is_err(), "the panic must have been caught");
+        assert!(
+            backend.conn.lock().is_err(),
+            "the mutex must be poisoned before recovery is exercised"
+        );
+        // Must still serve through the poison-tolerant accessor.
+        assert_eq!(backend.query_scalar("SELECT 1"), 1.0);
+        assert!(
+            backend.query_count("SELECT COUNT(*) FROM sales_fact") > 0,
+            "queries must keep working after a poisoned lock"
+        );
     }
 
     #[test]

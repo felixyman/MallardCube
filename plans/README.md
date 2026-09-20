@@ -45,16 +45,45 @@ honor its STOP conditions, and update your row when done.
 | 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
 | 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | DONE |
 | 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
+| 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
+| 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 DONE. 031–037 are performance/adoption/compatibility plans. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 and 036–039 DONE. 031–035 are performance/adoption plans. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
   dimensions, DATE → seeded date_dim with Year/Quarter/Month/Date hierarchy —
   via `MALLARDCUBE_DB` env + `auto-model` CLI. Verified end-to-end (smoke script
   + Excel MCP: revenue by category/date hierarchy render correctly).
+- 038 (set expressions) DONE 2026-08-23: `SetExpr` IR + `COUNT(<set>)`
+  calculated members; HEAD/TAIL/bare-`Members`/`[Measures].Members` probes;
+  `MetaCount`/`MetaCountLiteral`/`SetMembers`/`MeasuresList` plans. Verified in
+  real Excel (CUBESET/CUBESETCOUNT/CUBERANKEDMEMBER). `CUBECOUNT` residual
+  `#VALUE` is client-side — not a documented Excel function; `CUBESETCOUNT` works.
+- 039 (parent-child hierarchies) DONE 2026-08-23: `parent_child` config,
+  recursive-CTE materialization of `{dim}__pc_l1..N` levels with compound-key
+  unames, drilldown and subtree-rollup semantics. Materializing writes to the
+  project DB and only runs on the serving path (`load_for_serving`); read-only
+  tools (`qualify`, replay) reuse an existing materialization and never write.
+  `parent_child.refresh: true` forces recomputation after data changes.
+- 038/039 follow-up fix (2026-08-23, same day): per-dimension hierarchy levels.
+  Two field-list bugs found in live Excel: (1) dragging an individual level
+  (`[Date].[Date].[Quarter].Members`) was served at the leaf grain; (2) a
+  crossjoin with a leveled dimension in the *second* slot (Excel's
+  `CrossJoin(Category, DrilldownLevel(Date.All))`) returned 4,541 leaf dates
+  instead of 11 years. `SemanticQuery` now carries `drilldown_levels` (one per
+  axis dimension, plus a `level_drag` flag), `QueryPlan::GroupBy`/`MultiGroupBy`
+  carry `group_levels`, non-unique levels group by their full ancestor path
+  (compound `&[year]&[quarter]` keys, numerically ordered), and both crossjoin
+  slots are built at their own level. Both shapes verified against the trace the
+  live client emitted. Multi-parent expansion ("Expand Entire Field" / "Expand to
+  <Level>", e.g. `DrilldownMember(..., {Year.&[2026],Year.&[2027]})`) expands
+  every parent at once: per-parent ancestor chains on the axis, compound child
+  keys, and per-member `PARENT_UNIQUE_NAME` derived from each child's path. Deep drills ("Expand to Month") keep the intermediate levels (years, quarters) on the axis.
+  (Note: Excel does not allow *dragging* a hierarchy level; levels are reached
+  by expanding, per Microsoft's OLAP PivotTable rules.)
 
 ## Reconcile Status
 

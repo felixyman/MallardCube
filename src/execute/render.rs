@@ -183,105 +183,257 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     if query.axis_set_op.is_none() {
         data.sort_by(|a, b| a.0.cmp(&b.0));
     }
-    let parent_uname: Option<String> = query.drilldown_level.and_then(|dl| {
-        if dl == 0 {
+    let filter_keys: Vec<String> = query
+        .filters
+        .iter()
+        .find(|f| f.dimension == *dim)
+        .map(|f| f.members.clone())
+        .unwrap_or_default();
+    // Path labels (`2026|1|1`) already carry their ancestors, so the renderer
+    // must not prefix a parent key on top of them.
+    let labels_are_paths = data.iter().any(|(n, _)| n.contains('|'));
+    // Only a single expanded parent lets the renderer prefix the parent key;
+    // with several, the SQL emits full ancestor paths per member.
+    let single_parent = filter_keys.len() == 1 && !labels_are_paths;
+    let parent_uname: Option<String> = query.drilldown_level().and_then(|dl| {
+        if dl == 0 || query.level_drag || !single_parent {
             return None;
         }
         let project = crate::proxy_project::project();
         let dim_def = project.model.dim_def_opt(dim)?;
-        let key = query
-            .filters
-            .iter()
-            .find(|f| f.dimension == *dim)
-            .and_then(|f| f.members.first())?;
+        let key = filter_keys.first()?;
         Some(level_member_uname(dim_def, dl - 1, key))
     });
     let mut members = leaf_members_from(
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
-        query.drilldown_level,
+        query.drilldown_level(),
         parent_uname.as_deref(),
     );
+    // Multi-parent expansion ("Expand Entire Field"): each child's label is a
+    // path (`2026|1`), so wire its PARENT_UNIQUE_NAME from that prefix. Level
+    // drags stay flat — their parents are intentionally not on the axis.
+    if !query.level_drag {
+        attach_parent_keys(&mut members, dim, query.drilldown_level());
+    }
     // Report the real per-member child count so Excel's expand indicators stay
     // consistent (a year has 4 quarters, a quarter has 3 months, a month has its
     // day count). Without this, Excel shows a missing "+" on years and a
     // mismatched expand state on quarters.
-    if let Some(dl) = query.drilldown_level {
-        let key_path = query
-            .filters
-            .iter()
-            .find(|f| f.dimension == *dim)
-            .and_then(|f| f.members.first())
-            .cloned()
-            .unwrap_or_default();
+    if let Some(dl) = query.drilldown_level() {
+        let key_path = filter_keys.first().cloned().unwrap_or_default();
         let cc_map = drill_children_cardinalities(backend, dim, dl, &key_path);
         for m in &mut members {
-            if let Some(cc) = cc_map.get(&m.caption) {
-                m.children_cardinality = *cc;
-                m.display_info = if *cc > 0 { 131075 } else { 3 };
+            // Path-labelled members aren't in the plain-value map; compute
+            // their real count from the key path (a month shows ~30 day
+            // children, not the static whole-level cardinality).
+            let key = crate::axis_members::key_from_member_uname(&m.u_name);
+            let cc = match key.as_deref() {
+                Some(k) if k.contains('|') => member_child_count(backend, dim, dl, k),
+                _ => match cc_map.get(&m.caption) {
+                    Some(cc) => *cc,
+                    None => continue,
+                },
+            };
+            m.children_cardinality = cc;
+            m.display_info = if cc > 0 { 131075 } else { 3 };
+        }
+    }
+    // Whole-field / deep drills: emit the hierarchy in pre-order (parent
+    // immediately before its children) so Excel's DRILLED_DOWN bookkeeping
+    // stays consistent. Single-parent plain-value drills keep the chain path
+    // below.
+    if let Some(dl) = query.drilldown_level()
+        && dl > 0
+        && !query.level_drag
+        && (filter_keys.is_empty() || labels_are_paths)
+    {
+        let labels: Vec<String> = data.iter().map(|(n, _)| n.clone()).collect();
+        // SSAS returns the whole `DrilldownLevel({All})` input set (all level-0
+        // members) alongside the expanded branch; include it.
+        let extra_roots = level0_member_values(query, dim, backend);
+        let tree = preorder_drill_members(query, dim, &labels, dl, &extra_roots, backend);
+        let total: f64 = data.iter().map(|(_, v)| *v).sum();
+        let mut members: Vec<cellset::MemberConfig> = Vec::new();
+        let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
+        for (member, data_idx) in tree {
+            let value = match data_idx {
+                Some(i) => data[i].1,
+                // Ancestors aggregate their own subtree, not the whole branch.
+                None => {
+                    let key = crate::axis_members::key_from_member_uname(&member.u_name)
+                        .unwrap_or_default();
+                    if let Some((_, v)) = extra_roots.iter().find(|(k, _)| *k == key) {
+                        // A root of the input set carries its own aggregate.
+                        *v
+                    } else if key.is_empty() {
+                        total
+                    } else {
+                        let prefix = format!("{key}|");
+                        data.iter()
+                            .filter(|(n, _)| *n == key || n.starts_with(&prefix))
+                            .map(|(_, v)| *v)
+                            .sum()
+                    }
+                }
+            };
+            cells.push(measurement_cell_for_query(
+                query,
+                members.len() as u32,
+                value,
+            ));
+            members.push(member);
+        }
+        apply_member_display_info(&mut members);
+        return render_response(
+            vec![
+                member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
+                full_slicer_axis_with_backend(query, backend),
+            ],
+            cells,
+            &query.cell_props,
+        );
+    }
+
+    // Prepend the full ancestor chain so every member's parent is either on the
+    // axis or is the (All) root. Real SSAS DrilldownMember returns the whole
+    // input set — `DrilldownLevel({All})` = (All) plus every level-0 member —
+    // followed by the drilled branch's intermediate levels and its children.
+    let mut prefix: Vec<(cellset::MemberConfig, f64)> = Vec::new();
+    let total: f64 = data.iter().map(|(_, v)| *v).sum();
+    if let Some(dl) = query.drilldown_level()
+        && !query.level_drag
+        && dl > 0
+        && filter_keys.len() == 1
+        && !labels_are_paths
+    {
+        let project = crate::proxy_project::project();
+        if let Some(def) = project.model.dim_def_opt(dim) {
+            let key = &filter_keys[0];
+            let branch_year = key.split('|').next().unwrap_or("").to_string();
+            // Level-0 members with their own aggregates (the input set).
+            let mut roots = level0_member_values(query, dim, backend);
+            roots.sort_by(|a, b| cmp_key_paths(&a.0, &b.0));
+            prefix.push((
+                all_member_for_with_backend(dim, &query.dim_props, backend),
+                total,
+            ));
+            for (root_key, value) in &roots {
+                if root_key.split('|').count() != 1 {
+                    continue;
+                }
+                let is_branch = *root_key == branch_year;
+                let u_name = level_member_uname(def, 0, root_key);
+                let cc = member_child_count(backend, dim, 0, root_key);
+                prefix.push((
+                    cellset::MemberConfig {
+                        hierarchy: def.hierarchy_unique_name(),
+                        u_name: u_name.clone(),
+                        caption: root_key.clone(),
+                        l_name: format!("{}.[{}]", def.hierarchy_unique_name(), def.levels[0].name),
+                        l_num: 1,
+                        display_info: 0,
+                        children_cardinality: cc,
+                        dim_props: walk_dim_props(
+                            def,
+                            root_key,
+                            &u_name,
+                            &format!("{}.[{}]", def.hierarchy_unique_name(), def.levels[0].name),
+                            root_key,
+                            &def.all_member_unique_name(),
+                            0,
+                            &query.dim_props,
+                        ),
+                    },
+                    *value,
+                ));
+                if !is_branch {
+                    continue;
+                }
+                // The drilled branch: intermediate levels, then the children.
+                let parent_uname = Some(level_member_uname(def, dl - 1, key));
+                for m in ancestor_members(query, dim, def, key, dl, backend)
+                    .into_iter()
+                    .skip(1)
+                    .filter(|m| m.l_num != 1)
+                {
+                    prefix.push((m, total));
+                }
+                for (name, value) in &data {
+                    let m = leaf_members_from(
+                        dim,
+                        std::slice::from_ref(name),
+                        &query.dim_props,
+                        Some(dl),
+                        parent_uname.as_deref(),
+                    )
+                    .remove(0);
+                    prefix.push((m, *value));
+                }
+            }
+            // Fallback: the branch year missing from the roots (empty dim table).
+            if !prefix.iter().any(|(m, _)| m.l_num == 1)
+                || !prefix
+                    .iter()
+                    .any(|(m, _)| m.u_name == level_member_uname(def, 0, &branch_year))
+            {
+                for m in ancestor_members(query, dim, def, key, dl, backend) {
+                    prefix.push((m, total));
+                }
+                for (name, value) in &data {
+                    let m = leaf_members_from(
+                        dim,
+                        std::slice::from_ref(name),
+                        &query.dim_props,
+                        Some(dl),
+                        None,
+                    )
+                    .remove(0);
+                    prefix.push((m, *value));
+                }
             }
         }
     }
-    // Prepend the full ancestor chain so every member's parent is either on the
-    // axis or is the (All) root. Excel rebuilds the hierarchy tree from the
-    // axis via PARENT_UNIQUE_NAME / PARENT_SAME_AS_PREV; a non-root parent that
-    // is missing from the axis (drilling a quarter without its year, for
-    // example) makes MDDSAxis::MoveToHierProperty crash. Real SSAS
-    // DrilldownLevel returns the whole chain: [All, Year, Quarter, months...].
+
+    if !prefix.is_empty() {
+        let mut ms: Vec<cellset::MemberConfig> = Vec::new();
+        let mut cs: Vec<crate::cellset::CellConfig> = Vec::new();
+        for (m, v) in prefix {
+            cs.push(measurement_cell_for_query(query, ms.len() as u32, v));
+            ms.push(m);
+        }
+        apply_member_display_info(&mut ms);
+        return render_response(
+            vec![
+                member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), ms),
+                full_slicer_axis_with_backend(query, backend),
+            ],
+            cs,
+            &query.cell_props,
+        );
+    }
+
+    // Legacy chain prepend for shapes the prefix path doesn't cover.
     let mut num_ancestors: u32 = 0;
-    if let Some(dl) = query.drilldown_level {
+    if let Some(dl) = query.drilldown_level()
+        && !query.level_drag
+    {
         let project = crate::proxy_project::project();
-        let dim_def = project.model.dim_def_opt(dim);
-        let filter_key = query
-            .filters
-            .iter()
-            .find(|f| f.dimension == *dim)
-            .and_then(|f| f.members.first())
-            .cloned()
-            .unwrap_or_default();
-        if let Some(def) = dim_def {
-            let key_parts: Vec<&str> = filter_key.split('|').filter(|s| !s.is_empty()).collect();
+        if let Some(def) = project.model.dim_def_opt(dim) {
             let mut ancestors: Vec<cellset::MemberConfig> = Vec::new();
-            // (All) at hierarchy level 0.
-            ancestors.push(all_member_for_with_backend(dim, &query.dim_props, backend));
-            // Members at hierarchy levels 1..=dl (dim.levels indices 0..=dl-1).
-            for i in 0..dl {
-                if def.levels.get(i).is_none() || key_parts.len() < i + 1 {
-                    break;
+            if filter_keys.is_empty() || labels_are_paths {
+                let labels: Vec<String> = data.iter().map(|(n, _)| n.clone()).collect();
+                ancestors = ancestor_members_from_labels(query, dim, def, &labels, dl, backend);
+            } else {
+                for (i, key) in filter_keys.iter().enumerate() {
+                    let chain = ancestor_members(query, dim, def, key, dl, backend);
+                    if i == 0 {
+                        ancestors = chain;
+                    } else {
+                        ancestors.extend(chain.into_iter().skip(1));
+                    }
                 }
-                let anc_key = key_parts[..i + 1].join("|");
-                let u_name = level_member_uname(def, i, &anc_key);
-                let caption = anc_key.rsplit('|').next().unwrap_or(&anc_key).to_string();
-                let l_name = format!("{}.[{}]", def.hierarchy_unique_name(), def.levels[i].name);
-                let parent_uname = if i == 0 {
-                    def.all_member_unique_name()
-                } else {
-                    level_member_uname(def, i - 1, &key_parts[..i].join("|"))
-                };
-                let cc = member_child_count(backend, dim, i, &anc_key);
-                ancestors.push(cellset::MemberConfig {
-                    hierarchy: def.hierarchy_unique_name(),
-                    u_name,
-                    caption: caption.clone(),
-                    l_name,
-                    l_num: (i + 1) as i32,
-                    display_info: 0,
-                    children_cardinality: cc,
-                    dim_props: filter_dim_props(
-                        vec![
-                            ("PARENT_UNIQUE_NAME".into(), parent_uname),
-                            ("HIERARCHY_UNIQUE_NAME".into(), def.hierarchy_unique_name()),
-                            ("MEMBER_NAME".into(), caption.clone()),
-                            ("MEMBER_KEY".into(), anc_key.clone()),
-                            ("MEMBER_TYPE".into(), "1".into()),
-                            ("MEMBER_VALUE".into(), caption.clone()),
-                            ("PARENT_LEVEL".into(), i.to_string()),
-                            ("PARENT_COUNT".into(), "1".into()),
-                        ],
-                        &query.dim_props,
-                    ),
-                });
             }
             num_ancestors = ancestors.len() as u32;
             for a in ancestors.into_iter().rev() {
@@ -344,6 +496,463 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         cells,
         &query.cell_props,
     )
+}
+
+/// Fill in `PARENT_UNIQUE_NAME` for members whose label is a compound path
+/// (`2026|1`) — used when several parents are expanded at once, where the
+/// renderer can't prefix a single parent key. Replaces the default `(All)`
+/// parent that the member builder emits for path members. No-op when the path
+/// has no ancestor segments.
+fn attach_parent_keys(
+    members: &mut [crate::cellset::MemberConfig],
+    dim: &str,
+    level: Option<usize>,
+) {
+    let Some(dl) = level else { return };
+    // Level-0 members sit directly under (All); no parent uname is needed
+    // (and `dl - 1` would underflow).
+    if dl == 0 {
+        return;
+    }
+    let Some(def) = crate::proxy_project::project().model.dim_def_opt(dim) else {
+        return;
+    };
+    for m in members.iter_mut() {
+        let key = crate::axis_members::key_from_member_uname(&m.u_name)
+            .or_else(|| {
+                m.dim_props
+                    .iter()
+                    .find(|(k, _)| k == "MEMBER_KEY")
+                    .map(|(_, v)| v.clone())
+            })
+            .unwrap_or_default();
+        let parts: Vec<&str> = key.split('|').collect();
+        if parts.len() <= dl {
+            continue;
+        }
+        let parent = level_member_uname(def, dl - 1, &parts[..dl].join("|"));
+        match m
+            .dim_props
+            .iter_mut()
+            .find(|(k, _)| k == "PARENT_UNIQUE_NAME")
+        {
+            Some(slot) => slot.1 = parent,
+            None => m.dim_props.push(("PARENT_UNIQUE_NAME".into(), parent)),
+        }
+    }
+}
+
+/// Numeric-aware ordering for pipe-joined key paths: months sort 1..12 rather
+/// than "1","10","11","12","2". Shorter paths (ancestors) come first.
+fn cmp_key_paths(a: &str, b: &str) -> std::cmp::Ordering {
+    let (pa, pb): (Vec<&str>, Vec<&str>) = (a.split('|').collect(), b.split('|').collect());
+    for (x, y) in pa.iter().zip(pb.iter()) {
+        let ord = match (x.parse::<i64>(), y.parse::<i64>()) {
+            (Ok(nx), Ok(ny)) => nx.cmp(&ny),
+            _ => x.cmp(y),
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    pa.len().cmp(&pb.len())
+}
+
+/// Level-0 member values for a hierarchy: the `DrilldownLevel({All})` input
+/// set that SSAS includes alongside every expanded branch. Values respect the
+/// query's filters (slicers, subselects, time flags) because the level-0
+/// grouping runs through the normal plan executor.
+fn level0_member_values<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &str,
+    backend: &B,
+) -> Vec<(String, f64)> {
+    use crate::engine::plan::{
+        QueryPlan, QueryResult, execute_plan_with_backend, filters_with_time_flag, typed_filters,
+    };
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    if model.dim_def_opt(dim).is_none_or(|d| d.levels.is_empty()) {
+        return Vec::new();
+    }
+    // Requests without a measure (e.g. a pivot with only the hierarchy on an
+    // axis) still need the input set; fall back to the model's default measure.
+    let meas = query
+        .measures
+        .first()
+        .or(query.measure.as_ref())
+        .and_then(|name| model.lookup_measure(name))
+        .or_else(|| model.default_measure_id().map(|id| model.meas_def(&id)));
+    let Some(meas) = meas else {
+        return Vec::new();
+    };
+    // The drill's own member filter must not constrain the input set; real
+    // slicers on the same dimension are kept.
+    let is_drill_filter = |f: &crate::mdx_semantic::DimensionFilter| {
+        query
+            .drill_members
+            .iter()
+            .any(|(d, keys)| f.dimension == *d && f.members == *keys)
+    };
+    let slicers: Vec<crate::mdx_semantic::DimensionFilter> = query
+        .filters
+        .iter()
+        .filter(|f| !is_drill_filter(f))
+        .cloned()
+        .collect();
+    let plan = QueryPlan::GroupBy {
+        measure: meas.id.clone(),
+        group_by: vec![dim.to_string()],
+        filters: filters_with_time_flag(model, &meas.id, &typed_filters(&slicers)),
+        group_levels: vec![Some(0)],
+        set_op: None,
+    };
+    match execute_plan_with_backend(&plan, model, backend) {
+        QueryResult::Grouped(rows) => rows,
+        _ => Vec::new(),
+    }
+}
+
+/// Pre-order member walk for one axis slot's drill: `(All)`, then every
+/// ancestor level and the data members themselves, each parent immediately
+/// before its children. Excel's DRILLED_DOWN / PARENT_SAME_AS_PREV bookkeeping
+/// depends on that order; ancestors grouped by level instead corrupt its
+/// hierarchy tree. Returns `(member, Some(label index))` for data rows and
+/// `(member, None)` for ancestors.
+fn preorder_drill_members<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &str,
+    labels: &[String],
+    level_idx: usize,
+    extra_roots: &[(String, f64)],
+    backend: &B,
+) -> Vec<(cellset::MemberConfig, Option<usize>)> {
+    let project = crate::proxy_project::project();
+    let Some(def) = project.model.dim_def_opt(dim) else {
+        return Vec::new();
+    };
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    order.sort_by(|&a, &b| cmp_key_paths(&labels[a], &labels[b]));
+
+    let mut out: Vec<(cellset::MemberConfig, Option<usize>)> = Vec::new();
+    out.push((
+        all_member_for_with_backend(dim, &query.dim_props, backend),
+        None,
+    ));
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk<B: QueryBackend + ?Sized>(
+        out: &mut Vec<(cellset::MemberConfig, Option<usize>)>,
+        query: &SemanticQuery,
+        dim: &str,
+        def: &crate::engine::model::DimensionDef,
+        labels: &[String],
+        order: &[usize],
+        level_idx: usize,
+        level: usize,
+        prefix: &str,
+        extra_roots: &[(String, f64)],
+        backend: &B,
+    ) {
+        if level == level_idx {
+            for &idx in order {
+                let label = &labels[idx];
+                let parts: Vec<&str> = label.split('|').collect();
+                if parts.len() != level_idx + 1 {
+                    continue;
+                }
+                if level_idx > 0 && parts[..level_idx].join("|") != prefix {
+                    continue;
+                }
+                let mut m = leaf_members_from(
+                    dim,
+                    std::slice::from_ref(label),
+                    &query.dim_props,
+                    Some(level_idx),
+                    None,
+                )
+                .remove(0);
+                attach_parent_keys(std::slice::from_mut(&mut m), dim, Some(level_idx));
+                let cc = member_child_count(backend, dim, level_idx, label);
+                m.children_cardinality = cc;
+                m.display_info = if cc > 0 { 131075 } else { 3 };
+                out.push((m, Some(idx)));
+            }
+            return;
+        }
+        // Distinct keys at this level under `prefix`, in label order. The
+        // level-0 set also seeds the full `DrilldownLevel({All})` input set
+        // (every year), which SSAS returns alongside the expanded branch.
+        let mut seen: Vec<String> = Vec::new();
+        if level == 0 {
+            for (key, _) in extra_roots {
+                if !seen.contains(key) {
+                    seen.push(key.clone());
+                }
+            }
+        }
+        for &idx in order {
+            let parts: Vec<&str> = labels[idx].split('|').collect();
+            if parts.len() <= level {
+                continue;
+            }
+            if level > 0 && parts[..level].join("|") != prefix {
+                continue;
+            }
+            let key = parts[..=level].join("|");
+            if !seen.contains(&key) {
+                seen.push(key);
+            }
+        }
+        seen.sort_by(|a, b| cmp_key_paths(a, b));
+        for key in seen {
+            let parts: Vec<&str> = key.split('|').collect();
+            let caption = parts.last().copied().unwrap_or(&key).to_string();
+            let parent_uname = if level == 0 {
+                def.all_member_unique_name()
+            } else {
+                level_member_uname(def, level - 1, &parts[..level].join("|"))
+            };
+            let cc = member_child_count(backend, dim, level, &key);
+            out.push((
+                cellset::MemberConfig {
+                    hierarchy: def.hierarchy_unique_name(),
+                    u_name: level_member_uname(def, level, &key),
+                    caption: caption.clone(),
+                    l_name: def
+                        .levels
+                        .get(level)
+                        .map(|l| format!("{}.[{}]", def.hierarchy_unique_name(), l.name))
+                        .unwrap_or_default(),
+                    l_num: (level + 1) as i32,
+                    display_info: 0,
+                    children_cardinality: cc,
+                    dim_props: walk_dim_props(
+                        def,
+                        &caption,
+                        &level_member_uname(def, level, &key),
+                        &def.levels
+                            .get(level)
+                            .map(|l| format!("{}.[{}]", def.hierarchy_unique_name(), l.name))
+                            .unwrap_or_default(),
+                        &key,
+                        &parent_uname,
+                        level,
+                        &query.dim_props,
+                    ),
+                },
+                None,
+            ));
+            walk(
+                out,
+                query,
+                dim,
+                def,
+                labels,
+                order,
+                level_idx,
+                level + 1,
+                &key,
+                extra_roots,
+                backend,
+            );
+        }
+    }
+
+    walk(
+        &mut out,
+        query,
+        dim,
+        def,
+        labels,
+        &order,
+        level_idx,
+        0,
+        "",
+        extra_roots,
+        backend,
+    );
+    out
+}
+
+/// DRILLED_DOWN / PARENT_SAME_AS_PREV flags for a single flat member list in
+/// pre-order (each parent immediately followed by its children).
+fn apply_member_display_info(members: &mut [cellset::MemberConfig]) {
+    let parents: Vec<Option<String>> = members
+        .iter()
+        .map(|m| {
+            m.dim_props
+                .iter()
+                .find(|(k, _)| k == "PARENT_UNIQUE_NAME")
+                .map(|(_, v)| v.clone())
+        })
+        .collect();
+    let unames: Vec<String> = members.iter().map(|m| m.u_name.clone()).collect();
+    for i in 0..members.len() {
+        let mut di = members[i].children_cardinality.min(65535);
+        if i + 1 < members.len() && parents[i + 1].as_deref() == Some(unames[i].as_str()) {
+            di |= 0x10000;
+        }
+        if i > 0 && parents[i] == parents[i - 1] && parents[i].is_some() {
+            di |= 0x20000;
+        }
+        members[i].display_info = di;
+    }
+}
+
+/// Ancestor members derived from the data labels themselves: for a drill to
+/// `level_idx` with no single parent, every label path contributes its
+/// ancestors (years and quarters for a month drill). Returns `(All)` followed
+/// by the distinct members of each level `0..level_idx`, sorted by key.
+/// Without this, a whole-field "Expand to Month" returns months whose parents
+/// are absent from the axis — an inconsistent hierarchy that Excel dislikes.
+fn ancestor_members_from_labels<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &str,
+    def: &crate::engine::model::DimensionDef,
+    labels: &[String],
+    level_idx: usize,
+    backend: &B,
+) -> Vec<cellset::MemberConfig> {
+    // Distinct ancestor key paths per level.
+    let mut keys_by_level: Vec<Vec<String>> = vec![Vec::new(); level_idx];
+    for label in labels {
+        let parts: Vec<&str> = label.split('|').collect();
+        for (i, keys) in keys_by_level.iter_mut().enumerate() {
+            if parts.len() > i {
+                let key = parts[..=i].join("|");
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+    let mut out: Vec<cellset::MemberConfig> = Vec::new();
+    out.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+    for (i, keys) in keys_by_level.iter_mut().enumerate() {
+        keys.sort();
+        let Some(level) = def.levels.get(i) else {
+            continue;
+        };
+        for key in keys.iter() {
+            let parts: Vec<&str> = key.split('|').collect();
+            let caption = parts.last().copied().unwrap_or(key).to_string();
+            let parent_uname = if i == 0 {
+                def.all_member_unique_name()
+            } else {
+                level_member_uname(def, i - 1, &parts[..i].join("|"))
+            };
+            let cc = member_child_count(backend, dim, i, key);
+            out.push(cellset::MemberConfig {
+                hierarchy: def.hierarchy_unique_name(),
+                u_name: level_member_uname(def, i, key),
+                caption: caption.clone(),
+                l_name: format!("{}.[{}]", def.hierarchy_unique_name(), level.name),
+                l_num: (i + 1) as i32,
+                display_info: 0,
+                children_cardinality: cc,
+                dim_props: walk_dim_props(
+                    def,
+                    &caption,
+                    &level_member_uname(def, i, key),
+                    &format!("{}.[{}]", def.hierarchy_unique_name(), level.name),
+                    key,
+                    &parent_uname,
+                    i,
+                    &query.dim_props,
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// Dimension properties for members built by the renderer's ancestor/level
+/// walks: mirrors the leaf property set plus level identity, so every property
+/// Excel requests is actually emitted.
+#[allow(clippy::too_many_arguments)]
+fn walk_dim_props(
+    def: &crate::engine::model::DimensionDef,
+    caption: &str,
+    u_name: &str,
+    l_name: &str,
+    key: &str,
+    parent_uname: &str,
+    level: usize,
+    requested: &[String],
+) -> Vec<(String, String)> {
+    filter_dim_props(
+        vec![
+            ("PARENT_UNIQUE_NAME".into(), parent_uname.to_string()),
+            ("HIERARCHY_UNIQUE_NAME".into(), def.hierarchy_unique_name()),
+            ("MEMBER_NAME".into(), caption.to_string()),
+            ("MEMBER_CAPTION".into(), caption.to_string()),
+            ("MEMBER_UNIQUE_NAME".into(), u_name.to_string()),
+            ("MEMBER_KEY".into(), key.to_string()),
+            ("MEMBER_TYPE".into(), "1".into()),
+            ("MEMBER_VALUE".into(), caption.to_string()),
+            ("LEVEL_NUMBER".into(), (level + 1).to_string()),
+            ("LEVEL_UNIQUE_NAME".into(), l_name.to_string()),
+            ("PARENT_LEVEL".into(), level.to_string()),
+            ("PARENT_COUNT".into(), "1".into()),
+        ],
+        requested,
+    )
+}
+
+/// The ancestor chain — `(All)` plus levels `0..level_idx` — for a member of
+/// `dim` identified by the pipe-joined ancestor path `key_path` (e.g. `2026`).
+/// A member whose parent is missing from the axis corrupts Excel's
+/// `MDDSAxis::MoveToHierProperty` walk and crashes it, so every expanded
+/// member (and every crossjoin slot) must carry its full chain.
+fn ancestor_members<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &str,
+    def: &crate::engine::model::DimensionDef,
+    key_path: &str,
+    level_idx: usize,
+    backend: &B,
+) -> Vec<cellset::MemberConfig> {
+    let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
+    let mut out: Vec<cellset::MemberConfig> = Vec::new();
+    // (All) at hierarchy level 0.
+    out.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+    for i in 0..level_idx {
+        if def.levels.get(i).is_none() || key_parts.len() < i + 1 {
+            break;
+        }
+        let anc_key = key_parts[..i + 1].join("|");
+        let u_name = level_member_uname(def, i, &anc_key);
+        let caption = anc_key.rsplit('|').next().unwrap_or(&anc_key).to_string();
+        let l_name = format!("{}.[{}]", def.hierarchy_unique_name(), def.levels[i].name);
+        let parent_uname = if i == 0 {
+            def.all_member_unique_name()
+        } else {
+            level_member_uname(def, i - 1, &key_parts[..i].join("|"))
+        };
+        let cc = member_child_count(backend, dim, i, &anc_key);
+        let dim_props = walk_dim_props(
+            def,
+            &caption,
+            &u_name,
+            &l_name,
+            &anc_key,
+            &parent_uname,
+            i,
+            &query.dim_props,
+        );
+        out.push(cellset::MemberConfig {
+            hierarchy: def.hierarchy_unique_name(),
+            u_name,
+            caption: caption.clone(),
+            l_name,
+            l_num: (i + 1) as i32,
+            display_info: 0,
+            children_cardinality: cc,
+            dim_props,
+        });
+    }
+    out
 }
 
 /// Member unique name for a level, converting an internal pipe path to the
@@ -518,32 +1127,99 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     let d0 = &dims[0];
     let d1 = &dims[1];
 
-    // group_level applies to group_by.first() only (see sql.rs), so d0 is
-    // grouped at its drilled hierarchy level while d1 stays at physical-field
-    // grain. Build each side's members at the matching level so unique names,
-    // level numbers and child counts agree with the grouped data.
-    let d0_filter_key = query
-        .filters
-        .iter()
-        .find(|f| f.dimension == *d0)
-        .and_then(|f| f.members.first())
-        .cloned()
-        .unwrap_or_default();
-    let d0_parent_uname: Option<String> = query.drilldown_level.and_then(|dl| {
-        if dl == 0 {
+    // Per-dimension hierarchy levels: a whole-hierarchy drag (`DrilldownLevel`)
+    // puts every leveled dimension on the axis at its top level, so both slots
+    // must be built at their grouped level — not just the first.
+    let lvl0 = query.drilldown_levels.first().copied().flatten();
+    let lvl1 = query.drilldown_levels.get(1).copied().flatten();
+    let project = crate::proxy_project::project();
+
+    // A slot is "expanded" (DrilldownMember) when it sits below the top level
+    // *and* carries a filter on that dimension: its children must be keyed by
+    // the parent and the parent chain must appear on the axis, or Excel's
+    // MDDSAxis::MoveToHierProperty walk breaks and crashes.
+    let filter_keys = |dim: &str| -> Vec<String> {
+        query
+            .filters
+            .iter()
+            .find(|f| f.dimension == dim)
+            .map(|f| f.members.clone())
+            .unwrap_or_default()
+    };
+    let slot_drill = |dim: &str, lvl: Option<usize>| -> Option<(usize, Vec<String>)> {
+        let lvl = lvl?;
+        if lvl == 0 || query.level_drag {
             return None;
         }
-        let project = crate::proxy_project::project();
-        let dim_def = project.model.dim_def_opt(d0)?;
-        Some(level_member_uname(dim_def, dl - 1, &d0_filter_key))
-    });
-    let cc_map = query
-        .drilldown_level
-        .map(|dl| drill_children_cardinalities(backend, d0, dl, &d0_filter_key));
+        let keys = filter_keys(dim);
+        if keys.is_empty() {
+            None
+        } else {
+            Some((lvl, keys))
+        }
+    };
+    let drill0 = slot_drill(d0, lvl0);
+    let drill1 = slot_drill(d1, lvl1);
+    // With several expanded parents the SQL emits full ancestor paths, so the
+    // renderer cannot prefix one parent key; per-member keys are attached later.
+    let parent_uname = |dim: &str, drill: &Option<(usize, Vec<String>)>| -> Option<String> {
+        let (lvl, keys) = drill.as_ref()?;
+        if keys.len() != 1 {
+            return None;
+        }
+        let def = project.model.dim_def_opt(dim)?;
+        Some(level_member_uname(def, lvl - 1, &keys[0]))
+    };
+    let d0_parent_uname = parent_uname(d0, &drill0);
+    let d1_parent_uname = parent_uname(d1, &drill1);
 
-    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
-    let mut cells = Vec::new();
-    let mut ordinal = 0u32;
+    let d0_filter_key = filter_keys(d0).first().cloned().unwrap_or_default();
+    let d1_filter_key = filter_keys(d1).first().cloned().unwrap_or_default();
+    let cc_map = lvl0.map(|dl| drill_children_cardinalities(backend, d0, dl, &d0_filter_key));
+    let cc_map1 = lvl1.map(|dl| drill_children_cardinalities(backend, d1, dl, &d1_filter_key));
+
+    let slot_member = |slot: usize, value: &str| -> crate::cellset::MemberConfig {
+        let (dim, lvl, parent, cc_map) = if slot == 0 {
+            (d0, lvl0, d0_parent_uname.as_deref(), cc_map.as_ref())
+        } else {
+            (d1, lvl1, d1_parent_uname.as_deref(), cc_map1.as_ref())
+        };
+        let v = value.to_string();
+        let mut m = leaf_members_from(dim, std::slice::from_ref(&v), &query.dim_props, lvl, parent)
+            .remove(0);
+        // Path-labelled members aren't in the plain-value cc map; compute their
+        // real child count from the key path. Plain labels use the map.
+        let label_key = value
+            .contains('|')
+            .then(|| crate::axis_members::key_from_member_uname(&m.u_name))
+            .flatten();
+        match (label_key, lvl) {
+            (Some(k), Some(lv)) => {
+                let cc = member_child_count(backend, dim, lv, &k);
+                m.children_cardinality = cc;
+                m.display_info = if cc > 0 { 131075 } else { 3 };
+            }
+            _ => {
+                if let Some(cc) = cc_map.and_then(|m| m.get(value)) {
+                    m.children_cardinality = *cc;
+                }
+            }
+        }
+        // Multi-parent expansion: the label is a path, so derive the parent
+        // unique name from it (single-parent members already carry one).
+        if !query.level_drag {
+            attach_parent_keys(std::slice::from_mut(&mut m), dim, lvl);
+        }
+        m
+    };
+
+    // Distinct values per slot (for ancestor cross-products) and branch totals
+    // (ancestor cells aggregate their branch).
+    let mut first_values: Vec<String> = Vec::new();
+    let mut second_values: Vec<String> = Vec::new();
+    let mut first_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut second_totals: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
     for (first, second, value) in &all_data {
         if has_exclusions
             && query
@@ -553,21 +1229,372 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
         {
             continue;
         }
-        let mut m0 = leaf_members_from(
-            d0,
-            std::slice::from_ref(first),
-            &query.dim_props,
-            query.drilldown_level,
-            d0_parent_uname.as_deref(),
-        )
-        .remove(0);
-        if let Some(cc) = cc_map.as_ref().and_then(|m| m.get(first)) {
-            m0.children_cardinality = *cc;
+        if !first_values.contains(first) {
+            first_values.push(first.clone());
         }
-        let m1 = leaf_member_for(d1, second, &query.dim_props);
-        tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-        cells.push(measurement_cell_for_query(query, ordinal, *value));
-        ordinal += 1;
+        if !second_values.contains(second) {
+            second_values.push(second.clone());
+        }
+        *first_totals.entry(first.clone()).or_insert(0.0) += *value;
+        *second_totals.entry(second.clone()).or_insert(0.0) += *value;
+    }
+
+    let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+
+    // Emit the axis in the crossjoin's natural order: the first slot varies
+    // slowest, and each expanded member's ancestor chain comes immediately
+    // before that member's children (Excel's DRILLED_DOWN flag depends on the
+    // child following its parent on the axis).
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        tuples: &mut Vec<crate::cellset::TupleConfig>,
+        cells: &mut Vec<crate::cellset::CellConfig>,
+        ordinal: &mut u32,
+        dims: &[String],
+        d0: &str,
+        d1: &str,
+        slot0: crate::cellset::MemberConfig,
+        slot1: crate::cellset::MemberConfig,
+        query: &SemanticQuery,
+        value: f64,
+    ) {
+        tuples.push(ordered_pair(dims, d0, slot0, d1, slot1));
+        cells.push(measurement_cell_for_query(query, *ordinal, value));
+        *ordinal += 1;
+    }
+
+    // Ancestors per expanded slot. A single plain parent keeps its one chain
+    // (the renderer prefixes that parent key on the children); with path
+    // labels or several/mixed-level parents, one flat list derived from the
+    // labels carries every intermediate level.
+    let paths0 = first_values.iter().any(|v| v.contains('|'));
+    let paths1 = second_values.iter().any(|v| v.contains('|'));
+    let flat0 = drill0
+        .as_ref()
+        .is_some_and(|(_, keys)| paths0 || keys.len() > 1);
+    let flat1 = drill1
+        .as_ref()
+        .is_some_and(|(_, keys)| paths1 || keys.len() > 1);
+    let ancestors_for =
+        |dim: &str, drill: &Option<(usize, Vec<String>)>, values: &[String], flat: bool| {
+            let Some((lvl, keys)) = drill else {
+                return Vec::new();
+            };
+            let Some(def) = project.model.dim_def_opt(dim) else {
+                return Vec::new();
+            };
+            if flat {
+                vec![ancestor_members_from_labels(
+                    query, dim, def, values, *lvl, backend,
+                )]
+            } else {
+                keys.iter()
+                    .map(|key| ancestor_members(query, dim, def, key, *lvl, backend))
+                    .collect::<Vec<_>>()
+            }
+        };
+    let ancestors0 = ancestors_for(d0, &drill0, &first_values, flat0);
+    let ancestors1 = ancestors_for(d1, &drill1, &second_values, flat1);
+    let all0: Vec<crate::cellset::MemberConfig> = ancestors0
+        .first()
+        .and_then(|c| c.first().cloned())
+        .into_iter()
+        .collect();
+    let all1: Vec<crate::cellset::MemberConfig> = ancestors1
+        .first()
+        .and_then(|c| c.first().cloned())
+        .into_iter()
+        .collect();
+    let excluded = |a: &str, b: &str| {
+        has_exclusions
+            && query
+                .excluded_members
+                .iter()
+                .any(|e| e.key == *a || e.key == *b)
+    };
+    let value_for = |a: &str, b: &str| -> f64 {
+        all_data
+            .iter()
+            .find(|(x, y, _)| x == a && y == b)
+            .map(|(_, _, v)| *v)
+            .unwrap_or(0.0)
+    };
+    // Pre-order trees for flat slots (computed once, cloned per tuple).
+    let tree0 = flat0
+        .then(|| {
+            lvl0.map(|lvl| preorder_drill_members(query, d0, &first_values, lvl, &[], backend))
+        })
+        .flatten();
+    let tree1 = flat1
+        .then(|| {
+            lvl1.map(|lvl| preorder_drill_members(query, d1, &second_values, lvl, &[], backend))
+        })
+        .flatten();
+
+    match (drill0.is_some(), drill1.is_some()) {
+        // Second slot expanded (the common Excel shape, e.g. Category x Date):
+        // emit each parent immediately before its own children so Excel's
+        // DRILLED_DOWN flag lines up.
+        (false, true) => {
+            for first in &first_values {
+                // (All) once per other-slot member (the flat list starts with it).
+                if !flat1 {
+                    for anc in &all1 {
+                        push(
+                            &mut tuples,
+                            &mut cells,
+                            &mut ordinal,
+                            dims,
+                            d0,
+                            d1,
+                            slot_member(0, first),
+                            anc.clone(),
+                            query,
+                            *first_totals.get(first).unwrap_or(&0.0),
+                        );
+                    }
+                }
+                if !flat1 {
+                    // Single parent: children labels are plain level values.
+                    for chain in &ancestors1 {
+                        for anc in chain.iter().skip(1) {
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, first),
+                                anc.clone(),
+                                query,
+                                *first_totals.get(first).unwrap_or(&0.0),
+                            );
+                        }
+                    }
+                    for (a, b, v) in &all_data {
+                        if a == first && !excluded(a, b) {
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, a),
+                                slot_member(1, b),
+                                query,
+                                *v,
+                            );
+                        }
+                    }
+                } else {
+                    // Pre-order tree: (All), year, its quarters and months,
+                    // then the next year — parents immediately before children.
+                    if let Some(tree) = &tree1 {
+                        for (member, data_idx) in tree {
+                            let value = match data_idx {
+                                Some(i) => value_for(first, &second_values[*i]),
+                                None => {
+                                    // Ancestors aggregate their own subtree.
+                                    let key =
+                                        crate::axis_members::key_from_member_uname(&member.u_name)
+                                            .unwrap_or_default();
+                                    let prefix = format!("{key}|");
+                                    all_data
+                                        .iter()
+                                        .filter(|(a, b, _)| {
+                                            a == first && (*b == key || b.starts_with(&prefix))
+                                        })
+                                        .map(|(_, _, v)| *v)
+                                        .sum()
+                                }
+                            };
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, first),
+                                member.clone(),
+                                query,
+                                value,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // First slot expanded (e.g. Date x Segment).
+        (true, false) => {
+            for second in &second_values {
+                if !flat0 {
+                    for anc in &all0 {
+                        push(
+                            &mut tuples,
+                            &mut cells,
+                            &mut ordinal,
+                            dims,
+                            d0,
+                            d1,
+                            anc.clone(),
+                            slot_member(1, second),
+                            query,
+                            *second_totals.get(second).unwrap_or(&0.0),
+                        );
+                    }
+                }
+                if !flat0 {
+                    for chain in &ancestors0 {
+                        for anc in chain.iter().skip(1) {
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                anc.clone(),
+                                slot_member(1, second),
+                                query,
+                                *second_totals.get(second).unwrap_or(&0.0),
+                            );
+                        }
+                    }
+                    for (a, b, v) in &all_data {
+                        if b == second && !excluded(a, b) {
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, a),
+                                slot_member(1, b),
+                                query,
+                                *v,
+                            );
+                        }
+                    }
+                } else {
+                    // Pre-order tree for the first slot.
+                    if let Some(tree) = &tree0 {
+                        for (member, data_idx) in tree {
+                            let value = match data_idx {
+                                Some(i) => value_for(&first_values[*i], second),
+                                None => {
+                                    // Ancestors aggregate their own subtree.
+                                    let key =
+                                        crate::axis_members::key_from_member_uname(&member.u_name)
+                                            .unwrap_or_default();
+                                    let prefix = format!("{key}|");
+                                    all_data
+                                        .iter()
+                                        .filter(|(a, b, _)| {
+                                            b == second && (*a == key || a.starts_with(&prefix))
+                                        })
+                                        .map(|(_, _, v)| *v)
+                                        .sum()
+                                }
+                            };
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                member.clone(),
+                                slot_member(1, second),
+                                query,
+                                value,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // Both slots expanded (unusual): ancestors first, then the data.
+        (true, true) => {
+            for chain in &ancestors0 {
+                for anc in chain {
+                    for second in &second_values {
+                        push(
+                            &mut tuples,
+                            &mut cells,
+                            &mut ordinal,
+                            dims,
+                            d0,
+                            d1,
+                            anc.clone(),
+                            slot_member(1, second),
+                            query,
+                            *second_totals.get(second).unwrap_or(&0.0),
+                        );
+                    }
+                }
+            }
+            for chain in &ancestors1 {
+                for anc in chain {
+                    for first in &first_values {
+                        push(
+                            &mut tuples,
+                            &mut cells,
+                            &mut ordinal,
+                            dims,
+                            d0,
+                            d1,
+                            slot_member(0, first),
+                            anc.clone(),
+                            query,
+                            *first_totals.get(first).unwrap_or(&0.0),
+                        );
+                    }
+                }
+            }
+            for (a, b, v) in &all_data {
+                if excluded(a, b) {
+                    continue;
+                }
+                push(
+                    &mut tuples,
+                    &mut cells,
+                    &mut ordinal,
+                    dims,
+                    d0,
+                    d1,
+                    slot_member(0, a),
+                    slot_member(1, b),
+                    query,
+                    *v,
+                );
+            }
+        }
+        // No expanded slot: plain hierarchy levels / leaves.
+        (false, false) => {
+            for (a, b, v) in &all_data {
+                if excluded(a, b) {
+                    continue;
+                }
+                push(
+                    &mut tuples,
+                    &mut cells,
+                    &mut ordinal,
+                    dims,
+                    d0,
+                    d1,
+                    slot_member(0, a),
+                    slot_member(1, b),
+                    query,
+                    *v,
+                );
+            }
+        }
     }
 
     apply_axis_display_info(&mut tuples);
@@ -700,7 +1727,7 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
-        query.drilldown_level,
+        query.drilldown_level(),
         None,
     );
     let mut cells = Vec::new();
@@ -747,7 +1774,7 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
         dim,
         &merged.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
-        query.drilldown_level,
+        query.drilldown_level(),
         None,
     );
 
@@ -1082,7 +2109,7 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         SemanticQueryKind::MemberOnlyProbe => build_member_only_probe(query, backend),
         SemanticQueryKind::SetProbe => {
             if let Some(cc) = &query.set_count {
-                build_set_count(query, result, cc)
+                build_set_count(query, result, cc, backend)
             } else if let Some(se) = &query.set_probe {
                 build_set_members(query, result, se, backend)
             } else {
@@ -1093,26 +2120,25 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
 }
 
 /// Render an Excel CUBECOUNT probe: one `[Measures].[name]` member on Axis0
-/// with the set's member count as the single cell value.
-fn build_set_count(
+/// with the set's member count as the single cell value. A non-count result
+/// means the plan failed closed (e.g. an unknown level) — render an empty
+/// cellset rather than a misleading `0`.
+fn build_set_count<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
     cc: &crate::mdx_parser::CalculatedCount,
+    backend: &B,
 ) -> String {
-    let count = match result {
-        QueryResult::Count(c) => *c,
-        _ => 0,
+    let QueryResult::Count(count) = result else {
+        return empty_cellset(query, backend);
     };
     let member = measures_member(&format!("[Measures].[{}]", cc.member_name), &cc.member_name);
     render_response(
         vec![
             single_member_axis("Axis0", measures_hierarchy(), member),
-            crate::axis_members::dims_only_slicer_axis_with_backend(
-                query,
-                crate::backend::Backend::get(),
-            ),
+            crate::axis_members::dims_only_slicer_axis_with_backend(query, backend),
         ],
-        vec![count_cell(0, count)],
+        vec![count_cell(0, *count)],
         &query.cell_props,
     )
 }
@@ -1415,3 +2441,6 @@ fn extract_dim_hierarchy_name(target: &str) -> Option<String> {
     let hier = &rest[..close];
     Some(format!("[{}].[{}].[{}]", dim, hier, hier))
 }
+
+#[cfg(test)]
+mod tests {}

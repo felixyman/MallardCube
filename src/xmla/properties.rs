@@ -25,7 +25,10 @@ const PROPERTIES: &[Property] = &[
         prop_type: "int",
         access_type: "ReadWrite",
         is_required: false,
-        value: Some("2"),
+        // 0x1 = FROM-clause subselects (applied as slicer restrictions),
+        // 0x2 = WHERE-clause subqueries. Excel only enables
+        // attribute/level drilling when the lowest two bits are set.
+        value: Some("3"),
     },
     Property {
         name: "DbpropMsmdOptimizeResponse",

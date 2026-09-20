@@ -9,6 +9,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::{char, multispace0},
+    combinator::map,
     multi::separated_list0,
     sequence::delimited,
 };
@@ -225,6 +226,37 @@ fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
     results
 }
 
+/// Parse a `{ member | (tuple), ... }` axis set into its member refs.
+fn member_set(input: &str) -> IResult<&str, Vec<MemberRef>> {
+    let (input, _) = ws(input)?;
+    let (input, _) = char('{')(input)?;
+    let (input, _) = ws(input)?;
+    let (input, items) = separated_list0(
+        delimited(ws, char(','), ws),
+        alt((map(paren_members, |ms| ms), map(member_ref, |m| vec![m]))),
+    )(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = char('}')(input)?;
+    Ok((input, items.into_iter().flatten().collect()))
+}
+
+/// Members restricted by a FROM-clause subselect:
+/// `FROM (SELECT {[Dim].[Hier].&[k]} ON COLUMNS FROM [Cube])`. SSAS applies
+/// these as slicer-axis restrictions.
+fn find_subselect_members(input: &str) -> Vec<MemberRef> {
+    let mut results = Vec::new();
+    let upper = input.to_uppercase();
+    let mut search_from = 0;
+    while let Some(pos) = upper[search_from..].find("(SELECT ") {
+        let after = &input[search_from + pos + "(SELECT ".len()..];
+        if let Ok((_, members)) = member_set(after) {
+            results.extend(members);
+        }
+        search_from += pos + "(SELECT ".len();
+    }
+    results
+}
+
 /// Extract every `[Measures].[name]` reference on the COLUMNS axis, in order.
 /// Batched CUBEVALUE cells produce a multi-measure tuple set like
 /// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`. Set-function
@@ -379,9 +411,13 @@ pub fn parse_dimension_properties(input: &str) -> Vec<String> {
         "PARENT_UNIQUE_NAME",
         "HIERARCHY_UNIQUE_NAME",
         "MEMBER_NAME",
+        "MEMBER_CAPTION",
+        "MEMBER_UNIQUE_NAME",
         "MEMBER_KEY",
         "MEMBER_TYPE",
         "MEMBER_VALUE",
+        "LEVEL_NUMBER",
+        "LEVEL_UNIQUE_NAME",
         "PARENT_LEVEL",
         "PARENT_COUNT",
         "CHILDREN_CARDINALITY",
@@ -507,7 +543,15 @@ fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
     }
 
     if rest.contains(".Members}") || rest.contains(".MEMBERS}") {
-        return CalculatedMembersPat::LeafLevelMembers;
+        // A level-qualified source (`{AddCalculatedMembers({[D].[H].[Level].Members})}`)
+        // is a normal level set: the plan and renderer honor the level and emit
+        // level-qualified unique names. Only the unqualified
+        // `[D].[H].Members` form means the leaf grain.
+        return if parse_axis_level_members(input).is_empty() {
+            CalculatedMembersPat::LeafLevelMembers
+        } else {
+            CalculatedMembersPat::None
+        };
     }
 
     CalculatedMembersPat::None
@@ -946,6 +990,180 @@ pub struct ParsedMdx {
     pub axis_set_expr: Option<SetExpr>,
     /// Calculated members whose body is `COUNT(<set>)`, in declaration order.
     pub calculated_counts: Vec<CalculatedCount>,
+    /// Explicit level-set sources on the axes: `(dim, level)` pairs from
+    /// `[Dim].[Hier].[Level].Members` (Excel's field-list level drag).
+    pub axis_level_members: Vec<(String, String)>,
+    /// `DrilldownLevel(...)` targets on the axes (dimension + optional level
+    /// expression/index). Without a level they drill to the top level below
+    /// `(All)` — the whole-hierarchy drag.
+    pub drilldown_targets: Vec<DrilldownTarget>,
+}
+
+/// The outer SELECT clause (between the first SELECT and FROM), used by the
+/// axis scanners. Subquery SELECTs live inside FROM (...) and are excluded.
+fn outer_select_clause(input: &str) -> &str {
+    let upper = input.to_uppercase();
+    let select_pos = upper.find("SELECT").unwrap_or(0);
+    let from_pos = upper[select_pos..]
+        .find("FROM")
+        .map(|i| select_pos + i)
+        .unwrap_or(input.len());
+    &input[select_pos..from_pos]
+}
+
+/// Bracket contents (`[X]` -> `X`) in order, up to `max`.
+pub(crate) fn bracket_tokens(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while out.len() < max {
+        let Some(open) = rest.find('[') else { break };
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(']') else { break };
+        out.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// Explicit level-set sources on the axes: `[Dim].[Hier].[Level].Members`.
+/// Returns `(dim, level)` pairs in clause order, deduplicated. Bare
+/// `[X].Members` and `[X].[Y].[(All)].Members` are not level sets.
+/// `.AllMembers` (the Excel 2016 shape) is treated as the same level set.
+fn parse_axis_level_members(input: &str) -> Vec<(String, String)> {
+    let clause = outer_select_clause(input).replace(".AllMembers", ".Members");
+    let clause = clause.as_str();
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = clause[pos..].find(".Members") {
+        let abs = pos + i;
+        // Walk backwards over the `.`-separated bracket chain.
+        let mut rest = &clause[..abs];
+        let mut segs: Vec<String> = Vec::new();
+        while segs.len() < 4 && rest.ends_with(']') {
+            let close = rest.len() - 1;
+            let Some(open) = rest[..close].rfind('[') else {
+                break;
+            };
+            segs.push(rest[open + 1..close].to_string());
+            let before = &rest[..open];
+            if let Some(stripped) = before.strip_suffix('.') {
+                rest = stripped;
+            } else {
+                break;
+            }
+        }
+        segs.reverse();
+        if segs.len() == 3
+            && segs[0] != "Measures"
+            && !segs[2].eq_ignore_ascii_case("all")
+            && !segs[2].eq_ignore_ascii_case("(all)")
+        {
+            let pair = (segs[0].clone(), segs[2].clone());
+            if !out.contains(&pair) {
+                out.push(pair);
+            }
+        }
+        pos = abs + 1;
+    }
+    out
+}
+
+/// A `DrilldownLevel(...)` call on an axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrilldownTarget {
+    pub dim: String,
+    /// Level-expression argument (`DrilldownLevel(set, [D].[H].[Level])`).
+    pub level: Option<String>,
+    /// Numeric index argument (`DrilldownLevel(set, , N)`).
+    pub index: Option<usize>,
+}
+
+/// Split top-level comma-separated arguments, respecting `()`/`{}`/`[]` nesting.
+pub(crate) fn split_top_level_args(text: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for ch in text.chars() {
+        match ch {
+            '(' | '{' | '[' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' | '}' | ']' => {
+                depth -= 1;
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                args.push(cur.trim().to_string());
+                cur.clear();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    args.push(cur.trim().to_string());
+    args
+}
+
+/// Byte index of the `)` matching the `(` at `open`, if balanced.
+pub(crate) fn matching_paren(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `DrilldownLevel(...)` targets on the axes: the dimension, plus an explicit
+/// level expression or numeric index when present. Without either, the call
+/// drills to the top level below `(All)` (Excel's whole-hierarchy drag).
+fn parse_drilldown_targets(input: &str) -> Vec<DrilldownTarget> {
+    let clause = outer_select_clause(input);
+    let upper = clause.to_uppercase();
+    let mut out: Vec<DrilldownTarget> = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = upper[pos..].find("DRILLDOWNLEVEL") {
+        let after_name = pos + i + "DRILLDOWNLEVEL".len();
+        let Some(rel) = clause[after_name..].find('(') else {
+            break;
+        };
+        let open = after_name + rel;
+        let Some(close) = matching_paren(clause, open) else {
+            break;
+        };
+        let args = split_top_level_args(&clause[open + 1..close]);
+        let toks = args
+            .first()
+            .map(|a| bracket_tokens(a, 3))
+            .unwrap_or_default();
+        let from_all = toks.len() == 3
+            && (toks[2].eq_ignore_ascii_case("all") || toks[2].eq_ignore_ascii_case("(all)"));
+        if toks.len() >= 2 && toks[0] != "Measures" {
+            let dim = toks[0].clone();
+            let level = args.get(1).filter(|a| !a.is_empty()).and_then(|a| {
+                let lv = bracket_tokens(a, 3);
+                (lv.len() == 3).then(|| lv[2].clone())
+            });
+            let index = args.get(2).and_then(|a| a.trim().parse::<usize>().ok());
+            // Only a drill from `(All)` (hierarchy drag) or an explicitly
+            // named level/index is a level target.
+            if (from_all || level.is_some() || index.is_some())
+                && !out.iter().any(|t: &DrilldownTarget| t.dim == dim)
+            {
+                out.push(DrilldownTarget { dim, level, index });
+            }
+        }
+        pos = close;
+    }
+    out
 }
 
 /// Extract dimension IDs from the select clause in positional order.
@@ -1100,7 +1318,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let where_members = find_where_clause(input).unwrap_or_default();
 
     let all_subquery = find_all_subquery_members(input);
-    let subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
+    let mut subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
+    subquery_members.extend(find_subselect_members(input));
 
     let select_members = find_select_tuple_members(input);
     let select_tuples = find_select_tuples(input);
@@ -1145,6 +1364,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         axis_set_op: detect_axis_set_op(input),
         axis_set_expr: parse_axis_set_expr(input),
         calculated_counts: parse_calculated_count(input).into_iter().collect(),
+        axis_level_members: parse_axis_level_members(before_from),
+        drilldown_targets: parse_drilldown_targets(before_from),
     }
 }
 
@@ -1385,6 +1606,53 @@ mod set_expr_tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn parses_all_members_level() {
+        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Date].[Quarter].AllMembers} ON ROWS FROM [Sales]";
+        assert_eq!(
+            parse_axis_level_members(mdx),
+            vec![("Date".to_string(), "Quarter".to_string())]
+        );
+    }
+
+    #[test]
+    fn parses_drilldown_level_arguments() {
+        let level_expr = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]}, [Date].[Date].[Quarter])}) ON COLUMNS FROM [Sales]";
+        let t = parse_drilldown_targets(level_expr);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].dim, "Date");
+        assert_eq!(t[0].level.as_deref(), Some("Quarter"));
+        assert_eq!(t[0].index, None);
+
+        let index = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,1)}) ON COLUMNS FROM [Sales]";
+        let t = parse_drilldown_targets(index);
+        assert_eq!(t[0].index, Some(1));
+        assert_eq!(t[0].level, None);
+
+        // Plain hierarchy drag: no level or index argument.
+        let plain = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]";
+        let t = parse_drilldown_targets(plain);
+        assert_eq!((t[0].level.clone(), t[0].index), (None, None));
+    }
+
+    #[test]
+    fn parses_subselect_members() {
+        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM (SELECT {[Date].[Date].[Year].&[2024]} ON COLUMNS FROM [Sales])";
+        let members = find_subselect_members(mdx);
+        assert_eq!(members.len(), 1, "{members:?}");
+        match &members[0] {
+            MemberRef::Leaf {
+                dim: DimRef::Cube(name),
+                key,
+                ..
+            } => {
+                assert_eq!(name, "Date");
+                assert_eq!(key, "2024");
+            }
+            other => panic!("expected leaf member, got {other:?}"),
+        }
     }
 
     #[test]

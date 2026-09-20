@@ -96,11 +96,35 @@ pub fn sql_for_query_plan_with_context(
             measure,
             group_by,
             filters,
-            group_level,
+            group_levels,
             ..
         } => {
-            if let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config) {
-                return agg_groupby_sql(model, agg, measure, group_by, group_level, filters);
+            // A dimension at a non-unique level with several expanded parents
+            // must group by its full ancestor path; the date-aggregation
+            // fast path only knows single date columns, so skip it then.
+            let needs_path = group_by.iter().enumerate().any(|(i, dim_id)| {
+                let Some(level_idx) = group_levels.get(i).copied().flatten() else {
+                    return false;
+                };
+                let Some(dim) = model.dim_def_opt(dim_id) else {
+                    return false;
+                };
+                let single_parent = filters
+                    .iter()
+                    .any(|f| f.dimension == *dim_id && f.members.len() == 1);
+                level_idx > 0 && level_idx + 1 != dim.levels.len() && !single_parent
+            });
+            if !needs_path
+                && let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config)
+            {
+                return agg_groupby_sql(
+                    model,
+                    agg,
+                    measure,
+                    group_by,
+                    &group_levels.first().copied().flatten(),
+                    filters,
+                );
             }
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
@@ -108,28 +132,84 @@ pub fn sql_for_query_plan_with_context(
             let mut joined: HashSet<String> = HashSet::new();
             let (mut col_map, joins) =
                 resolve_group_cols(model, group_by, &mut joined, user, config);
-            // When drilling a specific hierarchy level, swap the dimension column
-            // to the level's column (e.g. "year" instead of "full_date").
-            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first())
-                && let Some(dim) = model.dim_def_opt(dim_id)
-                && let Some(level) = dim.levels.get(*level_idx)
-            {
+            // When drilling a specific hierarchy level, swap the dimension
+            // column to the level's column (e.g. "year" instead of "full_date").
+            // Non-unique levels get their full ancestor path so compound-key
+            // members (Q1-2020 vs Q1-2021) stay distinct; a drilldown-child
+            // query filters on the parent and lets the renderer prefix the
+            // parent key, so it keeps the plain level column.
+            let mut path_exprs: std::collections::HashMap<usize, String> =
+                std::collections::HashMap::new();
+            let mut path_order: std::collections::HashMap<usize, Vec<String>> =
+                std::collections::HashMap::new();
+            for (i, dim_id) in group_by.iter().enumerate() {
+                let Some(level_idx) = group_levels.get(i).copied().flatten() else {
+                    continue;
+                };
+                let Some(dim) = model.dim_def_opt(dim_id) else {
+                    continue;
+                };
+                let Some(level) = dim.levels.get(level_idx) else {
+                    continue;
+                };
                 let alias_prefix = col_map
                     .get(dim_id)
                     .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
                     .unwrap_or("");
-                let new_col = if alias_prefix.is_empty() {
-                    level.column.clone()
-                } else {
-                    format!("{}.{}", alias_prefix, level.column)
+                let qual = |col: &str| -> String {
+                    if alias_prefix.is_empty() {
+                        col.to_string()
+                    } else {
+                        format!("{alias_prefix}.{col}")
+                    }
                 };
-                col_map.insert(dim_id.clone(), new_col);
+                let single_parent = filters
+                    .iter()
+                    .find(|f| f.dimension == *dim_id && f.members.len() == 1);
+                // A single parent filter can prefix the parent key only when we
+                // drill exactly one level below it. Deeper drills carry the full
+                // ancestor path so intermediate levels can be derived.
+                let single_parent_level = single_parent
+                    .and_then(|f| f.level.as_ref())
+                    .and_then(|name| dim.levels.iter().position(|l| l.name == *name));
+                let is_leaf_level = level_idx + 1 == dim.levels.len();
+                let plain_column = level_idx == 0
+                    || is_leaf_level
+                    || single_parent.is_some()
+                        && (single_parent_level.is_none()
+                            || single_parent_level.is_some_and(|l| level_idx == l + 1));
+                if plain_column {
+                    col_map.insert(dim_id.clone(), qual(&level.column));
+                } else {
+                    // Compound ancestor path: "2020|1" for Q1-2020.
+                    let cols: Vec<String> = dim.levels[..=level_idx]
+                        .iter()
+                        .map(|l| format!("CAST({} AS VARCHAR)", qual(&l.column)))
+                        .collect();
+                    let path = if cols.len() == 1 {
+                        cols[0].clone()
+                    } else {
+                        format!("CONCAT_WS('|', {})", cols.join(", "))
+                    };
+                    path_exprs.insert(i, path);
+                    path_order.insert(
+                        i,
+                        dim.levels[..=level_idx]
+                            .iter()
+                            .map(|l| qual(&l.column))
+                            .collect(),
+                    );
+                }
             }
             let col_names: Vec<String> = group_by
                 .iter()
-                .map(|d| {
-                    let col = col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??");
-                    format!("CAST({col} AS VARCHAR)")
+                .enumerate()
+                .map(|(i, d)| match path_exprs.get(&i) {
+                    Some(path) => path.clone(),
+                    None => {
+                        let col = col_map.get(d.as_str()).map(|s| s.as_str()).unwrap_or("??");
+                        format!("CAST({col} AS VARCHAR)")
+                    }
                 })
                 .collect();
 
@@ -137,11 +217,19 @@ pub fn sql_for_query_plan_with_context(
             // deeper level, the filter uses the parent level's column (e.g.
             // WHERE year = '2023') not the target level's column (quarter).
             let mut where_col_map = col_map.clone();
-            if let (Some(level_idx), Some(dim_id)) = (group_level, group_by.first())
-                && *level_idx > 0
-                && let Some(dim) = model.dim_def_opt(dim_id)
-                && let Some(parent_level) = dim.levels.get(level_idx - 1)
-            {
+            for (i, dim_id) in group_by.iter().enumerate() {
+                let Some(level_idx) = group_levels.get(i).copied().flatten() else {
+                    continue;
+                };
+                if level_idx == 0 {
+                    continue;
+                }
+                let Some(dim) = model.dim_def_opt(dim_id) else {
+                    continue;
+                };
+                let Some(parent_level) = dim.levels.get(level_idx - 1) else {
+                    continue;
+                };
                 let alias_prefix = col_map
                     .get(dim_id)
                     .and_then(|v| v.rsplit_once('.').map(|(p, _)| p))
@@ -155,7 +243,24 @@ pub fn sql_for_query_plan_with_context(
             }
 
             let wc = sql_where_with_cols(model, filters, &where_col_map, user, config, table);
-            let group_nums: Vec<String> = (1..=col_names.len()).map(|i| i.to_string()).collect();
+            // Path-grouped dimensions sort by their underlying level columns
+            // (so months order 1..12, not "1","10","11"...). Those columns are
+            // also added to GROUP BY so the ORDER BY binds.
+            let mut group_terms: Vec<String> = Vec::new();
+            let mut order_terms: Vec<String> = Vec::new();
+            for i in 0..group_by.len() {
+                match (path_exprs.get(&i), path_order.get(&i)) {
+                    (Some(path), Some(cols)) => {
+                        group_terms.push(path.clone());
+                        group_terms.extend(cols.iter().cloned());
+                        order_terms.extend(cols.iter().cloned());
+                    }
+                    _ => {
+                        group_terms.push((i + 1).to_string());
+                        order_terms.push((i + 1).to_string());
+                    }
+                }
+            }
             format!(
                 "SELECT {}, {} FROM {} f{}{} GROUP BY {} ORDER BY {}",
                 col_names.join(", "),
@@ -163,8 +268,8 @@ pub fn sql_for_query_plan_with_context(
                 table,
                 joins,
                 wc,
-                group_nums.join(", "),
-                group_nums.join(", "),
+                group_terms.join(", "),
+                order_terms.join(", "),
             )
         }
 
@@ -488,14 +593,21 @@ fn sql_where_with_cols(
             let mut ors: Vec<String> = Vec::new();
             for key in &f.members {
                 let parts: Vec<&str> = key.split('|').collect();
-                // Align the key path to the end of the level chain: the last
-                // part matches the filter's level, earlier parts its ancestors
-                // (a single [Month].&[6] scopes month=6; [Quarter].&[2026]&[4]
-                // scopes year=2026 AND quarter=4).
-                let start = level_idx + 1 - parts.len();
+                // Align the key path to the level chain. A key with fewer parts
+                // than the filter's level is anchored at that level (a single
+                // [Month].&[6] scopes month=6); a key with more parts is itself
+                // a deeper member and root-anchored ([Quarter].&[2026]&[4]
+                // scopes year=2026 AND quarter=4). Excel mixes both in one
+                // DrilldownMember set, so never assume a single length.
+                let wanted = level_idx + 1;
+                let base = if parts.len() > wanted {
+                    0
+                } else {
+                    wanted - parts.len()
+                };
                 let mut ands: Vec<String> = Vec::new();
                 for (j, v) in parts.iter().enumerate() {
-                    if let Some(l) = d.levels.get(start + j) {
+                    if let Some(l) = d.levels.get(base + j) {
                         ands.push(format!(
                             "CAST({} AS VARCHAR) = '{}'",
                             l.column,
@@ -637,7 +749,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["ProductCategory".into()],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
             filters: vec![],
         };
@@ -653,7 +765,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["ProductCategory".into(), "Region".into()],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
             filters: vec![],
         };
@@ -669,7 +781,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["ProductCategory".into()],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
             filters: vec![TypedDimensionFilter {
                 dimension: "Region".into(),
@@ -812,7 +924,7 @@ mod tests {
             &QueryPlan::GroupBy {
                 measure: "Revenue".into(),
                 group_by: vec!["Product".into()],
-                group_level: None,
+                group_levels: vec![],
                 set_op: None,
                 filters: vec![],
             },
@@ -944,7 +1056,7 @@ mod tests {
             &QueryPlan::GroupBy {
                 measure: "Stock".into(),
                 group_by: vec!["Category".into()],
-                group_level: None,
+                group_levels: vec![],
                 set_op: None,
                 filters: vec![],
             },
@@ -1071,7 +1183,7 @@ mod tests {
             measure: "Revenue".into(),
             group_by: vec!["Date".into()],
             filters: vec![],
-            group_level: Some(0),
+            group_levels: vec![Some(0)],
             set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);
@@ -1094,7 +1206,7 @@ mod tests {
                 level: None,
                 time_flag: None,
             }],
-            group_level: Some(1),
+            group_levels: vec![Some(1)],
             set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);
@@ -1115,7 +1227,7 @@ mod tests {
             measure: "Revenue".into(),
             group_by: vec!["Date".into()],
             filters: vec![],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
         };
         let sql = sql_for_query_plan(&m, &plan);

@@ -40,6 +40,7 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
 fn dim_props_leaf(
     dim: &crate::engine::model::DimensionDef,
     name: &str,
+    member_uname: &str,
     member_key: &str,
     requested: &[String],
     parent_uname: Option<&str>,
@@ -48,6 +49,11 @@ fn dim_props_leaf(
     // The parent sits one level above this member (a year at LEVEL_NUMBER 1
     // has its (All) parent at level 0, a quarter's year parent at level 1).
     let parent_level = (level_number - 1).max(0);
+    let level_unique_name = dim
+        .levels
+        .get((level_number - 1).max(0) as usize)
+        .map(|l| format!("{}.[{}]", dim.hierarchy_unique_name(), l.name))
+        .unwrap_or_else(|| dim.leaf_level_unique_name());
     filter_dim_props(
         vec![
             (
@@ -58,9 +64,13 @@ fn dim_props_leaf(
             ),
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), name.to_string()),
+            ("MEMBER_CAPTION".into(), name.to_string()),
+            ("MEMBER_UNIQUE_NAME".into(), member_uname.to_string()),
             ("MEMBER_KEY".into(), member_key.to_string()),
             ("MEMBER_TYPE".into(), "1".into()),
             ("MEMBER_VALUE".into(), name.to_string()),
+            ("LEVEL_NUMBER".into(), level_number.to_string()),
+            ("LEVEL_UNIQUE_NAME".into(), level_unique_name),
             ("PARENT_LEVEL".into(), parent_level.to_string()),
             ("PARENT_COUNT".into(), "1".into()),
         ],
@@ -77,9 +87,13 @@ fn dim_props_all<B: QueryBackend + ?Sized>(
         vec![
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), "All".into()),
+            ("MEMBER_CAPTION".into(), "All".into()),
+            ("MEMBER_UNIQUE_NAME".into(), dim.all_member_unique_name()),
             ("MEMBER_KEY".into(), "All".into()),
             ("MEMBER_TYPE".into(), "2".into()),
             ("MEMBER_VALUE".into(), "All".into()),
+            ("LEVEL_NUMBER".into(), "0".into()),
+            ("LEVEL_UNIQUE_NAME".into(), dim.all_level_unique_name()),
             ("PARENT_LEVEL".into(), "0".into()),
             ("PARENT_COUNT".into(), "0".into()),
         ],
@@ -106,6 +120,16 @@ fn dim_decls(dim: &crate::engine::model::DimensionDef) -> Vec<(String, String, S
             "xsd:string".into(),
         ),
         (
+            "MEMBER_CAPTION".into(),
+            format!("{p}.[MEMBER_CAPTION]"),
+            "xsd:string".into(),
+        ),
+        (
+            "MEMBER_UNIQUE_NAME".into(),
+            format!("{p}.[MEMBER_UNIQUE_NAME]"),
+            "xsd:string".into(),
+        ),
+        (
             "MEMBER_KEY".into(),
             format!("{p}.[MEMBER_KEY]"),
             "xsd:string".into(),
@@ -118,6 +142,16 @@ fn dim_decls(dim: &crate::engine::model::DimensionDef) -> Vec<(String, String, S
         (
             "MEMBER_VALUE".into(),
             format!("{p}.[MEMBER_VALUE]"),
+            "xsd:string".into(),
+        ),
+        (
+            "LEVEL_NUMBER".into(),
+            format!("{p}.[LEVEL_NUMBER]"),
+            "xsd:int".into(),
+        ),
+        (
+            "LEVEL_UNIQUE_NAME".into(),
+            format!("{p}.[LEVEL_UNIQUE_NAME]"),
             "xsd:string".into(),
         ),
         (
@@ -152,10 +186,12 @@ fn leaf_member_for_dim(
 ) -> cellset::MemberConfig {
     // A member at a deeper level needs a key unique within the hierarchy, so
     // prefix its ancestor path (e.g. a quarter under 2026 is &[2026]&[1]).
+    // Compound path labels ("2026|1") show only their own segment as caption.
     let member_key = parent_uname
         .and_then(key_from_member_uname)
         .map(|path| format!("{path}|{name}"))
         .unwrap_or_else(|| name.to_string());
+    let caption = name.rsplit('|').next().unwrap_or(name).to_string();
     let (u_name, l_name, l_num) =
         if let (Some(level_idx), true) = (drilldown_level, !dim.levels.is_empty()) {
             if let Some(level) = dim.levels.get(level_idx) {
@@ -171,34 +207,51 @@ fn leaf_member_for_dim(
                 )
             } else {
                 (
-                    format!("{}.&amp;[{}]", dim.hierarchy_unique_name(), name),
+                    format!(
+                        "{}.{}",
+                        dim.hierarchy_unique_name(),
+                        member_key_suffix(&member_key)
+                    ),
                     dim.leaf_level_unique_name(),
                     1,
                 )
             }
         } else {
             (
-                format!("{}.&amp;[{}]", dim.hierarchy_unique_name(), name),
+                format!(
+                    "{}.{}",
+                    dim.hierarchy_unique_name(),
+                    member_key_suffix(&member_key)
+                ),
                 dim.leaf_level_unique_name(),
                 1,
             )
         };
     let cc = dim.children_cardinality_at(drilldown_level);
+    let dim_props = dim_props_leaf(
+        dim,
+        &caption,
+        &u_name,
+        &member_key,
+        requested,
+        parent_uname,
+        l_num,
+    );
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
         u_name,
-        caption: name.to_string(),
+        caption: caption.clone(),
         l_name,
         l_num,
         display_info: if cc > 0 { 131075 } else { 3 },
         children_cardinality: cc,
-        dim_props: dim_props_leaf(dim, name, &member_key, requested, parent_uname, l_num),
+        dim_props,
     }
 }
 
 /// Extract the key path from a member UName (compound aware), e.g.
 /// `[Date].[Date].[Year].&[2026]` -> `2026`.
-fn key_from_member_uname(uname: &str) -> Option<String> {
+pub(crate) fn key_from_member_uname(uname: &str) -> Option<String> {
     let start = uname.rfind(".&amp;[")? + 7;
     let mut rest = &uname[start..];
     let mut parts = Vec::new();

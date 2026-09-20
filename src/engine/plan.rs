@@ -61,10 +61,10 @@ pub enum QueryPlan {
         measure: MeasId,
         group_by: Vec<DimId>,
         filters: Vec<TypedDimensionFilter>,
-        /// When drilling a multi-level hierarchy, which level index to group by.
-        /// The SQL emitter uses the level's `column` instead of the dimension's
-        /// `physical_field`.  None = use the leaf physical_field.
-        group_level: Option<usize>,
+        /// Hierarchy level per `group_by` entry (`None` = leaf/physical
+        /// grain). Non-unique levels group by their full ancestor path so
+        /// compound-key members stay distinct.
+        group_levels: Vec<Option<usize>>,
         /// Axis set function (TopCount/Order/Filter) applied to the grouped rows.
         set_op: Option<AxisSetOp>,
     },
@@ -89,7 +89,7 @@ pub enum QueryPlan {
         measures: Vec<MeasId>,
         group_by: Vec<DimId>,
         filters: Vec<TypedDimensionFilter>,
-        group_level: Option<usize>,
+        group_levels: Vec<Option<usize>>,
     },
 
     Count {
@@ -151,7 +151,7 @@ pub enum QueryResult {
 // Filter helpers
 // ---------------------------------------------------------------------------
 
-fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
+pub(crate) fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
     source
         .iter()
         .map(|f| TypedDimensionFilter {
@@ -165,7 +165,7 @@ fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFilter> {
 
 /// Build filters for a plan, adding a time_flag filter if the selected
 /// measure has time_intelligence configured and the model has a date_dim.
-fn filters_with_time_flag(
+pub(crate) fn filters_with_time_flag(
     model: &SemanticModel,
     meas_id: &str,
     source_filters: &[TypedDimensionFilter],
@@ -244,18 +244,36 @@ fn innermost_source(se: &crate::mdx_parser::SetExpr) -> &crate::mdx_parser::SetE
     }
 }
 
-/// Resolve a set-expression source to (dimension id, group level index):
-/// `AllMembers` → level 0, `LevelMembers{Some(level)}` → that level's index,
+/// Align per-dimension hierarchy levels with a plan's `group_by` list. When the
+/// plan's dimensions match `axis_dimensions` positionally (the crossjoin shape)
+/// the parsed levels carry over; otherwise the primary level is used.
+fn levels_for(group_by: &[DimId], query: &SemanticQuery) -> Vec<Option<usize>> {
+    if group_by.len() == query.axis_dimensions.len()
+        && group_by
+            .iter()
+            .zip(query.axis_dimensions.iter())
+            .all(|(a, b)| a == b)
+    {
+        query.drilldown_levels.clone()
+    } else {
+        vec![query.drilldown_level(); group_by.len()]
+    }
+}
+
+/// Resolve a set-expression source to (dimension id, group level index):/// `AllMembers` → level 0, `LevelMembers{Some(level)}` → that level's index,
 /// `LevelMembers{None}` → the physical grain (`None`).
+///
+/// Returns `None` when the source names a level the dimension does not define.
+/// Failing closed beats silently counting the physical grain instead.
 fn resolve_set_source(
     se: &crate::mdx_parser::SetExpr,
     model: &SemanticModel,
     default: DimId,
-) -> (DimId, Option<usize>) {
+) -> Option<(DimId, Option<usize>)> {
     let (dim, level): (String, Option<&String>) = match se {
-        crate::mdx_parser::SetExpr::MemberList { .. } => return (default.clone(), None),
+        crate::mdx_parser::SetExpr::MemberList { .. } => return Some((default.clone(), None)),
         // Measures sets are planned as MeasuresList before this runs.
-        crate::mdx_parser::SetExpr::Measures => return (default.clone(), None),
+        crate::mdx_parser::SetExpr::Measures => return Some((default.clone(), None)),
         crate::mdx_parser::SetExpr::AllMembers { dim } => (dim.clone(), None),
         crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.as_ref()),
         // Wrappers are pruned at render time; plan on their source.
@@ -264,17 +282,26 @@ fn resolve_set_source(
         }
     };
     let dim_id = resolve_dim(&dim, model, default);
-    let group_level = level.and_then(|name| {
-        model
+    // AllMembers counts first-level members.
+    if matches!(se, crate::mdx_parser::SetExpr::AllMembers { .. }) {
+        return Some((dim_id, Some(0)));
+    }
+    let group_level = match level {
+        None => None,
+        Some(name) => match model
             .dim_def_opt(&dim_id)
             .and_then(|d| d.levels.iter().position(|l| l.name == *name))
-    });
-    // AllMembers counts first-level members.
-    let group_level = match se {
-        crate::mdx_parser::SetExpr::AllMembers { .. } => Some(0),
-        _ => group_level,
+        {
+            Some(idx) => Some(idx),
+            None => {
+                eprintln!(
+                    "plan: set source names unknown level '{name}' on dimension '{dim_id}' — failing closed"
+                );
+                return None;
+            }
+        },
     };
-    (dim_id, group_level)
+    Some((dim_id, group_level))
 }
 
 /// Return only the filters that are compatible with the selected measure.
@@ -423,7 +450,10 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         if matches!(cc.set, crate::mdx_parser::SetExpr::Measures) {
             return QueryPlan::MetaCountLiteral(model.measures.len() as u32);
         }
-        let (dim_id, group_level) = resolve_set_source(&cc.set, model, default_dim.clone());
+        let Some((dim_id, group_level)) = resolve_set_source(&cc.set, model, default_dim.clone())
+        else {
+            return QueryPlan::Empty;
+        };
         return QueryPlan::MetaCount {
             dim: dim_id,
             group_level,
@@ -444,7 +474,10 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                 crate::mdx_parser::SetExpr::Measures => return QueryPlan::MeasuresList(meas),
                 _ => {}
             }
-            let (dim_id, group_level) = resolve_set_source(se, model, default_dim.clone());
+            let Some((dim_id, group_level)) = resolve_set_source(se, model, default_dim.clone())
+            else {
+                return QueryPlan::Empty;
+            };
             QueryPlan::SetMembers {
                 dim: dim_id,
                 group_level,
@@ -538,12 +571,13 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                     .iter()
                     .filter_map(|name| model.lookup_measure(name).map(|m| m.id.clone()))
                     .collect();
+                let group_levels = levels_for(&group_by, query);
                 if measures.len() > 1 {
                     QueryPlan::MultiGroupBy {
                         measures,
                         group_by,
                         filters: typed_filters(&query.filters),
-                        group_level: query.drilldown_level,
+                        group_levels,
                     }
                 } else {
                     QueryPlan::GroupBy {
@@ -554,16 +588,17 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                             &meas,
                             &typed_filters(&query.filters),
                         ),
-                        group_level: query.drilldown_level,
+                        group_levels,
                         set_op: query.axis_set_op.clone(),
                     }
                 }
             } else {
+                let group_levels = levels_for(&group_by, query);
                 QueryPlan::GroupBy {
                     measure: meas.clone(),
                     group_by,
                     filters: filters_with_time_flag(model, &meas, &typed_filters(&query.filters)),
-                    group_level: query.drilldown_level,
+                    group_levels,
                     set_op: query.axis_set_op.clone(),
                 }
             }
@@ -596,10 +631,9 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     sql: &str,
     backend: &B,
 ) -> QueryResult {
-    if let QueryPlan::MetaCountLiteral(n) = plan {
-        return QueryResult::Count(*n);
-    }
-    if sql.is_empty() {
+    // A literal count is known at plan time and emits no SQL; every other
+    // plan needs a statement to execute.
+    if sql.is_empty() && !matches!(plan, QueryPlan::MetaCountLiteral(_)) {
         return QueryResult::Empty;
     }
     match plan {
@@ -681,7 +715,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         measures,
         group_by,
         filters,
-        group_level,
+        group_levels,
     } = plan
     {
         // Two-dimensional cross-join: N measures × (dim0, dim1) pairs.
@@ -693,7 +727,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
                     measure: measure.clone(),
                     group_by: group_by.clone(),
                     filters: filters_with_time_flag(model, measure, filters),
-                    group_level: *group_level,
+                    group_levels: group_levels.clone(),
                     set_op: None,
                 };
                 match execute_plan_with_backend_and_context(
@@ -740,7 +774,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
                 measure: measure.clone(),
                 group_by: group_by.clone(),
                 filters: filters_with_time_flag(model, measure, filters),
-                group_level: *group_level,
+                group_levels: group_levels.clone(),
                 set_op: None,
             };
             match execute_plan_with_backend_and_context(
@@ -846,10 +880,9 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         .map(|s| s.to_string())
         .unwrap_or_else(|| sql_for_query_plan_with_context(model, plan, user, config));
 
-    if let QueryPlan::MetaCountLiteral(n) = plan {
-        return QueryResult::Count(*n);
-    }
-    if sql.is_empty() {
+    // A literal count is known at plan time and emits no SQL; every other
+    // plan needs a statement to execute.
+    if sql.is_empty() && !matches!(plan, QueryPlan::MetaCountLiteral(_)) {
         return QueryResult::Empty;
     }
 

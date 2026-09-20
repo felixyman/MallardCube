@@ -67,7 +67,6 @@ src/
     model.rs                     SemanticModel, DimensionDef, MeasureDef, FactTable
     plan.rs                      QueryPlan, QueryResult, plan_from_semantic, execute_plan
     sql.rs                       SQL emitter: sql_for_query_plan
-    sql.rs                       SQL emitter: sql_for_query_plan
     normalize.rs                 plan_key normalization
     timing.rs                    Timings struct, RuntimePath enum
 
@@ -233,7 +232,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 293 tests covering MDX parsing, semantic classification, plan generation,
+- 410 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.

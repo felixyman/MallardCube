@@ -279,6 +279,12 @@ pub struct DimensionConfig {
 pub struct ParentChildConfig {
     pub key_column: String,
     pub parent_column: String,
+    /// Recompute the materialized levels at every server start. Default
+    /// `false`: an existing materialization is reused (no writes), so after
+    /// changing dimension data set this to `true` (or drop the
+    /// `{dimension_id}__pc_*` columns) to refresh.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

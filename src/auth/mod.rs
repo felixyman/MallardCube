@@ -66,12 +66,15 @@ impl Default for JwksCache {
 impl JwksCache {
     /// Return the decoding key for `kid`, fetching the JWKS if it isn't cached.
     fn key_for(&self, jwks_uri: &str, kid: &str) -> Result<DecodingKey, AuthError> {
-        if let Some(k) = self.keys.read().unwrap().get(kid) {
+        // Poison-tolerant locks: authentication runs inside request handling,
+        // which catches panics; recovering is better than a permanently
+        // auth-broken server.
+        if let Some(k) = self.keys.read().unwrap_or_else(|e| e.into_inner()).get(kid) {
             return Ok(k.clone());
         }
-        let _guard = self.refresh.lock().unwrap();
+        let _guard = self.refresh.lock().unwrap_or_else(|e| e.into_inner());
         // Double-check after acquiring the refresh lock (another thread may have fetched).
-        if let Some(k) = self.keys.read().unwrap().get(kid) {
+        if let Some(k) = self.keys.read().unwrap_or_else(|e| e.into_inner()).get(kid) {
             return Ok(k.clone());
         }
         let fetched = fetch_jwks(jwks_uri)?;
@@ -79,7 +82,7 @@ impl JwksCache {
             let known: Vec<String> = fetched.keys().cloned().collect();
             AuthError::UnknownKeyId(format!("{kid} (known: {known:?})"))
         })?;
-        *self.keys.write().unwrap() = fetched;
+        *self.keys.write().unwrap_or_else(|e| e.into_inner()) = fetched;
         Ok(key)
     }
 }
@@ -150,7 +153,11 @@ fn resolve_jwks_uri(config: &OidcConfig) -> Result<String, AuthError> {
     }
     static DISCOVERY: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     let map = DISCOVERY.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(uri) = map.lock().unwrap().get(&config.issuer) {
+    if let Some(uri) = map
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&config.issuer)
+    {
         return Ok(uri.clone());
     }
     let discovery_uri = format!("{}/.well-known/openid-configuration", config.issuer);
@@ -169,7 +176,7 @@ fn resolve_jwks_uri(config: &OidcConfig) -> Result<String, AuthError> {
         .ok_or_else(|| AuthError::Fetch("discovery response missing jwks_uri".into()))?
         .to_string();
     map.lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(config.issuer.clone(), jwks_uri.clone());
     Ok(jwks_uri)
 }

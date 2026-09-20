@@ -108,6 +108,7 @@ Two new `SemanticQueryKind` variants, matched before existing patterns:
 
 ## Done criteria
 
-- [ ] Both probe shapes return correct results (unit + wire)
-- [ ] Real Excel: CUBECOUNT(CUBESET(...)) resolves to 11, no #VALUE
-- [ ] Existing suite stays green (371 passing)
+- [x] Both probe shapes return correct results (unit + wire)
+- [x] Real Excel: `CUBESETCOUNT(CUBESET(...))` resolves to 11, no `#VALUE`
+      (`CUBECOUNT`'s residual `#VALUE` is client-side; see follow-up note)
+- [x] Existing suite stays green (371 passing at the time; 410 now)

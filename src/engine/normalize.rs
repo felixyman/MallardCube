@@ -18,10 +18,15 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             measure,
             group_by,
             filters,
+            group_levels,
             ..
         } => {
-            format!("groupby|measure={}|dims={}", measure, group_by.join(","),)
-                + &filter_suffix(filters)
+            format!(
+                "groupby|measure={}|dims={}|levels={:?}",
+                measure,
+                group_by.join(","),
+                group_levels
+            ) + &filter_suffix(filters)
         }
 
         QueryPlan::Count { dimension } => {
@@ -71,12 +76,13 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             measures,
             group_by,
             filters,
-            ..
+            group_levels,
         } => {
             format!(
-                "multigrp|measures={}|dims={}|{}",
+                "multigrp|measures={}|dims={}|levels={:?}|{}",
                 measures.join(","),
                 group_by.join(","),
+                group_levels,
                 filter_suffix(filters)
             )
         }
@@ -152,13 +158,13 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["ProductCategory".into(), "Region".into()],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
             filters: vec![],
         };
         assert_eq!(
             plan_key(&plan),
-            "groupby|measure=TotalSales|dims=ProductCategory,Region"
+            "groupby|measure=TotalSales|dims=ProductCategory,Region|levels=[]"
         );
     }
 
@@ -167,7 +173,7 @@ mod tests {
         let plan = QueryPlan::GroupBy {
             measure: "TotalSales".into(),
             group_by: vec!["ProductCategory".into()],
-            group_level: None,
+            group_levels: vec![],
             set_op: None,
             filters: vec![
                 TypedDimensionFilter {
@@ -187,7 +193,7 @@ mod tests {
         let key = plan_key(&plan);
         assert_eq!(
             key,
-            "groupby|measure=TotalSales|dims=ProductCategory|filters=ProductCategory=Category A,Category B;Region=North"
+            "groupby|measure=TotalSales|dims=ProductCategory|levels=[]|filters=ProductCategory=Category A,Category B;Region=North"
         );
     }
 
