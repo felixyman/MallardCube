@@ -383,12 +383,6 @@ mod tests {
         with_test_project(project, f)
     }
 
-    fn with_generated_project<T>(f: impl FnOnce() -> T) -> T {
-        let project = ProxyProject::load("projects/generated_project/proxy-config.json")
-            .expect("load generated_project");
-        with_test_project(project, f)
-    }
-
     /// Test-only `QueryBackend` that wraps a file-based DuckDB connection.
     /// Avoids the global `Backend` singleton so converted-project tests can
     /// exercise their own databases without in-memory demo seeding.
@@ -479,16 +473,6 @@ mod tests {
                 .filter_map(|r| r.ok())
                 .collect()
         }
-    }
-
-    fn extract_cell_value(xml: &str) -> Option<String> {
-        let cell_start = xml.find("<Cell CellOrdinal=\"0\"")?;
-        let val_start = xml[cell_start..].find("<Value")?;
-        let abs_val_start = cell_start + val_start;
-        let close = xml[abs_val_start..].find('>')?;
-        let content_start = abs_val_start + close + 1;
-        let content_end = xml[content_start..].find("</Value>")?;
-        Some(xml[content_start..content_start + content_end].to_string())
     }
 
     fn axis_captions(xml: &str, axis_name: &str) -> Vec<String> {
@@ -2243,14 +2227,16 @@ mod tests {
         });
     }
 
-    // Plan 042 regression: DRILLTHROUGH must read the backend it is given — a
-    // file-backed project's rows, not a demo fallback. `data/generated.db`
-    // holds 10 fact rows; the demo backend has no such table (and its
-    // `sales_fact` would return 1000 rows under the LIMIT).
+    // Regression: DRILLTHROUGH must read the backend it is given — a
+    // file-backed project's rows, not a demo fallback. Contoso's `sales`
+    // table has 7,794 rows; the response is capped at the 1,000-row LIMIT.
     #[test]
     fn drillthrough_reads_the_backend_it_is_given() {
-        with_generated_project(|| {
-            let conn = duckdb::Connection::open("data/generated.db").expect("open generated db");
+        let project = ProxyProject::load("projects/generated_contoso/proxy-config.json")
+            .expect("load generated_contoso");
+        with_test_project(project, || {
+            let conn = duckdb::Connection::open("projects/generated_contoso/data/sales.db")
+                .expect("open contoso db");
             let backend = FileQueryBackend(std::sync::Mutex::new(conn));
 
             let xml = crate::execute::dispatch::get_execute_drillthrough_response(
@@ -2259,8 +2245,8 @@ mod tests {
             );
             assert_eq!(
                 xml.matches("<row>").count(),
-                10,
-                "rows must come from the file-backed backend: {xml}"
+                1000,
+                "rows must come from the file-backed backend (LIMIT 1000): {xml}"
             );
         });
     }
@@ -3253,116 +3239,6 @@ mod tests {
                 assert!(!xml.is_empty(), "should not panic on stub measure");
                 // Stubs return Empty QueryResult — cellset has no cell data
             }
-        });
-    }
-
-    #[test]
-    fn generated_project_fallback_measures_return_real_data() {
-        // ---- direct DuckDB characterization (independent data-proof) ----
-        use duckdb::Connection;
-        let conn = Connection::open("data/generated.db").unwrap_or_else(|e| {
-            panic!(
-                "data/generated.db is missing or unreadable ({e}) — run:\n    \
-                 cargo run --bin mallard -- seed-generated-db"
-            )
-        });
-        let has_fact_table: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM duckdb_tables() \
-                 WHERE table_name = 'dw_sales_f_orders'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        assert!(
-            has_fact_table,
-            "data/generated.db is empty or stale (fact table missing) — run:\n    \
-             cargo run --bin mallard -- seed-generated-db"
-        );
-
-        // DVT measure: should find matching rows in the fixture
-        let dvt_count: f64 = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT f.order_id) AS value
-             FROM dw_sales_f_orders f
-             JOIN dw_sales_d_ordercodes rk ON f.ordercodesid = rk.ordercodesid
-             JOIN dw_sales_d_produkt p ON f.produktid = p.produktid
-             JOIN dw_sales_calendar_delivery_date kd ON f.delivery_date = kd.delivery_date
-             JOIN dw_sales_d_beställare b ON f.beställareid = b.beställareid
-             WHERE rk.akut = 'Ja'
-               AND p.produktkod IN ('516', '526', '524')
-               AND f.order_hour BETWEEN 8 AND 14
-               AND kd.veckodagssiffra BETWEEN 1 AND 5
-               AND RIGHT(b.beställarekod, 3) = 'M08'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("DVT query");
-        assert!(
-            dvt_count > 0.0,
-            "DVT measure should return > 0 order_id, got {dvt_count}"
-        );
-
-        // Medeltid measure: should return a non-null average
-        let medeltid: Option<f64> = conn
-            .query_row(
-                "SELECT AVG(avg_per_order) FROM (
-                SELECT AVG(ship_date_to_delivery_ej_akut) AS avg_per_order
-                FROM dw_sales_f_orders
-                GROUP BY order_id
-            ) sub",
-                [],
-                |r| r.get(0),
-            )
-            .expect("Medeltid query");
-        assert!(medeltid.is_some(), "Medeltid measure should return a value");
-        assert!(
-            medeltid.unwrap() > 0.0,
-            "Medeltid should be > 0, got {medeltid:?}"
-        );
-
-        // ---- execution-path assertions (prove the proxy returns the same) ----
-        with_generated_project(|| {
-            let project = crate::proxy_project::project();
-            let conn = Connection::open("data/generated.db").expect("open generated db");
-            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
-
-            // DVT measure through proxy execution
-            let mdx_dvt = "SELECT  FROM [DW_SALES_F_ORDERS] WHERE ([Measures].[Count signerade DVT-orderer]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml_dvt = crate::execute_builders::get_execute_cellset_response_with_backend(
-                mdx_dvt,
-                &backend,
-                &project.model,
-            );
-            assert!(
-                xml_dvt.contains("<CellData>"),
-                "DVT execution should produce cellset"
-            );
-            let dvt_val = extract_cell_value(&xml_dvt).expect("DVT cellset should contain <Value>");
-            let dvt_parsed: f64 = dvt_val.parse().expect("DVT value should be numeric");
-            assert!(
-                dvt_parsed > 0.0,
-                "DVT measure should return > 0 through proxy execution, got {dvt_parsed}"
-            );
-
-            // Medeltid measure through proxy execution
-            let mdx_mt = "SELECT  FROM [DW_SALES_F_ORDERS] WHERE ([Measures].[Avg Ship to Delivery (non-urgent)]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
-            let xml_mt = crate::execute_builders::get_execute_cellset_response_with_backend(
-                mdx_mt,
-                &backend,
-                &project.model,
-            );
-            assert!(
-                xml_mt.contains("<CellData>"),
-                "Medeltid execution should produce cellset"
-            );
-            let mt_val =
-                extract_cell_value(&xml_mt).expect("Medeltid cellset should contain <Value>");
-            let mt_parsed: f64 = mt_val.parse().expect("Medeltid value should be numeric");
-            assert!(
-                mt_parsed > 0.0,
-                "Medeltid should return > 0 through proxy execution, got {mt_parsed}"
-            );
         });
     }
 

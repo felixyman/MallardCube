@@ -4,7 +4,6 @@ debug-last-run.log
 xmla-trace.jsonl
 mallard-crash.log
 mallard-last-requests.log
-data/generated.db
 *.db
 node_modules/
 build/

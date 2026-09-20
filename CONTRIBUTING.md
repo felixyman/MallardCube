@@ -31,7 +31,6 @@ is only needed for end-to-end checks.
 Seed the DuckDB fixtures once before running the suite:
 
 ```bash
-cargo run --bin mallard -- seed-generated-db
 cargo run --bin seed_projects_db
 cargo test --lib
 ```

@@ -227,7 +227,6 @@ the compatibility gate.
 ## Running tests
 
 ```bash
-cargo run --bin mallard -- seed-generated-db     # once, seeds test fixtures
 cargo run --bin seed_projects_db                # once, seeds converted-project DBs
 cargo test --lib
 ```
@@ -235,7 +234,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-411 tests covering MDX parsing, semantic classification, plan generation, SQL
+413 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate

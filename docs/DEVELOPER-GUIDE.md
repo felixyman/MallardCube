@@ -124,7 +124,6 @@ src/
     trace_replay.rs              XMLA trace replay/compatibility validator
     load_replay.rs               Concurrent replay against a live endpoint
     extract_trace_mdx.rs         Extract unique ExecuteStatement MDX from traces
-    seed_generated_db.rs         Generate synthetic data for generated_project
     seed_sql.rs                  Synthetic data SQL generator
 ```
 
@@ -238,7 +237,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 417 tests covering MDX parsing, semantic classification, plan generation,
+- 413 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
@@ -279,7 +278,6 @@ cargo test --lib
 | `cargo run --bin mallard -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
 | `cargo run --bin mallard -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
 | `cargo run --bin mallard -- load-replay [args...]` | Concurrently replay captured requests against a live /xmla endpoint |
-| `cargo run --bin mallard -- seed-generated-db` | Seed generated_project DuckDB file with synthetic data |
 | `cargo run --bin mallard -- seed-sql` | Emit SQL to create demo fact tables |
 
 ## Appendix: Config reference

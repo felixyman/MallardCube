@@ -30,13 +30,13 @@ The full flow for bringing an existing Tabular model into MallardCube:
 2. **Convert** to a MallardCube project:
 
    ```bash
-   mallard convert-tabular path/to/tabular_export/ projects/generated_project/
+   mallard convert-tabular path/to/tabular_export/ projects/my-project/
    ```
 
 3. **Bootstrap** the database (for projects with date-role tables):
 
    ```bash
-   cd projects/generated_project/
+   cd projects/my-project/
    duckdb data/<cube>.db < bootstrap.sql
    # Then load your own data into the tables listed in schema.sql
    ```
@@ -44,7 +44,7 @@ The full flow for bringing an existing Tabular model into MallardCube:
 4. **Qualify** the output before Excel:
 
    ```bash
-   mallard qualify projects/generated_project/proxy-config.json
+   mallard qualify projects/my-project/proxy-config.json
    ```
 
    Output: `READY`, `PARTIAL` (usable with caveats), or `BLOCKED` (stub
@@ -54,9 +54,9 @@ The full flow for bringing an existing Tabular model into MallardCube:
 5. **Capture + replay** an Excel session to lock in compatibility:
 
    ```bash
-   XMLA_TRACE=1 PROXY_CONFIG=projects/generated_project/proxy-config.json mallard
+   XMLA_TRACE=1 PROXY_CONFIG=projects/my-project/proxy-config.json mallard
    # ... use Excel ...
-   mallard trace-replay xmla-trace.jsonl projects/generated_project/proxy-config.json
+   mallard trace-replay xmla-trace.jsonl projects/my-project/proxy-config.json
    ```
 
 ## Compatibility gate

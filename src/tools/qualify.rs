@@ -264,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn generated_project_is_partial_with_unsupported_roles() {
-        let v = qualify("projects/generated_project/proxy-config.json", None);
-        // Plan 014 retired both stub fallbacks. No auth config + roles defined.
+    fn generated_contoso_is_partial_with_unsupported_roles() {
+        let v = qualify("projects/generated_contoso/proxy-config.json", None);
+        // Roles defined without an auth config, plus measures needing manual review.
         assert_eq!(
             v.label(),
             "PARTIAL",
@@ -283,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_project_has_no_stub_fallbacks() {
+    fn generated_contoso_has_no_stub_fallbacks() {
         let p = crate::proxy_project::ProxyProject::load(
-            "projects/generated_project/proxy-config.json",
+            "projects/generated_contoso/proxy-config.json",
         )
-        .expect("load generated_project");
+        .expect("load generated_contoso");
         let stubs: Vec<_> = p
             .model
             .measures
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(
             stubs.len(),
             0,
-            "Plan 014 retired all stub fallback measures: {:?}",
+            "no converted project may ship stub fallback SQL: {:?}",
             stubs.iter().map(|m| &m.caption).collect::<Vec<_>>()
         );
     }
@@ -361,33 +361,6 @@ mod tests {
             0,
             "retail analytics should have 0 manual measures after fallback wiring: {:?}",
             manual.iter().map(|m| &m.caption).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn generated_project_has_known_stub_count() {
-        let p = crate::proxy_project::ProxyProject::load(
-            "projects/generated_project/proxy-config.json",
-        )
-        .expect("load generated_project");
-        let stubs: Vec<_> = p
-            .model
-            .measures
-            .iter()
-            .filter(|m| match &m.sql_fallback_sql {
-                Some(sql) => {
-                    sql.to_uppercase().contains("TODO")
-                        || sql.contains("SELECT 1 AS DUMMY")
-                        || sql.contains("SELECT 1 AS dummy")
-                }
-                None => false,
-            })
-            .collect();
-        assert_eq!(
-            stubs.len(),
-            0,
-            "Plan 014 retired all stub fallback measures: {:?}",
-            stubs.iter().map(|m| &m.caption).collect::<Vec<_>>()
         );
     }
 

@@ -38,8 +38,8 @@ enum Command {
     ConvertTabular {
         /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
         src_dir: String,
-        /// Output directory (default: generated_project)
-        #[arg(default_value = "generated_project")]
+        /// Output directory (default: converted-project)
+        #[arg(default_value = "converted-project")]
         out_dir: String,
         /// Number of dummy rows for fact tables (default: 10000)
         #[arg(long, default_value = "10000")]
@@ -70,8 +70,6 @@ enum Command {
         /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
         src_dir: String,
     },
-    /// Seed DuckDB with generated_project test data
-    SeedGeneratedDb,
     /// Emit SQL to create demo fact tables
     SeedSql,
     /// Auto-detect a semantic model from a DuckDB database
@@ -171,11 +169,6 @@ async fn main() {
             std::process::exit(mallardcube::tools::inventory::run(vec![
                 "inventory".into(),
                 src_dir,
-            ]));
-        }
-        Command::SeedGeneratedDb => {
-            std::process::exit(mallardcube::tools::seed_generated_db::run(vec![
-                "seed-generated-db".into(),
             ]));
         }
         Command::SeedSql => {

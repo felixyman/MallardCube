@@ -9,7 +9,6 @@ pub mod parse_bim;
 pub mod parse_folder;
 pub mod parse_tmdl;
 pub mod qualify;
-pub mod seed_generated_db;
 pub mod seed_projects_db;
 pub mod seed_sql;
 pub mod tabular_model;

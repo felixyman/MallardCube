@@ -1298,46 +1298,12 @@ mod tests {
         }
     }
 
-    // ---- generated_project smoke ----
+    // ---- contoso smoke ----
 
     #[test]
-    fn generated_project_loads() {
-        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
-            .expect("load generated_project");
-        assert_eq!(p.config.catalog, "SEMANTICMODEL");
-        assert_eq!(p.config.cube, "DW_SALES_F_ORDERS");
-        assert!(!p.model.fact_tables.is_empty());
-        assert!(
-            p.model.dimensions.len() >= 10,
-            "should have many dimensions"
-        );
-        assert!(p.model.measures.len() >= 20, "should have many measures");
-        assert!(
-            !p.model.relationships.is_empty(),
-            "should have relationships"
-        );
-    }
-
-    #[test]
-    fn generated_project_picks_one_non_fallback_measure() {
-        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
-            .expect("load generated_project");
-        let simple = p
-            .model
-            .measures
-            .iter()
-            .find(|m| m.sql_fallback_sql.is_none())
-            .expect("at least one non-fallback measure exists");
-        assert!(
-            !simple.sql_expr.is_empty(),
-            "a non-fallback measure should have a real SQL expression"
-        );
-    }
-
-    #[test]
-    fn generated_project_relationship_backed_dimension_has_correct_table() {
-        let p = ProxyProject::load("projects/generated_project/proxy-config.json")
-            .expect("load generated_project");
+    fn contoso_relationship_backed_dimension_has_correct_table() {
+        let p = ProxyProject::load("projects/generated_contoso/proxy-config.json")
+            .expect("load generated_contoso");
         let rel_dim = p
             .model
             .dimensions

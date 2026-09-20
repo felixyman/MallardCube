@@ -119,6 +119,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   new regression test `drillthrough_reads_the_backend_it_is_given`, 417 tests
   green, smoke 8/8. Follow-ups: plan 033 (filter semantics), refresh the
   `bench-workload.jsonl` capture.
+- 2026-09-20: `projects/generated_project/` (the fixture behind plans 004–014) was
+  **removed** — it is a real customer model (Swedish healthcare) and must not ship
+  in a public repo. Its tests were repointed to `generated_contoso`/retail or
+  deleted, and the seeder chain (`seed-generated-db`, `data/seed_generated.sql`,
+  `data/generated.db`, the CI seeding step) is gone; `convert-tabular`'s default
+  output directory is now `converted-project`. References in plans 004–023 are
+  historical.
 - 041 (data refresh lifecycle) written 2026-09-20: the proxy holds the DuckDB
   file for its lifetime and never reopens, so load jobs fail with a lock error
   and fresh data needs a restart (verified in both directions). Plan covers a

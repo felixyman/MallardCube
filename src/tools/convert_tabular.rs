@@ -54,7 +54,7 @@ pub fn run(args: Vec<String>) -> i32 {
     let out_dir = args
         .get(2)
         .cloned()
-        .unwrap_or_else(|| "generated_project".into());
+        .unwrap_or_else(|| "converted-project".into());
 
     let mut dummy_rows = 10000usize;
     for arg in &args {
