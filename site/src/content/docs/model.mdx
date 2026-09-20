@@ -122,6 +122,39 @@ Each level names the column in the dimension table that holds that level's
 value. `is_date_role: true` marks this dimension as the calendar used by
 time-intelligence measures.
 
+### Parent-child hierarchies
+
+A dimension table that stores a self-referencing key/parent pair — an org
+chart, a chart of accounts — uses `parent_child` instead of
+`hierarchy_levels`:
+
+```jsonc
+{
+  "id": "Employee",
+  "physical_field": "employee_key",
+  "caption": "Employee",
+  "hierarchy_name": "Employee",
+  "all_level_name": "(All)",
+  "leaf_level_name": "Employee",
+  "ordinal": 6,
+  "visible": true,
+  "has_all": true,
+  "parent_child": {
+    "key_column": "employee_key",
+    "parent_column": "manager_key"
+  }
+}
+```
+
+The dimension needs a relationship to its own table, the same way a date
+dimension does. On the serving path MallardCube materializes the recursion
+into `{dimension_id}__pc_l1..N` columns with synthetic levels (`Level 01`,
+`Level 02`, ...), then serves compound unique names and subtree rollups like
+any other hierarchy. `qualify` and `trace-replay` reuse an existing
+materialization and never write to the database. After the source data
+changes, set `"refresh": true` to rebuild the levels on the next start (or
+drop the `__pc_*` columns).
+
 ## Measures
 
 A measure is an aggregation over the fact table.

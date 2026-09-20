@@ -13,9 +13,16 @@ Excel PivotTables issue MDX `SELECT` statements. The shapes MallardCube handles:
 - Measures on columns or rows, for example `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]`.
 - Slicers in the `WHERE` clause, including level-qualified members such as
   `[Date].[Date].[Year].&[2024]`.
-- Drilldown with `DrilldownLevel` and `DrilldownMember`.
+- Drilldown with `DrilldownLevel` and `DrilldownMember`, including
+  `DrilldownLevel(set, <level>)` and multi-parent expansion (Excel's `Expand
+  Entire Field` and `Expand to <Level>` commands).
+- Level drags and level sets, for example `[Date].[Date].[Quarter].Members` or
+  `{...AllMembers}`, returned with compound unique names.
 - Crossjoin of two dimensions with `CrossJoin`.
+- FROM-clause subselects (`FROM (SELECT ...)`), applied as slicer restrictions.
 - Multiple measures in one query.
+- Set expressions: `HEAD`, `TAIL`, `.Members`, and `COUNT(<set>)` as a
+  calculated member.
 - Set functions `Order`, `Filter`, `TopCount`, `BottomCount`, and `TopPercent`.
 - Batched cube formulas, where several cells with different slicers arrive as
   one query.
@@ -29,6 +36,28 @@ Measures can carry year-to-date, quarter-to-date, and month-to-date semantics
 through flag columns on the date dimension. See [Model reference](./model/) for
 the `time_intelligence` field.
 
+## Set expressions and cube formulas
+
+Sets built with `HEAD`, `TAIL`, and `.Members` are evaluated, and
+`COUNT(<set>)` works as a calculated member, so Excel's set-based cube
+functions resolve:
+
+```
+=CUBESET("Connection","[Date].[Date].[Year].Members")
+=CUBESETCOUNT(<set cell>)
+=CUBERANKEDMEMBER("Connection", <set cell>, 3)
+```
+
+`CUBESETCOUNT` counts the dimension's members. Level and set listings return
+the members that have data (see the limitations below).
+
+## Hierarchies
+
+Multi-level dimensions drill down level by level, and a level can be dragged
+into a pivot directly. Parent-child dimensions — an org chart stored as a
+self-referencing key/parent pair — are materialized into synthetic levels at
+startup; see `parent_child` in the [Model reference](./model/).
+
 ## Known limitations
 
 - **No DAX.** Power BI is a DAX client; MallardCube is MDX only. Excel is the
@@ -40,6 +69,15 @@ the `time_intelligence` field.
 - **DuckDB only.** Attached data sources such as Postgres, SQL Server, or S3
   are not wired up.
 - **One model per server.** The server serves a single `proxy-config.json`.
+- **Deep hierarchy expansion can crash Excel.** Expanding more than one level
+  in a single step ("Expand to Month") or expanding the deepest level (month →
+  dates) triggers a native fault in `EXCEL.EXE`. The server responses match
+  SSAS conventions and MSOLAP reads them without error; expand one level at a
+  time (Year → Quarter → Month), which works at every level.
+- **Level and set listings are data-driven.** Members without facts are
+  omitted from `[Level].Members`, `HEAD`, and `TAIL` listings; counts stay
+  dimension-based. Excel pivots send `NON EMPTY`, so the pivot path is
+  unaffected.
 
 ## Supported MDX, by feature
 
@@ -49,10 +87,16 @@ the `time_intelligence` field.
 | Multi-level date hierarchy drilldown | Works |
 | Level-qualified slicers | Works |
 | Multiple measures | Works |
+| Set expressions (`HEAD`, `TAIL`, `Members`, `COUNT(<set>)`) | Works |
+| Level drags and `.AllMembers` level sets | Works |
+| FROM-clause subselects | Works |
+| Parent-child hierarchies | Works |
+| Multi-parent expand ("Expand Entire Field") | Works |
 | Set functions (`TopCount`, `Order`, `Filter`) | Works |
 | Batched `CUBEVALUE` with different slicers | Works |
 | DRILLTHROUGH | Works |
 | Time intelligence (`YTD`, `QTD`, `MTD`) | Works |
+| Deep expansion in one step ("Expand to Month") | Crashes Excel — expand stepwise |
 | DAX queries | Not supported |
 | Writeback | Not supported |
 | Calculation groups | Not supported |

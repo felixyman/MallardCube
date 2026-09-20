@@ -56,5 +56,8 @@ same endpoint, so anything a PivotTable can express works in a formula too:
 =CUBEVALUE("Connection Name","[Measures].[Revenue]","[Category].[Category].&[Electronics]")
 ```
 
+Set-based functions work as well: `CUBESET` builds a set, `CUBESETCOUNT`
+counts its members, and `CUBERANKEDMEMBER` reads a member from it.
+
 The connection name is the name Excel shows in its connection list, not the
 catalog from the config.

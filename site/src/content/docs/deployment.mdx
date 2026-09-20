@@ -63,9 +63,11 @@ docker run -p 8080:8080 \
   mallardcube
 ```
 
-A `docker-compose.yml` is included that wires up the config and aggregation
-cache directories. DuckDB is statically linked, so the runtime image has no
-shared library requirements.
+A `docker-compose.yml` is included. It serves the bundled sample project out
+of the box (`docker compose up --build`); for your own model, pass
+`PROXY_CONFIG` and mount the project directory, as shown in the comments in
+that file. DuckDB is statically linked, so the runtime image has no shared
+library requirements.
 
 ## Prebuilt binaries
 
