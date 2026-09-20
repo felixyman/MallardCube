@@ -2,6 +2,7 @@ pub mod auto_model;
 pub mod convert_tabular;
 pub mod data_loader;
 pub mod extract_trace_mdx;
+pub mod fmt;
 pub mod inventory;
 pub mod load_replay;
 pub mod m_query;

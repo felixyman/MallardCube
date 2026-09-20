@@ -87,35 +87,261 @@ pub struct MeasureTimeIntelligenceConfig {
 pub struct ProxyConfig {
     pub catalog: String,
     pub cube: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub table_name: String,
+    #[serde(
+        default = "default_dialect",
+        skip_serializing_if = "is_default_dialect"
+    )]
     pub dialect: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_path: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fact_tables: Vec<FactTableConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relationships: Vec<RelationshipConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<RoleConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_intelligence: Option<TimeIntelligenceConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<DimensionConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measures: Vec<MeasureConfig>,
+    /// Optional section files for large models. Each file holds the same list
+    /// format as the inline array; entries are merged (inline first) and paths
+    /// resolve relative to this config file. `mallard fmt` re-splits them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimensions_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measures_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationships_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles_file: Option<String>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_default_dialect(dialect: &String) -> bool {
+    *dialect == default_dialect()
+}
+
+fn is_default_format(format: &String) -> bool {
+    *format == default_format_string()
+}
+
+fn is_default_aggregator(aggregator: &u32) -> bool {
+    *aggregator == default_aggregator()
+}
+
+pub fn default_dialect() -> String {
+    "duckdb".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_format_string() -> String {
+    "#,##0.00".into()
+}
+
+impl ProxyConfig {
+    /// Fill derived defaults so hand-written configs stay small:
+    ///
+    /// - captions cascade to `hierarchy_name`, `leaf_level_name`, and
+    ///   `display_name`;
+    /// - `all_level_name` defaults to `(All)`;
+    /// - `ordinal` follows array order when omitted;
+    /// - a measure's `measure_group_name` follows its fact table, and a
+    ///   missing `fact_table` means the first fact table (`default`);
+    /// - `physical_field` defaults to the dimension id;
+    /// - `format_string` defaults to `#,##0.00`, `visible` to true.
+    ///
+    /// Existing configs (which specify everything) are unaffected.
+    pub fn normalize(&mut self) {
+        if self.dialect.is_empty() {
+            self.dialect = default_dialect();
+        }
+        if self.source_name.is_empty() {
+            self.source_name = self.table_name.clone();
+        }
+        let default_fact = self
+            .fact_tables
+            .first()
+            .map(|f| f.id.clone())
+            .unwrap_or_else(|| "default".into());
+        let groups: std::collections::HashMap<String, String> = self
+            .fact_tables
+            .iter()
+            .map(|f| {
+                let group = if f.measure_group_name.is_empty() {
+                    f.id.clone()
+                } else {
+                    f.measure_group_name.clone()
+                };
+                (f.id.clone(), group)
+            })
+            .collect();
+
+        for (i, dim) in self.dimensions.iter_mut().enumerate() {
+            if dim.hierarchy_name.is_empty() {
+                dim.hierarchy_name = dim.caption.clone();
+            }
+            if dim.all_level_name.is_empty() {
+                dim.all_level_name = "(All)".into();
+            }
+            if dim.leaf_level_name.is_empty() {
+                dim.leaf_level_name = dim.caption.clone();
+            }
+            if dim.physical_field.is_empty() {
+                dim.physical_field = dim.id.clone();
+            }
+            if dim.ordinal == 0 {
+                dim.ordinal = i as u32 + 1;
+            }
+        }
+        for (i, measure) in self.measures.iter_mut().enumerate() {
+            if measure.display_name.is_empty() {
+                measure.display_name = measure.caption.clone();
+            }
+            if measure.format_string.is_empty() {
+                measure.format_string = default_format_string();
+            }
+            if measure.ordinal == 0 {
+                measure.ordinal = i as u32 + 1;
+            }
+            let fact = measure
+                .fact_table
+                .clone()
+                .unwrap_or_else(|| default_fact.clone());
+            if measure.measure_group_name.is_empty() {
+                measure.measure_group_name = groups
+                    .get(&fact)
+                    .cloned()
+                    .unwrap_or_else(|| self.cube.clone());
+            }
+            measure.fact_table = Some(fact);
+        }
+        for fact in self.fact_tables.iter_mut() {
+            if fact.source_name.is_empty() {
+                fact.source_name = fact.table_name.clone();
+            }
+            if fact.measure_group_name.is_empty() {
+                fact.measure_group_name = fact.id.clone();
+            }
+        }
+        for rel in self.relationships.iter_mut() {
+            if rel.fact_table.is_empty() {
+                rel.fact_table = default_fact.clone();
+            }
+        }
+    }
+    /// Inverse of [`normalize`]: reset derived values to their omitted form so
+    /// canonical output stays compact — a minimal config stays minimal.
+    pub fn deminimize(&mut self) {
+        if self.source_name == self.table_name {
+            self.source_name.clear();
+        }
+        let default_fact = self
+            .fact_tables
+            .first()
+            .map(|f| f.id.clone())
+            .unwrap_or_else(|| "default".into());
+        let groups: std::collections::HashMap<String, String> = self
+            .fact_tables
+            .iter()
+            .map(|f| {
+                let group = if f.measure_group_name.is_empty() {
+                    f.id.clone()
+                } else {
+                    f.measure_group_name.clone()
+                };
+                (f.id.clone(), group)
+            })
+            .collect();
+        let cube = self.cube.clone();
+
+        for (i, dim) in self.dimensions.iter_mut().enumerate() {
+            if dim.hierarchy_name == dim.caption {
+                dim.hierarchy_name.clear();
+            }
+            if dim.leaf_level_name == dim.caption {
+                dim.leaf_level_name.clear();
+            }
+            if dim.all_level_name == "(All)" {
+                dim.all_level_name.clear();
+            }
+            if dim.physical_field == dim.id {
+                dim.physical_field.clear();
+            }
+            if dim.ordinal == i as u32 + 1 {
+                dim.ordinal = 0;
+            }
+        }
+        for (i, measure) in self.measures.iter_mut().enumerate() {
+            if measure.display_name == measure.caption {
+                measure.display_name.clear();
+            }
+            if measure.ordinal == i as u32 + 1 {
+                measure.ordinal = 0;
+            }
+            let fact = measure
+                .fact_table
+                .clone()
+                .unwrap_or_else(|| default_fact.clone());
+            let derived_group = groups.get(&fact).cloned().unwrap_or_else(|| cube.clone());
+            if measure.measure_group_name == derived_group {
+                measure.measure_group_name.clear();
+            }
+            if fact == default_fact {
+                measure.fact_table = None;
+            }
+        }
+        for fact in self.fact_tables.iter_mut() {
+            if fact.source_name == fact.table_name {
+                fact.source_name.clear();
+            }
+            if fact.measure_group_name == fact.id {
+                fact.measure_group_name.clear();
+            }
+        }
+        for rel in self.relationships.iter_mut() {
+            if rel.fact_table == default_fact {
+                rel.fact_table.clear();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactTableConfig {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_name: String,
     pub table_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measure_group_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fact_table: String,
     pub fact_column: String,
     pub dimension_id: String,
@@ -248,24 +474,32 @@ fn default_user_claim() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionConfig {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub physical_field: String,
     pub caption: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hierarchy_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub all_level_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub leaf_level_name: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub ordinal: u32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub visible: bool,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub has_all: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub cardinality_hint: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_table: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub shared: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub is_date_role: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hierarchy_levels: Vec<HierarchyLevelConfig>,
     /// Parent-child hierarchy: a self-referencing (key, parent) pair on this
     /// dimension's table. When set, synthetic levels (`Level 01..NN`) are
@@ -303,19 +537,32 @@ pub struct HierarchyLevelConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasureConfig {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sql_expr: String,
     pub caption: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[serde(
+        default = "default_format_string",
+        skip_serializing_if = "is_default_format"
+    )]
     pub format_string: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub units: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub ordinal: u32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub visible: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_table: Option<String>,
-    #[serde(default = "default_aggregator")]
+    #[serde(
+        default = "default_aggregator",
+        skip_serializing_if = "is_default_aggregator"
+    )]
     pub aggregator: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measure_group_name: String,
     #[serde(default = "default_precision")]
     pub numeric_precision: u16,

@@ -135,6 +135,17 @@ enum Command {
         /// Path to Tabular Editor source (directory for folder/TMDL format, or .bim file)
         src_dir: String,
     },
+    /// Format a proxy-config canonically (JSON or YAML)
+    Fmt {
+        /// Config file to format
+        config: String,
+        /// Exit non-zero when the file is not canonical (for CI)
+        #[arg(long)]
+        check: bool,
+        /// Print the effective config in this format instead of rewriting (yaml|json)
+        #[arg(long, value_name = "FORMAT")]
+        to: Option<String>,
+    },
     /// Emit SQL to create demo fact tables
     SeedSql,
     /// Auto-detect a semantic model from a DuckDB database
@@ -235,6 +246,18 @@ async fn main() {
                 "inventory".into(),
                 src_dir,
             ]));
+        }
+        Command::Fmt { config, check, to } => {
+            let mut args = vec!["fmt".to_string()];
+            if check {
+                args.push("--check".into());
+            }
+            if let Some(to) = to {
+                args.push("--to".into());
+                args.push(to);
+            }
+            args.push(config);
+            std::process::exit(mallardcube::tools::fmt::run(args));
         }
         Command::SeedSql => {
             std::process::exit(mallardcube::tools::seed_sql::run(vec!["seed-sql".into()]));

@@ -1,0 +1,29 @@
+# project2 — YAML twin of proxy-config.json (plan 040).
+#
+# Shows the maintainability features for larger models:
+#   * comments and YAML block style (non-ASCII stays readable in diffs);
+#   * derived defaults: captions cascade to hierarchy/leaf names and display
+#     names, ordinals follow list order, visible defaults to true,
+#     measure_group_name follows the fact table or cube;
+#   * section files: the dimensions live in dimensions.yaml.
+#
+# Run it with:  PROXY_CONFIG=projects/project2/proxy-config.yaml cargo run
+# Canonicalize: cargo run --bin mallard -- fmt projects/project2/proxy-config.yaml
+
+catalog: MY_CATALOG
+cube: SalesCube
+source_name: sales_data
+table_name: fact_table
+db_path: null # demo mode: bundled synthetic data
+
+dimensions_file: dimensions.yaml
+
+measures:
+  - id: Revenue
+    caption: Revenue
+    description: Total sales revenue
+    sql_expr: SUM(sales)
+    format_string: "0.00"
+    units: SEK
+    # display_name defaults to the caption, ordinal to the list position,
+    # measure_group_name to the cube name.

@@ -57,6 +57,7 @@ src/
 
   project/                       Config loading and project lifecycle
     config.rs                    ProxyConfig and related serde structs
+    config_io.rs                 JSON/YAML load, section files, canonical writer
     project.rs                   ProxyProject singleton, SemanticModel build from config
 
   mdx/                           MDX protocol layer
@@ -246,7 +247,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 428 tests covering MDX parsing, semantic classification, plan generation,
+- 437 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
@@ -285,6 +286,7 @@ cargo test --lib
 | `cargo run --bin mallard -- convert-tabular <src> <dest>` | Convert Tabular Editor folder to proxy project |
 | `cargo run --bin mallard -- inventory <src>` | Extract model inventory from Tabular Editor folder |
 | `cargo run --bin mallard -- qualify <config> [trace]` | Emit READY/PARTIAL/BLOCKED readiness verdict |
+| `cargo run --bin mallard -- fmt [--check] [--to yaml\|json] <config>` | Canonicalize a JSON/YAML config, or print it in the other format |
 | `cargo run --bin mallard -- trace-replay [trace.jsonl] [--project config.json]` | Replay captured XMLA trace and diff responses |
 | `cargo run --bin mallard -- extract-trace [trace.jsonl]` | Extract unique ExecuteStatement MDX from trace as Rust consts |
 | `cargo run --bin mallard -- load-replay [args...]` | Concurrently replay captured requests against a live /xmla endpoint |
@@ -300,15 +302,28 @@ Every field in `proxy-config.json`, with descriptions and defaults.
 |---|---|---|---|
 | `catalog` | string | required | Excel-visible catalog name |
 | `cube` | string | required | Cube name (MDX FROM clause) |
-| `source_name` | string | required | Legacy source name (informational; no longer consumed by the runtime) |
-| `table_name` | string | required | DuckDB table name (single-fact mode) |
-| `dialect` | string | required | Backend dialect (`"duckdb"`) |
+| `source_name` | string | `table_name` | Legacy source name (informational; no longer consumed by the runtime) |
+| `table_name` | string | `""` | DuckDB table name (single-fact mode) |
+| `dialect` | string | `"duckdb"` | Backend dialect |
 | `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with a temporary synthetic-data file |
 | `fact_tables` | array | `[]` | Fact table definitions (multi-fact mode) |
 | `relationships` | array | `[]` | Dimension-to-fact table relationship definitions |
 | `time_intelligence` | object\|null | `null` | Global time-intelligence configuration (date_dimension block) |
-| `dimensions` | array | required | Dimension definitions |
-| `measures` | array | required | Measure definitions |
+| `dimensions` | array | `[]` | Dimension definitions |
+| `measures` | array | `[]` | Measure definitions |
+| `dimensions_file` | string\|null | `null` | Section file holding dimensions (merged after inline entries; plan 040) |
+| `measures_file` | string\|null | `null` | Section file holding measures |
+| `relationships_file` | string\|null | `null` | Section file holding relationships |
+| `roles_file` | string\|null | `null` | Section file holding roles |
+
+The config file may be JSON or YAML (detected by extension, then content).
+Derived defaults are applied at load ([`ProxyConfig::normalize`]): only `id` and
+`caption` are required per dimension/measure; captions cascade to
+`hierarchy_name`/`leaf_level_name`/`display_name`, `ordinal` follows list order,
+`all_level_name` defaults to `(All)`, `visible` to true, `physical_field` to the
+id, `format_string` to `#,##0.00`, and a measure's `measure_group_name` follows
+its fact table (or the cube). `mallard fmt` writes the canonical form (defaults
+omitted again) and converts formats; a rewrite does not preserve YAML comments.
 
 When `fact_tables` is empty, the proxy uses single-fact mode with `source_name`/`table_name`.
 When `fact_tables` is non-empty, all measures must declare `fact_table`.

@@ -1,0 +1,17 @@
+# project2 dimensions (referenced from proxy-config.yaml via dimensions_file).
+#
+# Only fields that differ from the derived defaults are listed:
+# hierarchy_name/leaf_level_name default to the caption, all_level_name to
+# "(All)", ordinal to the list position, visible to true.
+
+- id: Category
+  physical_field: product_category
+  caption: Category
+  description: Product category
+  cardinality_hint: 50
+
+- id: Territory
+  physical_field: region
+  caption: Territory
+  description: Sales territory
+  cardinality_hint: 50

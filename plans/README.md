@@ -47,13 +47,13 @@ honor its STOP conditions, and update your row when done.
 | 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
 | 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
-| 040  | YAML configuration and git-friendly config handling | P2 | M | — | TODO |
+| 040  | YAML configuration and git-friendly config handling | P2 | M | — | DONE |
 | 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | DONE |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 and 031–033, 035–039, and 041–042 DONE. 040 (YAML config) is open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–042 DONE. 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -106,6 +106,17 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 040 (maintainable configuration) DONE 2026-09-20: JSON **or YAML**
+  (`src/project/config_io.rs`; extension then content detection, main file and
+  section files), derived defaults (`ProxyConfig::normalize`: only `id` +
+  `caption` required; captions cascade, ordinals follow order, format/group
+  defaults), section files for large models (`dimensions_file`,
+  `measures_file`, `relationships_file`, `roles_file`; inline first), and
+  `mallard fmt` (canonical rewrite, `--check` for CI, `--to yaml|json`
+  conversion via stdout; defaults are omitted again so minimal configs stay
+  minimal). YAML comments are not preserved by a rewrite (documented).
+  `projects/project2/` ships a YAML + section-file twin, asserted against the
+  JSON fixture field by field. JSON Schema and TOML deferred.
 - 031 (dimension metadata cache) DONE 2026-09-20: `src/engine/dim_cache.rs`
   keeps one dictionary per dimension on the model (`all_cardinality`,
   `leaf_values`, per-level `level_paths`) and answers All-member counts, flat

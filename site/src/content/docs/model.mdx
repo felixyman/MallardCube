@@ -1,6 +1,6 @@
 ---
 title: Model reference
-description: The proxy-config.json format
+description: The proxy-config format (JSON or YAML)
 ---
 
 The model file `proxy-config.json` describes the cube. It maps tables and
@@ -46,6 +46,36 @@ Here is a working model for a small sales database:
   ]
 }
 ```
+
+## Formats, defaults, and large models
+
+The config can be JSON or YAML (detected by extension, then by content). YAML
+suits large hand-maintained models: comments, readable non-ASCII, clean diffs.
+
+Only `id` and `caption` are required per dimension and measure — captions
+cascade to hierarchy/leaf names and display names, `ordinal` follows list
+order, `all_level_name` defaults to `(All)`, `visible` to true,
+`physical_field` to the id, `format_string` to `#,##0.00`, and a measure's
+`measure_group_name` follows its fact table (or the cube).
+
+Split large models into section files; inline entries come first and paths
+resolve relative to the config:
+
+```yaml
+dimensions_file: dimensions.yaml
+measures_file: measures.yaml
+roles_file: roles.yaml
+```
+
+`mallard fmt` canonicalizes a config and converts between formats:
+
+```bash
+mallard fmt my-project/proxy-config.yaml
+mallard fmt --check my-project/proxy-config.yaml
+mallard fmt --to yaml my-project/proxy-config.json
+```
+
+A rewrite does not preserve YAML comments.
 
 ## Top-level fields
 

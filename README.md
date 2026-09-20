@@ -155,6 +155,44 @@ Key naming rules:
 - **`caption`** - Excel-visible label. Can include spaces and Unicode.
 - **`sql_expr`** - DuckDB SQL expression for the measure. Direct SQL is the only runtime.
 
+### Formats, defaults, and large models
+
+The config can be JSON or YAML (detected by extension, then by content). YAML
+suits large hand-maintained models: comments, no escaped non-ASCII in captions,
+and readable diffs.
+
+Derived defaults keep configs small. Only these are required per entry:
+
+- dimension: `id`, `caption`
+- measure: `id`, `caption`
+
+Everything else falls back: captions cascade to `hierarchy_name`,
+`leaf_level_name`, and `display_name`; `all_level_name` is `(All)`; `ordinal`
+follows list order; `visible` is true; `physical_field` is the dimension id;
+`format_string` is `#,##0.00`; a measure's `measure_group_name` follows its
+fact table (or the cube), and a missing `fact_table` means the first one.
+
+Large models can split sections into their own files — each holds the same list
+format, inline entries come first, and paths resolve relative to the config:
+
+```yaml
+dimensions_file: dimensions.yaml
+measures_file: measures.yaml
+roles_file: roles.yaml
+```
+
+`mallard fmt` writes a config canonically (stable field order, defaults omitted
+again) and converts between formats:
+
+```bash
+mallard fmt my-project/proxy-config.yaml            # rewrite canonically
+mallard fmt --check my-project/proxy-config.yaml    # CI: non-zero when dirty
+mallard fmt --to yaml my-project/proxy-config.json  # print as YAML
+```
+
+A rewrite does not preserve YAML comments (serde has no comment model), so run
+`fmt` deliberately; `--to` prints to stdout and never writes.
+
 ### Multi-fact-table config
 
 For projects with more than one fact table, use the `fact_tables` array and
@@ -264,7 +302,7 @@ Sample projects live at the repo root.
 
 | Project | Description |
 |---------|-------------|
-| `projects/project2/` | Renamed variant proving name independence. 2 dims, 1 measure. |
+| `projects/project2/` | Renamed variant proving name independence. 2 dims, 1 measure. `proxy-config.yaml` + `dimensions.yaml` demonstrate YAML, defaults, and section files. |
 | `projects/project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
 | `projects/project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
 | `projects/generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
@@ -293,7 +331,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-428 tests covering MDX parsing, semantic classification, plan generation, SQL
+437 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate

@@ -244,6 +244,10 @@ pub fn detect_config(
         time_intelligence: None,
         dimensions: vec![],
         measures: vec![],
+        dimensions_file: None,
+        measures_file: None,
+        relationships_file: None,
+        roles_file: None,
     };
 
     let declared = declared_foreign_keys(&conn, &fact.name);

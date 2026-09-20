@@ -141,11 +141,9 @@ impl ProxyProject {
     }
 
     fn load_with_mode(config_path: &str, pc_mode: ParentChildMode) -> Result<Self, String> {
-        let config: ProxyConfig = {
-            let text = fs::read_to_string(config_path)
-                .map_err(|e| format!("read config {config_path}: {e}"))?;
-            serde_json::from_str(&text).map_err(|e| format!("parse config {config_path}: {e}"))?
-        };
+        // JSON or YAML, section files merged, derived defaults applied
+        // (plan 040). Errors name the file that failed.
+        let config = crate::project::config_io::load(Path::new(config_path))?;
 
         let model = build_semantic_model_with_mode(
             &config,
@@ -251,6 +249,10 @@ impl ProxyProject {
                     time_intelligence: None,
                     fallback_capability: None,
                 }],
+                dimensions_file: None,
+                measures_file: None,
+                relationships_file: None,
+                roles_file: None,
             },
             model: crate::engine::model::default_model(),
         }
