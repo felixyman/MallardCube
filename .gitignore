@@ -16,3 +16,6 @@ skills-lock.json
 .opencode/
 opencode.json.backup
 .agents/skills/excel-mcp/
+
+# Customer models: never commit (plan 044 — generic examples only)
+projects/private_model/
