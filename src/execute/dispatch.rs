@@ -1,6 +1,9 @@
+use crate::backend::QueryBackend;
+#[cfg(test)]
 use crate::execute_builders::{
     get_execute_cellset_response, get_execute_dax_response, get_execute_mdx_response,
 };
+#[cfg(test)]
 use crate::mdx_semantic::{is_dax, is_drillthrough, is_mdx_select};
 /// Execute dispatch.
 ///
@@ -21,11 +24,15 @@ pub fn get_empty_execute_response() -> String {
     )
 }
 
+/// Test seam: routes statements against the demo fixture. Production requests
+/// are routed by `route_request` in `main.rs`, which passes the request's
+/// backend explicitly.
+#[cfg(test)]
 pub fn get_execute_statement_response(statement: &str) -> String {
     if is_dax(statement) {
         get_execute_dax_response(statement)
     } else if is_drillthrough(statement) {
-        get_execute_drillthrough_response(statement)
+        get_execute_drillthrough_response(statement, crate::backend::Backend::test_fixture())
     } else if is_mdx_select(statement) {
         get_execute_cellset_response(statement)
     } else {
@@ -33,7 +40,10 @@ pub fn get_execute_statement_response(statement: &str) -> String {
     }
 }
 
-pub fn get_execute_drillthrough_response(statement: &str) -> String {
+pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
+    statement: &str,
+    backend: &B,
+) -> String {
     let project = crate::proxy_project::project();
     let model = &project.model;
     let table = model.primary_table_name();
@@ -82,7 +92,6 @@ pub fn get_execute_drillthrough_response(statement: &str) -> String {
             where_clauses.join(" AND ")
         )
     };
-    let backend = crate::backend::Backend::get();
     let rows = backend.query_rows(&sql);
     let col_names = backend.query_column_names(&sql);
     build_drillthrough_rowset(&col_names, rows, statement)
@@ -291,16 +300,16 @@ mod tests {
     // from the seeded database instead of hardcoding year ranges.
 
     fn demo_scalar(sql: &str) -> f64 {
-        crate::backend::Backend::get().query_scalar(sql)
+        crate::backend::Backend::test_fixture().query_scalar(sql)
     }
 
     fn demo_count(sql: &str) -> u32 {
-        crate::backend::Backend::get().query_count(sql)
+        crate::backend::Backend::test_fixture().query_count(sql)
     }
 
     /// Distinct years with facts, ascending.
     fn data_year_keys() -> Vec<String> {
-        crate::backend::Backend::get().query_strings(
+        crate::backend::Backend::test_fixture().query_strings(
             "SELECT DISTINCT CAST(d.year AS VARCHAR) FROM sales_fact f \
              JOIN date_dim d ON f.date_key = d.date_key ORDER BY d.year",
         )
@@ -308,7 +317,7 @@ mod tests {
 
     /// Distinct `year|quarter` paths with facts, ascending.
     fn data_quarter_keys() -> Vec<String> {
-        crate::backend::Backend::get().query_strings(
+        crate::backend::Backend::test_fixture().query_strings(
             "SELECT DISTINCT CAST(d.year AS VARCHAR) || '|' || CAST(d.quarter AS VARCHAR) \
              FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key \
              ORDER BY d.year, d.quarter",
@@ -317,7 +326,7 @@ mod tests {
 
     /// Distinct `year|quarter|month` paths with facts, ascending.
     fn data_month_keys() -> Vec<String> {
-        crate::backend::Backend::get().query_strings(
+        crate::backend::Backend::test_fixture().query_strings(
             "SELECT DISTINCT CAST(d.year AS VARCHAR) || '|' || CAST(d.quarter AS VARCHAR) \
              || '|' || CAST(d.month AS VARCHAR) \
              FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key \
@@ -576,14 +585,14 @@ mod tests {
     }
 
     fn query_grouped(sql: &str) -> (Vec<String>, Vec<f64>) {
-        let rows = Backend::get().query_grouped_1d(sql);
+        let rows = Backend::test_fixture().query_grouped_1d(sql);
         let captions = rows.iter().map(|(name, _)| name.clone()).collect();
         let values = rows.iter().map(|(_, value)| *value).collect();
         (captions, values)
     }
 
     fn query_pairs(sql: &str) -> (Vec<Vec<String>>, Vec<f64>) {
-        let rows = Backend::get().query_pairs(sql);
+        let rows = Backend::test_fixture().query_pairs(sql);
         let tuples = rows
             .iter()
             .map(|(first, second, _)| vec![first.clone(), second.clone()])
@@ -625,7 +634,7 @@ mod tests {
     }
 
     fn collapse_first_dimension(sql: &str, excluded: &str) -> (Vec<Vec<String>>, Vec<f64>) {
-        let rows = Backend::get().query_pairs(sql);
+        let rows = Backend::test_fixture().query_pairs(sql);
         let mut tuples = Vec::new();
         let mut values = Vec::new();
         let mut i = 0;
@@ -2179,7 +2188,8 @@ mod tests {
     fn excel_trace_total_revenue_matches_raw_sql() {
         with_project3(|| {
             let xml = get_execute_statement_response(EXCEL_TRACE_TOTAL_REVENUE);
-            let expected = Backend::get().query_scalar("SELECT SUM(revenue) FROM sales_fact");
+            let expected =
+                Backend::test_fixture().query_scalar("SELECT SUM(revenue) FROM sales_fact");
             assert_eq!(cell_values(&xml), vec![expected]);
         });
     }
@@ -2192,7 +2202,7 @@ mod tests {
         with_project3(|| {
             let base = "SELECT {[Measures].[Revenue]} ON COLUMNS, \
                         {[Category].[Category].Members} ON ROWS FROM [Sales]";
-            let backend = Backend::get();
+            let backend = Backend::test_fixture();
             let user = crate::engine::model::UserContext::admin_default();
             let config = crate::proxy_project::project().config.clone();
             let run = |mdx: &str| {
@@ -2230,6 +2240,28 @@ mod tests {
             let (_, other) =
                 run("SELECT {[Measures].[Units]} ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE");
             assert!(!other.cache_hit, "a different query must not hit the entry");
+        });
+    }
+
+    // Plan 042 regression: DRILLTHROUGH must read the backend it is given — a
+    // file-backed project's rows, not a demo fallback. `data/generated.db`
+    // holds 10 fact rows; the demo backend has no such table (and its
+    // `sales_fact` would return 1000 rows under the LIMIT).
+    #[test]
+    fn drillthrough_reads_the_backend_it_is_given() {
+        with_generated_project(|| {
+            let conn = duckdb::Connection::open("data/generated.db").expect("open generated db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+                "DRILLTHROUGH",
+                &backend,
+            );
+            assert_eq!(
+                xml.matches("<row>").count(),
+                10,
+                "rows must come from the file-backed backend: {xml}"
+            );
         });
     }
 
@@ -2564,7 +2596,8 @@ mod tests {
         with_project3(|| {
             let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR";
             let xml = get_execute_statement_response(mdx);
-            let expected = Backend::get().query_scalar("SELECT SUM(revenue) FROM sales_fact");
+            let expected =
+                Backend::test_fixture().query_scalar("SELECT SUM(revenue) FROM sales_fact");
             assert_eq!(cell_values(&xml), vec![expected]);
             assert!(
                 xml.contains("[Measures].[Revenue]"),
@@ -2730,7 +2763,7 @@ mod tests {
             use crate::backend::Backend;
             use crate::engine::plan::plan_from_semantic_with_model;
             let project = crate::proxy_project::project();
-            let backend = Backend::get();
+            let backend = Backend::test_fixture();
             for (mdx, label) in [
                 (
                     "SELECT  FROM [Sales] WHERE ([Measures].[Revenue YTD]) CELL PROPERTIES VALUE, FORMAT_STRING, BACK_COLOR, FORE_COLOR",
@@ -2780,7 +2813,7 @@ mod tests {
             };
             use crate::engine::sql::sql_for_query_plan;
             let project = crate::proxy_project::project();
-            let backend = Backend::get();
+            let backend = Backend::test_fixture();
 
             let total_plan = plan_from_semantic_with_model(
                 &crate::mdx_semantic::semantic_query_from_mdx(
@@ -2857,7 +2890,7 @@ mod tests {
             };
             use crate::engine::sql::sql_for_query_plan;
             let project = crate::proxy_project::project();
-            let backend = Backend::get();
+            let backend = Backend::test_fixture();
 
             let mdx = "SELECT [Date].[Date].[Year].Members ON ROWS, {[Measures].[RevenueYTD]} ON COLUMNS FROM [Sales]";
             let semantic = crate::mdx_semantic::semantic_query_from_mdx(mdx);
@@ -2893,7 +2926,7 @@ mod tests {
             // Revenue and Units are stable demo totals; the QTD measure drifts
             // with the current date, so compute its expectation from the same
             // seeded flag the engine filters on.
-            let qtd = crate::backend::Backend::get()
+            let qtd = crate::backend::Backend::test_fixture()
                 .query_scalar("SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.qtd_flag = true");
             assert_eq!(
                 values,

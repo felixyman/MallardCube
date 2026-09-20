@@ -11,7 +11,7 @@ How the SSAS Proxy works, module by module. For new developers.
    `proxy-config.json`. Falls back to
    `projects/project3/` (at repo root) if no config is set.
 3. Init DuckDB backend: opens a file-based database when `db_path` is
-   set, otherwise creates an in-memory demo database with synthetic data.
+   set, otherwise seeds a temporary demo database file with synthetic data.
 5. Start axum HTTP server on port 8080 at `POST /xmla`.
 
 ## Request lifecycle
@@ -103,7 +103,10 @@ src/
   xmla_trace.rs                  NDJSON trace capture (XMLA_TRACE=1)
 
   backend/                       Database backends
-    mod.rs                       DuckDB backend, QueryBackend trait, demo data generation
+    mod.rs                       DuckDB backend, QueryBackend trait, demo data
+                                 generation; `#[cfg(test)] test_fixture()` is the
+                                 only demo backend — production always carries a
+                                 BackendSource (file or temp-file demo)
 
   test_support/                  Shared test code
     fixtures.rs                  MDX test fixture constants
@@ -235,11 +238,17 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 410 tests covering MDX parsing, semantic classification, plan generation,
+- 417 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
 - Shared test fixtures: `src/test_support/fixtures.rs`.
+- Test-only backends: `Backend::test_fixture()` (a temp-file copy of the demo
+  database) and `FileQueryBackend` in `execute/dispatch.rs` (a file-backed
+  project's own DB). Parameterless helpers such as
+  `dispatch::get_execute_statement_response` are `#[cfg(test)]` — production
+  code always receives the request's backend, so no test seam can shadow real
+  data.
 - `project/project.rs` - Config parsing and model building.
 - `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses,
   compatibility gate tests.
@@ -250,7 +259,13 @@ cargo test --lib
 | Variable | Effect |
 |---|---|
 | `PROXY_CONFIG` | Path to `proxy-config.json` (default: `projects/project3/proxy-config.json`) |
+| `MALLARDCUBE_DB` | DuckDB file for AutoModel detection (overrides `PROXY_CONFIG`) |
+| `MALLARDCUBE_FACT` | Fact table override for AutoModel |
+| `MALLARDCUBE_POOL_SIZE` | Pooled read-only DuckDB connections (default: CPU count, capped 32) |
+| `MALLARDCUBE_AGG_CACHE` | Aggregation sidecar path; enables rollups for SUM measures |
+| `MALLARDCUBE_RESULT_CACHE` | Set to `0` to disable the 5 s result cache |
 | `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
+| `MALLARDCUBE_DEBUG` | Set to `1` to write a verbose request log to `debug-last-run.log` |
 | `BIND_ADDRESS` | Override listen address:port (default: `127.0.0.1:8080`) |
 
 ## Tools
@@ -280,7 +295,7 @@ Every field in `proxy-config.json`, with descriptions and defaults.
 | `source_name` | string | required | Legacy source name (informational; no longer consumed by the runtime) |
 | `table_name` | string | required | DuckDB table name (single-fact mode) |
 | `dialect` | string | required | Backend dialect (`"duckdb"`) |
-| `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with synthetic in-memory data |
+| `db_path` | string\|null | `null` | Path to DuckDB file, relative to config. `null` = demo mode with a temporary synthetic-data file |
 | `fact_tables` | array | `[]` | Fact table definitions (multi-fact mode) |
 | `relationships` | array | `[]` | Dimension-to-fact table relationship definitions |
 | `time_intelligence` | object\|null | `null` | Global time-intelligence configuration (date_dimension block) |
@@ -349,8 +364,8 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 ### db_path resolution
 
 `db_path` is resolved relative to the directory containing `proxy-config.json`.
-When `null` or omitted, the proxy creates an in-memory DuckDB with synthetic
-data (20k rows of `sales_fact`).
+When `null` or omitted, the proxy seeds a temporary DuckDB file with synthetic
+data (20k rows of `sales_fact`) and serves that.
 
 When set, the DuckDB backend opens the file directly. There is no separate
 runtime — DuckDB is the only execution engine.

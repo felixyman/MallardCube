@@ -685,7 +685,7 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
 
             let (resp, timings) = if mdx_semantic::is_drillthrough(mdx) {
                 (
-                    execute::dispatch::get_execute_drillthrough_response(mdx),
+                    execute::dispatch::get_execute_drillthrough_response(mdx, backend),
                     None,
                 )
             } else {

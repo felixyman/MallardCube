@@ -1,4 +1,4 @@
-use crate::backend::{Backend, QueryBackend};
+use crate::backend::QueryBackend;
 use crate::engine::model::{
     FallbackCapability, SemanticModel, TableAccess, UserContext, effective_model_permission,
     effective_table_filter,
@@ -614,17 +614,6 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
 // ---------------------------------------------------------------------------
 // Plan execution — generates SQL from plan + model, executes via Backend
 // ---------------------------------------------------------------------------
-
-pub fn execute_plan(plan: &QueryPlan, model: &SemanticModel) -> QueryResult {
-    execute_plan_with_backend(plan, model, Backend::get())
-}
-
-/// Execute a plan using the given pre-compiled SQL string instead of
-/// generating SQL from `sql_for_query_plan`. Used when the SQL comes
-/// from a pre-compiled path.
-pub fn execute_plan_with_sql(plan: &QueryPlan, sql: &str) -> QueryResult {
-    execute_plan_sql_with_backend(plan, sql, Backend::get())
-}
 
 pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     plan: &QueryPlan,

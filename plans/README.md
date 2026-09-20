@@ -48,10 +48,12 @@ honor its STOP conditions, and update your row when done.
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
 | 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
 | 040  | YAML configuration and git-friendly config handling | P2 | M | — | TODO |
+| 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | TODO |
+| 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030, 032, and 035–039 DONE. 031 (metadata cache), 033 (DRILLTHROUGH equality), and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–030, 032, 035–039, and 042 DONE. 031 (metadata cache), 033 (DRILLTHROUGH filters), 040 (YAML config), and 041 (data refresh lifecycle) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -104,6 +106,25 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 042 (retire the in-memory demo backend) DONE 2026-09-20: production
+  DRILLTHROUGH was reading the in-memory demo DB (`Backend::get()`), so
+  file-backed projects returned no rows or synthetic demo rows — verified live
+  (Contoso, 7,794 file rows → 0 returned). Removed `Backend::new()`, the module
+  `static BACKEND`, `instance()`, `init_backend()`, the dead `Backend::init()`,
+  and the dead benchmark scaffolding; added `#[cfg(test)] Backend::test_fixture()`
+  (temp-file demo DB) and gated every parameterless test seam behind
+  `#[cfg(test)]`, so production cannot reach demo data at all. DRILLTHROUGH now
+  takes the request backend, `trace-replay` carries its own `BackendSource`.
+  Verified: file-backed DRILLTHROUGH returns the file's rows (1,000 = LIMIT),
+  new regression test `drillthrough_reads_the_backend_it_is_given`, 417 tests
+  green, smoke 8/8. Follow-ups: plan 033 (filter semantics), refresh the
+  `bench-workload.jsonl` capture.
+- 041 (data refresh lifecycle) written 2026-09-20: the proxy holds the DuckDB
+  file for its lifetime and never reopens, so load jobs fail with a lock error
+  and fresh data needs a restart (verified in both directions). Plan covers a
+  docs runbook, a lock-aware startup error, `/health` + `/status` with a data
+  stamp, and SIGHUP reload of pool + aggregations + result cache. Depends on
+  042 (now DONE).
 
 ## Reconcile Status
 

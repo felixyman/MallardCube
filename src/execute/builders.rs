@@ -1,7 +1,11 @@
-use crate::backend::{Backend, QueryBackend};
+#[cfg(test)]
+use crate::backend::Backend;
+use crate::backend::QueryBackend;
 use crate::engine::model::SemanticModel;
-use crate::engine::plan::{execute_plan, execute_plan_with_backend, plan_from_semantic};
-use crate::execute::render::{dispatch, dispatch_with_backend};
+use crate::engine::plan::{execute_plan_with_backend, plan_from_semantic};
+#[cfg(test)]
+use crate::execute::render::dispatch;
+use crate::execute::render::dispatch_with_backend;
 use crate::mdx_semantic::SemanticQuery;
 /// Execute and cellset response layer.
 ///
@@ -10,17 +14,23 @@ use crate::mdx_semantic::SemanticQuery;
 /// runtime execution lives in `runtime.rs`.
 ///
 /// Legacy MDX/DAX flat-rowset helpers also live here as transitional code.
+#[cfg(test)]
 use crate::response::wrap_in_soap_envelope;
 
 // Re-export runtime entry point at the same path callers expect.
 pub use crate::execute::runtime::get_execute_cellset_response_with_backend_and_context;
 
-// ---- public API consumed by execute.rs dispatch ----
+// ---- test seams ----
+//
+// These helpers carry no backend parameter and use the demo fixture; they
+// exist for the compatibility-gate tests. Production code always passes the
+// request's backend (see `runtime.rs` and `route_request` in `main.rs`).
 
+#[cfg(test)]
 pub fn execute_semantic_query(query: &SemanticQuery) -> String {
     let plan = plan_from_semantic(query);
     let model = &crate::proxy_project::project().model;
-    let result = execute_plan(&plan, model);
+    let result = execute_plan_with_backend(&plan, model, Backend::test_fixture());
     dispatch(query, &result)
 }
 
@@ -34,6 +44,7 @@ pub fn execute_semantic_query_with_backend<B: QueryBackend>(
     dispatch_with_backend(query, &result, backend)
 }
 
+#[cfg(test)]
 pub fn get_execute_cellset_response(mdx: &str) -> String {
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     execute_semantic_query(&query)
@@ -48,13 +59,14 @@ pub fn get_execute_cellset_response_with_backend<B: QueryBackend>(
     execute_semantic_query_with_backend(&query, backend, model)
 }
 
-// ---- legacy flat-rowset helpers (transitional) ----
+// ---- legacy flat-rowset test seams (transitional) ----
 
+#[cfg(test)]
 pub fn get_execute_mdx_response(mdx: &str) -> String {
     let has_measures = mdx.contains("Measures") || mdx.contains("measures");
     let measure_name = "Total_Forsaljning";
     let measure_value = if has_measures {
-        Backend::get().total_sales()
+        Backend::test_fixture().total_sales()
     } else {
         0.0
     };
@@ -85,8 +97,9 @@ pub fn get_execute_mdx_response(mdx: &str) -> String {
     wrap_in_soap_envelope(&inner)
 }
 
+#[cfg(test)]
 pub fn get_execute_dax_response(_dax: &str) -> String {
-    let total = Backend::get().total_sales();
+    let total = Backend::test_fixture().total_sales();
     let col_xml_name = "FactTable_x005B_Total_x0020_Sales_x0020__x0028_SEK_x0029__x005D_";
     let col_sql_field = "[FactTable].[Total Sales (SEK)]";
 

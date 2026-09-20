@@ -177,7 +177,7 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     // --- optional replay ---
     if let Some(tp) = trace_path {
         if Path::new(tp).exists() {
-            // trace_replay::run handles its own init_project + init_backend.
+            // trace_replay::run loads its own project and backend source.
             let replay_ok = crate::tools::trace_replay::run(vec![
                 "trace-replay".into(),
                 tp.to_string(),

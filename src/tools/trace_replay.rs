@@ -15,7 +15,8 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use crate::execute_builders::get_execute_cellset_response;
+use crate::engine::model::UserContext;
+use crate::execute_builders::get_execute_cellset_response_with_backend_and_context;
 
 pub fn run(args: Vec<String>) -> i32 {
     let trace_path = args
@@ -32,12 +33,16 @@ pub fn run(args: Vec<String>) -> i32 {
     crate::proxy_project::init_project(config_path).expect("init project");
     let p = crate::proxy_project::project();
 
-    // Init backend from config — resolve db_path relative to config dir
+    // Open the project's own backend source — resolve db_path relative to the
+    // config dir. There is no global backend: every replay carries this source.
     let db_path = crate::proxy_project::resolve_db_path(
         config_path.unwrap_or("."),
         p.config.db_path.as_deref(),
     );
-    crate::backend::init_backend(db_path.as_deref()).expect("init backend");
+    let backend_source =
+        crate::backend::init_backend_source(db_path.as_deref()).expect("open backend source");
+    let config = p.config.clone();
+    let user = UserContext::admin_default();
 
     eprintln!("Project: {} | Cube: {}", p.config.catalog, p.config.cube);
     eprintln!("Trace file: {trace_path}");
@@ -86,8 +91,22 @@ pub fn run(args: Vec<String>) -> i32 {
                 let captured = v.get("response_xml").and_then(|r| r.as_str()).unwrap_or("");
 
                 execute_total += 1;
+                let backend = backend_source.checkout();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    get_execute_cellset_response(mdx)
+                    if crate::mdx_semantic::is_drillthrough(mdx) {
+                        crate::execute::dispatch::get_execute_drillthrough_response(
+                            mdx,
+                            backend.as_ref(),
+                        )
+                    } else {
+                        get_execute_cellset_response_with_backend_and_context(
+                            mdx,
+                            backend.as_ref(),
+                            &user,
+                            &config,
+                        )
+                        .0
+                    }
                 }));
 
                 match result {

@@ -1,7 +1,7 @@
 use duckdb::{AccessMode, Config, Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 pub struct Backend {
     conn: Mutex<Connection>,
@@ -147,63 +147,7 @@ impl BackendPool {
     }
 }
 
-// ---- benchmark config ----
-
-#[derive(Debug, Clone)]
-pub struct BenchmarkDataConfig {
-    pub row_count: usize,
-    pub category_count: usize,
-    pub region_count: usize,
-    pub seed: u64,
-}
-
-impl Default for BenchmarkDataConfig {
-    fn default() -> Self {
-        Self {
-            row_count: 10_000,
-            category_count: 20,
-            region_count: 8,
-            seed: 42,
-        }
-    }
-}
-
-impl BenchmarkDataConfig {
-    pub fn tiny() -> Self {
-        Self {
-            row_count: 10,
-            category_count: 4,
-            region_count: 2,
-            seed: 1,
-        }
-    }
-    pub fn small() -> Self {
-        Self {
-            row_count: 10_000,
-            category_count: 20,
-            region_count: 8,
-            seed: 42,
-        }
-    }
-    pub fn medium() -> Self {
-        Self {
-            row_count: 100_000,
-            category_count: 100,
-            region_count: 16,
-            seed: 43,
-        }
-    }
-    pub fn large() -> Self {
-        Self {
-            row_count: 1_000_000,
-            category_count: 500,
-            region_count: 32,
-            seed: 44,
-        }
-    }
-}
-
-// ---- deterministic pseudo-random for benchmark data ----
+// ---- deterministic pseudo-random for demo data ----
 
 struct SeededRng {
     state: u64,
@@ -221,75 +165,6 @@ impl SeededRng {
             .wrapping_add(1_442_695_040_888_963_407);
         self.state
     }
-}
-
-// ---- shared benchmark data ----
-
-pub struct FactRow {
-    pub product_category: String,
-    pub region: String,
-    pub order_date: String,
-    pub date_key: i32,
-    pub sales: f64,
-}
-
-pub fn generate_rows(config: &BenchmarkDataConfig) -> Vec<FactRow> {
-    let mut rng = SeededRng::new(config.seed);
-    let categories: Vec<String> = (1..=config.category_count)
-        .map(|i| format!("Category {:03}", i))
-        .collect();
-    let regions: Vec<String> = (1..=config.region_count)
-        .map(|i| format!("Region {:02}", i))
-        .collect();
-
-    let mut rows = Vec::with_capacity(config.row_count + 1);
-    for i in 0..config.row_count {
-        let kat = &categories[rng.next() as usize % config.category_count];
-        let reg = &regions[rng.next() as usize % config.region_count];
-        let sales = 10_000.0 + (rng.next() as f64 % 100_000.0);
-        let day_offset = (i % (365 * 6)) as i64;
-        // Generate a date string 2020-MM-DD within 2020-2026 range
-        let months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        let total_days = day_offset;
-        let mut remaining = total_days;
-        let mut y = 2020;
-        loop {
-            let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
-                366
-            } else {
-                365
-            };
-            if remaining < days_in_year {
-                break;
-            }
-            remaining -= days_in_year;
-            y += 1;
-        }
-        let mut mo = 0;
-        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-        while mo < 12 && remaining >= months[mo] + if mo == 1 && leap { 1 } else { 0 } {
-            remaining -= months[mo] + if mo == 1 && leap { 1 } else { 0 };
-            mo += 1;
-        }
-        let day = remaining + 1;
-        let date = format!("{y:04}-{:02}-{:02}", mo + 1, day);
-        let date_key_val = y * 10000 + (mo as i32 + 1) * 100 + day as i32;
-        rows.push(FactRow {
-            product_category: kat.clone(),
-            region: reg.clone(),
-            order_date: date,
-            date_key: date_key_val,
-            sales,
-        });
-    }
-    rows.push(FactRow {
-        product_category: "Category SKEW".into(),
-        region: "Region SKEW".into(),
-        order_date: "2020-01-01".into(),
-        date_key: 20200101,
-        sales: 9_999_999.0,
-    });
-    rows
 }
 
 // ---- wider demo data (project3) ----
@@ -483,26 +358,6 @@ pub fn generate_inventory_fact_rows() -> Vec<InventoryFactRow> {
     rows
 }
 
-static BACKEND: OnceLock<Backend> = OnceLock::new();
-
-fn instance() -> &'static Backend {
-    BACKEND.get_or_init(|| Backend::new().expect("failed to initialise DuckDB"))
-}
-
-/// Called once at startup, before any queries. When `db_path` is `Some`,
-/// opens the file-based DuckDB database (user-owned schema — no seeding).
-/// When `None`, uses the demo in-memory database with synthetic data.
-pub fn init_backend(db_path: Option<&str>) -> Result<(), duckdb::Error> {
-    let backend = match db_path {
-        Some(path) => Backend::open(Path::new(path))?,
-        None => Backend::new()?,
-    };
-    BACKEND
-        .set(backend)
-        .map_err(|_| duckdb::Error::InvalidParameterName("Backend already initialised".into()))?;
-    Ok(())
-}
-
 pub fn init_backend_source(db_path: Option<&str>) -> Result<BackendSource, duckdb::Error> {
     match db_path {
         Some(path) => BackendSource::file(path),
@@ -574,10 +429,6 @@ fn value_to_f64(v: &duckdb::types::Value) -> Option<f64> {
 }
 
 impl Backend {
-    pub fn get() -> &'static Self {
-        instance()
-    }
-
     /// Lock the connection, recovering from a poisoned mutex.
     ///
     /// Request handling catches panics so the server survives (`main.rs`). If a
@@ -588,21 +439,6 @@ impl Backend {
     /// better than refusing to serve.
     fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Called once at startup. When `db_path` is `Some`, opens the file-based
-    /// DuckDB database. When `None`, uses the demo in-memory database.
-    pub fn init(db_path: Option<&str>) -> Result<(), duckdb::Error> {
-        let backend = match db_path {
-            Some(path) => Backend::open(Path::new(path))?,
-            None => Backend::new()?,
-        };
-        static BACKEND: OnceLock<Backend> = OnceLock::new();
-        BACKEND
-            .set(backend)
-            .map_err(|_| duckdb::Error::InvalidParameterName("Backend already initialised".into()))
-            .ok();
-        Ok(())
     }
 
     /// Open a file-based DuckDB database. No seeding — the user owns the schema.
@@ -621,11 +457,19 @@ impl Backend {
         })
     }
 
-    pub fn new() -> Result<Self, duckdb::Error> {
-        let conn = Connection::open_in_memory()?;
-        Self::seed_demo_connection(&conn)?;
-        Ok(Backend {
-            conn: Mutex::new(conn),
+    /// Demo fixture for tests: a temp-file copy of the synthetic demo database.
+    ///
+    /// Production code never touches demo data — it always carries the
+    /// project's [`BackendSource`]. This fixture exists so tests can exercise
+    /// the demo model (project3) without a process-wide backend static.
+    #[cfg(test)]
+    pub fn test_fixture() -> &'static Backend {
+        static FIXTURE: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let path = std::env::temp_dir()
+                .join(format!("mallardcube-test-{}.duckdb", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            Backend::create_demo_file(&path).expect("seed test fixture")
         })
     }
 
@@ -678,38 +522,6 @@ impl Backend {
         let date_dim_sql = include_str!("../../data/seed_date_dim.sql");
         conn.execute_batch(date_dim_sql)?;
         Ok(())
-    }
-
-    pub fn new_with_config(config: &BenchmarkDataConfig) -> Result<Self, duckdb::Error> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE fact_table (
-                  product_category VARCHAR NOT NULL,
-                  region VARCHAR NOT NULL,
-                  order_date DATE NOT NULL,
-                  date_key INTEGER NOT NULL,
-                  sales DOUBLE NOT NULL
-               );",
-        )?;
-
-        let rows = generate_rows(config);
-        {
-            let mut app = conn.appender("fact_table")?;
-            for row in &rows {
-                app.append_row(params![
-                    row.product_category.as_str(),
-                    row.region.as_str(),
-                    row.order_date.as_str(),
-                    row.date_key,
-                    row.sales,
-                ])?;
-            }
-            app.flush()?;
-        }
-
-        Ok(Backend {
-            conn: Mutex::new(conn),
-        })
     }
 
     pub fn total_sales(&self) -> f64 {
@@ -1314,7 +1126,10 @@ mod tests {
     /// poisoned lock would turn that one failure into permanent SOAP faults.
     #[test]
     fn poisoned_connection_lock_recovers() {
-        let backend = Backend::new().unwrap();
+        let backend = Backend {
+            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+        };
+        backend.execute_ddl("CREATE TABLE sales_fact (i INT); INSERT INTO sales_fact VALUES (1);");
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = backend.conn.lock().unwrap();
             panic!("simulated request panic while holding the connection lock");
@@ -1366,7 +1181,9 @@ mod tests {
 
     #[test]
     fn query_methods_do_not_panic_on_bad_sql() {
-        let backend = Backend::new().expect("create in-memory backend");
+        let backend = Backend {
+            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+        };
         // Malformed SQL / missing tables must degrade to empty/default, not panic.
         assert!(
             backend
@@ -1381,7 +1198,9 @@ mod tests {
 
     #[test]
     fn date_dim_seed_has_all_period_flags() {
-        let db = Backend::new().expect("create in-memory backend");
+        let db = Backend {
+            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+        };
         let sql = include_str!("../../data/seed_date_dim.sql");
         db.execute_ddl(sql);
         let total = db.query_count("SELECT COUNT(*) FROM date_dim");

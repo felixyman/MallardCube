@@ -1,9 +1,11 @@
+#[cfg(test)]
+use crate::backend::Backend;
 /// MDSCHEMA_MEMBERS rowset — responds to Excel's member discovery.
 ///
 /// Member rows are generated from actual DuckDB data (distinct dimension
 /// values) plus synthetic `All` members from the semantic model.
 /// No hardcoded business values remain.
-use crate::backend::{Backend, QueryBackend};
+use crate::backend::QueryBackend;
 use crate::engine::model::{TableAccess, UserContext, effective_table_filter};
 use crate::project::config::ProxyConfig;
 use crate::proxy_project;
@@ -456,12 +458,16 @@ fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> 
 
 // ---- public API ----
 
+/// Test seam: enumerate members against the demo fixture. Production callers
+/// pass the request's backend to `get_members_response_with_backend`
+/// (`route_request` in `main.rs`).
+#[cfg(test)]
 pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -> String {
     let project = proxy_project::project();
     get_members_response_with_backend(
         member_filter,
         tree_op,
-        Backend::get(),
+        Backend::test_fixture(),
         &UserContext::admin_default(),
         &project.config,
     )
@@ -551,7 +557,7 @@ mod tests {
     fn all_rows() -> Vec<MemberRow> {
         let project = proxy_project::project();
         all_rows_with_backend(
-            Backend::get(),
+            Backend::test_fixture(),
             &UserContext::admin_default(),
             &project.config,
         )
@@ -565,7 +571,7 @@ mod tests {
         with_test_project(p, || {
             let project = proxy_project::project();
             all_rows_with_backend(
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             )
@@ -707,8 +713,8 @@ mod tests {
                 .first()
                 .map(|l| l.column.as_str())
                 .unwrap_or(dim.physical_field.as_str());
-            let expected =
-                Backend::get().query_count(&format!("SELECT COUNT(DISTINCT {col}) FROM {table}"));
+            let expected = Backend::test_fixture()
+                .query_count(&format!("SELECT COUNT(DISTINCT {col}) FROM {table}"));
             assert_eq!(
                 cc, expected,
                 "(All) of {} must report direct-children count ({col})",
@@ -805,7 +811,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(year_u),
                 Some(8),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
@@ -819,7 +825,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(year_u),
                 Some(1),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
@@ -829,7 +835,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(8),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
@@ -839,7 +845,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(2),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
@@ -849,7 +855,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(4),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
@@ -863,7 +869,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some("[Date].[Date].[Year].&[1999]"),
                 Some(8),
-                Backend::get(),
+                Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );

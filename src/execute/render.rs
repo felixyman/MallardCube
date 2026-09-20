@@ -2049,8 +2049,12 @@ fn empty_cellset<B: QueryBackend + ?Sized>(query: &SemanticQuery, backend: &B) -
     )
 }
 
+/// Test seam: route a classified query+result to the correct cellset builder
+/// using the demo fixture. Production code calls `dispatch_with_backend` with
+/// the request's backend (see `execute/runtime.rs`).
+#[cfg(test)]
 pub(crate) fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
-    dispatch_with_backend(query, result, crate::backend::Backend::get())
+    dispatch_with_backend(query, result, crate::backend::Backend::test_fixture())
 }
 
 pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(

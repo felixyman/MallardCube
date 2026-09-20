@@ -18,7 +18,8 @@ cargo run
 ```
 
 Without configuration, the default `projects/project3/` sample project (at repo root) loads with
-synthetic in-memory data and starts on `http://localhost:8080/xmla`.
+synthetic data (a temporary DuckDB file under the system temp dir) and starts on
+`http://localhost:8080/xmla`.
 
 The server binds to `127.0.0.1:8080` by default. To expose it on all interfaces
 (e.g. for a Windows VM), set `BIND_ADDRESS=0.0.0.0:8080`. A 1 MB request body
@@ -186,8 +187,8 @@ bind dimensions and measures to specific fact tables:
 
 ## Demo vs Real Data
 
-By default, the proxy runs in **demo mode**: in-memory DuckDB with synthetic
-data (20k `sales_fact` rows).
+By default, the proxy runs in **demo mode**: a temporary DuckDB file seeded
+with synthetic data (20k `sales_fact` rows).
 
 To use your own DuckDB database, set `"db_path"` in `proxy-config.json` to a
 file path relative to the config file:
