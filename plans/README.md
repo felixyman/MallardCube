@@ -51,10 +51,11 @@ honor its STOP conditions, and update your row when done.
 | 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | DONE |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 | 043  | RLS-aware aggregation routing (rollup-expressible role predicates) | P1 | M | — | DONE |
+| 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract) is TODO. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -107,6 +108,17 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 044 (boundary contract) written 2026-09-20: MallardCube stays a **protocol
+  adapter**. Defines the contract (the proxy owns the XMLA/MDX wire protocol,
+  Excel shape fidelity, delivery mechanics, and a mechanical projection; it
+  does not own measure definitions, DAX, calculation groups, time-intelligence
+  functions, or pre-aggregation semantics), five invariants with enforcement
+  (`qualify --strict` semantic-creep gate, frozen DAX lowering, flags-as-columns,
+  cache-only rollups, a feature-intake rule), and the **sqlmesh + DuckDB**
+  pairing (definitions and materialisation upstream, serving at the edge), with
+  the gaps and their handling (grain pinning, fan-out cardinality check, RLS
+  policy vs enforcement, no pre-aggregation matching). Work items 1–2 are the
+  anti-drift core. Generic examples only — no customer models.
 - 043 (RLS-aware rollup routing) DONE 2026-09-20: any active role filter used
   to disable rollups entirely, so secured users full-scanned the fact (~4 req/s
   vs ~300 req/s on the 100M-row benchmark). Role predicates are now rewritten
