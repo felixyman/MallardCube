@@ -1,4 +1,5 @@
 use crate::backend::QueryBackend;
+use crate::engine::model::SemanticModel;
 #[cfg(test)]
 use crate::execute_builders::{
     get_execute_cellset_response, get_execute_dax_response, get_execute_mdx_response,
@@ -48,40 +49,32 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
     let model = &project.model;
     let table = model.primary_table_name();
 
-    // Extract slicer filters from WHERE clause members like
-    // [Territory].[Territory].&[Northeast] or [Date].[Date].[Year].&[2024].
-    // Reuses the same bracket/key parsers the drilldown path uses.
+    // Extract slicer filters from WHERE-clause members like
+    // [Territory].[Territory].&[North], [Date].[Date].[Year].&[2024], or the
+    // compound [Date].[Date].[Quarter].&[2024]&[1]. Filters are exact: flat
+    // dimensions compare by equality, multi-level dimensions scope through
+    // their dim table by level (plan 033 — the old CAST+LIKE prefix match
+    // also returned Northeast/Northwest rows for North).
     let mut where_clauses: Vec<String> = Vec::new();
     let mut pos = 0usize;
     while let Some(rel) = statement[pos..].find(".&[") {
         let abs = pos + rel;
-        let key_len = crate::mdx_semantic::parse_amp_key(&statement[abs..])
-            .map(|k| {
-                // Backtrack to find the opening [Dim] bracket.
-                // DRILLTHROUGH uses (...), not {[...]}, so search for any [.
-                let prefix = &statement[..abs];
-                let bracket = prefix
-                    .rfind(",[")
-                    .or_else(|| prefix.rfind("(["))
-                    .unwrap_or(0);
-                let member = &statement[bracket + 1..abs + 3 + k.len() + 1];
-                if let Some(dim_name) = crate::mdx_semantic::first_bracket(member)
-                    && dim_name != "Measures"
-                    && let Some(dim) = model.dim_def_opt(&dim_name)
-                {
-                    let col = model
-                        .rel_for_dimension(&dim_name)
-                        .map(|r| r.fact_column.as_str())
-                        .unwrap_or(&dim.physical_field);
-                    where_clauses.push(format!(
-                        "CAST({col} AS VARCHAR) LIKE '{}%'",
-                        k.replace('\'', "''")
-                    ));
+        // Backtrack to the opening [Dim] bracket. DRILLTHROUGH uses (...),
+        // not {[...]}, so search for any [.
+        let prefix = &statement[..abs];
+        let bracket = prefix
+            .rfind(",[")
+            .or_else(|| prefix.rfind("(["))
+            .unwrap_or(0);
+        match parse_member_ref(&statement[bracket + 1..]) {
+            Some((member, consumed)) => {
+                if let Some(sql) = member_filter_sql(model, &member) {
+                    where_clauses.push(sql);
                 }
-                k.len()
-            })
-            .unwrap_or(1);
-        pos = abs + 3 + key_len + 1;
+                pos = bracket + 1 + consumed;
+            }
+            None => pos = abs + 3,
+        }
     }
 
     let sql = if where_clauses.is_empty() {
@@ -95,6 +88,106 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
     let rows = backend.query_rows(&sql);
     let col_names = backend.query_column_names(&sql);
     build_drillthrough_rowset(&col_names, rows, statement)
+}
+
+/// A DRILLTHROUGH slicer member: `[Dim].[Hier].[Level].&[k1]&[k2]`.
+struct DrillMember {
+    dim: String,
+    /// The named level, when the member carries one (`[Date].[Date].[Year]`).
+    level: Option<String>,
+    keys: Vec<String>,
+}
+
+/// Parse a member from the start of `text` (`[Dim].[Hier]...`). Returns the
+/// member and how many bytes were consumed (path plus every key).
+fn parse_member_ref(text: &str) -> Option<(DrillMember, usize)> {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut i = 0usize;
+    while text[i..].starts_with('[') {
+        let end = i + text[i..].find(']')?;
+        parts.push(&text[i + 1..end]);
+        i = end + 1;
+        if text[i..].starts_with(".[") {
+            i += 1; // another hierarchy level segment
+        } else {
+            break;
+        }
+    }
+    if text[i..].starts_with('.') {
+        i += 1; // the `.` of the first `.&[key]`
+    }
+    let mut keys = Vec::new();
+    while text[i..].starts_with("&[") {
+        let end = i + text[i..].find(']')?;
+        keys.push(text[i + 2..end].to_string());
+        i = end + 1;
+    }
+    if parts.is_empty() || keys.is_empty() {
+        return None;
+    }
+    let level = (parts.len() >= 3).then(|| parts[2].to_string());
+    Some((
+        DrillMember {
+            dim: parts[0].to_string(),
+            level,
+            keys,
+        },
+        i,
+    ))
+}
+
+/// Build an exact WHERE predicate for a DRILLTHROUGH member.
+///
+/// - Multi-level dimensions scope through their dim table by level columns
+///   (`date_key IN (SELECT date_key FROM date_dim WHERE year = '2024')`), so
+///   coarse members filter exactly and leaf members match the leaf column.
+/// - Flat dimensions compare the fact column by equality.
+///
+/// Never emits a prefix match: a member shape that cannot be aligned falls
+/// back to exact equality on the fact column (fail closed).
+fn member_filter_sql(model: &SemanticModel, m: &DrillMember) -> Option<String> {
+    let dim = model.dim_def_opt(&m.dim)?;
+    let rel = model.rel_for_dimension(&m.dim);
+    let esc = |v: &str| v.replace('\'', "''");
+
+    if !dim.levels.is_empty() {
+        let target = match &m.level {
+            Some(level) => dim
+                .levels
+                .iter()
+                .position(|l| l.name.eq_ignore_ascii_case(level)),
+            None => Some(dim.levels.len() - 1), // bare member = leaf level
+        };
+        if let (Some(target), Some(rel)) = (target, rel)
+            && let Some(start) = (target + 1).checked_sub(m.keys.len())
+        {
+            let preds: Vec<String> = m
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    format!(
+                        "CAST({} AS VARCHAR) = '{}'",
+                        dim.levels[start + i].column,
+                        esc(key)
+                    )
+                })
+                .collect();
+            return Some(format!(
+                "{} IN (SELECT {} FROM {} WHERE {})",
+                rel.fact_column,
+                rel.dim_column,
+                rel.dim_table,
+                preds.join(" AND ")
+            ));
+        }
+    }
+
+    let key = m.keys.last()?;
+    let col = rel
+        .map(|r| r.fact_column.as_str())
+        .unwrap_or(dim.physical_field.as_str());
+    Some(format!("CAST({col} AS VARCHAR) = '{}'", esc(key)))
 }
 
 fn build_drillthrough_rowset(
@@ -2247,6 +2340,75 @@ mod tests {
                 xml.matches("<row>").count(),
                 1000,
                 "rows must come from the file-backed backend (LIMIT 1000): {xml}"
+            );
+        });
+    }
+
+    // Plan 033: DRILLTHROUGH filters are exact. A flat-dimension member used
+    // to match by prefix, so "North" also returned Northeast/Northwest rows.
+    #[test]
+    fn drillthrough_flat_dimension_member_is_exact() {
+        with_project3(|| {
+            let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+                "DRILLTHROUGH SELECT FROM [Sales] WHERE ([Territory].[Territory].&[North])",
+                Backend::test_fixture(),
+            );
+            let territories: std::collections::BTreeSet<&str> = xml
+                .split("<territory>")
+                .skip(1)
+                .filter_map(|s| s.split("</territory>").next())
+                .collect();
+            assert!(!territories.is_empty(), "North has rows: {xml}");
+            assert_eq!(
+                territories,
+                std::collections::BTreeSet::from(["North"]),
+                "only North rows may be returned"
+            );
+        });
+    }
+
+    // Coarse date members scope through the dim table, so Year 2024 returns
+    // exactly the 2024 rows.
+    #[test]
+    fn drillthrough_coarse_date_member_scopes_exactly() {
+        with_project3(|| {
+            let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+                "DRILLTHROUGH SELECT FROM [Sales] WHERE ([Date].[Date].[Year].&[2024])",
+                Backend::test_fixture(),
+            );
+            let keys: Vec<&str> = xml
+                .split("<date_key>")
+                .skip(1)
+                .filter_map(|s| s.split("</date_key>").next())
+                .collect();
+            assert!(!keys.is_empty(), "2024 has rows: {xml}");
+            assert!(
+                keys.iter().all(|k| k.starts_with("2024")),
+                "every row must be in 2024: {keys:?}"
+            );
+        });
+    }
+
+    // Compound members align their key parts to the level chain: quarter
+    // &[2024]&[1] must not pick up other years' Q1s.
+    #[test]
+    fn drillthrough_compound_quarter_member_scopes_exactly() {
+        with_project3(|| {
+            let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+                "DRILLTHROUGH SELECT FROM [Sales] WHERE ([Date].[Date].[Quarter].&[2024]&[1])",
+                Backend::test_fixture(),
+            );
+            let keys: Vec<&str> = xml
+                .split("<date_key>")
+                .skip(1)
+                .filter_map(|s| s.split("</date_key>").next())
+                .collect();
+            assert!(!keys.is_empty(), "2024 Q1 has rows: {xml}");
+            assert!(
+                keys.iter().all(|k| k.starts_with("202401")
+                    || k.starts_with("202402")
+                    || k.starts_with("202403")),
+                "every row must be in 2024 Q1: {keys:?}"
             );
         });
     }

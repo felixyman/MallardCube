@@ -40,7 +40,7 @@ honor its STOP conditions, and update your row when done.
 | 030  | DRILLTHROUGH ("show details") | P1 | M | — | DONE |
 | 031  | In-memory dimension metadata cache | P2 | S | — | TODO |
 | 032  | MDX-hash result cache — deduplicate repeated Excel queries | P1 | XS | — | DONE |
-| 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | XS | — | TODO |
+| 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | M | — | DONE |
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
 | 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | DONE |
 | 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | DONE |
@@ -53,7 +53,7 @@ honor its STOP conditions, and update your row when done.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030, 032, 035–039, and 041–042 DONE. 031 (metadata cache), 033 (DRILLTHROUGH filters), and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 and 032–033, 035–039, and 041–042 DONE. 031 (metadata cache) and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -106,6 +106,16 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 033 (DRILLTHROUGH filters) DONE 2026-09-20: the `CAST(col AS VARCHAR) LIKE
+  'key%'` filter over-matched flat dimensions (live: `North` returned
+  Northeast/Northwest rows; 7,500 fact rows instead of 2,500), produced zero
+  rows for compound members (`&[2024]&[1]`), and mismatched leaf date keys.
+  Replaced with level-aware exact filters: multi-level dimensions scope through
+  their dim table by level columns (`date_key IN (SELECT date_key FROM date_dim
+  WHERE year = '2024' [AND quarter = '1'])`, leaf → `full_date = '…'`), flat
+  dimensions compare by equality, unalignable shapes fail closed. Verified live
+  (North → all-North 1,000 rows; Year 2024 → all-2024; Q1 2024 → 734 rows, all
+  Q1) plus three new tests; 423 tests green.
 - 042 (retire the in-memory demo backend) DONE 2026-09-20: production
   DRILLTHROUGH was reading the in-memory demo DB (`Backend::get()`), so
   file-backed projects returned no rows or synthetic demo rows — verified live

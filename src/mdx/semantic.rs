@@ -338,12 +338,6 @@ pub(crate) fn extract_drill_members(mdx: &str) -> Option<(String, String, Vec<St
     Some((dim, level, keys))
 }
 
-pub(crate) fn first_bracket(s: &str) -> Option<String> {
-    let rest = s.strip_prefix('[')?;
-    let close = rest.find(']')?;
-    Some(rest[..close].to_string())
-}
-
 pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
     let idx = s.find(".&[")?;
     let mut rest = &s[idx + 3..];
@@ -813,19 +807,6 @@ mod tests {
     fn extract_drillmembers_none_without_member_set() {
         let mdx = "DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)";
         assert_eq!(extract_drill_members(mdx), None);
-    }
-
-    #[test]
-    fn first_bracket_valid() {
-        assert_eq!(
-            first_bracket("[Date].[Date].[Year].&[2024]"),
-            Some("Date".into())
-        );
-    }
-
-    #[test]
-    fn first_bracket_empty() {
-        assert_eq!(first_bracket("no brackets"), None);
     }
 
     #[test]

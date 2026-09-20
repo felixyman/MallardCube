@@ -1,76 +1,74 @@
-# Plan 033: DRILLTHROUGH equality filter — replace CAST+LIKE with direct equality
+# Plan 033: DRILLTHROUGH filters are exact (level-aware)
 
 ## Status
 
-- **Priority**: P1 (correctness + perf, tiny effort)
-- **Effort**: XS
+- **Priority**: P1 (correctness — "Show Details" returned wrong rows)
+- **Effort**: M (the plan's original "replace LIKE with equality" was not enough)
 - **Risk**: LOW
-- **Depends on**: none
-- **Category**: performance
+- **Depends on**: none (042 made the path testable with real backends)
+- **Category**: correctness
+- **Status**: **DONE 2026-09-20**
 
-## Why this matters
+## Why this mattered
 
-DRILLTHROUGH currently builds WHERE clauses using `CAST(col AS VARCHAR) LIKE
-'value%'`. This is non-sargable — it forces a full table scan on every
-drillthrough request, even when the column has the exact value being filtered.
+DRILLTHROUGH built its WHERE clause with `CAST(col AS VARCHAR) LIKE 'key%'`,
+which is not an equality filter:
 
-For a 100M-row fact table, a DRILLTHROUGH with 3 slicer filters scans 100M rows
-instead of seeking to the matching rows.
+- **Flat dimensions over-matched.** Live proof on the demo data:
+  `DRILLTHROUGH ... WHERE ([Territory].[Territory].&[North])` returned
+  `{North: 333, Northeast: 334, Northwest: 333}` — "Show Details" on a North
+  cell showed other territories' rows. `North` matches 7,500 fact rows instead
+  of 2,500.
+- **Compound members never matched.** `[Date].[Date].[Quarter].&[2024]&[1]`
+  produced `date_key LIKE '2024|1%'` — zero rows.
+- **Leaf members mismatched.** A leaf date key (`2024-01-15`) was compared
+  against `date_key` (`20240115`), so leaf-level drillthrough returned nothing.
+- The prefix behaviour was load-bearing for *coarse* date members only
+  (`Year 2024` → `date_key LIKE '2024%'`), which is why a plain equality swap
+  would have broken years.
 
-## Design
+## Design (implemented)
 
-### Current code (`src/execute/dispatch.rs:65-66`)
+`src/execute/dispatch.rs` now parses each WHERE member into
+`DrillMember { dim, level, keys }` (`parse_member_ref`) and builds an exact
+predicate (`member_filter_sql`):
 
-```rust
-where_clauses.push(format!(
-    "CAST({col} AS VARCHAR) LIKE '{}%'",
-    k.replace('\'', "''")
-));
-```
+- **Multi-level dimensions** scope through their dim table by level columns,
+  aligning the key parts backwards from the target level:
+  ```sql
+  date_key IN (SELECT date_key FROM date_dim WHERE year = '2024')
+  date_key IN (SELECT date_key FROM date_dim WHERE year = '2024' AND quarter = '1')
+  date_key IN (SELECT date_key FROM date_dim WHERE full_date = '2024-01-15')
+  ```
+  `CAST(<column> AS VARCHAR) = '<key>'` keeps the comparison type-agnostic
+  (INT, DATE, VARCHAR columns all work). A bare member (`[Dim].[Hier].&[k]`)
+  targets the leaf level.
+- **Flat dimensions** compare the relationship's fact column (or the
+  dimension's `physical_field`) by exact equality.
+- **Fail closed**: a member shape that cannot be aligned falls back to exact
+  equality on the fact column — never a prefix match.
+- Compound keys are consumed as one member, so the scan continues past
+  `&[2024]&[1]` correctly.
 
-### Fix
+## Verification
 
-Use equality when the column is a dimension key (integer FK):
+- Live (demo data, rebuilt server):
+  | Query | Result |
+  |---|---|
+  | `[Territory].&[North]` | 1,000 rows, **all North** (was 333/334/333) |
+  | `[Date].[Date].[Year].&[2024]` | 1,000 rows, all 2024 |
+  | `[Date].[Date].[Quarter].&[2024]&[1]` | 734 rows, all 2024 Q1 (was 0) |
+  | bare `DRILLTHROUGH` | 1,000 rows (unchanged) |
+- Tests: `drillthrough_flat_dimension_member_is_exact`,
+  `drillthrough_coarse_date_member_scopes_exactly`,
+  `drillthrough_compound_quarter_member_scopes_exactly`, plus the existing
+  file-backed Contoso test (1,000-row LIMIT) — 423 tests green.
+- Removed the now-dead `first_bracket` helper (and its tests).
 
-```rust
-if col_is_integer_fk(model, dim, col) {
-    where_clauses.push(format!("{col} = {}", k.replace('\'', "''")));
-} else {
-    where_clauses.push(format!("CAST({col} AS VARCHAR) = '{}'", k.replace('\'', "''")));
-}
-```
+## Notes / follow-ups
 
-For string columns, keep CAST but use `=` instead of `LIKE`. For integer FK
-columns (the common case — date_key, territory_id), use direct equality without
-CAST.
-
-### Column type detection
-
-`dim.physical_field` tells us the dimension column type. DuckDB's
-`PRAGMA table_info('table')` gives the SQL type at runtime, or we can infer from
-the fact column's type: if the relationship's `fact_column` is INTEGER on the
-fact table, it's an FK and can use `=` directly.
-
-Simplest: always use `=` instead of `LIKE`. The `%` suffix was never correct
-semantics for DRILLTHROUGH — the slicer has an exact member key, not a prefix.
-The `LIKE 'value%'` would match `value1`, `value2` etc. which is a bug, not just
-a performance issue.
-
-## Scope
-
-**In scope:**
-- Replace `CAST(col AS VARCHAR) LIKE 'key%'` with `col = key_value` for integer
-  FKs
-- Replace with `CAST(col AS VARCHAR) = 'key'` for string columns
-- Preserve SQL escaping (`''` for single quotes)
-
-**Out of scope:**
-- Full schema type caching (use relationship metadata + fallback to CAST)
-
-## Done criteria
-
-- [ ] Integer FK DRILLTHROUGH uses `col = 1234` (no CAST, no LIKE)
-- [ ] String column DRILLTHROUGH uses `CAST(col AS VARCHAR) = 'value'` (no LIKE)
-- [ ] Existing DRILLTHROUGH tests pass (Contoso + project3)
-- [ ] Verify with `EXPLAIN` that the query plan uses an index/scan on the FK
-      column, not a full-table scan
+- `CAST(col AS VARCHAR) = ...` is not sargable on the fact column; for
+  relationship-backed dimensions the subquery runs against the (small) dim
+  table, and for flat dimensions a full scan was already the case. A numeric
+  fast path (`col = 123`) can be added later if a large fact table makes it
+  worthwhile.
