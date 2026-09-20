@@ -247,7 +247,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 437 tests covering MDX parsing, semantic classification, plan generation,
+- 439 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
@@ -262,6 +262,8 @@ cargo test --lib
 - `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses,
   compatibility gate tests.
 - Benchmark: `cargo bench` runs `benches/pipeline.rs`.
+- Load/scale harness: `scripts/bench.sh` (100M-row numbers in
+  `docs/SCALING.md`); RLS rollup A/B: `scripts/rls-rollup-ab.sh`.
 
 ## Environment variables
 

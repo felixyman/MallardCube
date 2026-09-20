@@ -74,11 +74,13 @@ if [ "${AGG:-0}" = "1" ]; then
   echo "==> aggregations enabled (sidecar: $BENCH_DIR/agg.duckdb)"
 fi
 echo "==> starting proxy on 0.0.0.0:8080"
-PROXY_CONFIG="$CFG" BIND_ADDRESS=0.0.0.0:8080 $AGG_ENV \
-  setsid nohup "$REPO_ROOT/target/release/mallard" serve \
+PROXY_CONFIG="$CFG" BIND_ADDRESS=0.0.0.0:8080 \
+  setsid nohup env $AGG_ENV "$REPO_ROOT/target/release/mallard" serve \
   > "$BENCH_DIR/proxy.log" 2>&1 < /dev/null &
-for _ in $(seq 1 30); do
+# Large models build aggregation rollups before serving; allow minutes.
+for i in $(seq 1 600); do
   curl -s -m 2 -o /dev/null "$URL" 2>/dev/null && break
+  [ "$i" = "30" ] && echo "==> still starting (rollup build can take minutes on large facts)"
   sleep 1
 done
 

@@ -82,8 +82,10 @@ pub fn sql_for_query_plan_with_context(
             )
         }
         QueryPlan::Total { measure, filters } => {
-            if let Some(agg) = route_plan(model, &aggregate::aggregations(), plan, user, config) {
-                return agg_total_sql(model, agg, measure, filters);
+            if let Some((agg, role_predicates)) =
+                route_plan(model, &aggregate::aggregations(), plan, user, config)
+            {
+                return agg_total_sql(model, agg, measure, filters, &role_predicates);
             }
             let meas = model.meas_def(measure);
             let table = &model.fact_table(meas.fact_table_idx).table_name;
@@ -115,7 +117,8 @@ pub fn sql_for_query_plan_with_context(
                 level_idx > 0 && level_idx + 1 != dim.levels.len() && !single_parent
             });
             if !needs_path
-                && let Some(agg) = route_plan(model, &aggregate::aggregations(), plan, user, config)
+                && let Some((agg, role_predicates)) =
+                    route_plan(model, &aggregate::aggregations(), plan, user, config)
             {
                 return agg_groupby_sql(
                     model,
@@ -124,6 +127,7 @@ pub fn sql_for_query_plan_with_context(
                     group_by,
                     &group_levels.first().copied().flatten(),
                     filters,
+                    &role_predicates,
                 );
             }
             let meas = model.meas_def(measure);
@@ -330,49 +334,200 @@ pub fn sql_for_query_plan_with_context(
     }
 }
 
-/// Return the role-filter SQL predicate for a table, or empty string when the
-/// user has unfettered access (`Full` or `Hidden` — gating handled in plan.rs).
+/// Rewrite a role-filter SQL fragment so it can be evaluated against a rollup.
 ///
-/// Rollups are built from the full fact, so they cannot be used when any role
-/// filter is active — that would bypass RLS.
-fn aggregation_safe(model: &SemanticModel, user: &UserContext, config: &ProxyConfig) -> bool {
+/// Rollups carry the date dimension's level columns and the flat dimensions'
+/// values, so a predicate is expressible when every column reference maps to a
+/// rollup column holding the same values. Anything else — fact columns that
+/// were not rolled up, other aliases/tables, quoted identifiers, subqueries —
+/// returns `None`, and the caller keeps the fact path. Correctness over speed:
+/// a rollup must never bypass row-level security.
+fn rewrite_predicate_for_rollup(
+    model: &SemanticModel,
+    agg: &Aggregation,
+    predicate: &str,
+) -> Option<String> {
+    use std::collections::HashSet;
+
+    let rollup_columns: HashSet<&str> = agg
+        .date_columns
+        .iter()
+        .map(|c| c.as_str())
+        .chain(agg.leaf_columns.values().map(|c| c.as_str()))
+        .collect();
+    let date_dim = model.dim_def(&agg.date_dim_id);
+    // `_<dim>.<col>` -> rollup column, when the rollup carries that value.
+    let dim_column = |dim_id: &str, col: &str| -> Option<String> {
+        if dim_id.eq_ignore_ascii_case(&agg.date_dim_id) {
+            let idx = date_dim.levels.iter().position(|l| l.column == col)?;
+            if idx > agg.date_level {
+                return None;
+            }
+            return agg.date_columns.get(idx).cloned();
+        }
+        let leaf_id = agg
+            .leaf_columns
+            .keys()
+            .find(|id| id.eq_ignore_ascii_case(dim_id))?;
+        let dim = model.dim_def_opt(leaf_id)?;
+        (dim.physical_field == col).then(|| col.to_string())
+    };
+
+    let bytes = predicate.as_bytes();
+    let mut out = String::with_capacity(predicate.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '\'' {
+            // Copy string literals verbatim (with '' escapes).
+            let start = i;
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\'' {
+                    if bytes.get(i + 1) == Some(&b'\'') {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push_str(&predicate[start..i]);
+            continue;
+        }
+        if c == '"' {
+            return None; // quoted identifiers: cannot reason about them
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let ident = &predicate[start..i];
+            let lower = ident.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "select" | "from" | "join" | "union" | "exists" | "with"
+            ) {
+                return None; // subqueries are not rollup-expressible
+            }
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'.' {
+                // alias.column
+                j += 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let col_start = j;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if col_start == j {
+                    return None;
+                }
+                let col = &predicate[col_start..j];
+                let mapped = if lower == "f" {
+                    rollup_columns.contains(col).then(|| col.to_string())
+                } else {
+                    dim_column(lower.strip_prefix('_')?, col)
+                };
+                out.push_str(&mapped?);
+                i = j;
+                continue;
+            }
+            let is_keyword = matches!(
+                lower.as_str(),
+                "and"
+                    | "or"
+                    | "not"
+                    | "in"
+                    | "is"
+                    | "null"
+                    | "true"
+                    | "false"
+                    | "like"
+                    | "ilike"
+                    | "between"
+                    | "cast"
+                    | "as"
+                    | "case"
+                    | "when"
+                    | "then"
+                    | "else"
+                    | "end"
+                    | "distinct"
+                    | "all"
+                    | "any"
+                    | "some"
+            );
+            if is_keyword || (j < bytes.len() && bytes[j] == b'(') {
+                // Function names and SQL keywords pass through; their column
+                // arguments are still scanned above.
+                out.push_str(ident);
+                continue;
+            }
+            // A bare column reference must be one the rollup carries.
+            if !rollup_columns.contains(ident) {
+                return None;
+            }
+            out.push_str(ident);
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    Some(out)
+}
+
+/// Role predicates rewritten for a rollup, or `None` when any of them cannot be
+/// evaluated there (the caller then keeps the fact path).
+fn rollup_role_predicates(
+    model: &SemanticModel,
+    user: &UserContext,
+    config: &ProxyConfig,
+    agg: &Aggregation,
+) -> Option<Vec<String>> {
+    let mut predicates = Vec::new();
     for ft in &model.fact_tables {
-        if matches!(
-            effective_table_filter(config, user, &ft.table_name),
-            TableAccess::Filtered(_)
-        ) {
-            return false;
+        if let TableAccess::Filtered(sql) = effective_table_filter(config, user, &ft.table_name) {
+            predicates.push(rewrite_predicate_for_rollup(model, agg, &sql)?);
         }
     }
     for rel in &model.relationships {
-        if matches!(
-            effective_table_filter(config, user, &rel.dim_table),
-            TableAccess::Filtered(_)
-        ) {
-            return false;
+        if let TableAccess::Filtered(sql) = effective_table_filter(config, user, &rel.dim_table) {
+            predicates.push(rewrite_predicate_for_rollup(model, agg, &sql)?);
         }
     }
-    true
+    Some(predicates)
 }
 
-/// The single aggregation routing decision: only route to a rollup when no role
-/// filter is active (rollups are built from the full fact and would bypass RLS)
-/// AND a rollup can answer the plan. Tested directly by the RLS test.
+/// The single aggregation routing decision: a rollup may answer the plan AND
+/// every active role filter is rollup-expressible. The rewritten role
+/// predicates are returned so the rollup query applies them (rollups are built
+/// from the full fact — they must never bypass RLS). Otherwise the fact path.
 fn route_plan<'a>(
     model: &SemanticModel,
     aggs: &'a [Aggregation],
     plan: &QueryPlan,
     user: &UserContext,
     config: &ProxyConfig,
-) -> Option<&'a Aggregation> {
-    if !aggregation_safe(model, user, config) {
-        return None;
-    }
-    aggregate::agg_for_plan_with(model, aggs, plan)
+) -> Option<(&'a Aggregation, Vec<String>)> {
+    let agg = aggregate::agg_for_plan_with(model, aggs, plan)?;
+    let predicates = rollup_role_predicates(model, user, config, agg)?;
+    Some((agg, predicates))
 }
 
 /// WHERE clause for a rollup query: filters map to the rollup's direct columns.
-fn agg_where(model: &SemanticModel, agg: &Aggregation, filters: &[TypedDimensionFilter]) -> String {
+fn agg_where(
+    model: &SemanticModel,
+    agg: &Aggregation,
+    filters: &[TypedDimensionFilter],
+    role_predicates: &[String],
+) -> String {
     let mut parts = Vec::new();
     for f in filters {
         let col = if f.dimension == agg.date_dim_id {
@@ -392,6 +547,7 @@ fn agg_where(model: &SemanticModel, agg: &Aggregation, filters: &[TypedDimension
             }
         }
     }
+    parts.extend(role_predicates.iter().cloned());
     if parts.is_empty() {
         String::new()
     } else {
@@ -404,9 +560,10 @@ fn agg_total_sql(
     agg: &Aggregation,
     measure: &str,
     filters: &[TypedDimensionFilter],
+    role_predicates: &[String],
 ) -> String {
     let meas = model.meas_def(measure);
-    let wc = agg_where(model, agg, filters);
+    let wc = agg_where(model, agg, filters, role_predicates);
     format!(
         "SELECT {} FROM {}.{}{}",
         meas.sql_expr, AGG_ALIAS, agg.table, wc
@@ -420,6 +577,7 @@ fn agg_groupby_sql(
     group_by: &[String],
     group_level: &Option<usize>,
     filters: &[TypedDimensionFilter],
+    role_predicates: &[String],
 ) -> String {
     let meas = model.meas_def(measure);
     let mut cols = Vec::new();
@@ -434,7 +592,7 @@ fn agg_groupby_sql(
             col.unwrap_or_else(|| "1".into())
         ));
     }
-    let wc = agg_where(model, agg, filters);
+    let wc = agg_where(model, agg, filters, role_predicates);
     let nums: Vec<String> = (1..=cols.len()).map(|i| i.to_string()).collect();
     format!(
         "SELECT {}, {} FROM {}.{} {} GROUP BY {} ORDER BY {}",
@@ -1244,10 +1402,11 @@ mod tests {
         );
     }
 
-    // Security: a role-filtered user must never be routed to a rollup (rollups
-    // are built from the full fact and would bypass RLS). Admin users may route.
+    // Security: rollups are built from the full fact, so RLS may only route
+    // when the role predicate is expressible on the rollup (same values) — and
+    // then the predicate is applied to the rollup query.
     #[test]
-    fn rls_blocks_aggregation_routing() {
+    fn rls_routing_requires_expressible_predicates() {
         let model =
             crate::project::project::ProxyProject::load("projects/project3/proxy-config.json")
                 .expect("load project3")
@@ -1280,24 +1439,124 @@ mod tests {
         };
 
         let admin = UserContext::admin_default();
-        assert!(
-            route_plan(&model, &aggs, &plan, &admin, &cfg).is_some(),
-            "admin should route to a rollup"
-        );
+        let (_, admin_preds) =
+            route_plan(&model, &aggs, &plan, &admin, &cfg).expect("admin should route to a rollup");
+        assert!(admin_preds.is_empty(), "admin has no role predicates");
 
+        // A predicate the rollup can evaluate (the Territory value is a leaf
+        // column) routes, and the predicate is applied to the rollup.
         let filtered = crate::engine::model::resolve_user_context(&cfg, "user1", &[]);
         assert!(!filtered.is_administrator);
+        let (agg, preds) = route_plan(&model, &aggs, &plan, &filtered, &cfg)
+            .expect("rollup-expressible RLS may route");
+        assert_eq!(preds, vec!["territory = 'North'".to_string()]);
+        assert!(agg.leaf_columns.values().any(|c| c == "territory"));
+
+        let sql = agg_total_sql(&model, agg, "Revenue", &[], &preds);
         assert!(
-            route_plan(&model, &aggs, &plan, &filtered, &cfg).is_none(),
-            "role-filtered user must never route to a rollup"
+            sql.contains("agg.agg_year"),
+            "expressible RLS should build a rollup query: {sql}"
+        );
+        assert!(
+            sql.contains("territory = 'North'"),
+            "the role predicate must be applied to the rollup: {sql}"
         );
 
-        // End-to-end: the generated SQL for the filtered user has no rollup table.
-        let sql = sql_for_query_plan_with_context(&model, &plan, &filtered, &cfg);
+        // A predicate on a fact column the rollup does not carry must fall
+        // back to the fact table — correctness over speed.
+        let cfg_unexpressible: ProxyConfig = serde_json::from_str(
+            r#"{
+                "catalog": "SALES_ANALYTICS", "cube": "Sales",
+                "source_name": "sales_fact", "table_name": "sales_fact",
+                "dialect": "duckdb", "dimensions": [], "measures": [],
+                "auth": { "trusted_proxy": true },
+                "roles": [{
+                    "name": "BigRevenue",
+                    "model_permission": "read",
+                    "members": [{"member_name": "user1", "member_type": "user"}],
+                    "table_permissions": [{
+                        "table": "sales_fact",
+                        "filter_expression": "revenue > 1000"
+                    }]
+                }]
+            }"#,
+        )
+        .expect("parse config");
+        let big = crate::engine::model::resolve_user_context(&cfg_unexpressible, "user1", &[]);
+        assert!(
+            route_plan(&model, &aggs, &plan, &big, &cfg_unexpressible).is_none(),
+            "an unexpressible predicate must keep the fact path"
+        );
+        // (The end-to-end SQL path routes through the process-wide rollup set,
+        // which tests keep disabled; the routing decision above is the seam.)
+        let sql = sql_for_query_plan_with_context(&model, &plan, &big, &cfg_unexpressible);
         assert!(!sql.contains("agg."), "RLS SQL must not use rollups: {sql}");
         assert!(
             sql.contains("FROM sales_fact"),
             "RLS SQL should scan the fact: {sql}"
         );
+    }
+
+    // The rewrite is the security boundary: it may only map references the
+    // rollup can evaluate with identical semantics.
+    #[test]
+    fn rollup_predicate_rewrite_is_conservative() {
+        let model =
+            crate::project::project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3")
+                .model;
+        let aggs = crate::engine::aggregate::design_aggregations(&model);
+        let year = aggs
+            .iter()
+            .find(|a| a.table == "agg_year")
+            .expect("agg_year");
+
+        // Expressible: flat-dim values (bare or via f.), date level columns,
+        // functions over those columns, and multi-condition predicates.
+        assert_eq!(
+            rewrite_predicate_for_rollup(&model, year, "territory = 'North'").as_deref(),
+            Some("territory = 'North'")
+        );
+        assert_eq!(
+            rewrite_predicate_for_rollup(&model, year, "f.territory = 'North'").as_deref(),
+            Some("territory = 'North'")
+        );
+        assert_eq!(
+            rewrite_predicate_for_rollup(
+                &model,
+                year,
+                "territory = 'North' AND channel = 'Online'"
+            )
+            .as_deref(),
+            Some("territory = 'North' AND channel = 'Online'")
+        );
+        assert_eq!(
+            rewrite_predicate_for_rollup(&model, year, "RIGHT(territory, 3) = 'rth'").as_deref(),
+            Some("RIGHT(territory, 3) = 'rth'")
+        );
+        assert_eq!(
+            rewrite_predicate_for_rollup(&model, year, "_date.year = 2024").as_deref(),
+            Some("year = 2024")
+        );
+
+        // Not expressible: measures, columns the rollup lacks, deeper date
+        // levels than this rollup stores, other aliases, quoted identifiers,
+        // subqueries.
+        for predicate in [
+            "revenue > 1000",
+            "f.revenue > 1000",
+            "f.region = 'EU'",
+            "_date.month = 1",
+            "_territory.region = 'EU'",
+            "x.territory = 'North'",
+            "\"Territory\" = 'North'",
+            "EXISTS (SELECT 1 FROM other)",
+        ] {
+            assert_eq!(
+                rewrite_predicate_for_rollup(&model, year, predicate),
+                None,
+                "must refuse to rewrite: {predicate}"
+            );
+        }
     }
 }

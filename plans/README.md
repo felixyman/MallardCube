@@ -50,10 +50,11 @@ honor its STOP conditions, and update your row when done.
 | 040  | YAML configuration and git-friendly config handling | P2 | M | — | DONE |
 | 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | DONE |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
+| 043  | RLS-aware aggregation routing (rollup-expressible role predicates) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–042 DONE. 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -106,6 +107,16 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 043 (RLS-aware rollup routing) DONE 2026-09-20: any active role filter used
+  to disable rollups entirely, so secured users full-scanned the fact (~4 req/s
+  vs ~300 req/s on the 100M-row benchmark). Role predicates are now rewritten
+  onto the rollup when every column reference is carried there with the same
+  values (flat-dim values, aliased `f.` refs, stored date levels, functions over
+  them), applied to the rollup query, and refused otherwise (unrolled columns,
+  deeper levels, other aliases, quoted identifiers, subqueries) so RLS is never
+  bypassed. Dimension aliases match case-insensitively (the join builder
+  lowercases them). Verified by rewrite/routing tests plus a rollup-vs-fact
+  equivalence test; numbers in `docs/SCALING.md`.
 - 040 (maintainable configuration) DONE 2026-09-20: JSON **or YAML**
   (`src/project/config_io.rs`; extension then content detection, main file and
   section files), derived defaults (`ProxyConfig::normalize`: only `id` +

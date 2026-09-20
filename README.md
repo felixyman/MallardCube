@@ -296,6 +296,19 @@ process), poll the file stamp instead:
 MALLARDCUBE_RELOAD_WATCH=5 cargo run   # check size+mtime every 5 seconds
 ```
 
+## Performance and scale
+
+Large fact tables are the point of the aggregation sidecar: set
+`MALLARDCUBE_AGG_CACHE` and MallardCube pre-computes rollups per hierarchy
+level, so coarse pivots read a few thousand rows instead of the whole fact.
+Row-level security no longer disables them: a role predicate is applied to the
+rollup when the rollup carries every column it references, and the fact path is
+used otherwise (never a silent bypass).
+
+Measured numbers for a 100M-row fact (latency by query shape, rollup benefit,
+concurrency, startup cost) are in `docs/SCALING.md`, with the reproduction
+harness in `scripts/bench.sh` and the RLS A/B in `scripts/rls-rollup-ab.sh`.
+
 ## Sample projects
 
 Sample projects live at the repo root.
@@ -331,7 +344,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-437 tests covering MDX parsing, semantic classification, plan generation, SQL
+439 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate

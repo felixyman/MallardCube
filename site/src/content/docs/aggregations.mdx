@@ -44,10 +44,27 @@ A query uses a rollup when all of these hold:
 - The measure is an additive `SUM`.
 - The query groups at the rollup's grain or coarser.
 - Every filter is on a column the rollup contains.
-- The user has no row-level security filter.
+- Every active row-level-security predicate can be evaluated on the rollup
+  (see below).
 
 Everything else reads the fact table as usual. Queries for time-intelligence
-measures, leaf-level drilldown, or role-filtered users fall back to the fact.
+measures or leaf-level drilldown fall back to the fact.
+
+### Row-level security
+
+Rollups are built from the full fact, so a role predicate must be *applied* to
+the rollup query — never ignored. MallardCube rewrites each predicate onto the
+rollup when every column it references is carried there with the same values:
+
+- flat dimension values (e.g. `territory = 'North'`, `f.territory = 'North'`);
+- date level columns the rollup stores (e.g. `_date.year = 2024` on the year
+  rollup);
+- expressions over those columns (e.g. `RIGHT(territory, 3) = 'rth'`).
+
+If any reference cannot be mapped — a fact column that was not rolled up, a
+deeper date level than the rollup stores, another table/alias, a quoted
+identifier, or a subquery — the query keeps the fact path. Correctness over
+speed: a rollup must never bypass row-level security.
 
 ## How it stays correct
 
@@ -62,7 +79,8 @@ To force a rebuild, delete the sidecar file.
 ## Limitations
 
 - Only `SUM` measures use rollups. `COUNT`, `MIN`, `MAX`, and expressions do not.
-- Row-level security disables rollups for the affected user, because a rollup
-  built from the full fact would otherwise leak rows.
+- A role predicate that cannot be evaluated on the rollup (see above) keeps
+  the fact path for that user.
 - The build scans the fact table once at startup. On a very large table the
-  first start takes a few seconds while the rollups are built.
+  first start takes minutes while the rollups are built (the bench notes in
+  `docs/SCALING.md` have numbers).

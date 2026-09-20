@@ -524,6 +524,56 @@ mod tests {
         let _ = std::fs::remove_file(&agg_path);
     }
 
+    /// RLS-aware routing relies on this: a predicate the rollup carries must
+    /// produce the same number on the rollup as on the fact table.
+    #[test]
+    fn rollup_with_role_predicate_matches_the_fact() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mallardcube-agg-rls-{}.duckdb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        crate::backend::Backend::create_demo_file(&path).expect("create demo file");
+        let model = project3_model();
+        let aggs = design_aggregations(&model);
+        let year = &aggs[0];
+        assert_eq!(year.table, "agg_year");
+
+        let conn = Connection::open_in_memory().expect("in-memory sidecar");
+        conn.execute_batch(&format!(
+            "ATTACH '{}' AS src (READ_ONLY);",
+            path.to_str().unwrap()
+        ))
+        .expect("attach source");
+        conn.execute_batch(&build_sql(&model, year))
+            .expect("build rollup");
+
+        for predicate in [
+            "territory = 'North'",
+            "territory = 'North' AND channel = 'Direct'",
+        ] {
+            let fact: f64 = conn
+                .query_row(
+                    &format!("SELECT SUM(revenue) FROM src.sales_fact WHERE {predicate}"),
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("fact total");
+            let rollup: f64 = conn
+                .query_row(
+                    &format!("SELECT SUM(revenue) FROM agg_year WHERE {predicate}"),
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("rollup total");
+            assert!(fact > 0.0, "{predicate} must match rows");
+            assert!(
+                (fact - rollup).abs() <= fact.abs().max(1.0) * 1e-6,
+                "rollup {rollup} != fact {fact} for {predicate}"
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn validate_rollups_detects_mismatch() {
         let dir = std::env::temp_dir();
