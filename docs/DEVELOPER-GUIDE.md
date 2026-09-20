@@ -105,6 +105,10 @@ src/
   reload.rs                      Data reload: file stamp, stale-sidecar check
                                  (plan 041 phase C)
 
+  dim_cache.rs                   Per-dimension member dictionaries: All-member
+                                 cardinality, leaf values, level paths
+                                 (plan 031)
+
   xmla_trace.rs                  NDJSON trace capture (XMLA_TRACE=1)
 
   backend/                       Database backends
@@ -242,7 +246,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 423 tests covering MDX parsing, semantic classification, plan generation,
+- 428 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.

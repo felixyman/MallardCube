@@ -1038,31 +1038,15 @@ fn member_child_count<B: QueryBackend + ?Sized>(
     let Some(dim_def) = model.dim_def_opt(dim) else {
         return 0;
     };
-    let Some(next) = dim_def.levels.get(level_idx + 1) else {
+    if dim_def.levels.get(level_idx + 1).is_none() {
         return 0;
-    };
-    let table = model.dim_table_for_discovery(dim);
-    let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
-    let mut wc = String::new();
-    if key_parts.len() > level_idx {
-        let conds: Vec<String> = dim_def.levels[..=level_idx]
-            .iter()
-            .zip(key_parts.iter().take(level_idx + 1))
-            .map(|(l, v)| {
-                format!(
-                    "CAST({} AS VARCHAR) = '{}'",
-                    l.column,
-                    v.replace('\'', "''")
-                )
-            })
-            .collect();
-        wc = format!(" WHERE {}", conds.join(" AND "));
     }
-    let sql = format!(
-        "SELECT COUNT(DISTINCT {}) FROM {}{}",
-        next.column, table, wc
-    );
-    backend.query_count(&sql)
+    // Cached dictionary (plan 031): one lookup instead of one query per axis
+    // member.
+    model
+        .dim_cache
+        .get(model, dim_def, backend)
+        .child_count(level_idx, key_path)
 }
 
 /// Apply OLE DB for OLAP "Axis Rowsets" DISPLAY_INFO conventions across an

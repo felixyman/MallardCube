@@ -437,6 +437,9 @@ pub struct SemanticModel {
     /// Per-dimension date-role definitions, keyed by dimension_id.
     /// Populated from is_date_role dimensions with explicit DateDimDef metadata.
     pub date_dims: HashMap<DimId, DateDimDef>,
+    /// Lazily built member dictionaries (plan 031): All-member cardinality,
+    /// distinct leaf values, and per-level paths. Cleared on a data reload.
+    pub dim_cache: crate::engine::dim_cache::DimCache,
 }
 
 impl SemanticModel {
@@ -695,6 +698,7 @@ pub fn default_model() -> SemanticModel {
         relationships: vec![],
         date_dim: None,
         date_dims: HashMap::new(),
+        dim_cache: Default::default(),
     }
 }
 

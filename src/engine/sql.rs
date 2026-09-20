@@ -893,6 +893,7 @@ mod tests {
             }],
             date_dim: None,
             date_dims: HashMap::new(),
+            dim_cache: Default::default(),
         }
     }
 
@@ -999,6 +1000,7 @@ mod tests {
             relationships: vec![],
             date_dim: None,
             date_dims: HashMap::new(),
+            dim_cache: Default::default(),
         }
     }
 
@@ -1173,6 +1175,7 @@ mod tests {
             }],
             date_dim: None,
             date_dims: std::collections::HashMap::new(),
+            dim_cache: Default::default(),
         }
     }
 

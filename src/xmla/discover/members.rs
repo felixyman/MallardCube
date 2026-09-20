@@ -78,17 +78,12 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
             .map(|l| l.column.as_str())
             .unwrap_or(dim.physical_field.as_str());
         let cardinality = match &access {
-            TableAccess::Filtered(sql) => {
-                let sql_count = format!(
-                    "SELECT COUNT(DISTINCT {}) FROM {} WHERE {}",
-                    child_col, dim_table, sql
-                );
-                backend.query_count(&sql_count)
-            }
-            _ => {
-                let sql = format!("SELECT COUNT(DISTINCT {}) FROM {}", child_col, dim_table);
-                backend.query_count(&sql)
-            }
+            TableAccess::Filtered(sql) => backend.query_count(&format!(
+                "SELECT COUNT(DISTINCT {child_col}) FROM {dim_table} WHERE {sql}"
+            )),
+            // Cached dictionary (plan 031): unfiltered counts are stable, so a
+            // field-list refresh costs no metadata queries after the first.
+            _ => model.dim_cache.get(model, dim, backend).all_cardinality,
         };
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
@@ -146,17 +141,21 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
         let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
-        let sql = match &access {
-            TableAccess::Filtered(sql_filter) => format!(
-                "SELECT DISTINCT {} FROM {} WHERE {} ORDER BY {}",
-                dim.physical_field, dim_table, sql_filter, dim.physical_field
-            ),
-            _ => format!(
-                "SELECT DISTINCT {} FROM {} ORDER BY {}",
-                dim.physical_field, dim_table, dim.physical_field
-            ),
+        let cached_values;
+        let members;
+        let values: &[String] = match &access {
+            TableAccess::Filtered(sql_filter) => {
+                cached_values = crate::engine::dim_cache::query_leaf_values(
+                    backend, dim, dim_table, sql_filter,
+                );
+                &cached_values
+            }
+            // Cached dictionary (plan 031).
+            _ => {
+                members = model.dim_cache.get(model, dim, backend);
+                &members.leaf_values
+            }
         };
-        let values = backend.query_strings(&sql);
         for (ordinal, val) in values.iter().enumerate() {
             let ordinal = ordinal as u32 + 1;
             let leaf_member_u = format!("{}.&[{}]", hier_u, val);
@@ -212,37 +211,27 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
         if access == TableAccess::Hidden {
             continue;
         }
-        let where_sql = match &access {
-            TableAccess::Filtered(sql) => format!(" WHERE {sql}"),
-            _ => String::new(),
+        let filter_sql = match &access {
+            TableAccess::Filtered(sql) => sql.as_str(),
+            _ => "",
         };
 
         let dim_u = dim.dimension_unique_name();
         let hier_u = dim.hierarchy_unique_name();
         let all_member_u = dim.all_member_unique_name();
-        // Phase 1 — distinct full paths per level, one '|' pipe-delimited
-        // string per row (query_rows returns table-width rows, so a
-        // concatenated projection keeps the column mapping explicit).
-        let level_paths: Vec<Vec<Vec<String>>> = (0..dim.levels.len())
-            .map(|i| {
-                let exprs: Vec<String> = dim.levels[..=i]
-                    .iter()
-                    .map(|l| format!("CAST({} AS VARCHAR)", l.column))
-                    .collect();
-                let concat = if exprs.len() == 1 {
-                    exprs[0].clone()
-                } else {
-                    format!("({})", exprs.join(" || '|' || "))
-                };
-                let sql =
-                    format!("SELECT DISTINCT {concat} FROM {dim_table}{where_sql} ORDER BY 1");
-                backend
-                    .query_strings(&sql)
-                    .into_iter()
-                    .map(|s| s.split('|').map(|p| p.to_string()).collect())
-                    .collect()
-            })
-            .collect();
+        // Phase 1 — distinct full paths per level (cached dictionary, plan 031;
+        // RLS-filtered users query directly because cached values are
+        // unfiltered). One '|' pipe-delimited string per row.
+        let cached_paths;
+        let members;
+        let level_paths: &Vec<Vec<Vec<String>>> = if filter_sql.is_empty() {
+            members = model.dim_cache.get(model, dim, backend);
+            &members.level_paths
+        } else {
+            cached_paths =
+                crate::engine::dim_cache::query_level_paths(backend, dim, dim_table, filter_sql);
+            &cached_paths
+        };
         // Phase 2 — emit rows. A member's child count is the number of
         // distinct next-level paths sharing its key as prefix.
         let mut ordinal = 1u32; // 0 belongs to the All member

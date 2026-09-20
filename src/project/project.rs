@@ -630,6 +630,7 @@ fn build_semantic_model_with_mode(
         relationships,
         date_dim,
         date_dims,
+        dim_cache: Default::default(),
     }
 }
 

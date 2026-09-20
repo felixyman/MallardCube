@@ -38,7 +38,7 @@ honor its STOP conditions, and update your row when done.
 | 028  | Hygiene foundation (green baseline, plan bookkeeping, lint bar, CI) | P1 | M | — | DONE |
 | 029  | Multi-level date hierarchies | P1 | L | 023, 027, 028 | DONE |
 | 030  | DRILLTHROUGH ("show details") | P1 | M | — | DONE |
-| 031  | In-memory dimension metadata cache | P2 | S | — | TODO |
+| 031  | In-memory dimension metadata cache | P2 | M | — | DONE |
 | 032  | MDX-hash result cache — deduplicate repeated Excel queries | P1 | XS | — | DONE |
 | 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | M | — | DONE |
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
@@ -53,7 +53,7 @@ honor its STOP conditions, and update your row when done.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 and 032–033, 035–039, and 041–042 DONE. 031 (metadata cache) and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 and 031–033, 035–039, and 041–042 DONE. 040 (YAML config) is open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -106,6 +106,15 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 031 (dimension metadata cache) DONE 2026-09-20: `src/engine/dim_cache.rs`
+  keeps one dictionary per dimension on the model (`all_cardinality`,
+  `leaf_values`, per-level `level_paths`) and answers All-member counts, flat
+  leaf lists, leveled member trees, drilldown child counts, and `MetaCount`
+  probes from memory after the first build. Lazy (the demo DB is created after
+  the project loads), per-model (tests/projects cannot share), RLS users bypass
+  it (cached values are unfiltered), and `reload_data` clears it (plan 041).
+  Proven by call-counting tests: the second MDSCHEMA_MEMBERS issues zero
+  metadata queries and returns an identical rowset body.
 - 033 (DRILLTHROUGH filters) DONE 2026-09-20: the `CAST(col AS VARCHAR) LIKE
   'key%'` filter over-matched flat dimensions (live: `North` returned
   Northeast/Northwest rows; 7,500 fact rows instead of 2,500), produced zero

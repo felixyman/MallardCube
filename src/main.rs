@@ -68,6 +68,11 @@ fn reload_data(state: &AppState) -> Result<String, String> {
         Err(e) => *e.into_inner() = status,
     }
     mallardcube::execute::cache::RESULT_CACHE.clear();
+    // Member dictionaries depend on the data too (plan 031).
+    mallardcube::proxy_project::project()
+        .model
+        .dim_cache
+        .clear();
 
     let mut note = format!(
         "{} ({} bytes, modified {} unix)",

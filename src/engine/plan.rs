@@ -910,8 +910,34 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             QueryResult::Count(count)
         }
 
-        QueryPlan::MetaCount { .. } => {
-            let count = backend.query_count(&sql);
+        QueryPlan::MetaCount { dim, group_level } => {
+            // Cached dictionary (plan 031) for unfiltered users; RLS-filtered
+            // users keep the role-scoped SQL so counts cannot leak.
+            let table = model.dim_table_for_discovery(dim);
+            let cached_ok = !matches!(
+                effective_table_filter(config, user, table),
+                TableAccess::Filtered(_)
+            );
+            let count = if cached_ok {
+                let dim_def = model.dim_def(dim);
+                let members = model.dim_cache.get(model, dim_def, backend);
+                match group_level {
+                    Some(idx) => members.path_count(*idx).unwrap_or(0),
+                    None => {
+                        if dim_def.levels.is_empty() {
+                            members.leaf_values.len() as u32
+                        } else {
+                            members
+                                .level_paths
+                                .last()
+                                .map(|p| p.len() as u32)
+                                .unwrap_or(0)
+                        }
+                    }
+                }
+            } else {
+                backend.query_count(&sql)
+            };
             QueryResult::Count(count)
         }
 
