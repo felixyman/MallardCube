@@ -351,7 +351,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-442 tests covering MDX parsing, semantic classification, plan generation, SQL
+445 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -399,7 +399,7 @@ For detailed documentation:
 - AutoModel: zero-config semantic model from any DuckDB file (`MALLARDCUBE_DB` / `auto-model` CLI)
 
 **Partial:**
-- Fallback SQL for composite DAX — 6 generic patterns covered; genuinely unsupported patterns emit honest stubs
+- Fallback SQL for composite DAX — 6 mechanical patterns, labelled **bridge code**: the conversion report lists a suggested upstream artifact per measure, and `qualify --strict` fails while bridge code remains
 - SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
 - Deep hierarchy expansion in Excel — expanding a whole field more than one level in a single step
   (e.g. Year → "Expand to Month") or expanding the deepest level (Month → dates) can crash

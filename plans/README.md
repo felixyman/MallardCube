@@ -113,15 +113,17 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   invariants with enforcement, the upstream recipe, trade-offs, non-goals;
   linked from README/CONTRIBUTING/PRODUCT-SUMMARY/DEVELOPER-GUIDE),
   `qualify --strict` (fails on fallback SQL + untranslated DAX filters, reports
-  non-additive measures, CI-usable), and the runnable proof
-  `projects/upstream_marts/` (upstream schema/seed/marts + a thin projection,
-  verified live against raw-SQL oracles). Fixed on the way: the time-flag filter
-  assumed the fact date column matched the dimension key name (models using
-  `order_date_key`/`DeliveryDate` silently returned 0 for YTD) — now
-  relationship-driven with a regression test. Noted gap for its own plan:
+  non-additive measures, CI-usable), the converter policy (frozen DAX lowering,
+  `BRIDGE CODE` banners on every fallback file, a "define upstream" checklist
+  with a suggested artifact per measure, `[bridge]` descriptions), and the
+  runnable proof `projects/upstream_marts/` (upstream schema/seed/marts + a thin
+  projection, verified live against raw-SQL oracles). Fixed on the way: the
+  time-flag filter assumed the fact date column matched the dimension key name
+  (models using `order_date_key`/`DeliveryDate` silently returned 0 for YTD)
+  — now relationship-driven with a regression test. Noted gap for its own plan:
   same-hierarchy slicer tuples are planned as a set (OR, first member's level)
-  rather than an intersection. Remaining: converter policy (item 3), optional
-  attach target and auto date hierarchies (items 4–5).
+  rather than an intersection. Remaining: optional attach target and auto date
+  hierarchies (items 4–5).
 - 043 (RLS-aware rollup routing) DONE 2026-09-20: any active role filter used
   to disable rollups entirely, so secured users full-scanned the fact (~4 req/s
   vs ~300 req/s on the 100M-row benchmark). Role predicates are now rewritten

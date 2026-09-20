@@ -687,7 +687,14 @@ fn render_measure_configs(m: &ConversionModel) -> String {
                 sql = sql,
                 caption = meas.name,
                 dn = meas.name,
-                desc = json_escape(&format!("[{}] {}", meas.classification, dax_expr)),
+                desc = json_escape(&format!(
+                    "[{}] {}",
+                    match meas.classification.as_str() {
+                        "sql_fallback" => "bridge",
+                        other => other,
+                    },
+                    dax_expr
+                )),
                 ord = i + 1,
                 cube = m.cube,
                 fb = fb_line,
@@ -1009,10 +1016,58 @@ SELECT 1 AS dummy;
 
 // ---- SQL fallback generation ----
 
-fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String {
-    generate_fallback_sql_recursive(meas, model, &mut Vec::new())
+/// Bridge-code banner prepended to every generated fallback file (plan 044).
+const BRIDGE_HEADER: &str = "\
+-- BRIDGE CODE (plan 044) — move this definition upstream.
+-- Fallback SQL exists so Excel keeps working during a migration; it is not
+-- where metric logic should live. Prefer an additive column or a mart in your
+-- transformation layer and delete this file. See docs/DESIGN-INVARIANTS.md.
+-- `mallard qualify --strict` fails while bridge code remains.";
+
+/// What to build upstream instead of this DAX (plan 044). A heuristic, but
+/// enough to turn the conversion report into a migration checklist.
+fn upstream_suggestion(dax: &str) -> &'static str {
+    // DAX is often written with spaces before the parenthesis
+    // (`CALCULATE ( SUM ( ... ) )`), so strip whitespace before matching.
+    let upper: String = dax
+        .to_uppercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if upper.contains("MEDIAN(") || upper.contains("PERCENTILE") {
+        "median/percentile mart at the reporting grain"
+    } else if upper.contains("DISTINCTCOUNT(") {
+        "grain change (one row per counted entity) or an entity-grain fact"
+    } else if upper.contains("ALLSELECTED(")
+        || upper.contains("ISONORAFTER(")
+        || upper.contains("TOTALYTD(")
+        || upper.contains("YEAR(TODAY())")
+    {
+        "cumulative snapshot mart at the calendar grain"
+    } else if upper.contains("SUMX(") && upper.contains("RELATED(") {
+        "additive column for the row-level multiplication"
+    } else if upper.contains("DIVIDE(") {
+        "numerator and denominator as additive columns"
+    } else if upper.contains("CALCULATE(") {
+        "status/bucket flag column for the CALCULATE filter"
+    } else {
+        "a SQL model in the transformation layer"
+    }
 }
 
+fn generate_fallback_sql(meas: &MeasureInfo, model: &ConversionModel) -> String {
+    let body = generate_fallback_sql_recursive(meas, model, &mut Vec::new());
+    format!("{BRIDGE_HEADER}\n\n{body}")
+}
+
+/// DAX lowering — **FROZEN** (plan 044).
+///
+/// Policy: mechanical patterns only; no new DAX coverage is added here.
+/// Complex measures are not lowered — they fall through to the stub and become
+/// an entry in the conversion report's "define upstream" checklist, so the
+/// definition moves to the transformation layer instead of growing a DAX engine
+/// inside the proxy (`docs/DESIGN-INVARIANTS.md`). Everything this function
+/// emits is bridge code, labelled as such in the file header and the report.
 fn generate_fallback_sql_recursive(
     meas: &MeasureInfo,
     model: &ConversionModel,
@@ -1634,12 +1689,16 @@ fn render_report(m: &ConversionModel) -> String {
     out.push_str(&format!("- Date-role tables: {}\n", m.date_roles.len()));
     out.push_str(&format!("- Relationships: {}\n", m.relationships.len()));
     out.push_str(&format!(
-        "- Measures: {} (simple: {}, sql_fallback: {}, manual: {})\n",
+        "- Measures: {} (simple: {}, bridge: {}, manual: {})\n",
         m.fact_table.measures.len(),
         simple.len(),
         fallback.len(),
         manual.len()
     ));
+    out.push_str(
+        "- Boundary: bridge/manual definitions belong upstream (an additive column or a mart) —\n  \
+         see docs/DESIGN-INVARIANTS.md. `mallard qualify --strict` fails while bridge code remains.\n",
+    );
     out.push_str(&format!("- M-partition tables: {} (load_data.sql attempts automated loading, see load_data.sql for details)\n\n",
         if m.fact_table.is_m_partition() { 1usize } else { 0 }
         + m.dimensions.iter().filter(|t| t.is_m_partition()).count()
@@ -1666,23 +1725,40 @@ fn render_report(m: &ConversionModel) -> String {
         out.push_str(&format!("| {} | {} | {} |\n", m.name, dax, sql));
     }
 
-    out.push_str("\n## SQL fallback measures\n\n");
-    out.push_str("| Measure | DAX pattern | Fallback file |\n|---|---|---|\n");
+    out.push_str("\n## Bridge code — define upstream\n\n");
+    out.push_str(
+        "These measures carry DAX-derived SQL in `sql_fallback/`. It is bridge code: it keeps\n\
+         Excel working during a migration. Move each definition upstream and delete the file —\n\
+         see `docs/DESIGN-INVARIANTS.md`.\n\n",
+    );
+    out.push_str(
+        "| Measure | DAX pattern | Suggested upstream artifact | Bridge file |\n|---|---|---|---|\n",
+    );
     for m in &fallback {
         let dax = m.expression.as_str();
         out.push_str(&format!(
-            "| {} | {} | sql_fallback/{}.sql |\n",
+            "| {} | {} | {} | sql_fallback/{}.sql |\n",
             m.name,
             dax,
+            upstream_suggestion(dax),
             normalize_ident(&m.name)
         ));
     }
 
     if !manual.is_empty() {
-        out.push_str("\n## Manual review required\n\n");
-        out.push_str("| Measure | DAX pattern |\n|---|---|\n");
+        out.push_str("\n## Manual review required — define upstream\n\n");
+        out.push_str(
+            "No SQL was generated for these. Define them in the transformation layer\n\
+             (see `docs/DESIGN-INVARIANTS.md`):\n\n",
+        );
+        out.push_str("| Measure | DAX pattern | Suggested upstream artifact |\n|---|---|---|\n");
         for m in &manual {
-            out.push_str(&format!("| {} | {} |\n", m.name, m.expression.as_str()));
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                m.name,
+                m.expression.as_str(),
+                upstream_suggestion(m.expression.as_str())
+            ));
         }
     }
 
@@ -2151,6 +2227,61 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&out_dir);
+    }
+
+    // Plan 044: fallback files are bridge code and say so; the report turns
+    // them into an upstream checklist.
+    #[test]
+    fn fallback_files_are_labelled_bridge_code() {
+        let model = make_generic_model();
+        let sql = generate_fallback_sql(&model.fact_table.measures[0], &model);
+        assert!(
+            sql.starts_with("-- BRIDGE CODE"),
+            "fallback files must be labelled: {sql}"
+        );
+        assert!(sql.contains("docs/DESIGN-INVARIANTS.md"), "{sql}");
+        // Comment lines are legal SQL; the statement is still there.
+        let body: String = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.to_uppercase().contains("SELECT"), "{body}");
+    }
+
+    #[test]
+    fn report_lists_the_upstream_checklist() {
+        let report = render_report(&make_generic_model());
+        assert!(report.contains("Bridge code — define upstream"), "{report}");
+        assert!(report.contains("Suggested upstream artifact"), "{report}");
+        assert!(
+            report.contains("status/bucket flag column for the CALCULATE filter"),
+            "CALCULATE measures get a flag suggestion: {report}"
+        );
+        assert!(report.contains("docs/DESIGN-INVARIANTS.md"), "{report}");
+        assert!(
+            report.contains("qualify --strict"),
+            "the report points at the enforcement gate: {report}"
+        );
+    }
+
+    #[test]
+    fn upstream_suggestions_cover_the_patterns() {
+        assert!(upstream_suggestion("MEDIAN('T'[c])").contains("median"));
+        assert!(upstream_suggestion("DISTINCTCOUNT('T'[c])").contains("grain change"));
+        assert!(
+            upstream_suggestion(
+                "CALCULATE([M], FILTER(ALLSELECTED('D'[x]), ISONORAFTER('D'[x], MAX('D'[x]), DESC)))"
+            )
+            .contains("cumulative")
+        );
+        assert!(
+            upstream_suggestion("SUMX(FILTER('T', 'T'[x]=1), 'T'[q] * RELATED('D'[c]))")
+                .contains("additive column")
+        );
+        assert!(upstream_suggestion("DIVIDE([A],[B])").contains("numerator"));
+        assert!(upstream_suggestion("CALCULATE([M], 'D'[x]=\"y\")").contains("flag column"));
+        assert!(upstream_suggestion("[A] + 1").contains("SQL model"));
     }
 
     #[test]

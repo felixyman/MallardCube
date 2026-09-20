@@ -7,9 +7,9 @@
 - **Risk**: LOW (no behaviour change beyond a new strict gate)
 - **Depends on**: none
 - **Category**: architecture / positioning
-- **Status**: **IN PROGRESS 2026-09-20** — items 1–2 landed (docs +
-  `qualify --strict`) plus the runnable proof project; item 3 (converter policy)
-  and 4–5 remain.
+- **Status**: **IN PROGRESS 2026-09-20** — items 1–3 landed (docs,
+  `qualify --strict`, converter policy) plus the runnable proof project; items
+  4–5 (optional/later) remain.
 
 ## Why this matters
 
@@ -126,7 +126,7 @@ MallardCube is deliberately that runtime, for Excel only.
 |---|---|---|---|
 | 1 | Design-invariants + "what belongs upstream" docs, README positioning line, product-summary update | S | **DONE** — `docs/DESIGN-INVARIANTS.md`, README + CONTRIBUTING + PRODUCT-SUMMARY + DEVELOPER-GUIDE pointers |
 | 2 | `qualify --strict`: semantic-creep report + non-additive report | S/M | **DONE** — fails on fallback SQL and untranslated DAX filters; reports non-additive measures; `--strict` is CI-usable (exit 1) |
-| 3 | Converter policy: freeze DAX lowering, emit a per-measure "define upstream" checklist, label fallbacks as bridge code | S/M | TODO |
+| 3 | Converter policy: freeze DAX lowering, emit a per-measure "define upstream" checklist, label fallbacks as bridge code | S/M | **DONE** — frozen policy comment on the lowering; `BRIDGE CODE` banner in every fallback file; report section "Bridge code — define upstream" with a suggested artifact per measure (heuristic over the DAX shape); config descriptions use `[bridge]` |
 | 4 | (Optional, later) Postgres-wire attach target (Cube Core OSS / Trino / Postgres marts) — spike first | M | TODO |
 | 5 | (Later) Auto date hierarchies from date/time columns (converter + AutoModel) | M | TODO |
 
@@ -146,6 +146,15 @@ Items 1–2 are the anti-drift core and can land independently of the rest.
   SQL plus a thin projection; every measure is plain SQL. Verified live against
   raw-SQL oracles: revenue, YTD (flag contract), on-time %, average lead time,
   median at the mart grain, and cumulative revenue all match exactly.
+- **Converter policy** (item 3): the DAX lowering carries a frozen-policy
+  comment (mechanical patterns only, no new coverage); every generated
+  `sql_fallback/*.sql` starts with a `BRIDGE CODE` banner; the conversion report
+  has a "Bridge code — define upstream" section with a suggested upstream
+  artifact per measure (median → mart, distinct count → grain change,
+  cumulative → snapshot mart, SUMX/RELATED → additive column, DIVIDE →
+  numerator/denominator, CALCULATE → flag column), and config descriptions are
+  labelled `[bridge]`. Verified by converting the retail sample: 4/4 measures
+  classified as bridge with suggestions, banners present.
 - **Bug fixed on the way**: the time-flag filter emitted `f.<dim key>` instead
   of the relationship's fact column, so any model whose fact date column is not
   named like the dimension key (`order_date_key`, `DeliveryDate`, …)
@@ -192,5 +201,5 @@ beyond bug fixes.
 - [x] `qualify --strict` implemented, tested, and documented (CI-usable).
 - [x] Runnable proof project (`projects/upstream_marts/`) passing `--strict` and
       verified against raw-SQL oracles.
-- [ ] Converter emits the "define upstream" checklist; DAX lowering frozen.
+- [x] Converter emits the "define upstream" checklist; DAX lowering frozen.
 - [x] Plan index updated; the feature-intake rule recorded.

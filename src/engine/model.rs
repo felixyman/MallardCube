@@ -613,7 +613,10 @@ impl SemanticModel {
         // Otherwise auto-classify from the SQL text.
         let sql = meas.sql_fallback_sql.as_deref()?;
         let upper = sql.to_uppercase();
-        if upper.trim() == "SELECT 1 AS DUMMY;" || upper.contains("TODO") {
+        if upper.trim() == "SELECT 1 AS DUMMY;"
+            || upper.contains("SELECT 1 AS DUMMY")
+            || upper.contains("TODO")
+        {
             return Some(FallbackCapability::Stub);
         }
         if !upper.contains("GROUP BY") {
