@@ -56,8 +56,10 @@ mallard trace-replay xmla-trace.jsonl --project /path/to/output/proxy-config.jso
 
 Straightforward models convert fully: dimensions, measures with simple
 aggregates, relationships, and single-level or multi-level hierarchies.
-Composite DAX measures become SQL fallback files for the patterns the converter
-recognizes, and honest stubs for the ones it does not.
+Hierarchy levels become Excel drill paths (year → quarter → month → day), and
+relationship columns are resolved to the generated schema so fact↔dim joins
+work. Composite DAX measures become SQL fallback files for the patterns the
+converter recognizes, and honest stubs for the ones it does not.
 
 Fallback SQL is **bridge code**: it keeps Excel working during a migration, and
 the conversion report suggests an upstream artifact for each measure (an

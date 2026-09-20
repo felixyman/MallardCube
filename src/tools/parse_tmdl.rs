@@ -486,7 +486,7 @@ fn build_table(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<TableInfo
     let mut columns: Vec<ColumnInfo> = Vec::new();
     let mut measures: Vec<MeasureInfo> = Vec::new();
     let mut partitions: Vec<PartitionInfo> = Vec::new();
-    let mut hierarchies: Vec<String> = Vec::new();
+    let mut hierarchies: Vec<HierarchyInfo> = Vec::new();
 
     for child in &obj.children {
         match child.object_type.as_str() {
@@ -506,7 +506,10 @@ fn build_table(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<TableInfo
                 }
             }
             "hierarchy" => {
-                hierarchies.push(child.name.clone());
+                hierarchies.push(HierarchyInfo {
+                    name: child.name.clone(),
+                    levels: build_hierarchy_levels(child),
+                });
             }
             _ => {}
         }
@@ -525,6 +528,41 @@ fn build_table(obj: &TmdlObject, warnings: &mut Vec<String>) -> Option<TableInfo
         partitions,
         hierarchies,
     })
+}
+
+/// Build hierarchy levels from the `level` child objects of a TMDL
+/// `hierarchy` declaration: `level Year` with `column: Year` / `ordinal: 0`.
+fn build_hierarchy_levels(hierarchy: &TmdlObject) -> Vec<HierarchyLevelInfo> {
+    let mut levels: Vec<HierarchyLevelInfo> = Vec::new();
+    for child in &hierarchy.children {
+        if child.object_type != "level" {
+            continue;
+        }
+        let mut column = String::new();
+        let mut ordinal: Option<u32> = None;
+        for (key, val) in &child.properties {
+            match key.as_str() {
+                "column" => column = val.trim().to_string(),
+                "ordinal" => ordinal = val.trim().parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        if column.is_empty() {
+            continue;
+        }
+        let name = child.name.trim();
+        levels.push(HierarchyLevelInfo {
+            name: if name.is_empty() {
+                column.clone()
+            } else {
+                name.to_string()
+            },
+            column,
+            ordinal: ordinal.unwrap_or(levels.len() as u32),
+        });
+    }
+    levels.sort_by_key(|l| l.ordinal);
+    levels
 }
 
 fn build_column(child: &TmdlObject) -> Option<ColumnInfo> {
@@ -901,7 +939,12 @@ mod tests {
         let date = model.tables.iter().find(|t| t.name == "Date").unwrap();
         assert_eq!(date.columns.len(), 2, "Date should have 2 columns");
         assert_eq!(date.hierarchies.len(), 1, "Date should have 1 hierarchy");
-        assert_eq!(date.hierarchies[0], "Calendar Hierarchy");
+        let hier = &date.hierarchies[0];
+        assert_eq!(hier.name, "Calendar Hierarchy");
+        assert_eq!(hier.levels.len(), 1, "TMDL fixture hierarchy has one level");
+        assert_eq!(hier.levels[0].name, "Year");
+        assert_eq!(hier.levels[0].column, "Year");
+        assert_eq!(hier.levels[0].ordinal, 0);
         assert_eq!(date.partitions.len(), 1);
 
         // Verify relationships (sorted: Sales→Date, Sales→Product)

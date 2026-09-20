@@ -351,7 +351,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-445 tests covering MDX parsing, semantic classification, plan generation, SQL
+450 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -392,7 +392,8 @@ For detailed documentation:
 - Object-level security (OLS) via table hiding
 - Model-level permission gating (read / administrator / none)
 - Trusted-proxy auth boundary (IIS/nginx → X-User header)
-- Tabular `.bim` / TMDL → proxy config converter
+- Tabular `.bim` / TMDL → proxy config converter, including hierarchy levels
+  (Excel drill paths) and relationship columns resolved to the generated schema
 - Structured fallback SQL with capability gates (6 generic DAX-lowering patterns)
 - Qualify migration readiness gate (READY / PARTIAL / BLOCKED)
 - Compatibility gate: discover + execute + replay validation

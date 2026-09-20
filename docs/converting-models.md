@@ -17,6 +17,24 @@ Output:
 - `sql_fallback/` — DuckDB SQL for complex measures (MEDIAN, cumulative, etc.)
 - `conversion-report.md` — summary and data-loading checklist
 
+What converts from the model's shape:
+
+- **Hierarchy levels** — every declared hierarchy is parsed (BIM/folder `levels`,
+  TMDL `level` children) and becomes `hierarchy_levels` in the config, so Excel
+  drills `[Dates].[Calendar Hierarchy].[year]` → quarter → month → day. The
+  config carries one hierarchy per dimension; extra hierarchies on the same
+  table are listed in the report.
+- **Relationships** — endpoints are resolved from model column names to the
+  source columns `schema.sql` creates (`Customer ID` → `customerid`), so
+  fact↔dim joins work on the generated schema.
+- **Measures** — plain aggregates become `sql_expr`; composite DAX becomes
+  bridge code in `sql_fallback/` with a "define upstream" checklist (see
+  `DESIGN-INVARIANTS.md`).
+
+Not yet converted (named in the report): relationship semantics
+(`isActive`, cross-filtering, cardinality), per-dimension date roles,
+calculated tables/columns.
+
 ## Migration intake loop
 
 The full flow for bringing an existing Tabular model into MallardCube:

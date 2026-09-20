@@ -210,10 +210,18 @@ fn render_markdown(inv: &Inventory) -> String {
             out.push_str("\n\n");
         }
         if !t.hierarchies.is_empty() {
-            out.push_str(&format!(
-                "**Hierarchies**: {}\n\n",
-                t.hierarchies.join(", ")
-            ));
+            let hiers: Vec<String> = t
+                .hierarchies
+                .iter()
+                .map(|h| {
+                    if h.levels.is_empty() {
+                        h.name.clone()
+                    } else {
+                        format!("{} ({} levels)", h.name, h.levels.len())
+                    }
+                })
+                .collect();
+            out.push_str(&format!("**Hierarchies**: {}\n\n", hiers.join(", ")));
         }
         if !t.columns.is_empty() {
             out.push_str("| Column | Type | Source | Hidden |\n|---|---|---|---|\n");

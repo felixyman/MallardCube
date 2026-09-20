@@ -309,15 +309,35 @@ fn parse_roles(dir: &str) -> Vec<RoleInfo> {
     roles
 }
 
-fn parse_hierarchies(dir: &Path) -> Vec<String> {
+fn parse_hierarchies(dir: &Path) -> Vec<HierarchyInfo> {
     let mut hiers = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
         return hiers;
     };
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        hiers.push(name.trim_end_matches(".json").to_string());
+        let path = entry.path();
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let name = v["name"].as_str().map(str::to_string).unwrap_or_else(|| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        });
+        if name.trim().is_empty() {
+            continue;
+        }
+        hiers.push(HierarchyInfo {
+            name: name.trim().to_string(),
+            levels: parse_hierarchy_levels(&v),
+        });
     }
+    hiers.sort_by(|a, b| a.name.cmp(&b.name));
     hiers
 }
 
@@ -372,6 +392,30 @@ mod tests {
         assert_eq!(
             map.get("persist security info").map(|s| s.as_str()),
             Some("True")
+        );
+    }
+
+    #[test]
+    fn test_hierarchy_levels_captured() {
+        let (model, _warnings) = parse_model("data/retailanalytics_tabular");
+        let dates = model.tables.iter().find(|t| t.name == "Dates").unwrap();
+        assert_eq!(dates.hierarchies.len(), 1, "Dates should have 1 hierarchy");
+        let hier = &dates.hierarchies[0];
+        assert_eq!(hier.name, "Calendar Hierarchy");
+        let levels: Vec<(&str, &str, u32)> = hier
+            .levels
+            .iter()
+            .map(|l| (l.name.as_str(), l.column.as_str(), l.ordinal))
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                ("year", "Year", 0),
+                ("quartername", "Quarter", 1),
+                ("monthname", "Month Name", 2),
+                ("fulldate", "Calendar Date", 3),
+            ],
+            "folder-format levels keep their names, columns and ordinals"
         );
     }
 

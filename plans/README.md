@@ -52,10 +52,11 @@ honor its STOP conditions, and update your row when done.
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 | 043  | RLS-aware aggregation routing (rollup-expressible role predicates) | P1 | M | — | DONE |
 | 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | IN PROGRESS |
+| 045  | Intake fidelity — converted models must arrive with their shape | P1 | L | 044 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract) is TODO. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract) and 045 (intake fidelity) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -108,6 +109,22 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
+- 045 (intake fidelity) **IN PROGRESS** 2026-09-20: converted models must
+  arrive with their Excel shape. Slice 1 landed: hierarchy levels are parsed
+  from all three export formats and emitted as `hierarchy_levels` (the export
+  hierarchy name becomes the hierarchy unique name, so Excel drills
+  `[Dates].[Calendar Hierarchy].[year]` → quarter → month → day), the
+  conversion report lists every declared hierarchy with status, and
+  **relationship endpoints now resolve to source columns** — before this,
+  `Customer ID` was emitted as `customer_id` while `schema.sql` creates
+  `customerid`, so every fact↔dim join in a fresh conversion was broken
+  (grouped queries empty, `NON EMPTY` drills collapsed to `All`); the tracked
+  `generated_retail_analytics` fixture had been hand-fixed, hiding it. Verified
+  live on the retail sample (all three formats) and locally on the real export
+  (6 role-playing calendars, 23 levels, 0 relationship endpoints missing from
+  `schema.sql`). Remaining slices: relationship semantics (`isActive` /
+  `crossFilteringBehavior` / cardinality — warn, then implement), per-dimension
+  date roles, calculated tables, and a synthetic gap-model fixture.
 - 044 (boundary contract) **IN PROGRESS** 2026-09-20: MallardCube stays a
   **protocol adapter**. Landed: `docs/DESIGN-INVARIANTS.md` (the contract, five
   invariants with enforcement, the upstream recipe, trade-offs, non-goals;

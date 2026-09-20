@@ -222,15 +222,22 @@ fn parse_partitions(table_val: &serde_json::Value) -> Vec<PartitionInfo> {
     parts
 }
 
-fn parse_hierarchies(table_val: &serde_json::Value) -> Vec<String> {
+fn parse_hierarchies(table_val: &serde_json::Value) -> Vec<HierarchyInfo> {
     let mut hiers = Vec::new();
     let Some(arr) = table_val["hierarchies"].as_array() else {
         return hiers;
     };
     for h in arr {
-        if let Some(name) = h["name"].as_str() {
-            hiers.push(name.to_string());
+        let Some(name) = h["name"].as_str() else {
+            continue;
+        };
+        if name.trim().is_empty() {
+            continue;
         }
+        hiers.push(HierarchyInfo {
+            name: name.trim().to_string(),
+            levels: parse_hierarchy_levels(h),
+        });
     }
     hiers
 }
@@ -411,7 +418,23 @@ mod tests {
         assert_eq!(dates.columns.len(), 17, "Dates should have 17 columns");
         assert_eq!(dates.partitions.len(), 1, "Dates should have 1 partition");
         assert_eq!(dates.hierarchies.len(), 1, "Dates should have 1 hierarchy");
-        assert_eq!(dates.hierarchies[0], "Calendar Hierarchy");
+        let hier = &dates.hierarchies[0];
+        assert_eq!(hier.name, "Calendar Hierarchy");
+        let levels: Vec<(&str, &str, u32)> = hier
+            .levels
+            .iter()
+            .map(|l| (l.name.as_str(), l.column.as_str(), l.ordinal))
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                ("year", "Year", 0),
+                ("quartername", "Quarter", 1),
+                ("monthname", "Month Name", 2),
+                ("fulldate", "Calendar Date", 3),
+            ],
+            "BIM levels keep their names, columns and ordinals"
+        );
 
         // Verify Products table
         let products = model.tables.iter().find(|t| t.name == "Products").unwrap();

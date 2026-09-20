@@ -464,6 +464,9 @@ fn render_relationships(m: &ConversionModel) -> String {
         .chain(&m.date_roles)
         .chain(&m.lookup_tables)
         .collect();
+    let all_tables: Vec<&TableInfo> = std::iter::once(&m.fact_table)
+        .chain(dim_tables.iter().copied())
+        .collect();
     let total = m.relationships.len();
     let mut emitted = 0usize;
     for rel in &m.relationships {
@@ -472,6 +475,13 @@ fn render_relationships(m: &ConversionModel) -> String {
             .find(|t| t.name == rel.to_table || t.ssas_name == rel.to_table)
         {
             let dim_id = t.ssas_name.clone();
+            // Relationship endpoints are model column names; schema.sql is
+            // built from source columns, so resolve both sides.
+            let fact_col = all_tables
+                .iter()
+                .find(|t| t.name == rel.from_table || t.ssas_name == rel.from_table)
+                .map(|t| schema_column(t, &rel.from_column))
+                .unwrap_or_else(|| normalize_ident(&rel.from_column));
             out.push_str(
                 &format!(
                     r##"    {{{{
@@ -481,10 +491,10 @@ fn render_relationships(m: &ConversionModel) -> String {
       "dim_table": "{dt}",
       "dim_column": "{dc}"
     }}}}"##,
-                    fc = normalize_ident(&rel.from_column),
+                    fc = fact_col,
                     did = dim_id,
                     dt = normalize_ident(&rel.to_table),
-                    dc = normalize_ident(&rel.to_column),
+                    dc = schema_column(t, &rel.to_column),
                 )
                 .replace("{{", "{")
                 .replace("}}", "}"),
@@ -509,6 +519,121 @@ fn render_time_intelligence_block(m: &ConversionModel) -> String {
         did = first.ssas_name,
         tn = normalize_ident(&first.name),
     ).replace("{{", "{").replace("}}", "}")
+}
+
+/// Resolve a model column reference (e.g. `Customer ID`, `Month Name`) to the
+/// table's column list. The export names columns (`Customer ID`) while
+/// `schema.sql` is built from source columns (`customerid`), so every reference
+/// has to go through this lookup.
+fn resolve_column<'a>(table: &'a TableInfo, column: &str) -> Option<&'a ColumnInfo> {
+    let want = column.trim();
+    let want_lower = want.to_lowercase();
+    table
+        .columns
+        .iter()
+        .find(|c| c.name == want)
+        .or_else(|| table.columns.iter().find(|c| c.source_column == want))
+        .or_else(|| {
+            table.columns.iter().find(|c| {
+                c.name.to_lowercase() == want_lower || c.source_column.to_lowercase() == want_lower
+            })
+        })
+}
+
+/// The column `schema.sql` creates for a model column reference. Falls back to
+/// normalizing the reference itself when the column list doesn't have it.
+fn schema_column(table: &TableInfo, column: &str) -> String {
+    resolve_column(table, column)
+        .map(|c| normalize_ident(&c.source_column))
+        .unwrap_or_else(|| normalize_ident(column))
+}
+
+/// Map a hierarchy level to the column `schema.sql` creates.
+fn level_schema_column(t: &TableInfo, level: &HierarchyLevelInfo) -> Option<String> {
+    resolve_column(t, &level.column).map(|c| normalize_ident(&c.source_column))
+}
+
+/// Does this level's column exist in the table (as `schema.sql` names it)?
+fn level_column_resolves(t: &TableInfo, level: &HierarchyLevelInfo) -> bool {
+    level_schema_column(t, level).is_some()
+}
+
+/// The runtime config models one hierarchy per dimension: pick the table's
+/// first hierarchy that has levels resolvable against the generated schema.
+/// Returns the hierarchy and its `hierarchy_levels` JSON. Extra hierarchies are
+/// surfaced in the conversion report.
+fn emit_hierarchy(t: &TableInfo) -> Option<(&HierarchyInfo, String)> {
+    let h = t.hierarchies.iter().find(|h| !h.levels.is_empty())?;
+    let levels: Vec<String> = h
+        .levels
+        .iter()
+        .filter_map(|l| {
+            let column = level_schema_column(t, l)?;
+            Some(format!(
+                "{{\"name\": \"{}\", \"column\": \"{}\", \"level_number\": {}}}",
+                l.name.replace('"', "\\\""),
+                column,
+                l.ordinal
+            ))
+        })
+        .collect();
+    if levels.is_empty() {
+        return None;
+    }
+    Some((h, levels.join(", ")))
+}
+
+/// One row per declared hierarchy for the conversion report:
+/// (table, hierarchy, levels, status).
+fn hierarchy_report_rows(m: &ConversionModel) -> Vec<(String, String, String, String)> {
+    let all_dims: Vec<&TableInfo> = m
+        .dimensions
+        .iter()
+        .chain(&m.date_roles)
+        .chain(&m.lookup_tables)
+        .collect();
+    let mut rows = Vec::new();
+    for t in all_dims {
+        if t.hierarchies.is_empty() {
+            continue;
+        }
+        let emitted = emit_hierarchy(t);
+        for h in &t.hierarchies {
+            let levels = h
+                .levels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" → ");
+            let status = if h.levels.is_empty() {
+                "not emitted — no levels in the export".to_string()
+            } else if emitted.as_ref().is_some_and(|(e, _)| e.name == h.name) {
+                let resolved = h
+                    .levels
+                    .iter()
+                    .filter(|l| level_column_resolves(t, l))
+                    .count();
+                if resolved == h.levels.len() {
+                    "emitted".to_string()
+                } else {
+                    format!(
+                        "emitted with {resolved} of {} levels (columns missing from schema.sql)",
+                        h.levels.len()
+                    )
+                }
+            } else if emitted.is_none() {
+                "not emitted — no level column matches schema.sql".to_string()
+            } else {
+                let name = &emitted
+                    .as_ref()
+                    .map(|(e, _)| e.name.clone())
+                    .unwrap_or_default();
+                format!("not emitted — this dimension already carries `{name}`")
+            };
+            rows.push((t.ssas_name.clone(), h.name.clone(), levels, status));
+        }
+    }
+    rows
 }
 
 fn render_dimension_configs(m: &ConversionModel) -> String {
@@ -562,6 +687,18 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
             ""
         };
 
+        // Hierarchy levels: the runtime models one hierarchy per dimension, so
+        // emit the first resolvable one and use its name for unique names
+        // (`[Dates].[Calendar Hierarchy].[year]`).
+        let hierarchy = emit_hierarchy(t);
+        let hierarchy_name = hierarchy
+            .as_ref()
+            .map(|(h, _)| h.name.replace('"', "\\\""))
+            .unwrap_or_else(|| t.ssas_name.clone());
+        let levels_line = hierarchy
+            .map(|(_, levels)| format!(",\n      \"hierarchy_levels\": [{levels}]"))
+            .unwrap_or_default();
+
         let pf = format!("{}.{}", normalize_ident(&t.name), physical);
         out.push_str(
             &format!(
@@ -570,17 +707,19 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
       "physical_field": "{pf}",
       "caption": "{caption}",
       "description": "{desc}",
-      "hierarchy_name": "{caption}",
+      "hierarchy_name": "{hierarchy_name}",
       "all_level_name": "(All)",
       "leaf_level_name": "{caption}",
       "ordinal": {ord},{ft_line}
       "visible": true,
       "has_all": true,
-          "cardinality_hint": 100{shared}{date_role_line}
+          "cardinality_hint": 100{shared}{date_role_line}{levels_line}
     }}}}"##,
                 id = t.ssas_name,
                 pf = pf,
                 caption = t.ssas_name,
+                hierarchy_name = hierarchy_name,
+                levels_line = levels_line,
                 desc = t.description.replace('\"', "\\\""),
                 ord = i + 1,
                 ft_line = ft_line,
@@ -1699,6 +1838,18 @@ fn render_report(m: &ConversionModel) -> String {
         "- Boundary: bridge/manual definitions belong upstream (an additive column or a mart) —\n  \
          see docs/DESIGN-INVARIANTS.md. `mallard qualify --strict` fails while bridge code remains.\n",
     );
+    let hier_rows = hierarchy_report_rows(m);
+    if !hier_rows.is_empty() {
+        let emitted = hier_rows
+            .iter()
+            .filter(|(_, _, _, status)| status.starts_with("emitted"))
+            .count();
+        out.push_str(&format!(
+            "- Hierarchies: {} of {} emitted (levels become Excel drill paths)\n",
+            emitted,
+            hier_rows.len()
+        ));
+    }
     out.push_str(&format!("- M-partition tables: {} (load_data.sql attempts automated loading, see load_data.sql for details)\n\n",
         if m.fact_table.is_m_partition() { 1usize } else { 0 }
         + m.dimensions.iter().filter(|t| t.is_m_partition()).count()
@@ -1716,6 +1867,22 @@ fn render_report(m: &ConversionModel) -> String {
         }
     }
     out.push('\n');
+
+    if !hier_rows.is_empty() {
+        out.push_str("## Hierarchies\n\n");
+        out.push_str(
+            "Levels become drill paths in Excel. The runtime config carries one hierarchy per\n\
+             dimension, so when a table declares several, the first with resolvable levels is\n\
+             emitted and the rest are listed here.\n\n",
+        );
+        out.push_str("| Table | Hierarchy | Levels | Status |\n|---|---|---|---|\n");
+        for (table, hierarchy, levels, status) in &hier_rows {
+            out.push_str(&format!(
+                "| {table} | {hierarchy} | {levels} | {status} |\n"
+            ));
+        }
+        out.push('\n');
+    }
 
     out.push_str("## Simple measures\n\n");
     out.push_str("| Measure | DAX | SQL |\n|---|---|---|\n");
@@ -2282,6 +2449,143 @@ mod tests {
         assert!(upstream_suggestion("DIVIDE([A],[B])").contains("numerator"));
         assert!(upstream_suggestion("CALCULATE([M], 'D'[x]=\"y\")").contains("flag column"));
         assert!(upstream_suggestion("[A] + 1").contains("SQL model"));
+    }
+
+    #[test]
+    fn converter_emits_hierarchy_levels() {
+        let (parsed, _warnings) = parse_bim::parse_model("data/retailanalytics.bim");
+        let model = classify_model(parsed);
+        let config = render_proxy_config(&model);
+
+        // The converted config must be valid for the runtime, levels included.
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&config).expect("converted config must parse");
+        let dates = cfg
+            .dimensions
+            .iter()
+            .find(|d| d.caption == "Dates")
+            .expect("Dates dimension");
+        assert_eq!(dates.hierarchy_name, "Calendar Hierarchy");
+        assert_eq!(
+            dates
+                .hierarchy_levels
+                .iter()
+                .map(|l| (l.name.as_str(), l.column.as_str(), l.level_number))
+                .collect::<Vec<_>>(),
+            vec![
+                ("year", "year", 0),
+                ("quartername", "quartername", 1),
+                ("monthname", "monthname", 2),
+                ("fulldate", "fulldate", 3),
+            ]
+        );
+
+        // Every level column must exist in the generated schema.
+        let schema = render_schema(&model);
+        for col in ["year", "quartername", "monthname", "fulldate"] {
+            assert!(
+                schema.contains(&format!("    {col} ")),
+                "schema.sql is missing {col}:\n{schema}"
+            );
+        }
+
+        // The report tells the user what happened to the hierarchy.
+        let report = render_report(&model);
+        assert!(report.contains("## Hierarchies"), "{report}");
+        assert!(
+            report.contains(
+                "| Dates | Calendar Hierarchy | year → quartername → monthname → fulldate | emitted |"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn converter_resolves_relationship_columns_to_schema() {
+        let (parsed, _warnings) = parse_bim::parse_model("data/retailanalytics.bim");
+        let model = classify_model(parsed);
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+        let schema = render_schema(&model);
+
+        let mut cols = Vec::new();
+        for rel in &cfg.relationships {
+            cols.push(rel.fact_column.clone());
+            cols.push(rel.dim_column.clone());
+        }
+        assert_eq!(cols.len(), 10, "5 relationships x 2 endpoints");
+        // The export names columns ("Customer ID"); schema.sql creates the
+        // source columns ("customerid"). Unmapped names break every join.
+        for expected in ["datekey", "customerid", "productid", "promoid", "storeid"] {
+            assert!(cols.contains(&expected.to_string()), "{cols:?}");
+        }
+        for c in &cols {
+            assert!(
+                schema.contains(&format!("    {c} ")),
+                "schema.sql is missing relationship column {c}:\n{schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn hierarchy_levels_skip_columns_missing_from_schema() {
+        let mut model = make_generic_model();
+        model.lookup_tables[0].hierarchies = vec![HierarchyInfo {
+            name: "Product".into(),
+            levels: vec![
+                HierarchyLevelInfo {
+                    name: "Item".into(),
+                    column: "itemid".into(),
+                    ordinal: 0,
+                },
+                HierarchyLevelInfo {
+                    name: "Ghost".into(),
+                    column: "Does Not Exist".into(),
+                    ordinal: 1,
+                },
+            ],
+        }];
+        let (hier, levels) = emit_hierarchy(&model.lookup_tables[0]).expect("resolvable level");
+        assert_eq!(hier.name, "Product");
+        assert!(levels.contains("\"name\": \"Item\""), "{levels}");
+        assert!(
+            !levels.contains("Ghost"),
+            "unresolvable level dropped: {levels}"
+        );
+
+        let report = render_report(&model);
+        assert!(report.contains("emitted with 1 of 2 levels"), "{report}");
+    }
+
+    #[test]
+    fn hierarchy_levels_emit_the_first_hierarchy_only() {
+        let mut model = make_generic_model();
+        model.lookup_tables[0].hierarchies = vec![
+            HierarchyInfo {
+                name: "First".into(),
+                levels: vec![HierarchyLevelInfo {
+                    name: "Item".into(),
+                    column: "itemid".into(),
+                    ordinal: 0,
+                }],
+            },
+            HierarchyInfo {
+                name: "Second".into(),
+                levels: vec![HierarchyLevelInfo {
+                    name: "Cost".into(),
+                    column: "unitcost".into(),
+                    ordinal: 0,
+                }],
+            },
+        ];
+        let (hier, _) = emit_hierarchy(&model.lookup_tables[0]).expect("first hierarchy");
+        assert_eq!(hier.name, "First");
+
+        let report = render_report(&model);
+        assert!(
+            report.contains("not emitted — this dimension already carries `First`"),
+            "{report}"
+        );
     }
 
     #[test]

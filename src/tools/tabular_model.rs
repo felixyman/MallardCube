@@ -23,7 +23,54 @@ pub struct TableInfo {
     pub columns: Vec<ColumnInfo>,
     pub measures: Vec<MeasureInfo>,
     pub partitions: Vec<PartitionInfo>,
-    pub hierarchies: Vec<String>,
+    pub hierarchies: Vec<HierarchyInfo>,
+}
+
+/// A user-defined hierarchy on a table (e.g. `Calendar Hierarchy` with the
+/// levels `year → quartername → monthname → fulldate`).
+#[derive(Debug, Clone, Serialize)]
+pub struct HierarchyInfo {
+    pub name: String,
+    pub levels: Vec<HierarchyLevelInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HierarchyLevelInfo {
+    pub name: String,
+    /// Source column on the table, as declared by the model.
+    pub column: String,
+    /// Distance from the root: 0 = top level.
+    pub ordinal: u32,
+}
+
+/// Parse the `levels` array of a BIM/folder hierarchy object:
+/// `{"name": "year", "ordinal": 0, "column": "Year"}`.
+///
+/// Levels whose `column` is missing are skipped (nothing to drill on); levels
+/// without an ordinal keep their declaration order.
+pub fn parse_hierarchy_levels(hierarchy: &serde_json::Value) -> Vec<HierarchyLevelInfo> {
+    let mut levels: Vec<HierarchyLevelInfo> = Vec::new();
+    let Some(arr) = hierarchy["levels"].as_array() else {
+        return levels;
+    };
+    for l in arr {
+        let column = l["column"].as_str().unwrap_or("").trim().to_string();
+        if column.is_empty() {
+            continue;
+        }
+        let name = l["name"].as_str().unwrap_or("").trim().to_string();
+        levels.push(HierarchyLevelInfo {
+            name: if name.is_empty() {
+                column.clone()
+            } else {
+                name
+            },
+            column,
+            ordinal: l["ordinal"].as_u64().unwrap_or(levels.len() as u64) as u32,
+        });
+    }
+    levels.sort_by_key(|l| l.ordinal);
+    levels
 }
 
 impl TableInfo {
