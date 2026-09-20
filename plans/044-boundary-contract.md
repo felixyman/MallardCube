@@ -7,7 +7,9 @@
 - **Risk**: LOW (no behaviour change beyond a new strict gate)
 - **Depends on**: none
 - **Category**: architecture / positioning
-- **Status**: TODO
+- **Status**: **IN PROGRESS 2026-09-20** — items 1–2 landed (docs +
+  `qualify --strict`) plus the runnable proof project; item 3 (converter policy)
+  and 4–5 remain.
 
 ## Why this matters
 
@@ -120,15 +122,40 @@ MallardCube is deliberately that runtime, for Excel only.
 
 ## Work items
 
-| # | Item | Effort | Notes |
+| # | Item | Effort | Status |
 |---|---|---|---|
-| 1 | Design-invariants + "what belongs upstream" docs (generic orders example), README positioning line, product-summary update | S | Foundation; cite the external validation |
-| 2 | `qualify --strict`: semantic-creep report (fallback SQL, non-additive measures) + relationship cardinality warning | S/M | The mechanism that stops drift |
-| 3 | Converter policy: freeze DAX lowering, emit a per-measure "define upstream" checklist, label fallbacks as bridge code | S/M | Conversion report becomes a migration plan |
-| 4 | (Optional, later) Postgres-wire attach target (Cube Core OSS / Trino / Postgres marts) — spike first: dialect fit, pushdown, per-user context, DRILLTHROUGH | M | Only if a target is actually needed |
-| 5 | (Later) Auto date hierarchies from date/time columns (converter + AutoModel): Year/Quarter/Month/Day, Year/Week, slicer-friendly Year and Quarter-of-year | M | Model *shape* fidelity, not semantics |
+| 1 | Design-invariants + "what belongs upstream" docs, README positioning line, product-summary update | S | **DONE** — `docs/DESIGN-INVARIANTS.md`, README + CONTRIBUTING + PRODUCT-SUMMARY + DEVELOPER-GUIDE pointers |
+| 2 | `qualify --strict`: semantic-creep report + non-additive report | S/M | **DONE** — fails on fallback SQL and untranslated DAX filters; reports non-additive measures; `--strict` is CI-usable (exit 1) |
+| 3 | Converter policy: freeze DAX lowering, emit a per-measure "define upstream" checklist, label fallbacks as bridge code | S/M | TODO |
+| 4 | (Optional, later) Postgres-wire attach target (Cube Core OSS / Trino / Postgres marts) — spike first | M | TODO |
+| 5 | (Later) Auto date hierarchies from date/time columns (converter + AutoModel) | M | TODO |
 
 Items 1–2 are the anti-drift core and can land independently of the rest.
+
+### Progress (2026-09-20)
+
+- **Docs** (item 1): `docs/DESIGN-INVARIANTS.md` holds the contract, the five
+  invariants with their enforcement, the upstream recipe (generic orders
+  example), the honest trade-offs, and the non-goals. Linked from README,
+  CONTRIBUTING (third principle), PRODUCT-SUMMARY, and the developer guide.
+- **`qualify --strict`** (item 2): reports proxy-side logic (fallback SQL,
+  untranslated DAX role filters) and fails with exit 1; reports non-additive
+  measures as a note. Verified: the demo project passes (`Strict: OK`), a
+  project with DAX-derived fallback SQL fails with six findings.
+- **Runnable proof**: `projects/upstream_marts/` — upstream schema/seed/marts
+  SQL plus a thin projection; every measure is plain SQL. Verified live against
+  raw-SQL oracles: revenue, YTD (flag contract), on-time %, average lead time,
+  median at the mart grain, and cumulative revenue all match exactly.
+- **Bug fixed on the way**: the time-flag filter emitted `f.<dim key>` instead
+  of the relationship's fact column, so any model whose fact date column is not
+  named like the dimension key (`order_date_key`, `DeliveryDate`, …)
+  silently returned 0 for YTD/prior-year measures. Now relationship-driven, with
+  a regression test.
+- **Noted gap** (needs its own plan): a slicer tuple with two members of the
+  same hierarchy (`(Year.&[2026], Month.&[9])`) is planned as a *set* — an OR
+  with the first member's level — instead of an intersection. Excel rarely sends
+  this shape (it uses subselect sets, which are handled), but the filter type
+  cannot express per-member levels today.
 
 ## Non-goals
 
@@ -160,8 +187,10 @@ beyond bug fixes.
 
 ## Done criteria
 
-- [ ] "Design invariants" and "what belongs upstream" docs published; README and
+- [x] "Design invariants" and "what belongs upstream" docs published; README and
       product summary state the position.
-- [ ] `qualify --strict` implemented, tested, and documented (CI-usable).
+- [x] `qualify --strict` implemented, tested, and documented (CI-usable).
+- [x] Runnable proof project (`projects/upstream_marts/`) passing `--strict` and
+      verified against raw-SQL oracles.
 - [ ] Converter emits the "define upstream" checklist; DAX lowering frozen.
-- [ ] Plan index updated; the feature-intake rule recorded.
+- [x] Plan index updated; the feature-intake rule recorded.

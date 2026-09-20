@@ -218,13 +218,69 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     }
 }
 
+/// Proxy-side logic that belongs upstream (plan 044). Empty means a thin
+/// projection: every measure is plain SQL over exposed tables and every role
+/// predicate is translated SQL.
+pub(crate) fn semantic_creep(p: &crate::proxy_project::ProxyProject) -> Vec<String> {
+    let mut findings = Vec::new();
+    for m in &p.model.measures {
+        let Some(sql) = m.sql_fallback_sql.as_deref() else {
+            continue;
+        };
+        let upper = sql.to_uppercase();
+        let is_stub = upper.trim() == "SELECT 1 AS DUMMY;"
+            || upper.contains("TODO")
+            || upper.contains("SELECT 1 AS DUMMY");
+        if !is_stub {
+            findings.push(format!(
+                "measure '{}' carries fallback SQL — define it upstream (an additive column or a mart)",
+                m.caption
+            ));
+        }
+    }
+    for role in &p.config.roles {
+        for tp in &role.table_permissions {
+            let has_dax = tp.dax_filter.as_deref().is_some_and(|d| !d.is_empty());
+            if tp.filter_expression.is_empty() && has_dax {
+                findings.push(format!(
+                    "role '{}' table '{}' has a DAX filter with no SQL translation",
+                    role.name, tp.table
+                ));
+            }
+        }
+    }
+    findings
+}
+
+/// Measures that are not a plain `SUM(column)`: ratios, counts, averages, or
+/// expressions. They are legitimate SQL, but they cannot use rollups and
+/// usually belong in an upstream mart at a declared grain (plan 044).
+pub(crate) fn non_additive_measures(p: &crate::proxy_project::ProxyProject) -> Vec<String> {
+    p.model
+        .measures
+        .iter()
+        .filter(|m| {
+            m.sql_fallback_sql.is_none()
+                && crate::engine::aggregate::measure_base_column(&m.sql_expr).is_none()
+        })
+        .map(|m| m.caption.clone())
+        .collect()
+}
+
 pub fn run(args: Vec<String>) -> i32 {
-    // args: ["qualify", "<config-path>", "<optional-trace-path>"])
-    let config_path = args
-        .get(1)
+    // args: ["qualify", "<config-path>", "<optional-trace-path>", "--strict"]
+    let strict = args.iter().any(|a| a == "--strict");
+    let positional: Vec<&str> = args
+        .iter()
+        .skip(1)
         .map(|s| s.as_str())
+        .filter(|a| !a.starts_with("--"))
+        .collect();
+    let config_path = positional
+        .first()
+        .copied()
         .unwrap_or("projects/project3/proxy-config.json");
-    let trace_path = args.get(2).map(|s| s.as_str());
+    let trace_path = positional.get(1).copied();
 
     let verdict = qualify(config_path, trace_path);
 
@@ -237,6 +293,40 @@ pub fn run(args: Vec<String>) -> i32 {
     println!("Verdict: {}", verdict.label());
     if verdict.reasons().is_empty() {
         println!("  No issues found.");
+    }
+
+    if strict {
+        println!();
+        println!("=== Strict mode (plan 044: no semantic layer in the proxy) ===");
+        match crate::proxy_project::ProxyProject::load(config_path) {
+            Ok(p) => {
+                let creep = semantic_creep(&p);
+                let non_additive = non_additive_measures(&p);
+                for finding in &creep {
+                    println!("  [FAIL] {finding}");
+                }
+                if !non_additive.is_empty() {
+                    println!(
+                        "  [NOTE] {} measure(s) are not plain SUM(column) — serve them from an upstream mart at a declared grain: {}",
+                        non_additive.len(),
+                        non_additive.join(", ")
+                    );
+                }
+                if creep.is_empty() {
+                    println!("  No proxy-side logic found (fallback SQL, untranslated DAX).");
+                }
+                if !creep.is_empty() {
+                    println!();
+                    println!("Strict: FAILED ({} finding(s))", creep.len());
+                    return 1;
+                }
+                println!("Strict: OK");
+            }
+            Err(e) => {
+                eprintln!("strict: cannot load project: {e}");
+                return 2;
+            }
+        }
     }
 
     verdict.exit_code()
@@ -361,6 +451,42 @@ mod tests {
             0,
             "retail analytics should have 0 manual measures after fallback wiring: {:?}",
             manual.iter().map(|m| &m.caption).collect::<Vec<_>>()
+        );
+    }
+
+    // Plan 044: strict mode fails on proxy-side logic and passes a thin
+    // projection.
+    #[test]
+    fn strict_is_clean_for_a_thin_projection() {
+        let p =
+            crate::proxy_project::ProxyProject::load("projects/upstream_marts/proxy-config.yaml")
+                .expect("load upstream_marts demo");
+        let creep = semantic_creep(&p);
+        assert!(
+            creep.is_empty(),
+            "demo must carry no proxy-side logic: {creep:?}"
+        );
+        let non_additive = non_additive_measures(&p);
+        assert!(
+            non_additive.iter().any(|m| m == "On-time %"),
+            "ratio measures are reported as non-additive: {non_additive:?}"
+        );
+    }
+
+    #[test]
+    fn strict_flags_fallback_sql_and_untranslated_dax() {
+        let p = crate::proxy_project::ProxyProject::load(
+            "projects/generated_contoso/proxy-config.json",
+        )
+        .expect("load contoso");
+        let creep = semantic_creep(&p);
+        assert!(
+            creep.iter().any(|f| f.contains("fallback SQL")),
+            "fallback measures must be flagged: {creep:?}"
+        );
+        assert!(
+            creep.iter().any(|f| f.contains("DAX filter")),
+            "untranslated DAX role filters must be flagged: {creep:?}"
         );
     }
 

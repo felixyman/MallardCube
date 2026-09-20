@@ -11,6 +11,10 @@ Two principles keep the project coherent:
    doubt, capture the request/response pair and compare with SSAS conventions.
 2. **Direct SQL is the only runtime path.** `src/engine/sql.rs` stays
    DuckDB-dialect only; there is no second dialect.
+3. **No measure logic in the proxy.** Definitions and materialisation live
+   upstream (sqlmesh/dbt models, or a semantic layer); the proxy serves a thin
+   projection. `cargo run --bin mallard -- qualify --strict <config>` enforces
+   it, and `docs/DESIGN-INVARIANTS.md` has the recipe and the invariants.
 
 ## Development setup
 

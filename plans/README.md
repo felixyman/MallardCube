@@ -51,7 +51,7 @@ honor its STOP conditions, and update your row when done.
 | 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | DONE |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 | 043  | RLS-aware aggregation routing (rollup-expressible role predicates) | P1 | M | — | DONE |
-| 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | TODO |
+| 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
@@ -108,17 +108,20 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
-- 044 (boundary contract) written 2026-09-20: MallardCube stays a **protocol
-  adapter**. Defines the contract (the proxy owns the XMLA/MDX wire protocol,
-  Excel shape fidelity, delivery mechanics, and a mechanical projection; it
-  does not own measure definitions, DAX, calculation groups, time-intelligence
-  functions, or pre-aggregation semantics), five invariants with enforcement
-  (`qualify --strict` semantic-creep gate, frozen DAX lowering, flags-as-columns,
-  cache-only rollups, a feature-intake rule), and the **sqlmesh + DuckDB**
-  pairing (definitions and materialisation upstream, serving at the edge), with
-  the gaps and their handling (grain pinning, fan-out cardinality check, RLS
-  policy vs enforcement, no pre-aggregation matching). Work items 1–2 are the
-  anti-drift core. Generic examples only — no customer models.
+- 044 (boundary contract) **IN PROGRESS** 2026-09-20: MallardCube stays a
+  **protocol adapter**. Landed: `docs/DESIGN-INVARIANTS.md` (the contract, five
+  invariants with enforcement, the upstream recipe, trade-offs, non-goals;
+  linked from README/CONTRIBUTING/PRODUCT-SUMMARY/DEVELOPER-GUIDE),
+  `qualify --strict` (fails on fallback SQL + untranslated DAX filters, reports
+  non-additive measures, CI-usable), and the runnable proof
+  `projects/upstream_marts/` (upstream schema/seed/marts + a thin projection,
+  verified live against raw-SQL oracles). Fixed on the way: the time-flag filter
+  assumed the fact date column matched the dimension key name (models using
+  `order_date_key`/`DeliveryDate` silently returned 0 for YTD) — now
+  relationship-driven with a regression test. Noted gap for its own plan:
+  same-hierarchy slicer tuples are planned as a set (OR, first member's level)
+  rather than an intersection. Remaining: converter policy (item 3), optional
+  attach target and auto date hierarchies (items 4–5).
 - 043 (RLS-aware rollup routing) DONE 2026-09-20: any active role filter used
   to disable rollups entirely, so secured users full-scanned the fact (~4 req/s
   vs ~300 req/s on the 100M-row benchmark). Role predicates are now rewritten

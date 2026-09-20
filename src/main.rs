@@ -166,6 +166,9 @@ enum Command {
         config: String,
         /// Optional path to xmla-trace.jsonl for replay validation
         trace: Option<String>,
+        /// Fail when the proxy carries semantic-layer logic (fallback SQL, untranslated DAX)
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -278,10 +281,17 @@ async fn main() {
             }
             std::process::exit(mallardcube::tools::auto_model::run(args));
         }
-        Command::Qualify { config, trace } => {
+        Command::Qualify {
+            config,
+            trace,
+            strict,
+        } => {
             let mut args = vec!["qualify".into(), config];
             if let Some(t) = trace {
                 args.push(t);
+            }
+            if strict {
+                args.push("--strict".into());
             }
             std::process::exit(mallardcube::tools::qualify::run(args));
         }

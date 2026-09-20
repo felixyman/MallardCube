@@ -11,6 +11,12 @@ No cloud, no per-user licensing, no Node.js.
 **Use case:** Migrate a Microsoft BI stack (SSIS + Kimball + SSAS) onto
 Airflow + sqlmesh + DuckDB — without your Excel users noticing.
 
+**Not a semantic layer.** Metric definitions live upstream (sqlmesh/dbt models,
+or a semantic layer such as Cube); MallardCube is the Excel/XMLA edge that
+serves a thin projection of what they materialise. See
+[`docs/DESIGN-INVARIANTS.md`](DESIGN-INVARIANTS.md) and the runnable proof in
+[`projects/upstream_marts/`](../projects/upstream_marts/README.md).
+
 ## Supported
 
 | Feature | Status |

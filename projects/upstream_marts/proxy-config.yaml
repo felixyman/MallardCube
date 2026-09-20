@@ -1,0 +1,147 @@
+# Thin projection of the upstream marts (plan 044).
+#
+# Every measure here is plain SQL over exposed tables: additive `SUM(column)`
+# for counts/sums, ratio-of-sums for rates and averages, and identity
+# aggregates over per-grain marts for non-additive/cumulative metrics. No DAX,
+# no fallback SQL, no measure logic in the proxy.
+#
+# Build the database first:  bash projects/upstream_marts/build.sh
+# Run it:                    PROXY_CONFIG=projects/upstream_marts/proxy-config.yaml cargo run
+# Prove the boundary:        cargo run --bin mallard -- qualify --strict projects/upstream_marts/proxy-config.yaml
+
+catalog: UPSTREAM_DEMO
+cube: Orders
+db_path: data/upstream_marts.duckdb
+
+fact_tables:
+  - id: orders
+    table_name: fact_orders
+    measure_group_name: Orders
+  - id: lead_time_median
+    table_name: mart_lead_time_median_month
+    measure_group_name: "Lead time (median, monthly)"
+  - id: cumulative
+    table_name: mart_cumulative_month
+    measure_group_name: "Revenue (cumulative, monthly)"
+
+dimensions:
+  - id: Date
+    physical_field: full_date
+    caption: Date
+    is_date_role: true
+    cardinality_hint: 1200
+    hierarchy_levels:
+      - { name: Year, column: year, level_number: 0, cardinality: 3 }
+      - { name: Quarter, column: quarter, level_number: 1, cardinality: 12 }
+      - { name: Month, column: month, level_number: 2, cardinality: 36 }
+      - { name: Date, column: full_date, level_number: 3, cardinality: 1200 }
+  - id: Category
+    physical_field: category
+    caption: Category
+    cardinality_hint: 3
+  - id: Product
+    physical_field: product_name
+    caption: Product
+    cardinality_hint: 12
+  - id: Customer
+    physical_field: customer_name
+    caption: Customer
+    cardinality_hint: 24
+  - id: Region
+    physical_field: region
+    caption: Region
+    cardinality_hint: 4
+  - id: Segment
+    physical_field: segment
+    caption: Segment
+    cardinality_hint: 2
+
+relationships:
+  # Conformed join columns (`order_date_key`, `product_key`) exist on every fact
+  # that uses the dimension, so one relationship per dimension serves them all.
+  - { fact_table: orders, fact_column: order_date_key, dimension_id: Date, dim_table: dim_date, dim_column: date_key }
+  - { fact_table: lead_time_median, fact_column: order_date_key, dimension_id: Date, dim_table: dim_date, dim_column: date_key }
+  - { fact_table: cumulative, fact_column: order_date_key, dimension_id: Date, dim_table: dim_date, dim_column: date_key }
+  - { fact_table: orders, fact_column: product_key, dimension_id: Product, dim_table: dim_product, dim_column: product_key }
+  - { fact_table: lead_time_median, fact_column: product_key, dimension_id: Product, dim_table: dim_product, dim_column: product_key }
+  - { fact_table: orders, fact_column: product_key, dimension_id: Category, dim_table: dim_product, dim_column: product_key }
+  - { fact_table: lead_time_median, fact_column: product_key, dimension_id: Category, dim_table: dim_product, dim_column: product_key }
+  - { fact_table: orders, fact_column: customer_key, dimension_id: Customer, dim_table: dim_customer, dim_column: customer_key }
+  - { fact_table: orders, fact_column: customer_key, dimension_id: Region, dim_table: dim_customer, dim_column: customer_key }
+  - { fact_table: orders, fact_column: customer_key, dimension_id: Segment, dim_table: dim_customer, dim_column: customer_key }
+
+measures:
+  - id: Revenue
+    caption: Revenue
+    fact_table: orders
+    sql_expr: SUM(revenue)
+    format_string: "#,##0"
+  - id: Revenue YTD
+    caption: Revenue YTD
+    fact_table: orders
+    sql_expr: SUM(revenue)
+    format_string: "#,##0"
+    # The flag is an upstream column; the proxy only filters on it.
+    time_intelligence: { dimension_id: Date, flag_column: ytd_flag }
+  - id: Orders
+    caption: Orders
+    fact_table: orders
+    sql_expr: SUM(is_order)
+    format_string: "#,##0"
+  - id: Open orders
+    caption: Open orders
+    fact_table: orders
+    sql_expr: SUM(is_open)
+    format_string: "#,##0"
+  - id: Cancelled orders
+    caption: Cancelled orders
+    fact_table: orders
+    sql_expr: SUM(is_cancelled)
+    format_string: "#,##0"
+  - id: Late orders
+    caption: Late orders
+    fact_table: orders
+    sql_expr: SUM(is_late)
+    format_string: "#,##0"
+  - id: On-time %
+    caption: On-time %
+    fact_table: orders
+    sql_expr: SUM(is_within_sla) * 100.0 / NULLIF(SUM(is_order), 0)
+    format_string: "0.0"
+  - id: Average lead time
+    caption: Average lead time (days)
+    fact_table: orders
+    sql_expr: SUM(sum_lead_time) / NULLIF(SUM(count_lead_time), 0)
+    format_string: "0.0"
+  # Identity aggregates over per-grain marts: exactly one row per pivot grain.
+  - id: Median lead time
+    caption: Median lead time (days)
+    fact_table: lead_time_median
+    sql_expr: MAX(median_lead_time)
+    format_string: "0.0"
+  - id: Cumulative revenue CY
+    caption: Cumulative revenue CY
+    fact_table: cumulative
+    sql_expr: MAX(cumulative_revenue_cy)
+    format_string: "#,##0"
+  - id: Cumulative revenue CY-1
+    caption: Cumulative revenue CY-1
+    fact_table: cumulative
+    sql_expr: MAX(cumulative_revenue_cy_minus_1)
+    format_string: "#,##0"
+
+time_intelligence:
+  date_dimension:
+    dimension_id: Date
+    table_name: dim_date
+    date_key_column: date_key
+    full_date_column: full_date
+    flag_columns:
+      year_column: year
+      quarter_column: quarter
+      month_column: month
+      ytd_flag_column: ytd_flag
+      qtd_flag_column: qtd_flag
+      mtd_flag_column: mtd_flag
+      prior_year_ytd_flag_column: prior_year_ytd_flag
+      current_year_flag_column: current_year_flag

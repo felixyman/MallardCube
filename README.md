@@ -11,6 +11,12 @@ DuckDB data.
 
 Direct SQL is the only runtime path.
 
+MallardCube is the **Excel/XMLA edge for modern SQL stacks** — a protocol
+adapter, not a semantic layer. Metric definitions and materialisation live
+upstream (sqlmesh/dbt models, or a semantic layer); this proxy serves a thin
+projection of them. See `docs/DESIGN-INVARIANTS.md` and the runnable proof in
+`projects/upstream_marts/`.
+
 ## Quick start
 
 ```bash
@@ -318,6 +324,7 @@ Sample projects live at the repo root.
 | `projects/project2/` | Renamed variant proving name independence. 2 dims, 1 measure. `proxy-config.yaml` + `dimensions.yaml` demonstrate YAML, defaults, and section files. |
 | `projects/project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
 | `projects/project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
+| `projects/upstream_marts/` | The boundary contract, runnable: semantic logic upstream (SQL models + marts), a thin projection here. |
 | `projects/generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
 | `projects/generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
 
@@ -344,7 +351,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-439 tests covering MDX parsing, semantic classification, plan generation, SQL
+442 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -364,6 +371,8 @@ For detailed documentation:
 | File | Description |
 |------|-------------|
 | [Published docs](https://felixyman.github.io/MallardCube/) | This documentation, rendered (GitHub Pages) |
+| `docs/DESIGN-INVARIANTS.md` | The boundary contract: what belongs upstream, and the five invariants |
+| `docs/SCALING.md` | 100M-row measurements and the reproduction harness |
 | `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
 | `docs/converting-models.md` | SSAS Tabular conversion: intake loop, qualify, compatibility gate |
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |

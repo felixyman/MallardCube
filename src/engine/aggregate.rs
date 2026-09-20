@@ -78,7 +78,7 @@ pub fn cache_path() -> Option<String> {
 /// `SUM(revenue)` -> `revenue`. Only plain `SUM(col)` is rollup-safe; anything
 /// else (COUNT/MIN/MAX/AVG, expressions) returns `None` and falls back to the
 /// fact table.
-fn measure_base_column(sql_expr: &str) -> Option<String> {
+pub(crate) fn measure_base_column(sql_expr: &str) -> Option<String> {
     let s = sql_expr.trim();
     let rest = s.strip_prefix("SUM(")?;
     let inner = rest.strip_suffix(')')?.trim();

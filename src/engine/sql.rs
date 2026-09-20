@@ -733,9 +733,28 @@ fn sql_where_with_cols(
                 .get(&f.dimension)
                 .or(model.date_dim.as_ref());
             if let (Some(dd), Some(flag)) = (date_dim, &f.time_flag) {
+                // The fact-side column comes from the relationship: a fact's
+                // date column need not be named like the dimension's key
+                // (`order_date_key` vs `date_key`). Fall back to the configured
+                // key column for models without a relationship.
+                let fact_id = model
+                    .fact_tables
+                    .iter()
+                    .find(|ft| ft.table_name == fact_table_name)
+                    .map(|ft| ft.id.as_str());
+                let fact_col = fact_id
+                    .and_then(|id| {
+                        model
+                            .relationships
+                            .iter()
+                            .find(|r| r.dimension_id == f.dimension && r.fact_table_id == id)
+                    })
+                    .or_else(|| model.rel_for_dimension(&f.dimension))
+                    .map(|r| r.fact_column.as_str())
+                    .unwrap_or(dd.date_key_column.as_str());
                 parts.push(format!(
-                    "f.{} IN (SELECT {} FROM {} WHERE {} = true)",
-                    dd.date_key_column, dd.date_key_column, dd.table_name, flag
+                    "f.{fact_col} IN (SELECT {} FROM {} WHERE {} = true)",
+                    dd.date_key_column, dd.table_name, flag
                 ));
             }
             continue;
@@ -1494,6 +1513,38 @@ mod tests {
         assert!(
             sql.contains("FROM sales_fact"),
             "RLS SQL should scan the fact: {sql}"
+        );
+    }
+
+    // A fact's date column need not be named like the dimension key: the
+    // time-flag filter must use the relationship's fact column (a model whose
+    // fact uses `order_date_key` returned 0 for YTD before this).
+    #[test]
+    fn time_flag_filter_uses_the_relationship_fact_column() {
+        let p = crate::project::project::ProxyProject::load(
+            "projects/upstream_marts/proxy-config.yaml",
+        )
+        .expect("load upstream_marts demo");
+        let model = &p.model;
+        let plan = QueryPlan::Total {
+            measure: "Revenue YTD".into(),
+            filters: vec![TypedDimensionFilter {
+                dimension: "Date".into(),
+                members: vec![],
+                level: None,
+                time_flag: Some("ytd_flag".into()),
+            }],
+        };
+        let sql = sql_for_query_plan(model, &plan);
+        assert!(
+            sql.contains(
+                "f.order_date_key IN (SELECT date_key FROM dim_date WHERE ytd_flag = true)"
+            ),
+            "flag filter must use the relationship's fact column: {sql}"
+        );
+        assert!(
+            !sql.contains("f.date_key"),
+            "must not assume the dimension key name on the fact: {sql}"
         );
     }
 

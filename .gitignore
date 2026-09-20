@@ -5,6 +5,7 @@ xmla-trace.jsonl
 mallard-crash.log
 mallard-last-requests.log
 *.db
+*.duckdb
 node_modules/
 build/
 conversion-inventory.json

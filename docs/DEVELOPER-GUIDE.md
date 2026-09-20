@@ -2,6 +2,11 @@
 
 How the SSAS Proxy works, module by module. For new developers.
 
+> **Boundary first:** the proxy is a protocol adapter, not a semantic layer.
+> Before adding a feature that puts measure logic in the proxy, read
+> [`DESIGN-INVARIANTS.md`](DESIGN-INVARIANTS.md) — the invariants and the
+> upstream recipe are enforced by `qualify --strict`.
+
 ## Startup
 
 `src/main.rs` orchestrates startup:
@@ -247,7 +252,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 439 tests covering MDX parsing, semantic classification, plan generation,
+- 442 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
