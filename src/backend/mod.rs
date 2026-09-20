@@ -13,7 +13,9 @@ pub struct Backend {
 /// lock when several read-write connections open the same file concurrently.
 pub struct BackendPool {
     backends: Arc<[Arc<Backend>]>,
-    next: AtomicUsize,
+    /// Shared across clones: a per-request clone of the source must keep
+    /// rotating through the pool, not reset to connection 0.
+    next: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for BackendPool {
@@ -26,7 +28,7 @@ impl Clone for BackendPool {
     fn clone(&self) -> Self {
         BackendPool {
             backends: self.backends.clone(),
-            next: AtomicUsize::new(0),
+            next: self.next.clone(),
         }
     }
 }
@@ -138,7 +140,7 @@ impl BackendPool {
         }
         Ok(BackendPool {
             backends: backends.into(),
-            next: AtomicUsize::new(0),
+            next: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -986,6 +988,38 @@ mod tests {
             missing * 100 <= total,
             "{missing} of {total} category-month combos have no facts"
         );
+    }
+
+    // A cloned source must keep rotating through the pool. Cloning used to
+    // reset the counter, so every request checked out connection 0 and the
+    // pool serialized all queries on a single connection.
+    #[test]
+    fn pool_clone_shares_round_robin() {
+        if super::pool_size() < 2 {
+            return; // a single-connection pool cannot demonstrate rotation
+        }
+        let path = temp_db_path("pool-rotation");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t (i INT); INSERT INTO t VALUES (1);")
+                .unwrap();
+        }
+        let source = BackendSource::file(&path).expect("open pool");
+        let first = source.checkout();
+        let second = source.checkout();
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &second),
+            "checkout must rotate connections"
+        );
+
+        let clone = source.clone();
+        let third = clone.checkout();
+        assert!(
+            !std::sync::Arc::ptr_eq(&third, &first),
+            "a cloned source must continue the rotation (shared counter)"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

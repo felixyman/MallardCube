@@ -8,6 +8,8 @@
 - **Depends on**: 042 (no production path may read the demo backend before the
   pool is made swappable)
 - **Category**: operations / correctness-adjacent
+- **Status**: **DONE 2026-09-20** (Phases A, B, C — see the plan index note for
+  verification evidence)
 
 ## Why this matters
 
@@ -160,13 +162,16 @@ production).
 
 ## Done criteria
 
-- [ ] README + site deployment page document the lock, the runbook, and the
+- [x] README + site deployment page document the lock, the runbook, and the
       aggregation/result-cache staleness windows.
-- [ ] Startup failure names the lock holder problem instead of panicking blankly.
-- [ ] `/health` and `/status` answer; `/status` carries `db_mtime` and
-      `loaded_at`; both are auth-gated when auth is configured.
-- [ ] `SIGHUP` reloads data with no restart: new file content is served, the
-      result cache is cleared, aggregations rebuild only when the stamp changed.
-- [ ] In-flight requests during a reload complete against their original pool.
-- [ ] All existing tests pass; new reload tests cover the swap.
-- [ ] Plan index updated (and 042 landed first).
+- [x] Startup failure names the lock holder problem instead of panicking blankly.
+- [x] `/health` and `/status` answer; `/status` carries the data stamp
+      (size/mtime/`loaded_at`); both are auth-gated when auth is configured.
+- [x] `SIGHUP` reloads data with no restart: new file content is served, the
+      result cache is cleared, and a stale aggregation sidecar is disabled
+      (rebuilding it needs write access the live pool holds) with a restart note.
+- [x] In-flight requests during a reload complete against their original pool
+      (`RwLock<Arc<BackendSource>>` swap; covered by the swap unit test).
+- [x] All existing tests pass; new reload tests cover the swap, the stamp, and
+      the cache clear (422 total).
+- [x] Plan index updated (and 042 landed first).

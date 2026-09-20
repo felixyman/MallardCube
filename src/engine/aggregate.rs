@@ -14,7 +14,7 @@ use crate::engine::model::SemanticModel;
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
 use duckdb::Connection;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// The sidecar database is attached to pooled connections under this alias.
 pub const AGG_ALIAS: &str = "agg";
@@ -37,19 +37,37 @@ pub struct Aggregation {
 }
 
 /// Process-wide rollup set, populated after a successful sidecar build.
-/// Empty = aggregation routing disabled.
-static AGGREGATIONS: OnceLock<Vec<Aggregation>> = OnceLock::new();
+/// Empty = aggregation routing disabled. Swappable so a data reload can
+/// disable stale rollups without a restart (plan 041 phase C).
+static AGGREGATIONS: LazyLock<RwLock<Arc<Vec<Aggregation>>>> =
+    LazyLock::new(|| RwLock::new(Arc::new(Vec::new())));
 
 pub fn enable(aggs: Vec<Aggregation>) {
     // Routing is only active when a sidecar is configured (MALLARDCUBE_AGG_CACHE).
     // Tests build rollups without that env var and must not flip global routing.
     if cache_path().is_some() {
-        let _ = AGGREGATIONS.set(aggs);
+        set_aggregations(aggs);
     }
 }
 
-pub fn aggregations() -> &'static [Aggregation] {
-    AGGREGATIONS.get().map(|v| v.as_slice()).unwrap_or(&[])
+/// Replace the rollup set regardless of the sidecar env var (reload path).
+pub fn set_aggregations(aggs: Vec<Aggregation>) {
+    if let Ok(mut slot) = AGGREGATIONS.write() {
+        *slot = Arc::new(aggs);
+    }
+}
+
+/// Turn aggregation routing off (used when a reload finds the sidecar stale —
+/// rebuilding it requires write access the live pool does not have).
+pub fn disable() {
+    set_aggregations(Vec::new());
+}
+
+pub fn aggregations() -> Arc<Vec<Aggregation>> {
+    AGGREGATIONS
+        .read()
+        .map(|slot| slot.clone())
+        .unwrap_or_else(|e| e.into_inner().clone())
 }
 
 pub fn cache_path() -> Option<String> {
@@ -158,6 +176,19 @@ pub fn ensure_aggregations(
     write_stamp(&conn, &stamp)?;
     enable(aggs);
     Ok(())
+}
+
+/// Read-only check whether `sidecar` matches `source`'s stamp. The reload path
+/// cannot open the sidecar read-write while the live pool holds it, so it asks
+/// this instead; a missing sidecar or meta row counts as "not current".
+pub fn sidecar_is_current(source: &std::path::Path, sidecar: &str) -> bool {
+    let Ok(config) = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly) else {
+        return false;
+    };
+    let Ok(conn) = duckdb::Connection::open_with_flags(sidecar, config) else {
+        return false;
+    };
+    sidecar_current(&conn, &source_stamp(&source.to_string_lossy()))
 }
 
 fn source_stamp(path: &str) -> (u64, u64) {
@@ -331,11 +362,6 @@ fn agg_covers(
         }
     }
     true
-}
-
-/// Match a plan to the coarsest rollup that can answer it, if any.
-pub fn agg_for_plan(model: &SemanticModel, plan: &QueryPlan) -> Option<&'static Aggregation> {
-    agg_for_plan_with(model, aggregations(), plan)
 }
 
 pub(crate) fn agg_for_plan_with<'a>(

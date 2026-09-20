@@ -80,8 +80,12 @@ until it restarts.
 1. Build the new data into a staging file (`build.duckdb`) while the server
    keeps serving.
 2. Rename it over the live file: `mv build.duckdb live.duckdb`.
-3. Restart the service. Aggregation rollups rebuild on restart only when the
-   source stamp (size + mtime) changed.
+3. Reload in place (`kill -HUP <pid>` / `systemctl reload mallard`) or restart
+   the service. A reload clears the result cache and falls back to the fact
+   table if aggregation rollups became stale; a restart rebuilds them.
+
+Where signals are awkward, set `MALLARDCUBE_RELOAD_WATCH=<secs>` and the server
+polls the file's size+mtime, reloading when it changes.
 
 ## Monitoring
 

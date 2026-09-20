@@ -16,11 +16,69 @@ use mallardcube::parser::{XmlaRequest, parse_xmla};
 use mallardcube::project::config::ProxyConfig;
 use mallardcube::*;
 
-#[derive(Clone)]
 struct AppState {
-    backend_source: backend::BackendSource,
-    /// Catalog/cube/data-freshness facts for `GET /status` (plan 041).
-    status: mallardcube::status::StatusInfo,
+    /// Swappable so a reload can replace the pool without dropping in-flight
+    /// requests (plan 041 phase C). Clone the `Arc` per request — the pool's
+    /// round-robin counter lives inside it.
+    backend_source: std::sync::RwLock<std::sync::Arc<backend::BackendSource>>,
+    /// Catalog/cube/data-freshness facts for `GET /status`; the data stamp is
+    /// updated on reload.
+    status: std::sync::RwLock<mallardcube::status::StatusInfo>,
+}
+
+/// Snapshot the current backend source (cheap `Arc` clone). A poisoned lock
+/// must not take the server down, so recover the guard.
+fn current_source(state: &AppState) -> std::sync::Arc<backend::BackendSource> {
+    match state.backend_source.read() {
+        Ok(slot) => slot.clone(),
+        Err(e) => e.into_inner().clone(),
+    }
+}
+
+fn current_status(state: &AppState) -> mallardcube::status::StatusInfo {
+    match state.status.read() {
+        Ok(slot) => slot.clone(),
+        Err(e) => e.into_inner().clone(),
+    }
+}
+
+/// Reopen the data file and swap the pool: in-flight requests finish on the
+/// old pool, new requests use the new one, and the result cache is cleared so
+/// no request can serve pre-reload rows. Returns an error message on failure
+/// (the old pool keeps serving).
+fn reload_data(state: &AppState) -> Result<String, String> {
+    let path = current_source(state).path().to_path_buf();
+
+    // Rollups cannot be rebuilt while the live pool holds the sidecar
+    // read-only; if the data changed, disable them (correct, slower) and
+    // rebuild on the next restart.
+    let aggregations_disabled = mallardcube::reload::disable_stale_aggregations(&path);
+
+    let new_source = backend::BackendSource::file(&path).map_err(|e| e.to_string())?;
+    let stamp = mallardcube::status::DataStamp::capture(new_source.path());
+    let (size_bytes, mtime_unix) = (stamp.size_bytes, stamp.mtime_unix);
+    match state.backend_source.write() {
+        Ok(mut slot) => *slot = std::sync::Arc::new(new_source),
+        Err(e) => *e.into_inner() = std::sync::Arc::new(new_source),
+    }
+    let mut status = current_status(state);
+    status.data = stamp;
+    match state.status.write() {
+        Ok(mut slot) => *slot = status,
+        Err(e) => *e.into_inner() = status,
+    }
+    mallardcube::execute::cache::RESULT_CACHE.clear();
+
+    let mut note = format!(
+        "{} ({} bytes, modified {} unix)",
+        path.display(),
+        size_bytes,
+        mtime_unix
+    );
+    if aggregations_disabled {
+        note.push_str(" — aggregations disabled until restart (data changed)");
+    }
+    Ok(note)
 }
 
 // ---- CLI ----
@@ -245,6 +303,16 @@ fn fatal_db_open_error(path: &str, err: &duckdb::Error) -> ! {
     std::process::exit(1);
 }
 
+/// `MALLARDCUBE_RELOAD_WATCH=<secs>`: poll the data file's size+mtime stamp and
+/// reload when it changes. Covers platforms without SIGHUP and loaders that
+/// cannot signal the process.
+fn watch_interval() -> Option<u64> {
+    std::env::var("MALLARDCUBE_RELOAD_WATCH")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+}
+
 async fn run_server() {
     install_panic_diagnostics();
     init_debug_log();
@@ -349,8 +417,8 @@ async fn run_server() {
             status.data.path, status.data.size_bytes, status.data.mtime_unix
         );
         std::sync::Arc::new(AppState {
-            backend_source,
-            status,
+            backend_source: std::sync::RwLock::new(std::sync::Arc::new(backend_source)),
+            status: std::sync::RwLock::new(status),
         })
     };
 
@@ -367,6 +435,52 @@ async fn run_server() {
                 p.config.roles.len()
             ));
         }
+    }
+
+    // ---- reload triggers (plan 041 phase C) ----
+
+    // SIGHUP: `systemctl reload mallard` or `kill -HUP <pid>`.
+    #[cfg(unix)]
+    {
+        let reload_state = state.clone();
+        tokio::spawn(async move {
+            let Ok(mut hangup) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            else {
+                return;
+            };
+            while hangup.recv().await.is_some() {
+                println!("🔄 SIGHUP received — reloading data");
+                match reload_data(&reload_state) {
+                    Ok(note) => println!("🔄 Reloaded {note}"),
+                    Err(e) => eprintln!("❌ Reload failed: {e}"),
+                }
+            }
+        });
+    }
+
+    // Stamp watcher: works where SIGHUP does not (Windows, or a loader that
+    // cannot signal the process).
+    if let Some(secs) = watch_interval() {
+        let watch_state = state.clone();
+        tokio::spawn(async move {
+            let path = current_source(&watch_state).path().to_path_buf();
+            let mut last = mallardcube::reload::file_stamp(&path);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                let current = mallardcube::reload::file_stamp(&path);
+                if current != last {
+                    println!("🔄 Data file changed — reloading");
+                    match reload_data(&watch_state) {
+                        Ok(note) => {
+                            println!("🔄 Reloaded {note}");
+                            last = current;
+                        }
+                        Err(e) => eprintln!("❌ Reload failed: {e}"),
+                    }
+                }
+            }
+        });
     }
 
     let bind_addr = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".into());
@@ -512,7 +626,7 @@ async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl 
     if !mallardcube::status::authenticated(&user) {
         return (StatusCode::UNAUTHORIZED, "unauthorized\n".to_string());
     }
-    (StatusCode::OK, state.status.to_json())
+    (StatusCode::OK, current_status(&state).to_json())
 }
 
 // ---- XMLA request handler ----
@@ -576,7 +690,7 @@ async fn handle_xmla(
     let body_for_worker = body.clone();
     let user_ctx = user_context.clone();
     let cfg = config.clone();
-    let backend_source = state.backend_source.clone();
+    let backend_source = current_source(&state);
     let response_body = tokio::task::spawn_blocking(move || {
         mallardcube::xmla_trace::mark_request_start();
         let session_id = body_for_worker.find("SessionId=\"").and_then(|start| {

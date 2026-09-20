@@ -218,9 +218,10 @@ The refresh procedure:
    keeps serving.
 2. `mv build.duckdb live.duckdb` — an atomic rename; running servers keep
    reading the old inode until they are restarted.
-3. Restart the service (`systemctl restart mallard`, `docker compose restart`).
-   Aggregation rollups are rebuilt on restart only when the source stamp
-   (size + mtime) changed.
+3. Restart the service (`systemctl restart mallard`, `docker compose restart`),
+   or reload it in place: `kill -HUP <pid>` / `systemctl reload mallard` (see
+   *Hot reload* below). Aggregation rollups are rebuilt on restart only when
+   the source stamp (size + mtime) changed.
 
 ### Freshness and liveness
 
@@ -236,8 +237,26 @@ curl -s http://localhost:8080/status
 `GET /health` answers `200 ok` for liveness probes. Both endpoints are
 auth-gated when `auth` is configured (trusted header or bearer token).
 
-Hot reload (SIGHUP without a restart) is planned in
-`plans/041-data-refresh-lifecycle.md`.
+### Hot reload
+
+Reload the data file without restarting and without dropping requests:
+
+```bash
+kill -HUP <pid>            # or: systemctl reload mallard
+```
+
+New requests get a freshly opened pool; requests already in flight finish on
+the old one. The result cache is cleared, so nothing can serve pre-reload rows.
+If aggregation rollups are enabled and the data changed, routing falls back to
+the fact table until the next restart — the sidecar cannot be rebuilt while the
+live pool holds it, and the reload log says so.
+
+Where signals are awkward (Windows, or a loader that cannot signal the
+process), poll the file stamp instead:
+
+```bash
+MALLARDCUBE_RELOAD_WATCH=5 cargo run   # check size+mtime every 5 seconds
+```
 
 ## Sample projects
 
@@ -274,7 +293,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-417 tests covering MDX parsing, semantic classification, plan generation, SQL
+422 tests covering MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate

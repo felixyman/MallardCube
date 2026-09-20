@@ -94,6 +94,13 @@ impl ResultCache {
             },
         );
     }
+    /// Drop every entry. Called on a data reload so no request can serve
+    /// pre-reload rows.
+    pub fn clear(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+    }
 }
 
 /// Process-wide cache for the execution path.
@@ -163,6 +170,15 @@ mod tests {
         assert!(cache.get("a").is_none(), "oldest entry evicted");
         assert_eq!(cache.get("b"), Some(scalar(2.0)));
         assert_eq!(cache.get("c"), Some(scalar(3.0)));
+    }
+
+    #[test]
+    fn clear_drops_every_entry() {
+        let cache = ResultCache::with_limits(Duration::from_secs(60), 8);
+        cache.insert("a".into(), scalar(1.0));
+        assert!(cache.get("a").is_some());
+        cache.clear();
+        assert!(cache.get("a").is_none(), "a reload must drop stale rows");
     }
 
     #[test]

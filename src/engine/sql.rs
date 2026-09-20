@@ -82,7 +82,7 @@ pub fn sql_for_query_plan_with_context(
             )
         }
         QueryPlan::Total { measure, filters } => {
-            if let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config) {
+            if let Some(agg) = route_plan(model, &aggregate::aggregations(), plan, user, config) {
                 return agg_total_sql(model, agg, measure, filters);
             }
             let meas = model.meas_def(measure);
@@ -115,7 +115,7 @@ pub fn sql_for_query_plan_with_context(
                 level_idx > 0 && level_idx + 1 != dim.levels.len() && !single_parent
             });
             if !needs_path
-                && let Some(agg) = route_plan(model, aggregate::aggregations(), plan, user, config)
+                && let Some(agg) = route_plan(model, &aggregate::aggregations(), plan, user, config)
             {
                 return agg_groupby_sql(
                     model,

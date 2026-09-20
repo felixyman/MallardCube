@@ -102,6 +102,8 @@ src/
 
   status.rs                      `/health` + `/status` payloads and the
                                  data-freshness stamp (plan 041)
+  reload.rs                      Data reload: file stamp, stale-sidecar check
+                                 (plan 041 phase C)
 
   xmla_trace.rs                  NDJSON trace capture (XMLA_TRACE=1)
 
@@ -240,7 +242,7 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 417 tests covering MDX parsing, semantic classification, plan generation,
+- 422 tests covering MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
@@ -266,6 +268,7 @@ cargo test --lib
 | `MALLARDCUBE_POOL_SIZE` | Pooled read-only DuckDB connections (default: CPU count, capped 32) |
 | `MALLARDCUBE_AGG_CACHE` | Aggregation sidecar path; enables rollups for SUM measures |
 | `MALLARDCUBE_RESULT_CACHE` | Set to `0` to disable the 5 s result cache |
+| `MALLARDCUBE_RELOAD_WATCH` | Seconds between data-file stamp checks; a change triggers a reload |
 | `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
 | `MALLARDCUBE_DEBUG` | Set to `1` to write a verbose request log to `debug-last-run.log` |
 | `BIND_ADDRESS` | Override listen address:port (default: `127.0.0.1:8080`) |

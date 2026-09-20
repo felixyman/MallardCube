@@ -48,12 +48,12 @@ honor its STOP conditions, and update your row when done.
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
 | 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
 | 040  | YAML configuration and git-friendly config handling | P2 | M | — | TODO |
-| 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | IN PROGRESS |
+| 041  | Data refresh lifecycle — writer exclusivity, freshness signal, reload | P1 | L | 042 | DONE |
 | 042  | Retire the in-memory demo backend (fixes file-backed DRILLTHROUGH) | P1 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030, 032, 035–039, and 042 DONE. 031 (metadata cache), 033 (DRILLTHROUGH filters), 040 (YAML config), and 041 (data refresh lifecycle) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
+**Plans 001–030, 032, 035–039, and 041–042 DONE. 031 (metadata cache), 033 (DRILLTHROUGH filters), and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -126,14 +126,22 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   `data/generated.db`, the CI seeding step) is gone; `convert-tabular`'s default
   output directory is now `converted-project`. References in plans 004–023 are
   historical.
-- 041 (data refresh lifecycle) **IN PROGRESS** 2026-09-20: Phase A+B landed —
-  README + site "Refreshing data" runbook (writer/reader exclusivity,
-  staging-file + rename + restart, aggregation-stamp note), a lock-aware
-  startup error (`fatal_db_open_error`) instead of a bare panic, and
-  `GET /health` + `GET /status` with a data stamp (`src/status.rs`,
-  auth-gated when `auth` is configured). Phase C (SIGHUP reload of pool +
-  aggregations + result cache, optional stamp watch) remains. Depends on 042
-  (DONE).
+- 041 (data refresh lifecycle) DONE 2026-09-20: Phase A+B — README + site
+  "Refreshing data" runbook (writer/reader exclusivity, staging-file + rename,
+  aggregation stamp), lock-aware startup error, `GET /health` + `GET /status`
+  with a data stamp (`src/status.rs`, auth-gated when `auth` is configured).
+  Phase C — SIGHUP reload (`src/reload.rs`, `main.rs`): a new pool is opened
+  and swapped in via `RwLock<Arc<BackendSource>>` (in-flight requests keep the
+  old pool), the result cache is cleared, and a stale aggregation sidecar is
+  *disabled* rather than served (it cannot be rebuilt while the live pool holds
+  it) with a restart note. `MALLARDCUBE_RELOAD_WATCH=<secs>` polls the stamp
+  for platforms/loaders without signals. Verified end-to-end: contoso project,
+  `DELETE`+rename staging file, SIGHUP/watch → Sales Amount 7,305,939 →
+  1,924,876 with `/status` mtime/loaded_at advancing, no restart, no dropped
+  requests; aggregation path logs "aggregations disabled until restart".
+  Also fixed a latent pooling bug found during this work: `BackendSource`
+  clones reset the pool's round-robin counter, so per-request clones all used
+  connection 0 (the counter now lives in an `Arc`). Depends on 042 (DONE).
 
 ## Reconcile Status
 
