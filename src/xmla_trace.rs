@@ -81,6 +81,7 @@ pub fn trace_request(
         rec["timings"] = serde_json::json!({
             "runtime_path": t.runtime_path.as_str(),
             "plan_key": t.plan_key,
+            "cache_hit": t.cache_hit,
             "mdx_parse_us": t.mdx_parse_us,
             "semantic_us": t.semantic_us,
             "plan_us": t.plan_us,

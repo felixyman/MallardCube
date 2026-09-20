@@ -131,7 +131,7 @@ pub struct TupleCell {
     pub filters: Vec<TypedDimensionFilter>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum QueryResult {
     Scalar(f64),
     Grouped(Vec<(String, f64)>),

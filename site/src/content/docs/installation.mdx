@@ -81,6 +81,7 @@ Three ways to point the server at data:
 | `BIND_ADDRESS` | Bind address, for example `0.0.0.0:8080`. Default `127.0.0.1:8080`. |
 | `MALLARDCUBE_AGG_CACHE` | Path to the aggregation sidecar. Enables the rollup layer. |
 | `MALLARDCUBE_POOL_SIZE` | Number of pooled DuckDB connections. Default is the CPU count. |
+| `MALLARDCUBE_RESULT_CACHE` | Set to `0` to disable the 5-second result cache that collapses Excel's repeated queries. |
 | `MALLARDCUBE_DEBUG` | Set to `1` to write a verbose request log to `debug-last-run.log`. |
 | `XMLA_TRACE` | Set to `1` to record every request and response as NDJSON in `xmla-trace.jsonl`. |
 

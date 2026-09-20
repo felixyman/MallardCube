@@ -77,6 +77,8 @@ src/
                                  plus most end-to-end tests
     runtime.rs                   Execution entry: backend injection, timing
                                  instrumentation
+    cache.rs                     Short-lived QueryResult cache (plan 032):
+                                 collapses Excel's per-CELL-PROPERTIES repeats
     render.rs                    Cellset XML rendering: dispatch_with_backend,
                                  11 query-kind handlers
     builders.rs                  Thin public entry points / re-exports over runtime
@@ -206,6 +208,7 @@ See `docs/naming-contract.md` for full rules.
 | `mdx/semantic.rs` | Stable | Classification driven by ParsedMdx structural fields |
 | `execute/dispatch.rs` | Stable | Statement routing test seam, compatibility gate tests |
 | `execute/runtime.rs` | Stable | Execution entry, runtime-path selection, timing |
+| `execute/cache.rs` | Stable | Short-lived result cache (plan 032), user-scoped keys |
 | `execute/render.rs` | Stable | Cellset rendering, 11 query-kind handlers |
 | `execute/builders.rs` | Stable | Thin shim over runtime/render |
 | `execute/axis_members.rs` | Needs cleanup | Heavy, some model-agnostic gaps |

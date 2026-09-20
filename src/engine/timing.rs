@@ -17,6 +17,9 @@ impl RuntimePath {
 pub struct Timings {
     pub runtime_path: RuntimePath,
     pub plan_key: String,
+    /// True when the executed result came from the short-lived result cache
+    /// (plan 032) instead of DuckDB.
+    pub cache_hit: bool,
     pub mdx_parse_us: u64,
     pub semantic_us: u64,
     pub plan_us: u64,
@@ -32,6 +35,7 @@ impl Timings {
         Timings {
             runtime_path: path,
             plan_key,
+            cache_hit: false,
             mdx_parse_us,
             semantic_us,
             plan_us: 0,
@@ -49,10 +53,11 @@ impl Timings {
 
     pub fn to_log_line(&self) -> String {
         format!(
-            "TIMINGS path={} plan_key={} mdx_parse={}us semantic={}us plan={}us \
+            "TIMINGS path={} plan_key={} cache_hit={} mdx_parse={}us semantic={}us plan={}us \
              sql_emit={}us sql_execute={}us xml_render={}us total={}us",
             self.runtime_path.as_str(),
             self.plan_key,
+            self.cache_hit,
             self.mdx_parse_us,
             self.semantic_us,
             self.plan_us,

@@ -10,6 +10,7 @@ use crate::engine::plan::{
     execute_plan_with_backend_and_context, plan_from_semantic_with_model_and_context,
 };
 use crate::engine::timing::{RuntimePath, Timings};
+use crate::execute::cache;
 use crate::execute::render::dispatch_with_backend;
 use crate::project::config::ProxyConfig;
 use std::time::Instant;
@@ -30,12 +31,32 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     let plan_us = (Instant::now() - t0).as_micros() as u64;
     let key = plan_key(&plan);
 
+    // Excel repeats the same query once per CELL PROPERTIES variant; serve the
+    // repeats from a short-lived cache (plan 032). The cellset is rendered
+    // fresh below, so every variant keeps its own cell properties.
+    let cache_enabled = cache::enabled();
+    let cache_key = cache::cache_key(&key, &config.catalog, &config.cube, user);
     let t0 = Instant::now();
-    let result = execute_plan_with_backend_and_context(&plan, model, backend, user, config);
+    let cached = if cache_enabled {
+        cache::RESULT_CACHE.get(&cache_key)
+    } else {
+        None
+    };
+    let (result, cache_hit) = match cached {
+        Some(hit) => (hit, true),
+        None => {
+            let result = execute_plan_with_backend_and_context(&plan, model, backend, user, config);
+            if cache_enabled {
+                cache::RESULT_CACHE.insert(cache_key, result.clone());
+            }
+            (result, false)
+        }
+    };
     let sql_execute_us = (Instant::now() - t0).as_micros() as u64;
 
     let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us, 0);
     timings.plan_us = plan_us;
+    timings.cache_hit = cache_hit;
     timings.sql_execute_us = sql_execute_us;
 
     let t0 = Instant::now();

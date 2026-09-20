@@ -91,6 +91,9 @@ storage and memory:
 - Keep the DuckDB file on fast local storage.
 - Set `MALLARDCUBE_POOL_SIZE` if you want a different number of connections
   than the CPU count.
+- Excel repeats each pivot query once per `CELL PROPERTIES` variant; the
+  built-in 5-second result cache collapses those repeats into one execution.
+  Disable it with `MALLARDCUBE_RESULT_CACHE=0` if you need zero staleness.
 
 The repository ships a benchmark harness in `scripts/bench.sh` that generates a
 large Parquet fact table and measures latency and throughput against a live

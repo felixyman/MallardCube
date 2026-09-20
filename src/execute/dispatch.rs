@@ -2184,6 +2184,55 @@ mod tests {
         });
     }
 
+    // Excel sends each PivotTable query once per CELL PROPERTIES variant. The
+    // short-lived result cache (plan 032) must collapse the repeats into one
+    // DuckDB execution without changing the rendered cellset.
+    #[test]
+    fn repeated_mdx_variants_are_served_from_the_result_cache() {
+        with_project3(|| {
+            let base = "SELECT {[Measures].[Revenue]} ON COLUMNS, \
+                        {[Category].[Category].Members} ON ROWS FROM [Sales]";
+            let backend = Backend::get();
+            let user = crate::engine::model::UserContext::admin_default();
+            let config = crate::proxy_project::project().config.clone();
+            let run = |mdx: &str| {
+                crate::execute::runtime::get_execute_cellset_response_with_backend_and_context(
+                    mdx, backend, &user, &config,
+                )
+            };
+
+            let (first_xml, first) = run(&format!("{base} CELL PROPERTIES VALUE"));
+            assert!(
+                !first.cache_hit,
+                "the first variant executes against DuckDB"
+            );
+            assert!(first.sql_execute_us > 0, "first variant runs a query");
+            assert!(first_xml.contains("<Value"), "cellset renders values");
+
+            let (second_xml, second) = run(&format!(
+                "{base} CELL PROPERTIES CELL_ORDINAL, FORMAT_STRING"
+            ));
+            assert!(
+                second.cache_hit,
+                "the repeat variant is served from the cache"
+            );
+            assert!(
+                second.sql_execute_us < first.sql_execute_us,
+                "a cache hit must not re-execute ({}us vs {}us)",
+                second.sql_execute_us,
+                first.sql_execute_us
+            );
+            assert!(
+                second_xml.contains("<Value") && second_xml.contains("<Axes>"),
+                "the cached result still renders a full cellset"
+            );
+
+            let (_, other) =
+                run("SELECT {[Measures].[Units]} ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE");
+            assert!(!other.cache_hit, "a different query must not hit the entry");
+        });
+    }
+
     #[test]
     fn excel_trace_territory_drilldown_matches_raw_sql() {
         with_project3(|| {

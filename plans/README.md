@@ -39,10 +39,10 @@ honor its STOP conditions, and update your row when done.
 | 029  | Multi-level date hierarchies | P1 | L | 023, 027, 028 | DONE |
 | 030  | DRILLTHROUGH ("show details") | P1 | M | — | DONE |
 | 031  | In-memory dimension metadata cache | P2 | S | — | TODO |
-| 032  | MDX-hash result cache — deduplicate repeated Excel queries | P1 | XS | — | TODO |
+| 032  | MDX-hash result cache — deduplicate repeated Excel queries | P1 | XS | — | DONE |
 | 033  | DRILLTHROUGH equality filter — replace CAST+LIKE | P1 | XS | — | TODO |
 | 034  | Streaming XML cellset render — constant memory | P2 | M | — | TODO |
-| 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | TODO |
+| 035  | Connection pooling — concurrent DuckDB connections | P1 | S | — | DONE |
 | 036  | AutoModel — zero-config semantic model from any DuckDB | P3 | L | Gate G1 | DONE |
 | 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
@@ -51,7 +51,7 @@ honor its STOP conditions, and update your row when done.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 and 036–039 DONE. 031–035 are performance/adoption plans; 040 is the YAML/config-DX plan. Next milestone: Gate G1 (public validation).**
+**Plans 001–030, 032, and 035–039 DONE. 031 (metadata cache), 033 (DRILLTHROUGH equality), and 040 (YAML config) are open; 034 (streaming XML) is deferred. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
@@ -85,6 +85,25 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   keys, and per-member `PARENT_UNIQUE_NAME` derived from each child's path. Deep drills ("Expand to Month") keep the intermediate levels (years, quarters) on the axis.
   (Note: Excel does not allow *dragging* a hierarchy level; levels are reached
   by expanding, per Microsoft's OLAP PivotTable rules.)
+- 032 (result cache) DONE 2026-09-20: `src/execute/cache.rs` caches the executed
+  `QueryResult` for 5 s, keyed by plan key + catalog/cube + user scope (roles,
+  groups, administrator flag — RLS predicates are part of the emitted SQL, so
+  entries never cross users), 64-entry cap with expired-then-oldest eviction.
+  Excel's per-`CELL PROPERTIES` repeats collapse into one DuckDB execution; the
+  cellset is rendered per request, so every variant keeps its own properties.
+  `Timings.cache_hit` (also in `xmla-trace.jsonl`) marks hits;
+  `MALLARDCUBE_RESULT_CACHE=0` disables the cache.
+  Bench (`scripts/bench.sh`, 1M-row fact, execute workload): concurrency 1
+  42.7 → 69.9 req/s (+64%), p50 15 → 2 ms; concurrency 8 41.3 → 65.1 req/s
+  (+58%), p50 86 → 35 ms; discover unchanged. The replay repeats the same
+  statements inside the TTL, so it over-represents hits versus a real session,
+  where the targeted win is the 3× per-interaction repeat (covered by the
+  integration test `repeated_mdx_variants_are_served_from_the_result_cache`).
+- 035 (connection pooling) DONE — implemented in `d38fd13` ("perf: pooled
+  read-only DuckDB connections + cached member cardinality"), verified
+  2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
+  connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
+  `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
 
 ## Reconcile Status
 
