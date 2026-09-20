@@ -628,7 +628,7 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
     match plan {
         QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
         QueryPlan::MeasuresList(_) => QueryResult::Empty,
-        QueryPlan::SetMembers { group_level: _, .. } => {
+        QueryPlan::SetMembers { .. } => {
             let mut rows = backend.query_grouped_1d(sql);
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             QueryResult::Grouped(rows)
@@ -878,7 +878,7 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
     match plan {
         QueryPlan::MetaCountLiteral(n) => QueryResult::Count(*n),
         QueryPlan::MeasuresList(_) => QueryResult::Empty,
-        QueryPlan::SetMembers { group_level: _, .. } => {
+        QueryPlan::SetMembers { .. } => {
             let mut rows = backend.query_grouped_1d(&sql);
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             QueryResult::Grouped(rows)
