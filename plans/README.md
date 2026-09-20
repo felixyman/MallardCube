@@ -47,10 +47,11 @@ honor its STOP conditions, and update your row when done.
 | 037  | CUBE worksheet functions — CUBEVALUE, CUBEMEMBER, CUBESET | P2 | XS | — | DONE |
 | 038  | Set expressions and calculated-member evaluation (CUBESET/CUBESETCOUNT probes) | P1 | M | — | DONE |
 | 039  | Parent-child hierarchies (materialized `Level 01..NN` levels) | P1 | M | — | DONE |
+| 040  | YAML configuration and git-friendly config handling | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–030 and 036–039 DONE. 031–035 are performance/adoption plans. Next milestone: Gate G1 (public validation).**
+**Plans 001–030 and 036–039 DONE. 031–035 are performance/adoption plans; 040 is the YAML/config-DX plan. Next milestone: Gate G1 (public validation).**
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
