@@ -181,22 +181,50 @@ connects to it, so every metadata question can be answered by comparison
    from the Filter menu instead.
 3. **Then**: Date Filters → capture the MDX they emit (`xmla-trace.jsonl`) and
    check it against the plan 046 date-window lowering.
-4. **`DrilldownMember` drops the un-expanded members** (found from a live Excel
-   session: "expand 2022 to quarters" errored). The query
+4. **`DrilldownMember` drops the un-expanded members** — *fixed* (commits
+   `647fe81`, `6a47054`). The query
    `CrossJoin(Hierarchize({DrilldownLevel({[Channel].[Channel].[All]})}),
    Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]})}},
    {[Date].[Calendar].[Year].&[2022]})))` must return the *full input set* with
    2022 expanded in place — the reference SSAS returns 12 members (All, 2020,
-   2021, **2022**, Q1–Q4, 2023, 2024, 2025, 2026); we return 6 (All, 2022, its
-   quarters) because the drill targets are applied as an axis *filter* instead
-   of an expansion. The same response also drops the `All` root on the flat
-   `[Channel]` leg. Fix: keep the input set on the axis, expand only the target
-   keys (the pre-order walk already synthesizes unexpanded roots with their own
-   aggregates via `level0_member_values`; the multi-dimension path needs the
-   same treatment), and strengthen the test to assert the whole member list —
-   the existing `drilldown_member_year_to_quarter` only checks that the
-   expanded branch is present, which is why this slipped through.
-5. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
+   2021, **2022**, Q1–Q4, 2023, 2024, 2025, 2026); we returned 6 (All, 2022,
+   its quarters) because the drill targets were applied as an axis *filter*.
+   Now the multi-dimension path emits the un-expanded level-0 members with
+   their per-other-slot aggregates (from a level-0 × level-0 grouping that
+   ignores the drill filter), the single-dimension chain path keeps the whole
+   input set too, and both paths report the **per-member** child count in
+   `DisplayInfo`'s low bits (a quarter is 3, a year is 4 — the static
+   whole-level cardinality, 132 and 44, corrupts Excel's hierarchy walk).
+   Verified against the reference: same 12 members, same order, same
+   `DisplayInfo` (3 / 0x20003 / 0x30004) and `CHILDREN_CARDINALITY`, same
+   parents. New regression test asserts the whole member list.
+5. **Open: Excel still does not *render* the expansion.** With the response now
+   matching the reference member-for-member, Excel sends the right MDX
+   (`DrilldownMember({{DrilldownLevel({All})}}, {[Date].[Calendar].[Year].&[2021]})`,
+   visible in `xmla-trace.jsonl`), receives our 12 members with no fault, and
+   leaves the pivot showing only years — while the same UI gesture against the
+   reference model (MallardRef) expands 2024 to its child "1" immediately.
+   Ruled out by experiment (rewriting proxy in front of the proxy, see
+   `/tmp/opencode/rewrite-proxy.py`):
+   - tabular member unique names for below-root members
+     (`[Date].[Calendar].[Year].&[2021].&[1]` instead of
+     `[Date].[Calendar].[Quarter].&[2021]&[1]`);
+   - clearing `PARENT_SAME_AS_PREV` on the expanded member (0x30004 → 0x10004);
+   - zeroing `LEVEL_CARDINALITY` / `HIERARCHY_CARDINALITY` in MDSCHEMA_LEVELS
+     (tabular reports 0; we report real counts);
+   - the All member's cellset `LName` (`[Date].[Calendar].[(All)]`) and the
+     child members' `LName`/`LNum`/`PARENT_UNIQUE_NAME` — all match the
+     metadata and the reference.
+   The year members that render fine are byte-identical in the working
+   (DrilldownLevel) and failing (DrilldownMember) responses, so the difference
+   is in the added members or the axis composition. Next diagnostics:
+   capture the reference's raw cellset XML (SSAS trace with the XMLA response,
+   or a loopback capture of the local MSOLAP connection) and diff it against
+   ours; compare the saved pivot cache/table XML for the reference's expanded
+   pivot vs ours (the earlier `SaveAs` attempt hit a pending save dialog —
+   retry with `DisplayAlerts=$false` and read the entry straight out of the
+   .xlsx zip).
+6. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
 
