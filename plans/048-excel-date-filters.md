@@ -201,29 +201,50 @@ connects to it, so every metadata question can be answered by comparison
 5. **Open: Excel still does not *render* the expansion.** With the response now
    matching the reference member-for-member, Excel sends the right MDX
    (`DrilldownMember({{DrilldownLevel({All})}}, {[Date].[Calendar].[Year].&[2021]})`,
-   visible in `xmla-trace.jsonl`), receives our 12 members with no fault, and
-   leaves the pivot showing only years — while the same UI gesture against the
-   reference model (MallardRef) expands 2024 to its child "1" immediately.
-   Ruled out by experiment (rewriting proxy in front of the proxy, see
+   visible in `xmla-trace.jsonl`), receives our cellset, and leaves the pivot
+   showing only years — while the same UI gesture against the reference model
+   (MallardRef) expands 2024 to its child "1" immediately.
+
+   Verified by capturing the reference's **raw cellset XML** (`AdomdCommand.
+   ExecuteXmlReader` on the reference, POSTed to a capture endpoint on the
+   Linux side, saved as `/tmp/opencode/ref-cellset.xml`): our Axis0 members are
+   now element-for-element identical (`UName,Caption,LName,LNum,DisplayInfo
+   [,PARENT_UNIQUE_NAME]`; `DisplayInfo` 3 / 0x20003 / 0x30004; same LName /
+   LNum / parents), and the slicer was aligned too (the reference keeps the
+   axis dimension's *other* hierarchies — e.g. the key attribute hierarchy —
+   with their default members; we dropped the whole dimension). None of it
+   changed Excel's behaviour.
+
+   Two decisive experiments (rewriting proxy in front of ours,
    `/tmp/opencode/rewrite-proxy.py`):
-   - tabular member unique names for below-root members
-     (`[Date].[Calendar].[Year].&[2021].&[1]` instead of
-     `[Date].[Calendar].[Quarter].&[2021]&[1]`);
-   - clearing `PARENT_SAME_AS_PREV` on the expanded member (0x30004 → 0x10004);
-   - zeroing `LEVEL_CARDINALITY` / `HIERARCHY_CARDINALITY` in MDSCHEMA_LEVELS
-     (tabular reports 0; we report real counts);
-   - the All member's cellset `LName` (`[Date].[Calendar].[(All)]`) and the
-     child members' `LName`/`LNum`/`PARENT_UNIQUE_NAME` — all match the
-     metadata and the reference.
-   The year members that render fine are byte-identical in the working
-   (DrilldownLevel) and failing (DrilldownMember) responses, so the difference
-   is in the added members or the axis composition. Next diagnostics:
-   capture the reference's raw cellset XML (SSAS trace with the XMLA response,
-   or a loopback capture of the local MSOLAP connection) and diff it against
-   ours; compare the saved pivot cache/table XML for the reference's expanded
-   pivot vs ours (the earlier `SaveAs` attempt hit a pending save dialog —
-   retry with `DisplayAlerts=$false` and read the entry straight out of the
-   .xlsx zip).
+   - **Value marker**: rewriting every cell value in the expand response to
+     `424242` leaves the pivot's numbers untouched → Excel never applies the
+     response.
+   - **SOAP fault**: answering the `DrilldownMember` request with a fault
+     produces no error dialog and no status change → Excel is not even waiting
+     on that response.
+
+   So the blocker is *outside* the cellset body: it is about how Excel's pivot
+   accepts the expand result at all. Also ruled out by experiment: tabular
+   member unique names for below-root members, clearing `PARENT_SAME_AS_PREV`
+   on the expanded member, zeroing `LEVEL_CARDINALITY`/`HIERARCHY_CARDINALITY`,
+   and the All/child `LName`/`LNum`/`PARENT_UNIQUE_NAME` (all match the
+   metadata and the reference).
+
+   Next diagnostics:
+   - capture the reference's response **as Excel receives it** (a byte-logging
+     TCP relay on the VM: `localhost:2399 → localhost:2383`, then point an
+     Excel connection at `Data Source=localhost:2399` and expand) — the
+     response SSAS sends to *Excel* may differ from the ADOMD one because
+     Excel sends `DbpropMsmdOptimizeResponse=9` / `SspropInitAppName=Excel`;
+   - compare the metadata Excel re-reads on the expand path. On a
+     hierarchy-restricted `MDSCHEMA_PROPERTIES` request the reference returns
+     only that hierarchy's `KEY0` / `NAME` (the `(All)` level) / `MEMBER_VALUE`
+     rows with `PROPERTY_TYPE=5`, while we mix in the eight cell properties
+     (`PROPERTY_TYPE=2`) and have no `KEY0`/`NAME` rows at all;
+   - check whether the *expand* depends on the connection being kept alive
+     (Excel's expand runs on a freshly opened session and closes it right
+     after, unlike the reference connection).
 6. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
