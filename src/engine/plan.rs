@@ -105,6 +105,8 @@ pub enum QueryPlan {
     MetaCount {
         dim: DimId,
         group_level: Option<usize>,
+        /// Filters restricting which members are counted (date windows).
+        filters: Vec<TypedDimensionFilter>,
     },
 
     /// Count of an explicit member list — known at parse time.
@@ -473,6 +475,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         return QueryPlan::MetaCount {
             dim: dim_id,
             group_level,
+            filters: typed_filters(&query.filters),
         };
     }
 
@@ -927,14 +930,20 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             QueryResult::Count(count)
         }
 
-        QueryPlan::MetaCount { dim, group_level } => {
+        QueryPlan::MetaCount {
+            dim,
+            group_level,
+            filters,
+        } => {
             // Cached dictionary (plan 031) for unfiltered users; RLS-filtered
-            // users keep the role-scoped SQL so counts cannot leak.
+            // users keep the role-scoped SQL so counts cannot leak, and a date
+            // window restricts the counted members so it must use the SQL too.
             let table = model.dim_table_for_discovery(dim);
-            let cached_ok = !matches!(
-                effective_table_filter(config, user, table),
-                TableAccess::Filtered(_)
-            );
+            let cached_ok = filters.iter().all(|f| f.date_window.is_none())
+                && !matches!(
+                    effective_table_filter(config, user, table),
+                    TableAccess::Filtered(_)
+                );
             let count = if cached_ok {
                 let dim_def = model.dim_def(dim);
                 let members = model.dim_cache.get(model, dim_def, backend);

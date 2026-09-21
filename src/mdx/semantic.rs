@@ -351,6 +351,13 @@ fn date_windows(
     for (_, body) in &named {
         walk(body, model, &mut out);
     }
+    for (_, body) in &sel.with_members {
+        if let crate::mdx::ast::Expr::Str(s) = body
+            && let Ok(e) = crate::mdx::frontend::parse_set_expr(s)
+        {
+            walk(&e, model, &mut out);
+        }
+    }
     // Silence an unused-import warning for `CmpOp` in builds without filters.
     let _ = std::marker::PhantomData::<CmpOp>;
     out

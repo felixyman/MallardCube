@@ -113,8 +113,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   day'`), `Filter(<level set>, Member_Value …)` lowering, and `WITH SET`
   resolution for references on the axis. Verified live: the captured CUBESET
   probe → 2026-08-22 (30 days back) and a `WITH SET [Last30]` axis → ~30 date
-  members. Remaining: the `COUNT(<windowed set>)` probe, ranges in slicers, and
-  `ParallelPeriod`/`LastPeriods`.
+  members. A follow-up pass (same day) closed the three loose ends: slicer
+  ranges (`WHERE ({a : b})` — which also fixed `flatten_members` turning a
+  range's endpoints into an OR filter that silently dropped the middle
+  members), `ParallelPeriod`/`LastPeriods` (a `DateWindow` enum with shifted
+  and lookback windows), and the `COUNT(<windowed set>)` probe (the quoted body
+  goes through the front-end, `MetaCount` carries filters). Only
+  `ClosingPeriod`/`OpeningPeriod` still fault.
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic

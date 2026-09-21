@@ -565,96 +565,6 @@ pub struct CalculatedCount {
     pub set: SetExpr,
 }
 
-/// Parse a set source like `[Date].[Date].[Year].Members`,
-/// `[Sales].[Sales].Children`, or `[Dim].[Dim].[All].Members` into a SetExpr.
-/// The closing `}` of an enclosing set may be present; it is ignored.
-fn parse_set_source(text: &str) -> Option<SetExpr> {
-    let t = text.trim().trim_end_matches('}').trim_end();
-    let dot = t.rfind('.')?;
-    let func = &t[dot + 1..];
-    let src = t[..dot].trim_end();
-    let members = func.eq_ignore_ascii_case("Members")
-        || func.eq_ignore_ascii_case("AllMembers")
-        || func.eq_ignore_ascii_case("Children");
-    if !members {
-        return None;
-    }
-    // Collect bracketed segments from the source reference. More than three
-    // segments means a member-qualified source (e.g. `[X].&[2024]&[2]`),
-    // which is not a supported set source.
-    let mut segs: Vec<String> = Vec::new();
-    let mut rest = src;
-    while let Some(open) = rest.find('[') {
-        let after = &rest[open + 1..];
-        let close = after.find(']')?;
-        segs.push(after[..close].to_string());
-        rest = &after[close + 1..];
-    }
-    if segs.len() == 1 {
-        // `[Measures].Members`
-        if segs[0] == "Measures" && func.eq_ignore_ascii_case("Members") {
-            return Some(SetExpr::Measures);
-        }
-        return None;
-    }
-    if segs.len() > 3 {
-        return None;
-    }
-    let dim = segs[0].clone();
-    if segs.len() == 2 {
-        Some(SetExpr::LevelMembers { dim, level: None })
-    } else {
-        let level = &segs[segs.len() - 1];
-        if level == "(All)" || level == "All" {
-            Some(SetExpr::AllMembers { dim })
-        } else {
-            Some(SetExpr::LevelMembers {
-                dim,
-                level: Some(level.clone()),
-            })
-        }
-    }
-}
-
-/// Split an explicit member list (`[D].[H].&[a],[D].[H].&[b]`) on commas that
-/// sit outside brackets. Returns None when the text isn't a member list.
-fn parse_member_list(text: &str) -> Option<Vec<String>> {
-    let t = text
-        .trim()
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .trim();
-    if !t.starts_with('[') || !t.contains("&[") {
-        return None;
-    }
-    let mut pieces: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut in_bracket = false;
-    for ch in t.chars() {
-        match ch {
-            '[' => {
-                in_bracket = true;
-                cur.push(ch);
-            }
-            ']' => {
-                in_bracket = false;
-                cur.push(ch);
-            }
-            ',' if !in_bracket => {
-                pieces.push(cur.trim().to_string());
-                cur = String::new();
-            }
-            _ => cur.push(ch),
-        }
-    }
-    pieces.push(cur.trim().to_string());
-    if !pieces.is_empty() && pieces.iter().all(|p| p.starts_with('[')) {
-        Some(pieces)
-    } else {
-        None
-    }
-}
-
 /// Find `WITH MEMBER [Measures].[name] AS '<expr>'` where expr is exactly
 /// `COUNT(<set>)`. Tolerates XML-escaped ampersands in member unames.
 pub fn parse_calculated_count(input: &str) -> Option<CalculatedCount> {
@@ -685,11 +595,11 @@ pub fn parse_calculated_count(input: &str) -> Option<CalculatedCount> {
         .strip_suffix(')')
         .unwrap_or("")
         .replace("&amp;", "&");
-    let set = if let Some(unames) = parse_member_list(&set_text) {
-        SetExpr::MemberList { unames }
-    } else {
-        parse_set_source(&set_text)?
-    };
+    // Plan 047: the set body goes through the front-end (it understands
+    // `Filter(...)` windows, ranges, HEAD/Tail and time-intelligence calls).
+    let set = crate::mdx::frontend::parse_set_expr(&set_text)
+        .ok()
+        .and_then(|e| crate::mdx::frontend::set_expr_from_ast(&e))?;
     Some(CalculatedCount {
         member_name: name,
         set,

@@ -9,9 +9,10 @@
   metadata-only)
 - **Depends on**: 045 (intake fidelity), 007 (measure-scoped date roles)
 - **Category**: Excel compatibility / MDX
-- **Status**: **IN PROGRESS 2026-09-21** — slices 1–6 landed (5 partially:
-  `ParallelPeriod`/`LastPeriods` remain). What remains: the `COUNT(<windowed
-  set>)` probe and ranges in slicers.
+- **Status**: **IN PROGRESS 2026-09-21** — slices 1–6 landed, plus the
+  follow-up pass: slicer ranges, `ParallelPeriod`/`LastPeriods` and the
+  `COUNT(<windowed set>)` probe. What remains: `ClosingPeriod`/`OpeningPeriod`
+  (fault with a reason).
 
 ## Why this matters
 
@@ -56,9 +57,9 @@ Additional findings:
 |---|---|---|---|
 | 1 | **Level data types**: emit the real OLE DB `LEVEL_DBTYPE` per level (date for a date role's leaf, numeric for year/quarter/month) instead of a hardcoded string | S | **DONE** |
 | 2 | **Loud faults**: unsupported set expressions (ranges, time functions, `WITH SET`, member-value `Filter`, VBA functions) return a SOAP fault naming the construct instead of a dropped/bogus axis; capability negotiation stops advertising named sets | S | **DONE** |
-| 3 | **Range sets** (`a : b`) in set probes (`HEAD({a:b},n)`, bare sets) | S/M | **DONE** |
+| 3 | **Range sets** (`a : b`) on axes, in set probes and in slicers | S/M | **DONE** |
 | 4 | **`WITH SET` + `Filter` with member-value comparisons + `DateAdd`/VBA** (the documented Excel named-set sliding window) | M | **DONE** |
-| 5 | **MDX time functions**: `YTD`/`QTD`/`MTD`/`PeriodsToDate` lowered to date windows on the anchor's date role; `ParallelPeriod`/`LastPeriods` still fault | M | **PARTIAL** |
+| 5 | **MDX time functions**: `YTD`/`QTD`/`MTD`/`PeriodsToDate`/`ParallelPeriod`/`LastPeriods` lowered to date windows; `ClosingPeriod`/`OpeningPeriod` fault | M | **DONE** |
 | 6 | **Converter DAX mappings**: `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` → the existing qtd/mtd flags; plain aggregates lowered to real SQL (was stubs) | S | **DONE** |
 
 ## Slice 1 evidence (2026-09-21)
@@ -111,8 +112,13 @@ Additional findings:
   same filter as `WITH SET [Last30]` referenced on the axis returns ~30 date
   members, and an upper-bound window (`<= DateAdd("yyyy", -1, …)`) returns
   2020-01-01.
-- Known gap (faults with a reason): the `COUNT(<windowed set>)` probe
-  (`WITH MEMBER … AS 'COUNT(Filter(…))'`) — its quoted body is not lowered yet.
+- Follow-up pass (same day): the `COUNT(<windowed set>)` probe works —
+  `parse_calculated_count` parses the quoted body through the front-end, the
+  body walkers lower the window, `MetaCount` carries filters and its SQL
+  applies the window predicate (the cached dictionary is skipped when a window
+  is present). Verified live: the 30-day window counts 1593 (the demo calendar
+  extends to 2030, so "from 30 days ago onwards" includes future dates — the
+  upper-bound variant counts 2091 = 2020-01-01…2025-09-21 ✓).
 
 ## Slice 5 evidence (2026-09-21, partial)
 

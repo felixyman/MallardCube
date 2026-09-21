@@ -33,8 +33,17 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             format!("count|dim={}", dimension)
         }
 
-        QueryPlan::MetaCount { dim, group_level } => {
-            format!("metacount|dim={}|level={:?}", dim, group_level)
+        QueryPlan::MetaCount {
+            dim,
+            group_level,
+            filters,
+        } => {
+            format!(
+                "metacount|dim={}|level={:?}{}",
+                dim,
+                group_level,
+                filter_suffix(filters)
+            )
         }
 
         QueryPlan::MetaCountLiteral(n) => {

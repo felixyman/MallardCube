@@ -303,9 +303,24 @@ pub fn sql_for_query_plan_with_context(
             format!("SELECT COUNT(DISTINCT {}) {}", col, from)
         }
 
-        QueryPlan::MetaCount { dim, group_level } => {
+        QueryPlan::MetaCount {
+            dim,
+            group_level,
+            filters,
+        } => {
             let d = model.dim_def(dim);
             let table = model.dim_table_for_discovery(dim);
+            // Date windows restrict which members are counted.
+            let windows: Vec<String> = filters
+                .iter()
+                .filter_map(|f| f.date_window.as_ref())
+                .map(|w| date_window_predicate(model, d, w, table))
+                .collect();
+            let where_clause = if windows.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {}", windows.join(" AND "))
+            };
             // A level member is identified by its FULL ancestor path (Q1 of
             // 2020 differs from Q1 of 2021), so count distinct paths.
             match group_level.and_then(|i| d.levels.get(i)) {
@@ -320,10 +335,10 @@ pub fn sql_for_query_plan_with_context(
                     } else {
                         format!("CONCAT_WS('|', {})", cols.join(", "))
                     };
-                    format!("SELECT COUNT(DISTINCT {path}) FROM {table}")
+                    format!("SELECT COUNT(DISTINCT {path}) FROM {table}{where_clause}")
                 }
                 None => format!(
-                    "SELECT COUNT(DISTINCT CAST({} AS VARCHAR)) FROM {table}",
+                    "SELECT COUNT(DISTINCT CAST({} AS VARCHAR)) FROM {table}{where_clause}",
                     d.physical_field
                 ),
             }
@@ -973,6 +988,89 @@ fn sql_where_with_cols(
 }
 
 /// Collect JOINs and WHERE including role-filter JOINs and predicates.
+/// SQL predicate for a date window on a dimension's own table (no fact
+/// wrapper) — used by dim-side counts (`MetaCount`).
+fn date_window_predicate(
+    model: &SemanticModel,
+    d: &crate::engine::model::DimensionDef,
+    w: &crate::mdx::ast::DateWindow,
+    dim_table: &str,
+) -> String {
+    use crate::mdx::ast::DateWindow;
+    let date_col = model
+        .date_dims
+        .get(&d.id)
+        .map(|dd| dd.full_date_column.clone())
+        .unwrap_or_else(|| {
+            d.levels
+                .last()
+                .map(|l| l.column.clone())
+                .unwrap_or_else(|| d.physical_field.clone())
+        });
+    let pins = |anchor: &[(String, String)]| -> String {
+        let mut out: Vec<String> = Vec::new();
+        for (level_name, value) in anchor {
+            if let Some(l) = d.levels.iter().find(|l| &l.name == level_name) {
+                out.push(format!(
+                    "CAST({} AS VARCHAR) = '{}'",
+                    l.column,
+                    value.replace('\'', "''")
+                ));
+            }
+        }
+        if out.is_empty() {
+            "TRUE".to_string()
+        } else {
+            out.join(" AND ")
+        }
+    };
+    let anchor = |a: &[(String, String)]| {
+        format!(
+            "(SELECT MAX({date_col}) FROM {dim_table} WHERE {})",
+            pins(a)
+        )
+    };
+    match w {
+        DateWindow::Relative { op, amount, unit } => {
+            let cmp = match op {
+                crate::mdx::ast::CmpOp::Gt => ">",
+                crate::mdx::ast::CmpOp::Ge => ">=",
+                crate::mdx::ast::CmpOp::Lt => "<",
+                crate::mdx::ast::CmpOp::Le => "<=",
+                crate::mdx::ast::CmpOp::Eq => "=",
+                crate::mdx::ast::CmpOp::Ne => "<>",
+            };
+            format!("{date_col} {cmp} (CURRENT_DATE + INTERVAL '{amount} {unit}')")
+        }
+        DateWindow::ToDate { anchor: a, period } => {
+            let a = anchor(a);
+            format!("{date_col} BETWEEN date_trunc('{period}', {a}) AND {a}")
+        }
+        DateWindow::Parallel {
+            anchor: a,
+            level,
+            offset,
+        } => {
+            let a = anchor(a);
+            let next = offset + 1;
+            format!(
+                "{date_col} >= date_trunc('{level}', {a}) + INTERVAL '{offset} {level}' AND {date_col} < date_trunc('{level}', {a}) + INTERVAL '{next} {level}'"
+            )
+        }
+        DateWindow::LastPeriods {
+            anchor: a,
+            level,
+            count,
+        } => {
+            let a = anchor(a);
+            let back = (count - 1).max(0);
+            format!(
+                "{date_col} >= date_trunc('{level}', {a}) - INTERVAL '{back} {level}' AND {date_col} <= {a}"
+            )
+        }
+    }
+}
+
 fn joins_and_where(
     model: &SemanticModel,
     filters: &[TypedDimensionFilter],

@@ -2812,6 +2812,29 @@ mod tests {
         });
     }
 
+    // The CUBESETCOUNT probe over a windowed set (`COUNT(Filter(…))`).
+    #[test]
+    fn count_probe_over_a_windowed_set() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())))' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 1);
+            // The fixture's `full_date` is an integer date key (the live demo
+            // uses a DATE), so assert the window *restricts* here; the live
+            // check verifies the exact ~30-day span.
+            let total = Backend::test_fixture()
+                .query_count("SELECT COUNT(DISTINCT CONCAT_WS('|', year, quarter, month, full_date)) FROM date_dim");
+            assert!(
+                values[0] > 0.0 && values[0] < f64::from(total),
+                "the window must restrict the count: {} of {total}",
+                values[0]
+            );
+        });
+    }
+
     // Slicer ranges restrict the aggregate (the same range filter as axes).
     #[test]
     fn slicer_member_range_restricts_the_aggregate() {

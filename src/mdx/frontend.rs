@@ -1260,6 +1260,13 @@ pub fn member_property_filter_count(sel: &Select) -> usize {
     for (_, body) in &sets {
         walk(body, &mut out);
     }
+    for (_, body) in &sel.with_members {
+        if let Expr::Str(s) = body
+            && let Ok(e) = parse_set_expr(s)
+        {
+            walk(&e, &mut out);
+        }
+    }
     out
 }
 
@@ -1345,8 +1352,19 @@ pub fn member_value_filters(sel: &Select) -> Vec<(Expr, CmpOp, i64, String)> {
             walk(&expand_named_sets(e, &sets), &mut out);
         }
     }
+    if let Some(w) = &sel.where_clause {
+        walk(&expand_named_sets(w, &sets), &mut out);
+    }
     for (_, body) in &sets {
         walk(body, &mut out);
+    }
+    // `WITH MEMBER … AS 'COUNT(<set>)'` bodies.
+    for (_, body) in &sel.with_members {
+        if let Expr::Str(s) = body
+            && let Ok(e) = parse_set_expr(s)
+        {
+            walk(&e, &mut out);
+        }
     }
     out
 }
