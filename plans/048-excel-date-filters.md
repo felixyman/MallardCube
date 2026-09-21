@@ -1,8 +1,9 @@
 # Plan 048 — Excel date filters: metadata requirements + UI spike
 
-Status: **in progress** — the SSAS-shaped date attribute hierarchy and the
-Discover restriction handling landed; Excel still withholds Date Filters and
-still refuses to add *any* hierarchy to a pivot built against the proxy.
+Status: **in progress** — the pivot field-add regression is **fixed** (bisected to
+`e9b7ab6` and repaired: duplicate standard member properties in the cellset).
+Excel still withholds Date Filters: it does not write `memberValueDatatype` for
+the date attribute hierarchy, so the field is not typed as a date.
 
 ## Why
 
@@ -98,6 +99,47 @@ connects to it, so every metadata question can be answered by comparison
    reference has `count="2"`, and no `memberValueDatatype` at all — i.e. Excel
    is not enumerating our levels the way it enumerates the reference's.
 
+## Findings (session 3 — the field-add regression, and where Date Filters stand)
+
+8. **Excel refused to add any hierarchy field to a pivot against the proxy**
+   (COM `CubeField.Orientation = 1` → 0x800A03EC, and the field-list checkbox
+   too) while measures worked and the same calls worked against the reference.
+   The last known-good state was the August test workbook, so this was a
+   regression: `git bisect 84da600..master` (19 revisions) landed on
+   **`e9b7ab6`** ("Excel hierarchy levels, expansion semantics, …", Sep 20).
+   The field-add path fetches metadata and then runs the drilldown MDX; the
+   requests and *all* non-member responses were byte-identical between the last
+   good and first bad build. The cellset was not: `e9b7ab6` started emitting
+   `MEMBER_CAPTION`, `MEMBER_UNIQUE_NAME`, `LEVEL_NUMBER` and
+   `LEVEL_UNIQUE_NAME` as extra member-property elements. Those values already
+   travel in the standard `Caption` / `UName` / `LNum` / `LName` tags and the
+   duplicates are **not declared in `HierarchyInfo`**, so Excel rejects the
+   cellset and aborts the field add. Fix: never emit them (`635e3f2`).
+   Verified live: `[Category].[Category]`, `[Date].[Date]` (the key attribute
+   hierarchy) and measures all add to a fresh pivot and it renders.
+9. **`MEMBER_KEY` for compound members is the *leaf* key**, not the pipe path
+   (`[DateDim].[Calendar].[Year].&[2020].&[1]` → `MEMBER_KEY=1`, verified
+   against the reference). Reverted to that (`7223633`); it was not the
+   field-add gate but it is the correct value.
+10. **Date Filters still withheld.** With fields adding again, the date field
+    can be inspected: Excel **auto-groups** it into Years/Quarters/Months/Days
+    (it parses the captions as dates) but the Filter menu offers only
+    Label/Value Filters — and the pivot cache for the hierarchy carries
+    `attribute="1" time="1"` with **no `memberValueDatatype`**, where the
+    reference writes `memberValueDatatype="7"`. Excel also **fails to save**
+    ("Document not saved") any workbook whose pivot contains that field —
+    another symptom of the same unresolved typing gap.
+    Aligned so far: `LEVEL_TYPE` 0 on the date level, `LEVEL_DBTYPE` 7,
+    `(All)` visible with DBTYPE 3, `LEVEL_ORDERING_PROPERTY` /
+    `LEVEL_ATTRIBUTE_HIERARCHY_NAME`, `LEVEL_UNIQUE_SETTINGS` 0,
+    `LEVEL_KEY_CARDINALITY` 1, hierarchy origin 2, `GROUPING_BEHAVIOR` 1,
+    `STRUCTURE_TYPE`, `DIMENSION_UNIQUE_SETTINGS` 1, `HIERARCHY_ORDINAL`,
+    `MEMBER_VALUE` per level (`(All)`=130, periods=3, date=7) with
+    `PROPERTY_ORIGIN`/`PROPERTY_IS_VISIBLE`, and
+    `MEASUREGROUP_DIMENSIONS.DIMENSION_GRANULARITY`. Cardinalities
+    (`LEVEL_CARDINALITY`, `HIERARCHY_CARDINALITY`) were tried as 0 ("unknown",
+    like the reference) and made no difference; reverted to the real values.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
@@ -125,23 +167,24 @@ connects to it, so every metadata question can be answered by comparison
 
 ## Next
 
-1. **Make `DrilldownLevel` match SSAS** (likely the field-add blocker):
-   include the input member(s) in the result, for flat dimensions too, and
-   resolve the hierarchy segment — `[Date].[Date].All` must drill the date
-   level, not the user hierarchy's years. Re-test the Excel field add after
-   each: a fresh pivot cache + `CubeField.Orientation = 1` is a 30-second
-   check, and the cache definition shows whether Excel accepted the field.
-2. **Match the level enumeration.** The reference reports `count="2"` for a
-   two-level hierarchy where Excel reports `count="0"` for ours. Compare the
-   full `MDSCHEMA_LEVELS`/`MDSCHEMA_HIERARCHIES` rows (we are missing
-   `DESCRIPTION`, the SQL column names, `LEVEL_MASTER_UNIQUE_NAME`;
-   `LEVEL_CARDINALITY`/`HIERARCHY_CARDINALITY` are real here and 0 there;
-   `DIMENSION_UNIQUE_SETTINGS` 0 vs 1; `GROUPING_BEHAVIOR` 0 vs 1;
-   `HIERARCHY_ORDINAL` 0 vs per-hierarchy) and bisect until
-   `memberValueDatatype="7"` appears in the cache definition.
-3. Once Date Filters appear, capture the MDX they emit (`xmla-trace.jsonl`) and
+1. **Make Excel type the date field.** The one remaining gate: with the field in
+   a pivot, Excel must write `memberValueDatatype="7"` for `[Date].[Date]` (the
+   reference does). Everything else in the date hierarchy's metadata now matches
+   the reference; the remaining differences are `DIMENSION_MASTER_NAME` vs
+   `DIMENSION_MASTER_UNIQUE_NAME`, `INSTANCE_SELECTION` (0 here, empty there),
+   non-empty GUIDs, and the empty `LEVEL_MASTER_UNIQUE_NAME` / SQL column-name
+   fields we do not emit. Work the list down and watch the cache.
+2. **Work around the save failure** to read that cache: Excel refuses to save a
+   workbook whose pivot contains the date field ("Document not saved"), so the
+   cache definition can only be read for pivots without it. `SaveCopyAs` writes
+   ODF (unusable). Try saving through a different path/format, or infer the flag
+   from the Filter menu instead.
+3. **Then**: Date Filters → capture the MDX they emit (`xmla-trace.jsonl`) and
    check it against the plan 046 date-window lowering.
-4. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
+4. Also worth fixing: `DrilldownLevel` drops the All root for flat dimensions
+   and resolves `[Date].[Date].All` to the user hierarchy (both differ from
+   SSAS; neither blocks the field add, but they will bite elsewhere).
+5. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
 
