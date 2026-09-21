@@ -1189,7 +1189,7 @@ mod tests {
     fn unknown_set_level_fails_closed() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Bogus].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Full Date].[Bogus].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
             );
             // The CellData block must be empty: counting the physical grain
             // would emit a misleading cell value.
@@ -1569,10 +1569,10 @@ mod tests {
 
             // An unqualified `.Members` set stays at the leaf grain.
             // TODO(plan 048): a set queried from the key attribute hierarchy
-            // should render its members under [Date].[Date]; today the leaf
+            // should render its members under [Date].[Full Date]; today the leaf
             // renders under the user hierarchy (and without the level segment).
             let leaf = get_execute_statement_response(
-                "SELECT {AddCalculatedMembers({[Date].[Date].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {AddCalculatedMembers({[Date].[Full Date].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             let leaf_infos = axis0_member_infos(&leaf);
             assert!(
@@ -1927,7 +1927,7 @@ mod tests {
     #[test]
     fn crossjoin_leveled_first_dim_emits_level_qualified_members() {
         with_project3(|| {
-            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Territory].[Territory].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Date].[Calendar].[Date]MEMBER_CAPTION,[Date].[Calendar].[Date]MEMBER_UNIQUE_NAME,[Date].[Calendar].[Date]LEVEL_NUMBER,[Date].[Calendar].[Date]LEVEL_UNIQUE_NAME,[Date].[Calendar].[Date]PARENT_LEVEL,[Date].[Calendar].[Date]CHILDREN_CARDINALITY,[Territory].[Territory].[Territory]MEMBER_CAPTION,[Territory].[Territory].[Territory]MEMBER_UNIQUE_NAME ON COLUMNS  FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING"#;
+            let mdx = r#"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Territory].[Territory].[All]},,,INCLUDE_CALC_MEMBERS)})) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME,[Date].[Calendar].[Full Date]MEMBER_CAPTION,[Date].[Calendar].[Full Date]MEMBER_UNIQUE_NAME,[Date].[Calendar].[Full Date]LEVEL_NUMBER,[Date].[Calendar].[Full Date]LEVEL_UNIQUE_NAME,[Date].[Calendar].[Full Date]PARENT_LEVEL,[Date].[Calendar].[Full Date]CHILDREN_CARDINALITY,[Territory].[Territory].[Territory]MEMBER_CAPTION,[Territory].[Territory].[Territory]MEMBER_UNIQUE_NAME ON COLUMNS  FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING"#;
             let xml = get_execute_statement_response(mdx);
             let members = axis0_member_infos(&xml);
             assert!(
@@ -2822,7 +2822,7 @@ mod tests {
     fn count_probe_over_a_windowed_set() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT(Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())))' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT(Filter([Date].[Calendar].[Full Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())))' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             let values = cell_values(&xml);
@@ -2862,7 +2862,7 @@ mod tests {
         with_project3(|| {
             // Inline filter — the captured CUBESET probe shape.
             let xml = get_execute_statement_response(
-                "SELECT {HEAD(Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {HEAD(Filter([Date].[Calendar].[Full Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             let caps: Vec<String> = xml
@@ -2877,7 +2877,7 @@ mod tests {
 
             // Named set (`WITH SET`) referenced on the axis.
             let xml = get_execute_statement_response(
-                "WITH SET [Last30] AS 'Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Last30]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "WITH SET [Last30] AS 'Filter([Date].[Calendar].[Full Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Last30]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             let members = xml.matches("<Member ").count();
@@ -2888,7 +2888,7 @@ mod tests {
 
             // An upper-bound window (`Member_Value <= DateAdd("yyyy", -1, …)`).
             let xml = get_execute_statement_response(
-                "SELECT {HEAD(Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value <= DateAdd(\"yyyy\", -1, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {HEAD(Filter([Date].[Calendar].[Full Date].Members, [Date].[Calendar].CurrentMember.Member_Value <= DateAdd(\"yyyy\", -1, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
         });
@@ -3041,7 +3041,7 @@ mod tests {
                     "member ranges",
                 ),
                 (
-                    "WITH SET [Last30] AS 'Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                    "WITH SET [Last30] AS 'Filter([Date].[Calendar].[Full Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
                     "member-property filters",
                 ),
             ] {

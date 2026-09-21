@@ -305,7 +305,7 @@ mod tests {
             let year = date_section.contains("<LEVEL_NAME>Year</LEVEL_NAME>");
             let quarter = date_section.contains("<LEVEL_NAME>Quarter</LEVEL_NAME>");
             let month = date_section.contains("<LEVEL_NAME>Month</LEVEL_NAME>");
-            let date_leaf = date_section.contains("<LEVEL_NAME>Date</LEVEL_NAME>");
+            let date_leaf = date_section.contains("<LEVEL_NAME>Full Date</LEVEL_NAME>");
             assert!(year, "should have Year level");
             assert!(quarter, "should have Quarter level");
             assert!(month, "should have Month level");
@@ -319,8 +319,8 @@ mod tests {
                 ("[Date].[Calendar].[Year]", "3"),
                 ("[Date].[Calendar].[Quarter]", "3"),
                 ("[Date].[Calendar].[Month]", "3"),
-                ("[Date].[Calendar].[Date]", "7"),
-                ("[Date].[Date].[Date]", "7"),
+                ("[Date].[Calendar].[Full Date]", "7"),
+                ("[Date].[Full Date].[Full Date]", "7"),
             ] {
                 let marker = format!("<LEVEL_UNIQUE_NAME>{lvl}</LEVEL_UNIQUE_NAME>");
                 let start = resp
@@ -372,8 +372,8 @@ mod tests {
             );
             for lvl in [
                 "[Date].[Calendar].[Year]",
-                "[Date].[Calendar].[Date]",
-                "[Date].[Date].[Date]",
+                "[Date].[Calendar].[Full Date]",
+                "[Date].[Full Date].[Full Date]",
             ] {
                 let marker = format!("<LEVEL_UNIQUE_NAME>{lvl}</LEVEL_UNIQUE_NAME>");
                 let start = resp

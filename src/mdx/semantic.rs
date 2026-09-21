@@ -1136,12 +1136,12 @@ mod tests {
 
     #[test]
     fn bare_hierarchy_members_stay_at_leaf_grain() {
-        // `[Date].[Date].Members` is the leaf level (individual dates), not the
+        // `[Date].[Full Date].Members` is the leaf level (individual dates), not the
         // top level — only an explicit level or DrilldownLevel promotes it.
         let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3");
         crate::project::project::with_test_project(p, || {
-            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].Members ON ROWS FROM [Sales]";
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Full Date].Members ON ROWS FROM [Sales]";
             let q = semantic_query_from_mdx(mdx);
             assert_eq!(q.axis_dimensions, vec!["Date"]);
             assert_eq!(q.drilldown_levels, vec![None]);

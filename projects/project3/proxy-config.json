@@ -80,7 +80,7 @@
       "description": "Calendar date dimension",
       "hierarchy_name": "Calendar",
       "all_level_name": "(All)",
-      "leaf_level_name": "Date",
+      "leaf_level_name": "Full Date",
       "ordinal": 5,
       "visible": true,
       "has_all": true,
@@ -108,7 +108,7 @@
           "cardinality": 132
         },
         {
-          "name": "Date",
+          "name": "Full Date",
           "column": "full_date",
           "level_number": 3,
           "cardinality": 4018

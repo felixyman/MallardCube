@@ -363,18 +363,19 @@ impl DimensionDef {
         )
     }
 
-    /// SSAS shape for a date role with hierarchy levels: the full-date level is
-    /// exposed as the dimension's **key attribute hierarchy** beside the user
-    /// hierarchy. Its name is the dimension caption (`[Date].[Date]`) and its
-    /// only level is the deepest hierarchy level. Excel only offers its Date
-    /// Filters on such a single-level attribute hierarchy (plan 048).
+    /// SSAS tabular shape for a date role with hierarchy levels: the full-date
+    /// level is exposed as its own single-level attribute hierarchy beside the
+    /// user hierarchy. Like tabular SSAS — where every attribute hierarchy is
+    /// named after its column (the reference's `[DateDim].[FullDate]`) — it is
+    /// named after the leaf level, e.g. `[Date].[Full Date]`.
     ///
     /// Requires the config to give the user hierarchy a distinct name
-    /// (`hierarchy_name: Calendar`); otherwise the unique names would collide
-    /// and no key hierarchy is emitted.
+    /// (`hierarchy_name: Calendar`) and the leaf a name that differs from the
+    /// user hierarchy's; otherwise the unique names would collide and no key
+    /// hierarchy is emitted.
     pub fn key_hierarchy_name(&self) -> Option<&str> {
-        (self.is_date_role && !self.levels.is_empty() && self.hierarchy_name != self.caption)
-            .then_some(self.caption.as_str())
+        let leaf = self.levels.last()?.name.as_str();
+        (self.is_date_role && self.hierarchy_name != leaf).then_some(leaf)
     }
 
     /// The key attribute hierarchy's only level (the full-date level).

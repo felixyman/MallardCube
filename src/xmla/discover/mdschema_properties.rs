@@ -394,7 +394,7 @@ mod tests {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_mdschema_properties_response(None, &Restrictions::default());
-            let date_row = member_value_row(&resp, "[Date].[Calendar].[Date]");
+            let date_row = member_value_row(&resp, "[Date].[Calendar].[Full Date]");
             assert!(date_row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{date_row}");
             let cat_row = member_value_row(&resp, "[Category].[Category].[Category]");
             assert!(cat_row.contains("<DATA_TYPE>130</DATA_TYPE>"), "{cat_row}");
@@ -409,12 +409,12 @@ mod tests {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let restrictions = Restrictions {
-                hierarchy_unique_name: Some("[Date].[Date]".into()),
+                hierarchy_unique_name: Some("[Date].[Full Date]".into()),
                 ..Restrictions::default()
             };
             let resp = super::get_mdschema_properties_response(Some(1), &restrictions);
             assert!(
-                resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>"),
+                resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
             );
             assert!(
@@ -431,7 +431,7 @@ mod tests {
                 !resp.contains("<DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>"),
                 "{resp}"
             );
-            let row = member_value_row(&resp, "[Date].[Date].[Date]");
+            let row = member_value_row(&resp, "[Date].[Full Date].[Full Date]");
             assert!(row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{row}");
         });
     }

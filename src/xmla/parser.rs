@@ -239,7 +239,7 @@ mod tests {
                 <RestrictionList>
                   <CATALOG_NAME>SALES_ANALYTICS</CATALOG_NAME>
                   <CUBE_NAME>Sales</CUBE_NAME>
-                  <HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>
+                  <HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>
                   <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
                   <PROPERTY_TYPE>1</PROPERTY_TYPE>
                 </RestrictionList>
@@ -261,7 +261,7 @@ mod tests {
                 assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
                 assert_eq!(
                     restrictions.hierarchy_unique_name.as_deref(),
-                    Some("[Date].[Date]")
+                    Some("[Date].[Full Date]")
                 );
                 assert_eq!(restrictions.property_name.as_deref(), Some("MEMBER_VALUE"));
                 assert_eq!(restrictions.dimension_unique_name, None);

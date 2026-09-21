@@ -37,7 +37,7 @@ dimensions:
       - { name: Year, column: year, level_number: 0, cardinality: 3 }
       - { name: Quarter, column: quarter, level_number: 1, cardinality: 12 }
       - { name: Month, column: month, level_number: 2, cardinality: 36 }
-      - { name: Date, column: full_date, level_number: 3, cardinality: 1200 }
+      - { name: Full Date, column: full_date, level_number: 3, cardinality: 1200 }
   - id: Category
     physical_field: category
     caption: Category

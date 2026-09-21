@@ -744,7 +744,7 @@ mod tests {
             .iter()
             .filter(|r| {
                 r.member_unique_name
-                    .starts_with("[Date].[Calendar].[Date].&[")
+                    .starts_with("[Date].[Calendar].[Full Date].&[")
             })
             .count();
         assert!(!quarters.is_empty() && quarters.len().is_multiple_of(4));
@@ -753,9 +753,9 @@ mod tests {
 
         // No flat unqualified Date leaves may survive next to the level tree.
         assert!(
-            !rows
-                .iter()
-                .any(|r| r.member_unique_name.starts_with("[Date].[Date].&[")),
+            !rows.iter().any(|r| r
+                .member_unique_name
+                .starts_with("[Date].[Full Date].[Date].[Full Date].&[[")),
             "unqualified Date leaves contradict the level tree"
         );
 

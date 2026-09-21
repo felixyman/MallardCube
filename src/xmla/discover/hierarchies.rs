@@ -176,7 +176,7 @@ mod tests {
     fn date_dim_exposes_key_attribute_hierarchy() {
         // project3 has Date with hierarchy_levels + is_date_role=true. SSAS
         // shape: the user hierarchy [Date].[Calendar] (origin 1) plus the
-        // single-level key attribute hierarchy [Date].[Date] carrying the
+        // single-level key attribute hierarchy [Date].[Full Date] carrying the
         // attribute|key bits (origin 6) — the latter is what makes Excel offer
         // its Date Filters (plan 048).
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
@@ -187,7 +187,7 @@ mod tests {
                 "{resp}"
             );
             assert!(
-                resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>"),
+                resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
             );
             // The key attribute hierarchy is a plain attribute hierarchy
@@ -197,7 +197,7 @@ mod tests {
             let key_row = resp
                 .split("<row>")
                 .find(|r| {
-                    r.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>")
+                    r.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>")
                 })
                 .expect("key hierarchy row");
             assert!(
