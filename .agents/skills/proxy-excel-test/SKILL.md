@@ -156,12 +156,42 @@ This is how you confirm (a) which MDX shape the client actually emitted and
 (b) whether the proxy returned the right number. When a CUBE-function test
 gives a surprising result, check the trace before concluding anything.
 
+## Part E — UI-level checks (windows-mcp, session 1)
+
+Some Excel surfaces exist only in the UI: pivot **Date Filters**, context menus,
+dialogs, field-list drags. For those use the `windows` MCP server against the
+**visible** Excel in session 1 — full recipe in the `windows-mcp-desktop` skill:
+
+- select a pivot cell via COM, `Shift+F10`, screenshot the menu, click **Filter**,
+  read the submenu;
+- add fields to an OLAP pivot with `CubeField.Orientation` (1=row, 4=data);
+  `AddFields` is refused for OLAP;
+- read what Excel decided from the saved pivot cache definition
+  (`xl/pivotCache/pivotCacheDefinition1.xml`, `cacheHierarchy` attributes
+  `time`, `attribute`, `keyAttribute`, `memberValueDatatype`).
+
+**Pivot refresh sends `REFRESH CUBE [<cube>]`.** The context-menu Refresh does;
+`PivotTable.RefreshTable`, `Alt+F5` and `ExecuteMso("RefreshData")` re-read
+metadata but do not. The proxy answers REFRESH CUBE as a no-op (empty success,
+commit 95c4e37) — if a UI refresh fails with "The query did not run", grep the
+trace for `REFRESH CUBE`. The cache definition is only rewritten on that path,
+so use the context-menu Refresh when comparing cache definitions.
+
+**Date Filters are not offered by the proxy yet.** Excel only offers them on a
+field whose `memberValueDatatype` is 7, which it reads per *single-level
+attribute hierarchy* from that level's `MEMBER_VALUE` DATA_TYPE. The proxy's date
+role is one multi-level hierarchy, so Excel finds no such level → label/value
+filters only. Full rule + reference-engine recipe: `ssas-reference-oracle`
+skill and `plans/048-excel-date-filters.md`.
+
 ## Gotchas (learned the hard way — do not repeat)
 
-- **`Connections.Add2` and native connection creation hang forever.** They pop a
-  modal "Import Data"/security dialog the MCP cannot click, and the fixed 120s
-  MCP timeout kills the session. Do NOT create connections programmatically.
-  Reuse the existing workbook's connection (Part B) or use ADOMD (Part C).
+- **`Connections.Add2` via the excel-mcp hangs forever.** It pops a modal
+  "Import Data"/security dialog the MCP cannot click, and the fixed 120s MCP
+  timeout kills the session. Don't create connections through the excel-mcp.
+  Via the `windows` MCP's PowerShell/COM in session 1 it *does* work when
+  `CommandType = 1` (xlCmdCube) — see `windows-mcp-desktop`; with `3` Excel
+  reports "can't find table".
 - **Do not chain `file open` + `vba` in one `execute` block.** The `vba` call
   fails generically ("An error occurred invoking 'vba'"). Open first, then
   `vba import` in a separate `execute` call, then `vba run` in a third.

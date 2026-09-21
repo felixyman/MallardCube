@@ -90,6 +90,11 @@ add `--auth-key` (and a header in the opencode config) before leaving it up.
 
 ## Harness notes
 
+- The reusable recipes live in the repo skills:
+  `.agents/skills/windows-mcp-desktop` (drive the VM's real desktop/Excel UI and
+  COM in the interactive session) and `.agents/skills/ssas-reference-oracle`
+  (deploy/query a real SSAS model, read Excel's cache definition, and the
+  verified metadata rules below).
 - The pivot cache definition is the ground truth for what Excel decided:
   `SaveCopyAs` a copy and read `xl/pivotCache/pivotCacheDefinition1.xml`
   (`cacheHierarchy` attributes `time`, `keyAttribute`, `memberValueDatatype`).
