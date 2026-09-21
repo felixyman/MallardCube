@@ -65,10 +65,15 @@ pub fn get_hierarchies_response() -> String {
     ));
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        // HIERARCHY_ORIGIN is a bitmask (MS-SSAS): 1 = user-defined,
+        // 2 = attribute, 4 = key attribute. Excel only stores a hierarchy's
+        // MEMBER_VALUE data type — and therefore only offers date filters on a
+        // Time dimension — when it sees the key attribute hierarchy, so the
+        // date role's hierarchy carries the key-attribute bit (plan 048).
         let (dim_type, hier_origin) = if !d.levels.is_empty() {
             (
                 if d.is_date_role { 1 } else { 0 }, // Time dim = 1, Regular = 0
-                1,                                  // User-defined hierarchy
+                if d.is_date_role { 4 } else { 1 }, // Key attribute / user hierarchy
             )
         } else {
             (3, 2) // Other dim, Attribute hierarchy (current defaults)
@@ -127,10 +132,11 @@ mod tests {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
             let resp = super::get_hierarchies_response();
-            // Date hierarchy should have HIERARCHY_ORIGIN=1, DIMENSION_TYPE=1
+            // Date hierarchy should have HIERARCHY_ORIGIN=4 (key attribute,
+            // which is what makes Excel offer its date filters), DIMENSION_TYPE=1
             assert!(
-                resp.contains("<HIERARCHY_ORIGIN>1</HIERARCHY_ORIGIN>"),
-                "Date should have HIERARCHY_ORIGIN=1 (user hierarchy)"
+                resp.contains("<HIERARCHY_ORIGIN>4</HIERARCHY_ORIGIN>"),
+                "Date should have HIERARCHY_ORIGIN=4 (key attribute)"
             );
             assert!(
                 resp.contains("<DIMENSION_TYPE>1</DIMENSION_TYPE>"),
