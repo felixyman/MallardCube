@@ -3751,6 +3751,53 @@ mod tests {
     }
 
     #[test]
+    fn drilldown_member_keeps_the_whole_input_set() {
+        // Excel's "expand this year to quarters" in a Channel x Date pivot.
+        // SSAS returns the full DrilldownLevel({All}) input set with only the
+        // target expanded (verified against the reference engine: All, every
+        // year in order, the target's four quarters right after the target).
+        // Returning just the expanded branch made Excel error out (plan 048).
+        with_project3(|| {
+            let years = data_year_keys();
+            let target = years.get(1).cloned().unwrap_or_else(|| years[0].clone());
+            let mdx = format!(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({{DrilldownLevel({{[Channel].[Channel].[All]}},,,INCLUDE_CALC_MEMBERS)}}), Hierarchize(DrilldownMember({{{{DrilldownLevel({{[Date].[Calendar].[All]}},,,INCLUDE_CALC_MEMBERS)}}}}, {{[Date].[Calendar].[Year].&[{target}]}},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE"
+            );
+            let xml = get_execute_statement_response(&mdx);
+            let axis = xml
+                .split("<Axis name=\"Axis0\">")
+                .nth(1)
+                .and_then(|s| s.split("</Axis>").next())
+                .unwrap_or_default();
+            let mut date_members: Vec<String> = Vec::new();
+            for tuple in axis.split("<Tuple>").skip(1) {
+                let names: Vec<&str> = tuple
+                    .match_indices("<UName>")
+                    .map(|(i, _)| {
+                        let rest = &tuple[i + "<UName>".len()..];
+                        &rest[..rest.find('<').unwrap_or(0)]
+                    })
+                    .collect();
+                if names.len() == 2 && !date_members.iter().any(|d| d == names[1]) {
+                    date_members.push(names[1].to_string());
+                }
+            }
+            let mut expected = vec!["[Date].[Calendar].[All]".to_string()];
+            for year in &years {
+                expected.push(format!("[Date].[Calendar].[Year].&amp;[{year}]"));
+                if *year == target {
+                    for quarter in ["1", "2", "3", "4"] {
+                        expected.push(format!(
+                            "[Date].[Calendar].[Quarter].&amp;[{year}]&amp;[{quarter}]"
+                        ));
+                    }
+                }
+            }
+            assert_eq!(date_members, expected, "{date_members:?}");
+        });
+    }
+
+    #[test]
     fn cubevalue_metadata_probe_returns_measure_info() {
         with_project3(|| {
             let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Revenue]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Revenue]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Revenue]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;

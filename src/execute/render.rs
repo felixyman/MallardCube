@@ -613,6 +613,56 @@ fn level0_member_values<B: QueryBackend + ?Sized>(
     }
 }
 
+/// Level-0 member values for two dimensions, paired: the `DrilldownMember`
+/// input set (every level-0 member, not just the expanded target) with each
+/// member's aggregate per member of the other slot. SSAS returns the whole
+/// input set alongside the expanded branch; without it, expanding one member
+/// drops every un-expanded sibling from the axis (plan 048).
+fn pair_level0_values<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    d0: &str,
+    d1: &str,
+    backend: &B,
+) -> Vec<(String, String, f64)> {
+    use crate::engine::plan::{
+        QueryPlan, QueryResult, execute_plan_with_backend, filters_with_time_flag, typed_filters,
+    };
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    let meas = query
+        .measures
+        .first()
+        .or(query.measure.as_ref())
+        .and_then(|name| model.lookup_measure(name))
+        .or_else(|| model.default_measure_id().map(|id| model.meas_def(&id)));
+    let Some(meas) = meas else {
+        return Vec::new();
+    };
+    let is_drill_filter = |f: &crate::mdx_semantic::DimensionFilter| {
+        query
+            .drill_members
+            .iter()
+            .any(|(d, keys)| f.dimension == *d && f.members == *keys)
+    };
+    let slicers: Vec<crate::mdx_semantic::DimensionFilter> = query
+        .filters
+        .iter()
+        .filter(|f| !is_drill_filter(f))
+        .cloned()
+        .collect();
+    let plan = QueryPlan::GroupBy {
+        measure: meas.id.clone(),
+        group_by: vec![d0.to_string(), d1.to_string()],
+        filters: filters_with_time_flag(model, &meas.id, &typed_filters(&slicers)),
+        group_levels: vec![Some(0), Some(0)],
+        set_op: None,
+    };
+    match execute_plan_with_backend(&plan, model, backend) {
+        QueryResult::Pairs(rows) => rows,
+        _ => Vec::new(),
+    }
+}
+
 /// Pre-order member walk for one axis slot's drill: `(All)`, then every
 /// ancestor level and the data members themselves, each parent immediately
 /// before its children. Excel's DRILLED_DOWN / PARENT_SAME_AS_PREV bookkeeping
@@ -1317,6 +1367,61 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
         })
         .flatten();
 
+    // The DrilldownMember input set for a single-target slot: every level-0
+    // member of the drilled hierarchy with its value per other-slot member.
+    // SSAS returns them all, with only the target expanded; without them,
+    // expanding one year drops every sibling year from the axis (plan 048).
+    let roots_pairs = pair_level0_values(query, d0, d1, backend);
+    let single_target = |drill: &Option<(usize, Vec<String>)>| -> Option<String> {
+        drill
+            .as_ref()
+            .and_then(|(_, keys)| (keys.len() == 1).then(|| keys[0].clone()))
+    };
+    let target0 = single_target(&drill0);
+    let target1 = single_target(&drill1);
+    let roots_for = |slot: usize| -> Vec<String> {
+        let mut keys: Vec<String> = roots_pairs
+            .iter()
+            .map(|(a, b, _)| if slot == 0 { a.clone() } else { b.clone() })
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    };
+    let roots0 = if target0.is_some() {
+        roots_for(0)
+    } else {
+        Vec::new()
+    };
+    let roots1 = if target1.is_some() {
+        roots_for(1)
+    } else {
+        Vec::new()
+    };
+    let root_value = |first: &str, second: &str| -> f64 {
+        roots_pairs
+            .iter()
+            .find(|(a, b, _)| a == first && b == second)
+            .map(|(_, _, v)| *v)
+            .unwrap_or(0.0)
+    };
+    let slot_member_at = |slot: usize, value: &str, level: usize| -> crate::cellset::MemberConfig {
+        let dim = if slot == 0 { d0 } else { d1 };
+        let v = value.to_string();
+        let mut m = leaf_members_from(
+            dim,
+            std::slice::from_ref(&v),
+            &query.dim_props,
+            Some(level),
+            None,
+        )
+        .remove(0);
+        if !query.level_drag {
+            attach_parent_keys(std::slice::from_mut(&mut m), dim, Some(level));
+        }
+        m
+    };
+
     match (drill0.is_some(), drill1.is_some()) {
         // Second slot expanded (the common Excel shape, e.g. Category x Date):
         // emit each parent immediately before its own children so Excel's
@@ -1341,6 +1446,27 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
                     }
                 }
                 if !flat1 {
+                    // Un-expanded members of the DrilldownMember input set that
+                    // sort before the target (plan 048).
+                    if let Some(target) = &target1 {
+                        for root in &roots1 {
+                            if root == target {
+                                break;
+                            }
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, first),
+                                slot_member_at(1, root, 0),
+                                query,
+                                root_value(first, root),
+                            );
+                        }
+                    }
                     // Single parent: children labels are plain level values.
                     for chain in &ancestors1 {
                         for anc in chain.iter().skip(1) {
@@ -1371,6 +1497,28 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
                                 slot_member(1, b),
                                 query,
                                 *v,
+                            );
+                        }
+                    }
+                    // Un-expanded members that sort after the target.
+                    if let Some(target) = &target1 {
+                        let mut seen_target = false;
+                        for root in &roots1 {
+                            if !seen_target {
+                                seen_target = root == target;
+                                continue;
+                            }
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member(0, first),
+                                slot_member_at(1, root, 0),
+                                query,
+                                root_value(first, root),
                             );
                         }
                     }
@@ -1433,6 +1581,27 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
                     }
                 }
                 if !flat0 {
+                    // Un-expanded members of the DrilldownMember input set that
+                    // sort before the target (plan 048).
+                    if let Some(target) = &target0 {
+                        for root in &roots0 {
+                            if root == target {
+                                break;
+                            }
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member_at(0, root, 0),
+                                slot_member(1, second),
+                                query,
+                                root_value(root, second),
+                            );
+                        }
+                    }
                     for chain in &ancestors0 {
                         for anc in chain.iter().skip(1) {
                             push(
@@ -1462,6 +1631,28 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
                                 slot_member(1, b),
                                 query,
                                 *v,
+                            );
+                        }
+                    }
+                    // Un-expanded members that sort after the target.
+                    if let Some(target) = &target0 {
+                        let mut seen_target = false;
+                        for root in &roots0 {
+                            if !seen_target {
+                                seen_target = root == target;
+                                continue;
+                            }
+                            push(
+                                &mut tuples,
+                                &mut cells,
+                                &mut ordinal,
+                                dims,
+                                d0,
+                                d1,
+                                slot_member_at(0, root, 0),
+                                slot_member(1, second),
+                                query,
+                                root_value(root, second),
                             );
                         }
                     }
