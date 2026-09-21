@@ -82,7 +82,9 @@ const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="C
                 <xsd:element sql:field="PROPERTY_DESCRIPTION" name="PROPERTY_DESCRIPTION" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_TYPE" name="PROPERTY_TYPE" type="xsd:short" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_CONTENT_TYPE" name="PROPERTY_CONTENT_TYPE" type="xsd:short" minOccurs="0"/>
-                <xsd:element sql:field="DATA_TYPE" name="DATA_TYPE" type="xsd:unsignedShort" minOccurs="0"/>"#;
+                <xsd:element sql:field="DATA_TYPE" name="DATA_TYPE" type="xsd:unsignedShort" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_ORIGIN" name="PROPERTY_ORIGIN" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_IS_VISIBLE" name="PROPERTY_IS_VISIBLE" type="xsd:boolean" minOccurs="0"/>"#;
 
 /// Dimension/hierarchy/level coordinates a member-property row is emitted for.
 struct RowCoords<'a> {
@@ -98,6 +100,7 @@ fn member_property_row(
     prop_name: &str,
     content_type: u8,
     data_type: Option<i32>,
+    origin: u32,
 ) -> String {
     let RowCoords { dim, hier, level } = coords;
     let data_type_xml = match data_type {
@@ -115,6 +118,8 @@ fn member_property_row(
             <PROPERTY_CAPTION>{prop_name}</PROPERTY_CAPTION>
             <PROPERTY_TYPE>1</PROPERTY_TYPE>
             <PROPERTY_CONTENT_TYPE>{content_type}</PROPERTY_CONTENT_TYPE>{data_type_xml}
+            <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
+            <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>"#,
     )
 }
@@ -182,6 +187,11 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
                 hier: &hier,
                 level: &level,
             };
+            let origin = if !d.levels.is_empty() && hier == d.hierarchy_unique_name() {
+                1
+            } else {
+                2
+            };
             for (name, content) in PROPS {
                 if !property_requested(restrictions, name) {
                     continue;
@@ -193,6 +203,7 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
                     name,
                     *content,
                     (*name == "MEMBER_VALUE").then_some(data_type),
+                    origin,
                 ));
                 out.push('\n');
             }
@@ -228,6 +239,7 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
                 name,
                 *content,
                 (*name == "MEMBER_VALUE").then_some(DBTYPE_R8),
+                2,
             ));
             out.push('\n');
         }
@@ -300,6 +312,8 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
             <PROPERTY_TYPE>5</PROPERTY_TYPE>
             <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>
             <DATA_TYPE>{data_type}</DATA_TYPE>
+            <PROPERTY_ORIGIN>2</PROPERTY_ORIGIN>
+            <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>
 "#,
             data_type = DBTYPE_R8,
@@ -312,6 +326,11 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
             if !matches_restrictions(restrictions, dim, &hier, &level) {
                 continue;
             }
+            let origin = if !d.levels.is_empty() && hier == d.hierarchy_unique_name() {
+                1
+            } else {
+                2
+            };
             out.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -324,6 +343,8 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
             <PROPERTY_TYPE>5</PROPERTY_TYPE>
             <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>
             <DATA_TYPE>{data_type}</DATA_TYPE>
+            <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
+            <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>
 "#,
             ));

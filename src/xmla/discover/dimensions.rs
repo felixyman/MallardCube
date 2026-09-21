@@ -43,7 +43,7 @@ pub fn get_dimensions_response() -> String {
             <DESCRIPTION>Measures system dimension</DESCRIPTION>
             <IS_VIRTUAL>false</IS_VIRTUAL>
             <IS_READWRITE>false</IS_READWRITE>
-            <DIMENSION_UNIQUE_SETTINGS>0</DIMENSION_UNIQUE_SETTINGS>
+            <DIMENSION_UNIQUE_SETTINGS>1</DIMENSION_UNIQUE_SETTINGS>
             <DIMENSION_MASTER_UNIQUE_NAME>[Measures]</DIMENSION_MASTER_UNIQUE_NAME>
             <DIMENSION_IS_VISIBLE>false</DIMENSION_IS_VISIBLE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -67,7 +67,7 @@ pub fn get_dimensions_response() -> String {
             <DESCRIPTION>{description}</DESCRIPTION>
             <IS_VIRTUAL>false</IS_VIRTUAL>
             <IS_READWRITE>false</IS_READWRITE>
-            <DIMENSION_UNIQUE_SETTINGS>0</DIMENSION_UNIQUE_SETTINGS>
+            <DIMENSION_UNIQUE_SETTINGS>1</DIMENSION_UNIQUE_SETTINGS>
             <DIMENSION_MASTER_UNIQUE_NAME>{dim_u}</DIMENSION_MASTER_UNIQUE_NAME>
             <DIMENSION_IS_VISIBLE>{visible}</DIMENSION_IS_VISIBLE>
             <CUBE_SOURCE>1</CUBE_SOURCE>

@@ -1,18 +1,6 @@
 use crate::proxy_project;
 use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
 
-/// MDSCHEMA_LEVELS `LEVEL_TYPE` for time-hierarchy levels (mdstypes.h).
-/// Excel uses these to recognize Year/Quarter/Month/Day as time levels.
-fn time_level_type(name: &str) -> u32 {
-    match name.to_ascii_lowercase().as_str() {
-        "year" => 20,          // MDLEVEL_TYPE_TIME_YEARS
-        "quarter" => 68,       // MDLEVEL_TYPE_TIME_QUARTERS
-        "month" => 84,         // MDLEVEL_TYPE_TIME_MONTHS
-        "day" | "date" => 116, // MDLEVEL_TYPE_TIME_DAYS (0x74)
-        _ => 0,
-    }
-}
-
 // OLE DB DBTYPE values (oledb.h / mdstypes.h).
 const DBTYPE_I4: i32 = 3;
 const DBTYPE_DATE: i32 = 7;
@@ -34,19 +22,13 @@ fn level_db_type(
     if !d.is_date_role {
         return DBTYPE_WSTR;
     }
-    match time_level_type(&level.name) {
-        116 => DBTYPE_DATE,
-        20 | 68 | 84 => DBTYPE_I4,
-        _ => {
-            // Non-English level names: the deepest level of a date role is the
-            // full date, the ones above it are period parts.
-            let deepest = d.levels.iter().map(|l| l.level_number).max();
-            if Some(level.level_number) == deepest {
-                DBTYPE_DATE
-            } else {
-                DBTYPE_I4
-            }
-        }
+    // The deepest level of a date role is the full date, the ones above it are
+    // period parts (level names are project-defined, so go by level number).
+    let deepest = d.levels.iter().map(|l| l.level_number).max();
+    if Some(level.level_number) == deepest {
+        DBTYPE_DATE
+    } else {
+        DBTYPE_I4
     }
 }
 
@@ -127,9 +109,10 @@ pub fn get_levels_response() -> String {
             <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
             <LEVEL_TYPE>1</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
-            <LEVEL_IS_VISIBLE>false</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
+            <LEVEL_UNIQUE_SETTINGS>0</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_ORDERING_PROPERTY>{all_name}</LEVEL_ORDERING_PROPERTY>
+            <LEVEL_DBTYPE>3</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -146,16 +129,14 @@ pub fn get_levels_response() -> String {
 
         if !d.levels.is_empty() {
             // Levels of the user hierarchy: LEVEL_ORIGIN 1 (MS-SSAS bitmask:
-            // 1 = user hierarchy level). The key attribute hierarchy's own
-            // levels are emitted below with origins 2/6 (plan 048).
+            // 1 = user hierarchy level) and LEVEL_TYPE 0 — the tabular
+            // presentation. Time level types (20/68/84/116) are a
+            // multidimensional concept; the reference SSAS 2025 reports 0 for
+            // every level but (All), and Excel still offers its Date Filters on
+            // the date attribute hierarchy (plan 048).
             for level in &d.levels {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
                 let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
-                let level_type = if d.is_date_role {
-                    time_level_type(&level.name)
-                } else {
-                    0
-                };
                 let level_dbt = level_db_type(d, level);
                 rows.push_str(&format!(
                     r#"          <row>
@@ -169,11 +150,13 @@ pub fn get_levels_response() -> String {
             <LEVEL_CAPTION>{lname}</LEVEL_CAPTION>
             <LEVEL_NUMBER>{lnum}</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>{lcard}</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>{ltype}</LEVEL_TYPE>
+            <LEVEL_TYPE>0</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>0</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_ORDERING_PROPERTY>{lname}</LEVEL_ORDERING_PROPERTY>
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
+            <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{lname}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -183,7 +166,6 @@ pub fn get_levels_response() -> String {
                     lunique = xml_escape(&level_unique),
                     lnum = level_num,
                     lcard = level.cardinality.max(1),
-                    ltype = level_type,
                     ldbt = level_dbt,
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
@@ -206,11 +188,13 @@ pub fn get_levels_response() -> String {
             <LEVEL_CAPTION>{leaf_name}</LEVEL_CAPTION>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>{cardinality}</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>{ltype}</LEVEL_TYPE>
+            <LEVEL_TYPE>0</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
-            <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>0</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_ORDERING_PROPERTY>{leaf_name}</LEVEL_ORDERING_PROPERTY>
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
+            <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{leaf_name}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -222,7 +206,6 @@ pub fn get_levels_response() -> String {
                 leaf_unique = xml_escape(&d.leaf_level_unique_name()),
                 guid = base_guid + 1,
                 cardinality = d.cardinality_hint,
-                ltype = if d.is_date_role { 116 } else { 0 },
                 ldbt = if d.is_date_role {
                     DBTYPE_DATE
                 } else {
@@ -353,15 +336,56 @@ mod tests {
                 assert_eq!(dbt, expected, "LEVEL_DBTYPE for {lvl}: {row}");
             }
 
-            // Non-date dimensions stay strings.
+            // Non-date dimensions stay strings at the leaf level.
             let cat_row = resp
                 .split("<row>")
-                .find(|r| r.contains("<DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>"))
-                .expect("Category level row");
+                .find(|r| {
+                    r.contains(
+                        "<LEVEL_UNIQUE_NAME>[Category].[Category].[Category]</LEVEL_UNIQUE_NAME>",
+                    )
+                })
+                .expect("Category leaf level row");
             assert!(
                 cat_row.contains("<LEVEL_DBTYPE>130</LEVEL_DBTYPE>"),
                 "Category should stay a string level: {cat_row}"
             );
+
+            // Tabular presentation, verified against the reference SSAS 2025:
+            // (All) levels are visible with DBTYPE 3 and LEVEL_TYPE 1; every
+            // other level reports LEVEL_TYPE 0. Time level types are a
+            // multidimensional concept, and Excel still offers Date Filters on
+            // the date attribute hierarchy without them (plan 048).
+            let all_row = resp
+                .split("<row>")
+                .find(|r| {
+                    r.contains("<LEVEL_UNIQUE_NAME>[Date].[Calendar].[(All)]</LEVEL_UNIQUE_NAME>")
+                })
+                .expect("Date (All) level row");
+            assert!(all_row.contains("<LEVEL_TYPE>1</LEVEL_TYPE>"), "{all_row}");
+            assert!(
+                all_row.contains("<LEVEL_DBTYPE>3</LEVEL_DBTYPE>"),
+                "{all_row}"
+            );
+            assert!(
+                all_row.contains("<LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>"),
+                "{all_row}"
+            );
+            for lvl in [
+                "[Date].[Calendar].[Year]",
+                "[Date].[Calendar].[Date]",
+                "[Date].[Date].[Date]",
+            ] {
+                let marker = format!("<LEVEL_UNIQUE_NAME>{lvl}</LEVEL_UNIQUE_NAME>");
+                let start = resp
+                    .find(&marker)
+                    .unwrap_or_else(|| panic!("missing {lvl}"));
+                let end = start + resp[start..].find("</row>").unwrap();
+                let row = &resp[start..end];
+                assert!(
+                    row.contains("<LEVEL_TYPE>0</LEVEL_TYPE>"),
+                    "tabular LEVEL_TYPE for {lvl}: {row}"
+                );
+            }
         });
     }
 

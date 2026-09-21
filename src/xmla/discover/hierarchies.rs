@@ -67,7 +67,9 @@ pub fn get_hierarchies_response() -> String {
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     // HIERARCHY_ORIGIN is a bitmask (MS-SSAS): 1 = user-defined, 2 = attribute,
-    // 4 = key attribute.
+    // 4 = key attribute. GROUPING_BEHAVIOR 1 (discourage grouping) and
+    // STRUCTURE_TYPE Unnatural for user hierarchies / Natural for attribute
+    // hierarchies match the reference SSAS 2025 (plan 048).
     let hier_row = |guid: u32,
                     dim_u: &str,
                     caption: &str,
@@ -75,8 +77,10 @@ pub fn get_hierarchies_response() -> String {
                     dim_type: u32,
                     origin: u32,
                     cardinality: u32,
+                    ordinal: u32,
                     all_member: &str,
                     visible: bool| {
+        let structure = if origin == 1 { "Unnatural" } else { "Natural" };
         format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -92,14 +96,14 @@ pub fn get_hierarchies_response() -> String {
             <ALL_MEMBER>{all_member}</ALL_MEMBER>
             <STRUCTURE>0</STRUCTURE>
             <DIMENSION_IS_VISIBLE>{visible}</DIMENSION_IS_VISIBLE>
-            <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
+            <HIERARCHY_ORDINAL>{ordinal}</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
             <HIERARCHY_IS_VISIBLE>{visible}</HIERARCHY_IS_VISIBLE>
             <HIERARCHY_ORIGIN>{origin}</HIERARCHY_ORIGIN>
             <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
             <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
-            <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
-            <STRUCTURE_TYPE>Natural</STRUCTURE_TYPE>
+            <GROUPING_BEHAVIOR>1</GROUPING_BEHAVIOR>
+            <STRUCTURE_TYPE>{structure}</STRUCTURE_TYPE>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
@@ -129,6 +133,7 @@ pub fn get_hierarchies_response() -> String {
             dim_type,
             user_origin,
             d.cardinality_hint,
+            1,
             &d.all_member_unique_name(),
             d.visible,
         ));
@@ -152,6 +157,7 @@ pub fn get_hierarchies_response() -> String {
                 dim_type,
                 2, // attribute hierarchy (matches the verified reference)
                 level.cardinality.max(1),
+                2,
                 &format!("[{}].[{}].[All]", d.caption, name),
                 d.visible,
             ));
