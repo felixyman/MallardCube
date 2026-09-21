@@ -231,20 +231,46 @@ connects to it, so every metadata question can be answered by comparison
    and the All/child `LName`/`LNum`/`PARENT_UNIQUE_NAME` (all match the
    metadata and the reference).
 
-   Next diagnostics:
-   - capture the reference's response **as Excel receives it** (a byte-logging
-     TCP relay on the VM: `localhost:2399 → localhost:2383`, then point an
-     Excel connection at `Data Source=localhost:2399` and expand) — the
-     response SSAS sends to *Excel* may differ from the ADOMD one because
-     Excel sends `DbpropMsmdOptimizeResponse=9` / `SspropInitAppName=Excel`;
-   - compare the metadata Excel re-reads on the expand path. On a
-     hierarchy-restricted `MDSCHEMA_PROPERTIES` request the reference returns
-     only that hierarchy's `KEY0` / `NAME` (the `(All)` level) / `MEMBER_VALUE`
-     rows with `PROPERTY_TYPE=5`, while we mix in the eight cell properties
-     (`PROPERTY_TYPE=2`) and have no `KEY0`/`NAME` rows at all;
-   - check whether the *expand* depends on the connection being kept alive
-     (Excel's expand runs on a freshly opened session and closes it right
-     after, unlike the reference connection).
+   **The reference's own response was captured** with a byte-logging TCP relay
+   on the VM (`C:\Users\Public\Documents\relay.ps1`: `localhost:2399 → 2383`,
+   log `relay.bin`) and a Book13 pivot pointed at `Data Source=localhost:2399`
+   with `CommandText=Model`. The expand works through the relay (2024 renders
+   its child "1"), so a transparent relay is not the difference. Findings from
+   the capture:
+   - responses come back as `application/sx+xpress`; the *first* response of
+     each session decodes with `ntdll!RtlDecompressBuffer` (format 3) at
+     `ct+32`, length from the header field, into 652 bytes of SOAP XML;
+   - the larger responses do not decode with plain XPRESS at any offset/length
+     (framing or variant still unknown), so the exact bytes SSAS sends Excel
+     for the expand are still unseen.
+
+   **A real parity gap found (but not the blocker).** With the same
+   level-scoped `DIMENSION PROPERTIES` Excel sends, the reference returns each
+   *level-scoped* property **only on members of that level**: the `[Year]`-
+   scoped properties appear on year members and are *absent* on quarter
+   members; the unscoped `PARENT_UNIQUE_NAME` / `HIERARCHY_UNIQUE_NAME` appear
+   on every member that has them (the `(All)` member carries only
+   `HIERARCHY_UNIQUE_NAME`), and `PARENT_UNIQUE_NAME` is emitted twice on year
+   members (unscoped + scoped). We emit the fixed set on *every* level.
+   Replaying the reference's exact shape through the rewriting proxy still does
+   not make Excel render the expansion — so this is parity work, not the fix.
+
+   Metadata re-checked this round, all identical to the reference:
+   `MdpropMdxSubqueries=63`, `MdpropMdxDrillFunctions=7`,
+   `MdpropFlatteningSupport=1`, `MdpropNamedLevels=3`,
+   `MdpropMdxDdlExtensions=23`, `MdpropMdxNamedSets=15`,
+   `MdpropMdxSetFunctions=524287`, `HIERARCHY_ORIGIN` (user hierarchy 1, key
+   attribute 2). Differences that turned out not to matter:
+   `PREFERRED_QUERY_PATTERNS` (we 0, reference 3 — rewriting to 3 does not
+   fix rendering); `MDSCHEMA_MEMBERS` (reference: `MEMBER_KEY=0` and
+   `MEMBER_ORDINAL=0` for every member; we report `All` / 1..N);
+   `MDSCHEMA_LEVELS` (`LEVEL_ATTRIBUTE_HIERARCHY_NAME` of the key hierarchy's
+   `(All)` level: reference empty, we write `(All)`).
+
+   Next diagnostic: build a tiny **HTTP XMLA bridge on the VM** (HttpListener +
+   ADOMD against the reference) and point Excel at it — if the reference's
+   responses render through HTTP, diff the bridge's responses against ours; if
+   they do not, the transport/session layer is the difference.
 6. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
