@@ -27,13 +27,18 @@ What converts from the model's shape:
 - **Relationships** — endpoints are resolved from model column names to the
   source columns `schema.sql` creates (`Customer ID` → `customerid`), so
   fact↔dim joins work on the generated schema.
+- **Date roles** — each role's date key (from its relationship), full date
+  (from the hierarchy leaf) and year/quarter/month columns are resolved against
+  the table. Period-over-period measures bind to the calendar their DAX
+  references. Flag columns are upstream (plan 044): the converter emits the
+  ones that exist, and turns a measure into bridge code when its role lacks
+  them, instead of referencing columns that do not exist.
 - **Measures** — plain aggregates become `sql_expr`; composite DAX becomes
   bridge code in `sql_fallback/` with a "define upstream" checklist (see
   `DESIGN-INVARIANTS.md`).
 
 Not yet converted (named in the report): relationship semantics
-(`isActive`, cross-filtering, cardinality), per-dimension date roles,
-calculated tables/columns.
+(`isActive`, cross-filtering, cardinality) and calculated tables/columns.
 
 ## Migration intake loop
 

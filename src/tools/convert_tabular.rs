@@ -133,6 +133,12 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     }
 
+    // Time intelligence needs flag columns upstream (plan 044, invariant 2).
+    // When the measure's date role has no flag column, emit bridge code with an
+    // upstream checklist instead of a measure that references a column which
+    // does not exist.
+    downgrade_time_intelligence_without_flags(&mut model);
+
     // Generate SQL fallback files
     for meas in &model.fact_table.measures {
         if meas.classification == "sql_fallback" {
@@ -193,12 +199,6 @@ pub fn run(args: Vec<String>) -> i32 {
         cube = model.cube,
         cube_db = cube_db,
     );
-
-    if !model.date_roles.is_empty() {
-        let seed_sql = include_str!("../../data/seed_date_dim.sql");
-        fs::write(format!("{out_dir}/seed_date_dim.sql"), seed_sql).ok();
-        bootstrap.push_str(".read seed_date_dim.sql\n");
-    }
 
     bootstrap.push_str(".read load_dummy_data.sql\n");
     bootstrap.push_str("\n-- For real data, replace the line above with:\n");
@@ -508,17 +508,222 @@ fn render_relationships(m: &ConversionModel) -> String {
     out
 }
 
-fn render_time_intelligence_block(m: &ConversionModel) -> String {
-    if m.date_roles.is_empty() {
-        return String::new();
+// ---- date roles ----
+
+/// Canonical time-intelligence flag columns. Flags are upstream columns
+/// (plan 044, invariant 2) — the converter only emits the ones that exist.
+const FLAG_COLUMNS: [(&str, &str); 5] = [
+    ("ytd_flag_column", "ytd_flag"),
+    ("prior_year_ytd_flag_column", "prior_year_ytd_flag"),
+    ("current_year_flag_column", "current_year_flag"),
+    ("qtd_flag_column", "qtd_flag"),
+    ("mtd_flag_column", "mtd_flag"),
+];
+
+/// A date-role table with every time-intelligence column resolved against the
+/// generated schema. Nothing is guessed: a field is `None` when the model has
+/// no such column, and the conversion report says so.
+struct DateRole {
+    /// Config dimension id (`ssas_name`).
+    dim_id: String,
+    /// Model table name, as referenced by DAX (`Calendar_DeliveryDate`).
+    source_name: String,
+    /// Physical table name in `schema.sql`.
+    table_name: String,
+    /// Date key: the relationship's dimension column.
+    date_key: Option<String>,
+    /// Full date: the primary hierarchy's leaf level.
+    full_date: Option<String>,
+    year: Option<String>,
+    quarter: Option<String>,
+    month: Option<String>,
+    /// Flag columns present on this table: `(config key, column)`.
+    flags: Vec<(&'static str, String)>,
+}
+
+impl DateRole {
+    fn flag(&self, config_key: &str) -> Option<&str> {
+        self.flags
+            .iter()
+            .find(|(k, _)| *k == config_key)
+            .map(|(_, c)| c.as_str())
     }
-    // Use the first date-role dimension as the default calendar dimension.
-    let first = &m.date_roles[0];
+}
+
+/// Resolve a date-part column: an exact source column (`year`, `år`), then a
+/// numeric sibling (`quarternumber`), then any matching display name.
+fn date_part_column(t: &TableInfo, words: &[&str]) -> Option<String> {
+    for w in words {
+        if let Some(c) = t
+            .columns
+            .iter()
+            .find(|c| normalize_ident(&c.source_column) == *w)
+        {
+            return Some(normalize_ident(&c.source_column));
+        }
+    }
+    for w in words {
+        for c in &t.columns {
+            let n = c.name.to_lowercase();
+            if n.contains(w)
+                && (n.ends_with("number") || n.ends_with("nummer") || n.ends_with("nr"))
+            {
+                return Some(normalize_ident(&c.source_column));
+            }
+        }
+    }
+    for w in words {
+        if let Some(c) = resolve_column(t, w) {
+            return Some(normalize_ident(&c.source_column));
+        }
+    }
+    None
+}
+
+/// Build the resolved date-role description for one date-role table.
+fn build_date_role(m: &ConversionModel, t: &TableInfo) -> DateRole {
+    let date_key = m
+        .relationships
+        .iter()
+        .find(|r| r.to_table == t.name || r.to_table == t.ssas_name)
+        .and_then(|r| resolve_column(t, &r.to_column))
+        .map(|c| normalize_ident(&c.source_column));
+
+    // The primary hierarchy carries the date levels; its leaf is the full date.
+    let (mut hier_year, mut hier_quarter, mut hier_month) = (None, None, None);
+    let mut full_date = None;
+    if let Some(h) = t.hierarchies.iter().find(|h| !h.levels.is_empty()) {
+        for level in &h.levels {
+            let Some(col) = level_schema_column(t, level) else {
+                continue;
+            };
+            let n = level.name.to_lowercase();
+            if hier_year.is_none() && (n.contains("year") || n.contains("år")) {
+                hier_year = Some(col.clone());
+            } else if hier_quarter.is_none() && (n.contains("quarter")) {
+                hier_quarter = Some(col.clone());
+            } else if hier_month.is_none() && (n.contains("month")) {
+                hier_month = Some(col.clone());
+            }
+            full_date = Some(col);
+        }
+    }
+    let full_date = full_date.or_else(|| {
+        ["full_date", "fulldate", "date"]
+            .iter()
+            .find_map(|w| resolve_column(t, w).map(|c| normalize_ident(&c.source_column)))
+    });
+
+    let flags = FLAG_COLUMNS
+        .iter()
+        .filter_map(|(key, name)| {
+            resolve_column(t, name).map(|c| (*key, normalize_ident(&c.source_column)))
+        })
+        .collect();
+
+    DateRole {
+        dim_id: t.ssas_name.clone(),
+        source_name: t.name.clone(),
+        table_name: normalize_ident(&t.name),
+        date_key,
+        full_date,
+        year: date_part_column(t, &["year"]).or(hier_year),
+        quarter: date_part_column(t, &["quarter"]).or(hier_quarter),
+        month: date_part_column(t, &["month"]).or(hier_month),
+        flags,
+    }
+}
+
+fn date_roles(m: &ConversionModel) -> Vec<DateRole> {
+    m.date_roles.iter().map(|t| build_date_role(m, t)).collect()
+}
+
+/// Downgrade time-intelligence measures whose date role has no flag column to
+/// bridge code: they get a stub plus an upstream checklist entry instead of a
+/// measure that references a column which does not exist.
+fn downgrade_time_intelligence_without_flags(model: &mut ConversionModel) {
+    let roles = date_roles(model);
+    for meas in model.fact_table.measures.iter_mut() {
+        let flag_key = match meas.classification.as_str() {
+            "time_ytd" => "ytd_flag_column",
+            "time_prior_year" => "prior_year_ytd_flag_column",
+            _ => continue,
+        };
+        let (role, _) = time_role_for_measure(&roles, &meas.expression);
+        if role.and_then(|r| r.flag(flag_key)).is_none() {
+            meas.classification = "sql_fallback".to_string();
+        }
+    }
+}
+
+/// Quoted table references in a DAX expression (`'Calendar_X'[Date]`).
+fn dax_table_refs(dax: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut rest = dax;
+    while let Some(start) = rest.find('\'') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('\'') else {
+            break;
+        };
+        refs.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    refs
+}
+
+/// Which date role a time-intelligence measure uses. Inferred from the tables
+/// the DAX references; falls back to the first role (the report marks that as
+/// assumed).
+fn time_role_for_measure<'a>(roles: &'a [DateRole], dax: &str) -> (Option<&'a DateRole>, bool) {
+    let refs = dax_table_refs(dax);
+    for r in roles {
+        if refs.iter().any(|q| {
+            q.eq_ignore_ascii_case(&r.source_name)
+                || q.eq_ignore_ascii_case(&r.dim_id)
+                || normalize_ident(q) == r.table_name
+        }) {
+            return (Some(r), true);
+        }
+    }
+    (roles.first(), false)
+}
+
+fn render_time_intelligence_block(m: &ConversionModel) -> String {
+    let roles = date_roles(m);
+    let Some(first) = roles.iter().find(|r| r.date_key.is_some()) else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for (key, col) in [
+        ("year_column", &first.year),
+        ("quarter_column", &first.quarter),
+        ("month_column", &first.month),
+    ] {
+        if let Some(col) = col {
+            parts.push(format!("\"{key}\": \"{}\"", col.replace('"', "\\\"")));
+        }
+    }
+    parts.extend(
+        first
+            .flags
+            .iter()
+            .map(|(key, col)| format!("\"{key}\": \"{}\"", col.replace('"', "\\\""))),
+    );
+    let full_date = first
+        .full_date
+        .as_deref()
+        .or(first.date_key.as_deref())
+        .unwrap_or("");
     format!(
-        "\n  \"time_intelligence\": {{{{\n    \"date_dimension\": {{{{\n      \"dimension_id\": \"{did}\",\n      \"table_name\": \"{tn}\",\n      \"date_key_column\": \"date_key\",\n      \"full_date_column\": \"full_date\",\n      \"flag_columns\": {{{{\n        \"year_column\": \"year\",\n        \"quarter_column\": \"quarter\",\n        \"month_column\": \"month\",\n        \"ytd_flag_column\": \"ytd_flag\",\n        \"prior_year_ytd_flag_column\": \"prior_year_ytd_flag\",\n        \"current_year_flag_column\": \"current_year_flag\",\n        \"qtd_flag_column\": \"qtd_flag\",\n        \"mtd_flag_column\": \"mtd_flag\"\n      }}}}\n    }}}}\n  }},\n",
-        did = first.ssas_name,
-        tn = normalize_ident(&first.name),
-    ).replace("{{", "{").replace("}}", "}")
+        "\n  \"time_intelligence\": {{{{\n    \"date_dimension\": {{{{\n      \"dimension_id\": \"{did}\",\n      \"table_name\": \"{tn}\",\n      \"date_key_column\": \"{key}\",\n      \"full_date_column\": \"{full}\",\n      \"flag_columns\": {{{flags}}}\n    }}}}\n  }},\n",
+        did = first.dim_id.replace('"', "\\\""),
+        tn = first.table_name,
+        key = first.date_key.as_deref().unwrap_or(""),
+        full = full_date,
+        flags = parts.join(", "),
+    )
+    .replace("{{", "{")
+    .replace("}}", "}")
 }
 
 /// Resolve a model column reference (e.g. `Customer ID`, `Month Name`) to the
@@ -747,6 +952,7 @@ fn render_dimension_configs(m: &ConversionModel) -> String {
 
 fn render_measure_configs(m: &ConversionModel) -> String {
     let mut out = String::new();
+    let roles = date_roles(m);
     let all_measures: Vec<&MeasureInfo> = m
         .fact_table
         .measures
@@ -758,25 +964,19 @@ fn render_measure_configs(m: &ConversionModel) -> String {
     for (i, meas) in all_measures.iter().enumerate() {
         let dax_expr = meas.expression.as_str();
         // For time measures, extract the inner aggregation for the sql_expr.
-        let (time_class, flag_col, time_dim_id) = match meas.classification.as_str() {
-            "time_ytd" => (
-                "time_ytd",
-                "ytd_flag",
-                m.date_roles
-                    .first()
-                    .map(|d| d.ssas_name.as_str())
-                    .unwrap_or("Date"),
-            ),
-            "time_prior_year" => (
-                "time_prior_year",
-                "prior_year_ytd_flag",
-                m.date_roles
-                    .first()
-                    .map(|d| d.ssas_name.as_str())
-                    .unwrap_or("Date"),
-            ),
-            _ => ("", "", ""),
+        // The flag column comes from the measure's own date role; a role
+        // without the flag was downgraded to bridge code before rendering.
+        let (time_class, flag_key) = match meas.classification.as_str() {
+            "time_ytd" => ("time_ytd", "ytd_flag_column"),
+            "time_prior_year" => ("time_prior_year", "prior_year_ytd_flag_column"),
+            _ => ("", ""),
         };
+        let time_role = if time_class.is_empty() {
+            None
+        } else {
+            time_role_for_measure(&roles, dax_expr).0
+        };
+        let time_flag = time_role.and_then(|r| r.flag(flag_key));
         let sql = if !time_class.is_empty() {
             let inner = extract_ti_inner(dax_expr);
             let expr = dax_to_expr(&inner);
@@ -798,11 +998,11 @@ fn render_measure_configs(m: &ConversionModel) -> String {
                 ",\n      \"sql_fallback_file\": \"sql_fallback/{}.sql\"",
                 normalize_ident(&meas.name)
             )
-        } else if !time_class.is_empty() {
+        } else if let (Some(role), Some(flag)) = (time_role, time_flag) {
             format!(
                 ",\n      \"time_intelligence\": {{ \"dimension_id\": \"{did}\", \"flag_column\": \"{fc}\" }}",
-                did = time_dim_id,
-                fc = flag_col
+                did = role.dim_id.replace('"', "\\\""),
+                fc = flag
             )
         } else {
             String::new()
@@ -1177,11 +1377,13 @@ fn upstream_suggestion(dax: &str) -> &'static str {
         "median/percentile mart at the reporting grain"
     } else if upper.contains("DISTINCTCOUNT(") {
         "grain change (one row per counted entity) or an entity-grain fact"
-    } else if upper.contains("ALLSELECTED(")
-        || upper.contains("ISONORAFTER(")
-        || upper.contains("TOTALYTD(")
+    } else if upper.contains("TOTALYTD(")
+        || upper.contains("DATESYTD(")
+        || upper.contains("SAMEPERIODLASTYEAR(")
         || upper.contains("YEAR(TODAY())")
     {
+        "date flag columns on the calendar (`ytd_flag`, `prior_year_ytd_flag`) or a cumulative snapshot mart"
+    } else if upper.contains("ALLSELECTED(") || upper.contains("ISONORAFTER(") {
         "cumulative snapshot mart at the calendar grain"
     } else if upper.contains("SUMX(") && upper.contains("RELATED(") {
         "additive column for the row-level multiplication"
@@ -1850,6 +2052,15 @@ fn render_report(m: &ConversionModel) -> String {
             hier_rows.len()
         ));
     }
+    let roles = date_roles(m);
+    if !roles.is_empty() {
+        let with_flags = roles.iter().filter(|r| !r.flags.is_empty()).count();
+        out.push_str(&format!(
+            "- Date roles: {} ({} with flag columns; period-over-period measures need them upstream)\n",
+            roles.len(),
+            with_flags
+        ));
+    }
     out.push_str(&format!("- M-partition tables: {} (load_data.sql attempts automated loading, see load_data.sql for details)\n\n",
         if m.fact_table.is_m_partition() { 1usize } else { 0 }
         + m.dimensions.iter().filter(|t| t.is_m_partition()).count()
@@ -1882,6 +2093,67 @@ fn render_report(m: &ConversionModel) -> String {
             ));
         }
         out.push('\n');
+    }
+
+    if !roles.is_empty() {
+        out.push_str("## Date roles\n\n");
+        out.push_str(
+            "Period-over-period measures (`TOTALYTD`, `SAMEPERIODLASTYEAR`, …) need flag columns\n\
+             on the calendar. Flags are upstream columns (docs/DESIGN-INVARIANTS.md): the converter\n\
+             emits the ones that exist and reports the rest as bridge code.\n\n",
+        );
+        out.push_str(
+            "| Table | Dimension | Date key | Full date | Year / Quarter / Month | Flags |\n|---|---|---|---|---|---|\n",
+        );
+        let or_dash = |c: &Option<String>| c.clone().unwrap_or_else(|| "—".to_string());
+        for r in &roles {
+            let flags = if r.flags.is_empty() {
+                "none".to_string()
+            } else {
+                r.flags
+                    .iter()
+                    .map(|(_, c)| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} / {} / {} | {} |\n",
+                r.table_name,
+                r.dim_id,
+                or_dash(&r.date_key),
+                or_dash(&r.full_date),
+                or_dash(&r.year),
+                or_dash(&r.quarter),
+                or_dash(&r.month),
+                flags
+            ));
+        }
+        out.push('\n');
+        let ti: Vec<String> = m
+            .fact_table
+            .measures
+            .iter()
+            .filter(|meas| matches!(meas.classification.as_str(), "time_ytd" | "time_prior_year"))
+            .map(|meas| {
+                let (role, inferred) = time_role_for_measure(&roles, &meas.expression);
+                format!(
+                    "{} → {} ({})",
+                    meas.name,
+                    role.map(|r| r.dim_id.as_str()).unwrap_or("—"),
+                    if inferred {
+                        "inferred"
+                    } else {
+                        "assumed first role"
+                    }
+                )
+            })
+            .collect();
+        if !ti.is_empty() {
+            out.push_str(&format!(
+                "Time-intelligence measures: {}\n\n",
+                ti.join("; ")
+            ));
+        }
     }
 
     out.push_str("## Simple measures\n\n");
@@ -1971,7 +2243,7 @@ fn render_report(m: &ConversionModel) -> String {
     }
     for t in &m.date_roles {
         out.push_str(&format!(
-            "- [ ] `{}` (date-role, seeded by seed_date_dim.sql)\n",
+            "- [ ] `{}` (date-role)\n",
             normalize_ident(&t.name)
         ));
     }
@@ -2116,6 +2388,224 @@ mod tests {
             roles: vec![],
             data_sources: vec![],
         }
+    }
+
+    /// A synthetic date-role table with a hierarchy and optional flag columns.
+    fn date_role(
+        name: &str,
+        columns: &[&str],
+        levels: &[(&str, &str, u32)],
+        flags: &[&str],
+    ) -> TableInfo {
+        let mut cols: Vec<ColumnInfo> = columns
+            .iter()
+            .map(|c| ColumnInfo {
+                name: c.to_string(),
+                data_type: "string".into(),
+                source_column: c.to_lowercase().replace(' ', "_"),
+                is_hidden: false,
+            })
+            .collect();
+        for f in flags {
+            cols.push(ColumnInfo {
+                name: f.to_string(),
+                data_type: "boolean".into(),
+                source_column: f.to_string(),
+                is_hidden: false,
+            });
+        }
+        TableInfo {
+            name: name.into(),
+            ssas_name: name.into(),
+            description: String::new(),
+            columns: cols,
+            measures: vec![],
+            partitions: vec![],
+            hierarchies: vec![HierarchyInfo {
+                name: "Calendar Hierarchy".into(),
+                levels: levels
+                    .iter()
+                    .map(|(n, c, o)| HierarchyLevelInfo {
+                        name: n.to_string(),
+                        column: c.to_string(),
+                        ordinal: *o,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn model_with_date_roles(roles: Vec<TableInfo>) -> ConversionModel {
+        let mut m = make_generic_model();
+        for r in &roles {
+            m.relationships.push(RelInfo {
+                from_table: "Orders".into(),
+                from_column: "itemid".into(),
+                to_table: r.name.clone(),
+                to_column: "Date Key".into(),
+            });
+        }
+        m.date_roles = roles;
+        m
+    }
+
+    fn ti_measure(name: &str, dax: &str) -> MeasureInfo {
+        MeasureInfo {
+            name: name.into(),
+            expression: dax.into(),
+            display_folder: String::new(),
+            classification: "time_ytd".into(),
+        }
+    }
+
+    const CAL_COLUMNS: [&str; 5] = ["Date Key", "Full Date", "Year", "Quarter", "Month"];
+    const CAL_LEVELS: [(&str, &str, u32); 4] = [
+        ("Year", "Year", 0),
+        ("Quarter", "Quarter", 1),
+        ("Month", "Month", 2),
+        ("Full Date", "Full Date", 3),
+    ];
+
+    #[test]
+    fn converter_resolves_date_role_columns() {
+        let (parsed, _warnings) = parse_bim::parse_model("data/retailanalytics.bim");
+        let model = classify_model(parsed);
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+
+        let dd = &cfg
+            .time_intelligence
+            .as_ref()
+            .expect("time_intelligence block")
+            .date_dimension;
+        assert_eq!(dd.dimension_id, "Dates");
+        assert_eq!(dd.table_name, "dates");
+        assert_eq!(dd.date_key_column, "datekey");
+        assert_eq!(dd.full_date_column, "fulldate");
+        assert_eq!(dd.flag_columns.year_column, "year");
+        assert_eq!(dd.flag_columns.quarter_column, "quarternumber");
+        assert_eq!(dd.flag_columns.month_column, "monthnumber");
+        assert!(
+            dd.flag_columns.ytd_flag_column.is_empty(),
+            "the retail sample has no flag columns — none may be invented"
+        );
+
+        // Every emitted column must exist in the generated schema.
+        let schema = render_schema(&model);
+        for col in [
+            &dd.date_key_column,
+            &dd.full_date_column,
+            &dd.flag_columns.year_column,
+            &dd.flag_columns.quarter_column,
+            &dd.flag_columns.month_column,
+        ] {
+            assert!(
+                schema.contains(&format!("    {col} ")),
+                "schema.sql is missing {col}:\n{schema}"
+            );
+        }
+
+        let report = render_report(&model);
+        assert!(report.contains("## Date roles"), "{report}");
+        assert!(
+            report.contains(
+                "| dates | Dates | datekey | fulldate | year / quarternumber / monthnumber | none |"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn time_intelligence_binds_to_the_measure_date_role() {
+        let roles = vec![
+            date_role("Cal A", &CAL_COLUMNS, &CAL_LEVELS, &["ytd_flag"]),
+            date_role("Cal B", &CAL_COLUMNS, &CAL_LEVELS, &["ytd_flag"]),
+        ];
+        let mut model = model_with_date_roles(roles);
+        model.fact_table.measures = vec![ti_measure(
+            "YTD B",
+            "= TOTALYTD(SUM('Orders'[amount]), 'Cal B'[Full Date])",
+        )];
+
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+        let meas = cfg.measures.iter().find(|m| m.id == "YTD B").unwrap();
+        let ti = meas
+            .time_intelligence
+            .as_ref()
+            .expect("per-measure time intelligence");
+        assert_eq!(ti.dimension_id.as_deref(), Some("Cal B"));
+        assert_eq!(ti.flag_column, "ytd_flag");
+
+        // The global block resolves the first role's real columns.
+        let dd = &cfg.time_intelligence.as_ref().unwrap().date_dimension;
+        assert_eq!(dd.dimension_id, "Cal A");
+        assert_eq!(dd.date_key_column, "date_key");
+        assert_eq!(dd.full_date_column, "full_date");
+        assert_eq!(dd.flag_columns.year_column, "year");
+        assert_eq!(dd.flag_columns.ytd_flag_column, "ytd_flag");
+
+        // The report records which role was inferred.
+        let report = render_report(&model);
+        assert!(report.contains("YTD B → Cal B (inferred)"), "{report}");
+    }
+
+    #[test]
+    fn time_intelligence_without_flags_becomes_bridge_code() {
+        let roles = vec![date_role("Cal A", &CAL_COLUMNS, &CAL_LEVELS, &[])];
+        let mut model = model_with_date_roles(roles);
+        model.fact_table.measures = vec![ti_measure(
+            "YTD",
+            "= TOTALYTD(SUM('Orders'[amount]), 'Cal A'[Full Date])",
+        )];
+
+        downgrade_time_intelligence_without_flags(&mut model);
+        assert_eq!(model.fact_table.measures[0].classification, "sql_fallback");
+
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+        assert!(
+            cfg.measures
+                .iter()
+                .find(|m| m.id == "YTD")
+                .unwrap()
+                .time_intelligence
+                .is_none(),
+            "a measure whose flag does not exist must not reference it"
+        );
+        assert!(
+            cfg.time_intelligence
+                .as_ref()
+                .unwrap()
+                .date_dimension
+                .flag_columns
+                .ytd_flag_column
+                .is_empty()
+        );
+
+        let report = render_report(&model);
+        assert!(
+            report.contains("date flag columns on the calendar"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "| cal_a | Cal A | date_key | full_date | year / quarter / month | none |"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn time_intelligence_keeps_flags_when_present() {
+        let roles = vec![date_role("Cal A", &CAL_COLUMNS, &CAL_LEVELS, &["ytd_flag"])];
+        let mut model = model_with_date_roles(roles);
+        model.fact_table.measures = vec![ti_measure(
+            "YTD",
+            "= TOTALYTD(SUM('Orders'[amount]), 'Cal A'[Full Date])",
+        )];
+        downgrade_time_intelligence_without_flags(&mut model);
+        assert_eq!(model.fact_table.measures[0].classification, "time_ytd");
     }
 
     #[test]
@@ -2386,10 +2876,15 @@ mod tests {
             "bootstrap should have load_data.sql commented out"
         );
 
-        // With date roles, should also reference seed_date_dim.sql
+        // Date-role tables are real model tables; the legacy date_dim seed is
+        // no longer emitted.
         assert!(
-            bootstrap.contains(".read seed_date_dim.sql"),
-            "should reference seed_date_dim.sql when date roles present"
+            !bootstrap.contains("seed_date_dim.sql"),
+            "bootstrap must not reference the legacy date_dim seed"
+        );
+        assert!(
+            !out_dir.join("seed_date_dim.sql").exists(),
+            "seed_date_dim.sql should not be emitted"
         );
 
         // Cleanup

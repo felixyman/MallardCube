@@ -109,22 +109,28 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   2026-09-20: `BackendPool` (`src/backend/mod.rs`) pre-opens N read-only
   connections (`AccessMode::ReadOnly`) with round-robin checkout, sized by
   `MALLARDCUBE_POOL_SIZE` (default `available_parallelism`, capped 32).
-- 045 (intake fidelity) **IN PROGRESS** 2026-09-20: converted models must
-  arrive with their Excel shape. Slice 1 landed: hierarchy levels are parsed
-  from all three export formats and emitted as `hierarchy_levels` (the export
-  hierarchy name becomes the hierarchy unique name, so Excel drills
+- 045 (intake fidelity) **IN PROGRESS** 2026-09-21: converted models must
+  arrive with their Excel shape. **Slice 1** (2026-09-20): hierarchy levels are
+  parsed from all three export formats and emitted as `hierarchy_levels` (the
+  export hierarchy name becomes the hierarchy unique name, so Excel drills
   `[Dates].[Calendar Hierarchy].[year]` → quarter → month → day), the
   conversion report lists every declared hierarchy with status, and
   **relationship endpoints now resolve to source columns** — before this,
   `Customer ID` was emitted as `customer_id` while `schema.sql` creates
   `customerid`, so every fact↔dim join in a fresh conversion was broken
-  (grouped queries empty, `NON EMPTY` drills collapsed to `All`); the tracked
-  `generated_retail_analytics` fixture had been hand-fixed, hiding it. Verified
-  live on the retail sample (all three formats) and locally on the real export
-  (6 role-playing calendars, 23 levels, 0 relationship endpoints missing from
-  `schema.sql`). Remaining slices: relationship semantics (`isActive` /
-  `crossFilteringBehavior` / cardinality — warn, then implement), per-dimension
-  date roles, calculated tables, and a synthetic gap-model fixture.
+  (grouped queries empty, `NON EMPTY` drills collapsed to `All`). **Slice 3**
+  (2026-09-21): the `time_intelligence` block is resolved from the model —
+  date key from the role's relationship, full date from the hierarchy leaf,
+  year/quarter/month from real date-part columns — and flag columns are emitted
+  only when they exist (flags are upstream). Time-intelligence measures bind to
+  the role their DAX references; a role without the flag turns the measure into
+  bridge code with an upstream checklist entry instead of referencing a column
+  that does not exist. The legacy `date_dim` seed is gone. Verified live on the
+  retail sample (YTD matched the SQL oracle exactly) and locally on the real
+  export (7 roles, 0 invented columns); the tracked `generated_retail_analytics`
+  fixture's broken relationship endpoints and date-role columns were fixed.
+  Remaining slices: relationship semantics (`isActive` / `crossFilteringBehavior`
+  / cardinality), calculated tables, and a synthetic gap-model fixture.
 - 044 (boundary contract) **IN PROGRESS** 2026-09-20: MallardCube stays a
   **protocol adapter**. Landed: `docs/DESIGN-INVARIANTS.md` (the contract, five
   invariants with enforcement, the upstream recipe, trade-offs, non-goals;

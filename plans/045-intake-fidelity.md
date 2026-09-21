@@ -9,8 +9,9 @@
 - **Depends on**: 044 (boundary contract), 011/012 (converted-project
   qualification)
 - **Category**: converter / product
-- **Status**: **IN PROGRESS 2026-09-20** — slice 1 landed (hierarchy levels +
-  relationship column resolution); slices 2–5 remain.
+- **Status**: **IN PROGRESS 2026-09-21** — slices 1 and 3 landed (hierarchy
+  levels + relationship column resolution; date roles resolved and bound);
+  slices 2, 4 and 5 remain.
 
 ## Why this matters
 
@@ -40,7 +41,7 @@ fidelity gaps, ordered by how badly they hurt:
 |---|---|---|---|
 | 1 | **Hierarchy levels + relationship columns.** Parse `levels` (BIM/folder/TMDL), emit `hierarchy_levels` and the export hierarchy name, resolve relationship endpoints through source columns, report every declared hierarchy | S/M | **DONE** |
 | 2 | **Relationship semantics, loudly.** Read `isActive` / `crossFilteringBehavior` / cardinality; warn in the conversion report and fail in `qualify` wherever semantics are not implemented; then implement the safe subset (inactive relationships, many-to-one bidirectional filter propagation) | M/L | TODO |
-| 3 | **Per-dimension date roles.** `time_intelligence.date_dimension` becomes a list; the converter emits one entry per date-role table | M | TODO |
+| 3 | **Date roles, honestly.** Resolve the role's date key (relationship), full date (hierarchy leaf) and year/quarter/month columns through the table; emit only flag columns that exist (flags are upstream); bind time-intelligence measures to the role their DAX references; drop the legacy `date_dim` seed | M | **DONE** |
 | 4 | **Calculated tables/columns.** Precise report lines; materialise simple `DATATABLE` tables as static dimensions | M | TODO |
 | 5 | **Gap-model fixture.** A synthetic export exercising slices 1–4 in CI (no customer data) | S | TODO |
 
@@ -68,6 +69,33 @@ fidelity gaps, ordered by how badly they hurt:
 - **Verified locally** against the real export: 6 role-playing calendars with
   23 levels emitted, 0 of 16 relationship endpoints missing from `schema.sql`.
 - 450 tests green, clippy/fmt clean.
+
+## Slice 3 evidence (2026-09-21)
+
+- The global `time_intelligence` block is resolved, never invented:
+  `date_key_column` from the role's relationship, `full_date_column` from the
+  primary hierarchy's leaf, and year/quarter/month from the date-part columns
+  (`year`/`quarternumber`/`monthnumber` in the retail sample;
+  `year`/`quarter`/`month` in the real export). Flag columns are emitted only when
+  the table has them — flags are upstream (plan 044, invariant 2).
+- Time-intelligence measures bind to the role their DAX references
+  (`TOTALYTD(…, 'Cal B'[Date])` → `Cal B`); the report marks inferred vs
+  assumed. A measure whose role lacks the flag is downgraded to bridge code
+  (stub + a "date flag columns on the calendar" checklist entry) instead of
+  referencing a column that does not exist.
+- The legacy `seed_date_dim.sql` (`date_dim`) is no longer emitted for
+  conversions; `bootstrap.sql` reads only `schema.sql` and the data loaders.
+- A "Date roles" report section lists every role with its resolved columns and
+  flag status, and names the time-intelligence measures per role.
+- Verified: retail (BIM) resolves `datekey`/`fulldate`/`year`/`quarternumber`/
+  `monthnumber` with `none` flags and qualifies READY; the real export resolves
+  7 roles with 0 flag columns; a live YTD query through a per-measure role
+  matched the SQL oracle exactly (2,287,560).
+- The tracked `generated_retail_analytics` fixture's five relationship
+  endpoints and its time-intelligence columns now resolve against its own
+  `schema.sql` (they referenced `date_key`/`customer_id`/… which the schema
+  never had, so every join in the fixture was broken).
+- 454 tests green.
 
 ## Non-goals
 

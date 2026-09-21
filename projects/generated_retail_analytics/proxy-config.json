@@ -16,55 +16,50 @@
   "relationships": [
     {
       "fact_table": "default",
-      "fact_column": "date_key",
+      "fact_column": "datekey",
       "dimension_id": "Dates",
       "dim_table": "dates",
-      "dim_column": "date_key"
+      "dim_column": "datekey"
     },
     {
       "fact_table": "default",
-      "fact_column": "store_id",
+      "fact_column": "storeid",
       "dimension_id": "Stores",
       "dim_table": "stores",
-      "dim_column": "store_id"
+      "dim_column": "storeid"
     },
     {
       "fact_table": "default",
-      "fact_column": "product_id",
+      "fact_column": "productid",
       "dimension_id": "Products",
       "dim_table": "products",
-      "dim_column": "product_id"
+      "dim_column": "productid"
     },
     {
       "fact_table": "default",
-      "fact_column": "promotion_id",
+      "fact_column": "promoid",
       "dimension_id": "Promotions",
       "dim_table": "promotions",
-      "dim_column": "promotion_id"
+      "dim_column": "promoid"
     },
     {
       "fact_table": "default",
-      "fact_column": "customer_id",
+      "fact_column": "customerid",
       "dimension_id": "Customers",
       "dim_table": "customers",
-      "dim_column": "customer_id"
+      "dim_column": "customerid"
     }
   ],
   "time_intelligence": {
     "date_dimension": {
       "dimension_id": "Dates",
       "table_name": "dates",
-      "date_key_column": "date_key",
-      "full_date_column": "full_date",
+      "date_key_column": "datekey",
+      "full_date_column": "fulldate",
       "flag_columns": {
         "year_column": "year",
-        "quarter_column": "quarter",
-        "month_column": "month",
-        "ytd_flag_column": "ytd_flag",
-        "prior_year_ytd_flag_column": "prior_year_ytd_flag",
-        "current_year_flag_column": "current_year_flag",
-        "qtd_flag_column": "qtd_flag",
-        "mtd_flag_column": "mtd_flag"
+        "quarter_column": "quarternumber",
+        "month_column": "monthnumber"
       }
     }
   },

@@ -45,13 +45,24 @@ impl Default for DateDimensionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DateFlagColumns {
+    /// Date-part columns and flag columns. Each is optional: a config that
+    /// omits one means the column does not exist upstream, and consumers must
+    /// treat it as unavailable instead of guessing a name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub year_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub quarter_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub month_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ytd_flag_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prior_year_ytd_flag_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub current_year_flag_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub qtd_flag_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub mtd_flag_column: String,
 }
 
