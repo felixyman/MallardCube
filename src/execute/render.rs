@@ -361,7 +361,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     prefix.push((m, total));
                 }
                 for (name, value) in &data {
-                    let m = leaf_members_from(
+                    let mut m = leaf_members_from(
                         dim,
                         std::slice::from_ref(name),
                         &query.dim_props,
@@ -369,6 +369,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                         parent_uname.as_deref(),
                     )
                     .remove(0);
+                    // Real per-member child count: Excel's hierarchy walk reads
+                    // the low bits of DisplayInfo as the child count, so the
+                    // static whole-level value (e.g. 132 months for a quarter)
+                    // corrupts its tree and the expand never renders.
+                    m.children_cardinality =
+                        member_child_count(backend, dim, dl, &format!("{key}|{name}"));
                     prefix.push((m, *value));
                 }
             }
@@ -382,7 +388,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     prefix.push((m, total));
                 }
                 for (name, value) in &data {
-                    let m = leaf_members_from(
+                    let mut m = leaf_members_from(
                         dim,
                         std::slice::from_ref(name),
                         &query.dim_props,
@@ -390,6 +396,8 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                         None,
                     )
                     .remove(0);
+                    m.children_cardinality =
+                        member_child_count(backend, dim, dl, &format!("{key}|{name}"));
                     prefix.push((m, *value));
                 }
             }
@@ -1398,6 +1406,24 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     } else {
         Vec::new()
     };
+    // Real per-member child counts for the un-expanded roots (a year has 4
+    // quarters, not the whole next level's cardinality). Excel's hierarchy walk
+    // reads the low bits of DisplayInfo as the child count, so a static
+    // whole-level value corrupts its tree.
+    let roots_cc = |slot: usize| -> std::collections::HashMap<String, u32> {
+        let dim = if slot == 0 { d0 } else { d1 };
+        drill_children_cardinalities(backend, dim, 0, "")
+    };
+    let roots_cc0 = if target0.is_some() {
+        roots_cc(0)
+    } else {
+        std::collections::HashMap::new()
+    };
+    let roots_cc1 = if target1.is_some() {
+        roots_cc(1)
+    } else {
+        std::collections::HashMap::new()
+    };
     let root_value = |first: &str, second: &str| -> f64 {
         roots_pairs
             .iter()
@@ -1416,6 +1442,10 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
             None,
         )
         .remove(0);
+        let cc_map = if slot == 0 { &roots_cc0 } else { &roots_cc1 };
+        if let Some(cc) = cc_map.get(value) {
+            m.children_cardinality = *cc;
+        }
         if !query.level_drag {
             attach_parent_keys(std::slice::from_mut(&mut m), dim, Some(level));
         }
