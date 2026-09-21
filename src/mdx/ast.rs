@@ -63,10 +63,14 @@ pub enum Expr {
 /// bounds the window (`YTD(m)` → `date_trunc('year', anchor) .. anchor`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DateWindow {
-    /// `(level name, value)` equalities identifying the anchor member.
+    /// `(level name, value)` equalities identifying the anchor member
+    /// (period-to-date windows).
     pub anchor: Vec<(String, String)>,
     /// `year` | `quarter` | `month` — the period-to-date grain.
     pub period: String,
+    /// Relative window (`Filter(…, Member_Value >= DateAdd('d', -30, VBA![Date]()))`):
+    /// the date column compared to `CURRENT_DATE + INTERVAL '<amount> <unit>'`.
+    pub relative: Option<(CmpOp, i64, String)>,
 }
 
 /// Comparison operators in filter predicates.

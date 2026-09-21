@@ -787,6 +787,22 @@ fn sql_where_with_cols(
                             .map(|l| l.column.clone())
                             .unwrap_or_else(|| d.physical_field.clone())
                     });
+                // Relative window: `Member_Value <op> CURRENT_DATE ± n unit`.
+                if let Some((op, amount, unit)) = &w.relative {
+                    let cmp = match op {
+                        crate::mdx::ast::CmpOp::Gt => ">",
+                        crate::mdx::ast::CmpOp::Ge => ">=",
+                        crate::mdx::ast::CmpOp::Lt => "<",
+                        crate::mdx::ast::CmpOp::Le => "<=",
+                        crate::mdx::ast::CmpOp::Eq => "=",
+                        crate::mdx::ast::CmpOp::Ne => "<>",
+                    };
+                    parts.push(format!(
+                        "f.{} IN (SELECT {} FROM {} WHERE {date_col} {cmp} (CURRENT_DATE + INTERVAL '{} {}'))",
+                        rel.fact_column, rel.dim_column, rel.dim_table, amount, unit
+                    ));
+                    continue;
+                }
                 let mut pins: Vec<String> = Vec::new();
                 for (level_name, value) in &w.anchor {
                     if let Some(l) = d.levels.iter().find(|l| &l.name == level_name) {

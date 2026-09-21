@@ -107,9 +107,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   Slice 5 (same day, partial) lowered `YTD`/`QTD`/`MTD`/`PeriodsToDate` to date
   windows on the anchor's date role (`date_trunc(<period>, anchor) .. anchor`),
   so `HEAD(YTD([Year].&[2024]),1)` → 2024 and `QTD(June 2024)` → months 4–6;
-  `ParallelPeriod`/`LastPeriods` still fault. Remaining: slice 4 (named-set
-  MDX: `WITH SET` + member-value filters + `DateAdd`/VBA), ranges in slicers,
-  and the rest of slice 5.
+  `ParallelPeriod`/`LastPeriods` still fault. Slice 4 (same day) landed the
+  documented Excel named-set sliding window: `VBA![Date]()` → `CURRENT_DATE`,
+  `DateAdd(…)` → a relative window (`date_col >= CURRENT_DATE + INTERVAL '-30
+  day'`), `Filter(<level set>, Member_Value …)` lowering, and `WITH SET`
+  resolution for references on the axis. Verified live: the captured CUBESET
+  probe → 2026-08-22 (30 days back) and a `WITH SET [Last30]` axis → ~30 date
+  members. Remaining: the `COUNT(<windowed set>)` probe, ranges in slicers, and
+  `ParallelPeriod`/`LastPeriods`.
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic

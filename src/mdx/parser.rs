@@ -28,13 +28,14 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
     };
     use crate::mdx::frontend as fe;
 
-    // Named sets — Excel's "Manage Sets" feature. Only the explicit
-    // `WITH SET` form faults: probe shapes use a bare `Set X As '…'` clause
-    // whose set is consumed by the probe itself.
-    if mdx.to_uppercase().contains("WITH SET") {
-        return Some("named sets (`WITH SET`) are not supported yet".into());
+    // Named sets (`WITH SET`): bodies we can parse are expanded by the
+    // semantic layer; an unparseable body faults.
+    let named = fe::named_sets(&sel);
+    if named.len() < sel.with_sets.len() {
+        return Some(
+            "named sets (`WITH SET`) with an unparseable body are not supported yet".into(),
+        );
     }
-    let _ = &sel;
     // MDX time functions.
     // `YTD`/`QTD`/`MTD`/`PeriodsToDate` lower to date windows; the rest of the
     // time-intelligence function library is not supported yet.
@@ -49,12 +50,20 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
             "the MDX time function `{name}()` is not supported yet"
         ));
     }
-    // VBA date arithmetic (`DateAdd('d', -30, VBA![Date]())`).
-    if fe::first_call(&sel, &["DATEADD"]).is_some() || fe::bodies_contain(&sel, "VBA!") {
-        return Some("MDX date arithmetic (`DateAdd`/`VBA!`) is not supported yet".into());
+    // `DateAdd`/`VBA!` are lowered inside member-value filters; elsewhere they
+    // are not handled yet.
+    let lowered_windows = fe::member_value_filters(&sel).len();
+    if (fe::first_call(&sel, &["DATEADD"]).is_some() || fe::bodies_contain(&sel, "VBA!"))
+        && lowered_windows == 0
+    {
+        return Some(
+            "MDX date arithmetic (`DateAdd`/`VBA!`) outside a member-value filter is not supported yet"
+                .into(),
+        );
     }
-    // Member-property filters (`Filter(…, [D].[H].CurrentMember.Member_Value …)`).
-    if fe::mentions_member_property(&sel) {
+    // Member-value filters we can lower (`Filter(set, Member_Value >=
+    // DateAdd(…))`); anything else referencing member properties faults.
+    if fe::member_property_filter_count(&sel) > lowered_windows {
         return Some(
             "member-property filters (`Filter` over `Member_Value`/`Member_Key`) are not supported yet"
                 .into(),
@@ -1126,8 +1135,8 @@ mod tests {
                 "LastPeriods()",
             ),
             (
-                "WITH SET [Last30] AS 'x' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
-                "named sets",
+                "WITH SET [Last30] AS 'HEAD(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1), 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                "member-property filters",
             ),
             (
                 "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
@@ -1164,7 +1173,8 @@ mod tests {
             "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {YTD([Date].[Date].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[6])} ON 1 FROM [Sales]",
+            "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+            "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
             "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
         ] {

@@ -2812,6 +2812,45 @@ mod tests {
         });
     }
 
+    // Plan 046 slice 4: the documented Excel named-set sliding window
+    // (`Filter(…, Member_Value >= DateAdd("d", -30, VBA![Date]()))`).
+    #[test]
+    fn member_value_windows_lower_to_date_filters() {
+        with_project3(|| {
+            // Inline filter — the captured CUBESET probe shape.
+            let xml = get_execute_statement_response(
+                "SELECT {HEAD(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            let caps: Vec<String> = xml
+                .split("<Caption>")
+                .skip(1)
+                .filter_map(|s| s.split("</Caption>").next().map(str::to_string))
+                .collect();
+            assert!(
+                !caps.is_empty() && caps[0] != "All" && caps[0] != "Revenue",
+                "one window member: {caps:?}"
+            );
+
+            // Named set (`WITH SET`) referenced on the axis.
+            let xml = get_execute_statement_response(
+                "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Last30]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            let members = xml.matches("<Member ").count();
+            assert!(
+                members > 1 && members < 40,
+                "the window spans about 30 days: {members} members"
+            );
+
+            // An upper-bound window (`Member_Value <= DateAdd("yyyy", -1, …)`).
+            let xml = get_execute_statement_response(
+                "SELECT {HEAD(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value <= DateAdd(\"yyyy\", -1, VBA![Date]())), 1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+        });
+    }
+
     // Plan 046 slice 5: period-to-date functions lower to date windows on the
     // anchor's date role.
     #[test]
@@ -2935,8 +2974,8 @@ mod tests {
                     "member ranges",
                 ),
                 (
-                    "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
-                    "named sets",
+                    "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                    "member-property filters",
                 ),
             ] {
                 let xml = crate::execute_builders::get_execute_cellset_response(mdx);

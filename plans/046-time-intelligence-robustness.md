@@ -9,9 +9,9 @@
   metadata-only)
 - **Depends on**: 045 (intake fidelity), 007 (measure-scoped date roles)
 - **Category**: Excel compatibility / MDX
-- **Status**: **IN PROGRESS 2026-09-21** — slices 1–3, 5 (partial) and 6 landed;
-  slice 4 (named-set MDX) and the rest of 5 (`ParallelPeriod`/`LastPeriods`)
-  TODO.
+- **Status**: **IN PROGRESS 2026-09-21** — slices 1–6 landed (5 partially:
+  `ParallelPeriod`/`LastPeriods` remain). What remains: the `COUNT(<windowed
+  set>)` probe and ranges in slicers.
 
 ## Why this matters
 
@@ -57,7 +57,7 @@ Additional findings:
 | 1 | **Level data types**: emit the real OLE DB `LEVEL_DBTYPE` per level (date for a date role's leaf, numeric for year/quarter/month) instead of a hardcoded string | S | **DONE** |
 | 2 | **Loud faults**: unsupported set expressions (ranges, time functions, `WITH SET`, member-value `Filter`, VBA functions) return a SOAP fault naming the construct instead of a dropped/bogus axis; capability negotiation stops advertising named sets | S | **DONE** |
 | 3 | **Range sets** (`a : b`) in set probes (`HEAD({a:b},n)`, bare sets) | S/M | **DONE** |
-| 4 | **`WITH SET` + `Filter` with member-value comparisons + `DateAdd`/VBA date functions** (the documented Excel named-set pattern) | M | TODO |
+| 4 | **`WITH SET` + `Filter` with member-value comparisons + `DateAdd`/VBA** (the documented Excel named-set sliding window) | M | **DONE** |
 | 5 | **MDX time functions**: `YTD`/`QTD`/`MTD`/`PeriodsToDate` lowered to date windows on the anchor's date role; `ParallelPeriod`/`LastPeriods` still fault | M | **PARTIAL** |
 | 6 | **Converter DAX mappings**: `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` → the existing qtd/mtd flags; plain aggregates lowered to real SQL (was stubs) | S | **DONE** |
 
@@ -94,6 +94,25 @@ Additional findings:
 - **Capability negotiation**: Excel asks for `MdpropMdxNamedSets` at connect
   time; the proxy advertised 15 (full support) while `WITH SET` returned
   garbage. It now advertises 0 — honest until slice 4 lands.
+
+## Slice 4 evidence (2026-09-21)
+
+- `VBA![Date]()` parses (lowered to `CURRENT_DATE`) and `DateAdd(unit, n, …)`
+  becomes a relative window: `Filter(<level set>, CurrentMember.Member_Value
+  <op> DateAdd(…))` → `date_col <op> (CURRENT_DATE + INTERVAL '<n> <unit>')`.
+- `WITH SET [name] AS '<set expr>'` bodies are parsed (set-like expressions
+  only) and references (`{[name]}`) are expanded by the semantic layer; the
+  plan key fingerprints relative windows (`rel:Ge:-30day`).
+- Faults narrowed: a member-property `Filter` that cannot be lowered, and
+  `DateAdd`/`VBA!` outside a member-value filter, still fault with named
+  reasons.
+- Verified live: `HEAD(Filter([Date].[Date].[Date].Members, … Member_Value >=
+  DateAdd("d", -30, VBA![Date]())), 1)` → 2026-08-22 (exactly 30 days back), the
+  same filter as `WITH SET [Last30]` referenced on the axis returns ~30 date
+  members, and an upper-bound window (`<= DateAdd("yyyy", -1, …)`) returns
+  2020-01-01.
+- Known gap (faults with a reason): the `COUNT(<windowed set>)` probe
+  (`WITH MEMBER … AS 'COUNT(Filter(…))'`) — its quoted body is not lowered yet.
 
 ## Slice 5 evidence (2026-09-21, partial)
 

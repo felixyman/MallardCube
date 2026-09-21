@@ -115,6 +115,9 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
             // Ranges and date windows must change the key too, or the result
             // cache serves one probe's response for another (and vice versa).
             if let Some(w) = &f.date_window {
+                if let Some((op, amount, unit)) = &w.relative {
+                    return format!("{dk}=rel:{op:?}:{amount}{unit}");
+                }
                 format!(
                     "{dk}={}@{}",
                     w.anchor
@@ -173,6 +176,36 @@ mod tests {
             filter_suffix(std::slice::from_ref(&plain))
         );
         assert!(filter_suffix(&[ranged]).contains("2022..2024"));
+    }
+
+    // Plan 046 slice 4: a date window must change the plan key too.
+    #[test]
+    fn date_windows_change_the_plan_key() {
+        let windowed = TypedDimensionFilter {
+            dimension: "Date".into(),
+            members: vec![],
+            level: Some("Date".into()),
+            time_flag: None,
+            range: None,
+            date_window: Some(crate::mdx::ast::DateWindow {
+                anchor: Vec::new(),
+                period: String::new(),
+                relative: Some((crate::mdx::ast::CmpOp::Ge, -30, "day".into())),
+            }),
+        };
+        let plain = TypedDimensionFilter {
+            dimension: "Date".into(),
+            members: vec![],
+            level: Some("Date".into()),
+            time_flag: None,
+            range: None,
+            date_window: None,
+        };
+        assert_ne!(
+            filter_suffix(std::slice::from_ref(&windowed)),
+            filter_suffix(std::slice::from_ref(&plain))
+        );
+        assert!(filter_suffix(&[windowed]).contains("-30day"));
     }
 
     use super::*;

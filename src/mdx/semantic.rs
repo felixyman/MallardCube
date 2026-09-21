@@ -104,15 +104,23 @@ fn dim_ref_str(dim: &DimRef) -> String {
     }
 }
 
-/// Lower period-to-date MDX calls into date windows: `(dim, level, window)`.
+/// Lower MDX date windows into filters: `(dim, level, window)`.
 ///
-/// The anchor member's key parts map to the model's levels by index, so the
-/// window pins the anchor exactly (`year=2024 AND month=6`) and the SQL bounds
-/// it with `date_trunc(<period>, anchor date) .. anchor date`.
-fn period_to_date_windows(
+/// Two forms are supported:
+/// - period-to-date calls (`YTD(m)`, `QTD(m)`, `MTD(m)`, `PeriodsToDate(level, m)`):
+///   the anchor member's key parts map to the model's levels by index, and the
+///   SQL bounds the window with `date_trunc(<period>, anchor) .. anchor`;
+/// - member-value windows (`Filter(<level set>, CurrentMember.Member_Value >=
+///   DateAdd("d", -30, VBA![Date]()))`): the date column is compared to
+///   `CURRENT_DATE + INTERVAL '<amount> <unit>'`.
+///
+/// Named-set references (`WITH SET [x] AS '…'`) are expanded first.
+fn date_windows(
     mdx: &str,
     model: &crate::engine::model::SemanticModel,
 ) -> Vec<(String, String, DateWindow)> {
+    use crate::mdx::ast::{CmpOp, Expr};
+
     fn period_for(name: &str) -> Option<&'static str> {
         match name.to_uppercase().as_str() {
             "YTD" => Some("year"),
@@ -139,19 +147,57 @@ fn period_to_date_windows(
         let parts: Vec<String> = key.split('|').map(str::to_string).collect();
         Some((m.dim().to_string(), level, parts))
     }
+    fn unit_name(s: &str) -> Option<String> {
+        Some(match s.to_lowercase().as_str() {
+            "d" | "dd" | "day" => "day".into(),
+            "ww" | "wk" | "week" => "week".into(),
+            "m" | "mm" | "month" => "month".into(),
+            "yyyy" | "yy" | "year" => "year".into(),
+            _ => return None,
+        })
+    }
+    fn date_shift(e: &Expr) -> Option<(i64, String)> {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("DateAdd") => {
+                let unit = match args.first() {
+                    Some(Expr::Str(s)) => unit_name(s)?,
+                    _ => return None,
+                };
+                let amount = match args.get(1) {
+                    Some(Expr::Number(n)) => n.parse().ok()?,
+                    _ => return None,
+                };
+                match args.get(2) {
+                    Some(Expr::Call { name, .. }) if name == "VBA_DATE" => Some((amount, unit)),
+                    _ => None,
+                }
+            }
+            Expr::Call { name, .. } if name == "VBA_DATE" => Some((0, "day".into())),
+            _ => None,
+        }
+    }
+    fn is_member_value(e: &Expr) -> bool {
+        e.as_member().is_some_and(|m| {
+            m.parts
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("Member_Value"))
+        })
+    }
+
     let Ok(sel) = crate::mdx::frontend::parse_select(mdx) else {
         return Vec::new();
     };
+    let named = crate::mdx::frontend::named_sets(&sel);
     let mut out: Vec<(String, String, DateWindow)> = Vec::new();
+
     fn walk(
-        e: &crate::mdx::ast::Expr,
+        e: &Expr,
         model: &crate::engine::model::SemanticModel,
         out: &mut Vec<(String, String, DateWindow)>,
     ) {
         match e {
-            crate::mdx::ast::Expr::Call { name, args } => {
+            Expr::Call { name, args } => {
                 let period = period_for(name).or_else(|| {
-                    // `PeriodsToDate(level, anchor)`
                     if name.eq_ignore_ascii_case("PeriodsToDate") {
                         args.first()
                             .and_then(|a| a.as_member())
@@ -161,64 +207,92 @@ fn period_to_date_windows(
                         None
                     }
                 });
-                let anchor_member = if name.eq_ignore_ascii_case("PeriodsToDate") {
-                    args.get(1).and_then(|a| a.as_member())
-                } else {
-                    args.first().and_then(|a| a.as_member())
-                };
-                if let (Some(period), Some(m)) = (period, anchor_member)
-                    && let Some((dim, level, parts)) = anchor_of(m)
-                {
-                    // Align the key path to the level chain from the anchor's
-                    // level (a short key anchors at that level), like the range
-                    // SQL does.
-                    let levels: Vec<(String, String)> = model
-                        .dim_def_opt(&dim)
-                        .and_then(|d| {
-                            let level_idx = d.levels.iter().position(|l| l.name == level)?;
-                            let start = (level_idx + 1).saturating_sub(parts.len());
-                            Some(
-                                d.levels[start..=level_idx]
-                                    .iter()
-                                    .map(|l| l.name.clone())
-                                    .zip(parts.iter().cloned())
-                                    .collect(),
-                            )
-                        })
-                        .unwrap_or_default();
-                    out.push((
-                        dim,
-                        level,
-                        DateWindow {
-                            anchor: levels,
-                            period: period.to_string(),
-                        },
-                    ));
+                if let Some(period) = period {
+                    let anchor_member = if name.eq_ignore_ascii_case("PeriodsToDate") {
+                        args.get(1).and_then(|a| a.as_member())
+                    } else {
+                        args.first().and_then(|a| a.as_member())
+                    };
+                    if let Some(m) = anchor_member
+                        && let Some((dim, level, parts)) = anchor_of(m)
+                    {
+                        // Align the key path to the level chain from the
+                        // anchor's level (a short key anchors at that level).
+                        let levels: Vec<(String, String)> = model
+                            .dim_def_opt(&dim)
+                            .and_then(|d| {
+                                let level_idx = d.levels.iter().position(|l| l.name == level)?;
+                                let start = (level_idx + 1).saturating_sub(parts.len());
+                                Some(
+                                    d.levels[start..=level_idx]
+                                        .iter()
+                                        .map(|l| l.name.clone())
+                                        .zip(parts.iter().cloned())
+                                        .collect(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        out.push((
+                            dim,
+                            level,
+                            DateWindow {
+                                anchor: levels,
+                                period: period.to_string(),
+                                relative: None,
+                            },
+                        ));
+                    }
+                } else if name.eq_ignore_ascii_case("Filter") {
+                    // `Filter(<level set>, <member-value comparison>)`.
+                    if let (Some(set), Some(Expr::Binary { op, lhs, rhs })) =
+                        (args.first(), args.get(1))
+                        && is_member_value(lhs)
+                        && let Some((amount, unit)) = date_shift(rhs)
+                        && let Some(m) = set.as_member()
+                        && let Some(level) = m.level()
+                    {
+                        out.push((
+                            m.dim().to_string(),
+                            level.to_string(),
+                            DateWindow {
+                                anchor: Vec::new(),
+                                period: String::new(),
+                                relative: Some((*op, amount, unit)),
+                            },
+                        ));
+                    }
                 }
                 for a in args {
                     walk(a, model, out);
                 }
             }
-            crate::mdx::ast::Expr::Set(items) | crate::mdx::ast::Expr::Tuple(items) => {
+            Expr::Set(items) | Expr::Tuple(items) => {
                 for i in items {
                     walk(i, model, out);
                 }
             }
-            crate::mdx::ast::Expr::Range(a, b) => {
+            Expr::Range(a, b) => {
                 walk(a, model, out);
                 walk(b, model, out);
             }
-            crate::mdx::ast::Expr::Members(inner)
-            | crate::mdx::ast::Expr::Children(inner)
-            | crate::mdx::ast::Expr::Exclude(inner) => walk(inner, model, out),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => {
+                walk(inner, model, out)
+            }
             _ => {}
         }
     }
+
     for axis in &sel.axes {
         for e in &axis.exprs {
-            walk(e, model, &mut out);
+            let expanded = crate::mdx::frontend::expand_named_sets(e, &named);
+            walk(&expanded, model, &mut out);
         }
     }
+    for (_, body) in &named {
+        walk(body, model, &mut out);
+    }
+    // Silence an unused-import warning for `CmpOp` in builds without filters.
+    let _ = std::marker::PhantomData::<CmpOp>;
     out
 }
 
@@ -656,7 +730,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     // Period-to-date time functions (`YTD(m)`, `QTD(m)`, `MTD(m)`,
     // `PeriodsToDate(level, m)`) lower to a date window on the anchor's date
     // role; the axis lists the anchor's level, restricted by the window.
-    let time_windows = period_to_date_windows(mdx, &project.model);
+    let time_windows = date_windows(mdx, &project.model);
     for (dim_name, level_name, _) in &time_windows {
         if let Some(i) = axis_dims.iter().position(|d| d == dim_name)
             && let Some(level_idx) = project

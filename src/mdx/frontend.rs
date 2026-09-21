@@ -13,6 +13,16 @@ use super::ast::{Axis, CmpOp, Expr, MemberRef, Select};
 use super::lexer::{ParseError, Token, lex};
 use super::parser::SetExpr;
 
+/// Parse a bare set expression (a `WITH SET` body, a `Filter` argument).
+pub fn parse_set_expr(text: &str) -> Result<Expr, ParseError> {
+    let toks = lex(text)?;
+    let mut p = Parser {
+        toks: &toks,
+        pos: 0,
+    };
+    p.expr()
+}
+
 /// Parse an MDX statement into the subset AST.
 pub fn parse_select(mdx: &str) -> Result<Select, ParseError> {
     let toks = lex(mdx)?;
@@ -352,12 +362,25 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Ident(name)) => {
                 let name = name.clone();
-                // `VBA![Date]()` — VBA date arithmetic is not supported.
+                // `VBA![Date]()` lowers to `CURRENT_DATE`; other VBA functions
+                // are not supported.
                 if name.eq_ignore_ascii_case("VBA")
                     && self.toks.get(self.pos + 1) == Some(&Token::Bang)
                 {
+                    let is_date = matches!(
+                        self.toks.get(self.pos + 2),
+                        Some(Token::Bracket(b)) if b.eq_ignore_ascii_case("Date")
+                    ) && self.toks.get(self.pos + 3) == Some(&Token::LParen)
+                        && self.toks.get(self.pos + 4) == Some(&Token::RParen);
+                    if is_date {
+                        self.pos += 5;
+                        return Ok(Expr::Call {
+                            name: "VBA_DATE".into(),
+                            args: Vec::new(),
+                        });
+                    }
                     return Err(ParseError::Unsupported(
-                        "MDX date arithmetic (`DateAdd`/`VBA!`) is not supported yet".into(),
+                        "unsupported VBA function (only `VBA![Date]()` is lowered)".into(),
                     ));
                 }
                 self.pos += 1;
@@ -620,7 +643,9 @@ pub fn set_probe_expr(sel: &Select) -> Option<SetExpr> {
     if sel.axes.len() != 1 {
         return None;
     }
-    let expr = sel.axes[0].exprs.first()?;
+    let sets = named_sets(sel);
+    let expanded = expand_named_sets(sel.axes[0].exprs.first()?, &sets);
+    let expr = &expanded;
     // A measure set on the axis means the query is a normal pivot query, not a
     // set probe.
     if axis_has_measure(sel) {
@@ -679,6 +704,10 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
                 } else {
                     SetExpr::Tail(Box::new(src), n)
                 })
+            } else if upper == "FILTER" {
+                // `Filter(<level set>, <predicate>)` lists the level; the
+                // predicate becomes a window filter in the semantic layer.
+                args.first().and_then(set_expr_from_ast)
             } else if matches!(upper.as_str(), "YTD" | "QTD" | "MTD" | "PERIODSTODATE") {
                 // Period-to-date sets list the anchor's level; the date window
                 // itself comes from the semantic layer's filter.
@@ -1098,6 +1127,216 @@ pub fn bodies_contain(sel: &Select, needle: &str) -> bool {
             Expr::Str(s) => s.to_uppercase().contains(&needle),
             _ => false,
         })
+}
+
+/// Named sets from `WITH SET [name] AS '<set expr>'`, with their bodies parsed.
+pub fn named_sets(sel: &Select) -> Vec<(String, Expr)> {
+    fn set_like(e: &Expr) -> bool {
+        matches!(
+            e,
+            Expr::Set(_)
+                | Expr::Tuple(_)
+                | Expr::Member(_)
+                | Expr::Measure(_)
+                | Expr::Members(_)
+                | Expr::Children(_)
+                | Expr::Range(..)
+                | Expr::Call { .. }
+        )
+    }
+    sel.with_sets
+        .iter()
+        .filter_map(|(name, body)| match body {
+            Expr::Str(s) => parse_set_expr(s)
+                .ok()
+                .filter(set_like)
+                .map(|e| (name.clone(), e)),
+            other if set_like(other) => Some((name.clone(), other.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Replace single-part named-set references (`[Last30]`) with their bodies.
+pub fn expand_named_sets(expr: &Expr, sets: &[(String, Expr)]) -> Expr {
+    match expr {
+        Expr::Member(m) if m.parts.len() == 1 => {
+            if let Some((_, body)) = sets
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&m.parts[0]))
+            {
+                return expand_named_sets(body, sets);
+            }
+            expr.clone()
+        }
+        Expr::Set(items) => Expr::Set(items.iter().map(|i| expand_named_sets(i, sets)).collect()),
+        Expr::Tuple(items) => {
+            Expr::Tuple(items.iter().map(|i| expand_named_sets(i, sets)).collect())
+        }
+        Expr::Call { name, args } => Expr::Call {
+            name: name.clone(),
+            args: args.iter().map(|a| expand_named_sets(a, sets)).collect(),
+        },
+        Expr::Range(a, b) => Expr::Range(
+            Box::new(expand_named_sets(a, sets)),
+            Box::new(expand_named_sets(b, sets)),
+        ),
+        Expr::Members(inner) => Expr::Members(Box::new(expand_named_sets(inner, sets))),
+        Expr::Children(inner) => Expr::Children(Box::new(expand_named_sets(inner, sets))),
+        Expr::Exclude(inner) => Expr::Exclude(Box::new(expand_named_sets(inner, sets))),
+        Expr::Binary { op, lhs, rhs } => Expr::Binary {
+            op: *op,
+            lhs: Box::new(expand_named_sets(lhs, sets)),
+            rhs: Box::new(expand_named_sets(rhs, sets)),
+        },
+        other => other.clone(),
+    }
+}
+
+/// How many `Filter(...)` calls reference a member property? Compared against
+/// `member_value_filters` to fault on predicates we cannot lower.
+pub fn member_property_filter_count(sel: &Select) -> usize {
+    fn is_member_value(e: &Expr) -> bool {
+        e.as_member().is_some_and(|m| {
+            m.parts
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("Member_Value"))
+        })
+    }
+    fn walk(e: &Expr, out: &mut usize) {
+        match e {
+            Expr::Call { name, args } => {
+                if name.eq_ignore_ascii_case("Filter")
+                    && args.get(1).is_some_and(|p| match p {
+                        Expr::Binary { lhs, .. } => is_member_value(lhs),
+                        _ => false,
+                    })
+                {
+                    *out += 1;
+                }
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let sets = named_sets(sel);
+    let mut out = 0;
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(&expand_named_sets(e, &sets), &mut out);
+        }
+    }
+    if let Some(w) = &sel.where_clause {
+        walk(&expand_named_sets(w, &sets), &mut out);
+    }
+    for (_, body) in &sets {
+        walk(body, &mut out);
+    }
+    out
+}
+
+/// `Filter(<level set>, <member-value comparison against a date expression>)`
+/// predicates we can lower: `(set, op, amount, unit)`.
+pub fn member_value_filters(sel: &Select) -> Vec<(Expr, CmpOp, i64, String)> {
+    fn unit_name(s: &str) -> Option<String> {
+        Some(match s.to_lowercase().as_str() {
+            "d" | "dd" | "day" => "day".into(),
+            "ww" | "wk" | "week" => "week".into(),
+            "m" | "mm" | "month" => "month".into(),
+            "yyyy" | "yy" | "year" => "year".into(),
+            _ => return None,
+        })
+    }
+    fn date_shift(e: &Expr) -> Option<(i64, String)> {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("DateAdd") => {
+                let unit = match args.first() {
+                    Some(Expr::Str(s)) => unit_name(s)?,
+                    _ => return None,
+                };
+                let amount = match args.get(1) {
+                    Some(Expr::Number(n)) => n.parse().ok()?,
+                    _ => return None,
+                };
+                match args.get(2) {
+                    Some(Expr::Call { name, .. }) if name == "VBA_DATE" => Some((amount, unit)),
+                    _ => None,
+                }
+            }
+            Expr::Call { name, .. } if name == "VBA_DATE" => Some((0, "day".into())),
+            _ => None,
+        }
+    }
+    fn is_member_value(e: &Expr) -> bool {
+        e.as_member().is_some_and(|m| {
+            m.parts
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("Member_Value"))
+        })
+    }
+    fn walk(e: &Expr, out: &mut Vec<(Expr, CmpOp, i64, String)>) {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("Filter") => {
+                if let (Some(set), Some(Expr::Binary { op, lhs, rhs })) =
+                    (args.first(), args.get(1))
+                    && is_member_value(lhs)
+                    && let Some((amount, unit)) = date_shift(rhs)
+                {
+                    out.push((set.clone(), *op, amount, unit));
+                }
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let sets = named_sets(sel);
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(&expand_named_sets(e, &sets), &mut out);
+        }
+    }
+    for (_, body) in &sets {
+        walk(body, &mut out);
+    }
+    out
 }
 
 /// Is a member range present in the slicer (`WHERE {a : b}`)?
