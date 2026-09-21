@@ -96,7 +96,10 @@ pub fn plan_key(plan: &QueryPlan) -> String {
 }
 
 fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
-    if filters.iter().all(|f| f.members.is_empty()) {
+    if filters
+        .iter()
+        .all(|f| f.members.is_empty() && f.range.is_none())
+    {
         return String::new();
     }
 
@@ -107,11 +110,18 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
 
     let parts: Vec<String> = ordered
         .iter()
-        .filter(|(f, _)| !f.members.is_empty())
+        .filter(|(f, _)| !f.members.is_empty() || f.range.is_some())
         .map(|(f, dk)| {
-            let mut members: Vec<&str> = f.members.iter().map(|s| s.as_str()).collect();
-            members.sort();
-            format!("{}={}", dk, members.join(","))
+            // A member range must change the key too, or the result cache
+            // serves a range probe's response for a plain probe (and vice
+            // versa).
+            if let Some((from, to)) = &f.range {
+                format!("{dk}={from}..{to}@{}", f.level.as_deref().unwrap_or(""))
+            } else {
+                let mut members: Vec<&str> = f.members.iter().map(|s| s.as_str()).collect();
+                members.sort();
+                format!("{}={}", dk, members.join(","))
+            }
         })
         .collect();
 
@@ -128,6 +138,32 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    // Plan 047: a range filter must change the plan key, or the result cache
+    // serves a range probe's response for a plain probe.
+    #[test]
+    fn range_filters_change_the_plan_key() {
+        let ranged = TypedDimensionFilter {
+            dimension: "Date".into(),
+            members: vec![],
+            level: Some("Year".into()),
+            time_flag: None,
+            range: Some(("2022".into(), "2024".into())),
+        };
+        let plain = TypedDimensionFilter {
+            dimension: "Date".into(),
+            members: vec![],
+            level: Some("Year".into()),
+            time_flag: None,
+            range: None,
+        };
+        assert_ne!(
+            filter_suffix(std::slice::from_ref(&ranged)),
+            filter_suffix(std::slice::from_ref(&plain))
+        );
+        assert!(filter_suffix(&[ranged]).contains("2022..2024"));
+    }
+
     use super::*;
     use crate::engine::plan::TypedDimensionFilter;
 

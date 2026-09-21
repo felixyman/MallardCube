@@ -54,10 +54,25 @@ honor its STOP conditions, and update your row when done.
 | 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | IN PROGRESS |
 | 045  | Intake fidelity — converted models must arrive with their shape | P1 | L | 044 | IN PROGRESS |
 | 046  | Time intelligence robustness — the SSAS killer feature | P1 | M/L | 045 | IN PROGRESS |
+| 047  | MDX front-end — lexer + AST for the Excel subset | P1 | M | 046 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity) and 046 (time intelligence robustness) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness) and 047 (MDX front-end) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
+
+- 047 (MDX front-end) **IN PROGRESS** 2026-09-21: the parser was a hybrid of
+  `nom` fragments and ~20 hand scanners with a flat `ParsedMdx` flag bag and no
+  parse-error path — this session alone produced four silent misparses
+  (multi-set clauses, `WITH SET`, member-value `Filter`, ranges). Increment 1
+  landed: `mdx/lexer.rs` (tokens), `mdx/ast.rs` (`Select`/`Axis`/`Expr`) and
+  `mdx/frontend.rs` (recursive descent + derivations); `ParsedMdx` now takes
+  axis dimensions, level sets, member ranges and the set-probe expression from
+  the AST, with the legacy scanners as a transitional fallback. The captured
+  Excel workload replays 7/7 without faults and smoke stays 8/8. Also fixed a
+  cache-key bug the AST work exposed (`filter_suffix` ignored ranges, so a range
+  probe could be served for a plain probe). Remaining: migrate WHERE/slicers,
+  calculated members and drilldown targets; retire the scanners and the lexical
+  unsupported pre-scan; add the trace corpus as a parser regression suite.
 
 - 046 (time intelligence robustness) **IN PROGRESS** 2026-09-21: captured what
   Excel actually sends (real MSOLAP client) for time-intelligence paths —

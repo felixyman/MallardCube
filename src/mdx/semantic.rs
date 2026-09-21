@@ -514,6 +514,21 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         }
     }
 
+    // A member range on an axis (`{a : b}`) lists the level's members between
+    // the keys: level-drag rendering plus a range filter (plan 047: the axis
+    // dimensions come from the AST, so this is correct for multi-axis clauses).
+    for (dim_name, level_name, _, _) in &parsed.axis_member_ranges {
+        if let Some(i) = axis_dims.iter().position(|d| d == dim_name)
+            && let Some(level_idx) = project
+                .model
+                .dim_def_opt(dim_name)
+                .and_then(|d| d.levels.iter().position(|l| l.name == *level_name))
+        {
+            drilldown_levels[i] = Some(level_idx);
+            level_drag = true;
+        }
+    }
+
     // Whole-hierarchy drags (`DrilldownLevel({...All})`) start at the top
     // level; Excel may instead name the level explicitly
     // (`DrilldownLevel({...All}, [Date].[Date].[Quarter])` or `, , N`).
@@ -576,6 +591,14 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     }
 
     let mut filters = filters_from_parsed(&parsed);
+    for (dim_name, level_name, from_key, to_key) in &parsed.axis_member_ranges {
+        filters.push(DimensionFilter {
+            dimension: dim_name.clone(),
+            members: vec![],
+            level: Some(level_name.clone()),
+            range: Some((from_key.clone(), to_key.clone())),
+        });
+    }
     filters.extend(extra_filters);
 
     // A drill scoped by a compound member (a slicer or subselect like

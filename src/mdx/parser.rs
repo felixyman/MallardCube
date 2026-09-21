@@ -55,21 +55,55 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
-    // Member ranges are supported in set probes (`HEAD({a : b}, n)` / a bare
-    // `{a : b}` set). On a pivot axis (a measure set elsewhere in the select
-    // clause), in slicers, and in calculated-member COUNTs they are not
-    // handled yet.
+    // A braced `{range}` beside a braced measure set (`{[Measures].[X]} ON 0,
+    // {a : b} ON 1`) is not classified as an axis yet — fault instead of
+    // returning a slicer-only cellset.
+    if let Ok(sel) = crate::mdx::frontend::parse_select(mdx) {
+        let axis_set_has = |pred: &dyn Fn(&crate::mdx::ast::Expr) -> bool| {
+            sel.axes.iter().any(|a| {
+                a.exprs.iter().any(
+                    |e| matches!(e, crate::mdx::ast::Expr::Set(items) if items.iter().any(pred)),
+                )
+            })
+        };
+        if axis_set_has(&|e| matches!(e, crate::mdx::ast::Expr::Measure(_)))
+            && axis_set_has(&|e| matches!(e, crate::mdx::ast::Expr::Range(..)))
+        {
+            return Some(
+                "member ranges on a pivot axis beside a measure set are not supported yet".into(),
+            );
+        }
+    }
+
+    // Member ranges are supported on the axis (a pivot axis, a set probe, or a
+    // bare set). In a slicer, or inside a quoted calculated-member body
+    // (`COUNT({a : b})`), they are not handled yet.
     if let Some(pos) = member_range_pos(mdx) {
         let from_pos = upper.find("FROM").unwrap_or(mdx.len());
-        let select_clause = mdx[..from_pos.min(mdx.len())].to_uppercase();
-        if pos > from_pos || select_clause.contains("[MEASURES].") {
+        if pos > from_pos || inside_quotes(mdx, pos) {
             return Some(
-                "member ranges outside a set probe (`HEAD({a : b}, n)`) are not supported yet"
+                "member ranges outside the axis (`{a : b}` in a slicer or a calculated member) are not supported yet"
                     .into(),
             );
         }
     }
     None
+}
+
+/// Is a byte position inside a quoted string (`'…'` / `"…"`)?
+fn inside_quotes(mdx: &str, pos: usize) -> bool {
+    let mut quote: Option<char> = None;
+    for (i, c) in mdx.char_indices() {
+        if i >= pos {
+            break;
+        }
+        match (quote, c) {
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    quote.is_some()
 }
 
 /// Byte position of a `:` between two bracketed members, outside brackets.
@@ -1128,6 +1162,8 @@ pub struct ParsedMdx {
     /// Explicit level-set sources on the axes: `(dim, level)` pairs from
     /// `[Dim].[Hier].[Level].Members` (Excel's field-list level drag).
     pub axis_level_members: Vec<(String, String)>,
+    /// Member ranges on the axes: `(dim, level, from_key, to_key)`.
+    pub axis_member_ranges: Vec<(String, String, String, String)>,
     /// `DrilldownLevel(...)` targets on the axes (dimension + optional level
     /// expression/index). Without a level they drill to the top level below
     /// `(All)` — the whole-hierarchy drag.
@@ -1435,7 +1471,25 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     // Parse axis dimension IDs from the select clause in positional order.
     // Strategy: split on CrossJoin( / DrilldownLevel( to find axis expressions,
     // then extract the first non-Measures bracketed identifier in each.
-    let axis_dimension_ids = parse_axis_dimension_ids(before_from);
+    // Plan 047: the front-end (lexer + AST) owns axis extraction when it can
+    // parse the statement; the legacy scanners remain as a transitional
+    // fallback for shapes the AST does not model yet.
+    let frontend = crate::mdx::frontend::parse_select(input);
+    let (axis_dimension_ids, axis_level_members, axis_member_ranges, axis_set_expr) =
+        match &frontend {
+            Ok(sel) => (
+                crate::mdx::frontend::axis_dimension_ids(sel),
+                crate::mdx::frontend::axis_level_members(sel),
+                crate::mdx::frontend::axis_member_ranges(sel),
+                crate::mdx::frontend::set_probe_expr(sel),
+            ),
+            Err(_) => (
+                parse_axis_dimension_ids(before_from),
+                parse_axis_level_members(before_from),
+                Vec::new(),
+                parse_axis_set_expr(input),
+            ),
+        };
 
     // Parse excluded members from DrilldownMember if present.
     let excluded_members = if has_drilldown_member(input) {
@@ -1497,9 +1551,10 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         excluded_members,
         drilldown_member_hierarchy,
         axis_set_op: detect_axis_set_op(input),
-        axis_set_expr: parse_axis_set_expr(input),
+        axis_set_expr,
         calculated_counts: parse_calculated_count(input).into_iter().collect(),
-        axis_level_members: parse_axis_level_members(before_from),
+        axis_level_members,
+        axis_member_ranges,
         drilldown_targets: parse_drilldown_targets(before_from),
     }
 }
@@ -1525,6 +1580,10 @@ mod tests {
             ),
             (
                 "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
+                "member ranges",
+            ),
+            (
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
                 "member ranges",
             ),
             (

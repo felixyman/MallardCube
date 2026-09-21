@@ -2812,8 +2812,9 @@ mod tests {
         });
     }
 
-    // A range on a pivot axis (a measure set in the select clause) is not
-    // handled yet — it must fault, not drop the axis.
+    // A braced `{range}` beside a braced measure set is not an axis shape we
+    // classify yet (plan 047 increment 2) — it must fault, not silently return
+    // a slicer-only cellset.
     #[test]
     fn pivot_axis_member_range_faults_loudly() {
         with_project3(|| {
