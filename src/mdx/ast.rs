@@ -59,18 +59,37 @@ pub enum Expr {
     Str(String),
 }
 
-/// A period-to-date window on a date-role dimension: the anchor member's date
-/// bounds the window (`YTD(m)` → `date_trunc('year', anchor) .. anchor`).
+/// A date window on a date-role dimension's full-date column.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DateWindow {
-    /// `(level name, value)` equalities identifying the anchor member
-    /// (period-to-date windows).
-    pub anchor: Vec<(String, String)>,
-    /// `year` | `quarter` | `month` — the period-to-date grain.
-    pub period: String,
-    /// Relative window (`Filter(…, Member_Value >= DateAdd('d', -30, VBA![Date]()))`):
-    /// the date column compared to `CURRENT_DATE + INTERVAL '<amount> <unit>'`.
-    pub relative: Option<(CmpOp, i64, String)>,
+pub enum DateWindow {
+    /// Period-to-date (`YTD(m)`): `date_trunc(<period>, anchor) .. anchor`.
+    ToDate {
+        /// `(level name, value)` equalities identifying the anchor member.
+        anchor: Vec<(String, String)>,
+        /// `year` | `quarter` | `month` — the period-to-date grain.
+        period: String,
+    },
+    /// Relative window
+    /// (`Filter(…, Member_Value >= DateAdd('d', -30, VBA![Date]()))`): the date
+    /// column compared to `CURRENT_DATE + INTERVAL '<amount> <unit>'`.
+    Relative {
+        op: CmpOp,
+        amount: i64,
+        unit: String,
+    },
+    /// `ParallelPeriod(level, n, anchor)`: the period at `level` shifted by `n`.
+    Parallel {
+        anchor: Vec<(String, String)>,
+        level: String,
+        offset: i64,
+    },
+    /// `LastPeriods(n, anchor)`: the `count` periods at the anchor's level
+    /// ending at the anchor.
+    LastPeriods {
+        anchor: Vec<(String, String)>,
+        level: String,
+        count: i64,
+    },
 }
 
 /// Comparison operators in filter predicates.

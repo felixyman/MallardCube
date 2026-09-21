@@ -115,18 +115,32 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
             // Ranges and date windows must change the key too, or the result
             // cache serves one probe's response for another (and vice versa).
             if let Some(w) = &f.date_window {
-                if let Some((op, amount, unit)) = &w.relative {
-                    return format!("{dk}=rel:{op:?}:{amount}{unit}");
-                }
-                format!(
-                    "{dk}={}@{}",
-                    w.anchor
+                use crate::mdx::ast::DateWindow;
+                let pins = |anchor: &[(String, String)]| {
+                    anchor
                         .iter()
                         .map(|(l, v)| format!("{l}:{v}"))
                         .collect::<Vec<_>>()
-                        .join(","),
-                    w.period
-                )
+                        .join(",")
+                };
+                match w {
+                    DateWindow::Relative { op, amount, unit } => {
+                        format!("{dk}=rel:{op:?}:{amount}{unit}")
+                    }
+                    DateWindow::ToDate { anchor, period } => {
+                        format!("{dk}={}@{period}", pins(anchor))
+                    }
+                    DateWindow::Parallel {
+                        anchor,
+                        level,
+                        offset,
+                    } => format!("{dk}={}@par:{level}:{offset}", pins(anchor)),
+                    DateWindow::LastPeriods {
+                        anchor,
+                        level,
+                        count,
+                    } => format!("{dk}={}@last:{level}:{count}", pins(anchor)),
+                }
             } else if let Some((from, to)) = &f.range {
                 format!("{dk}={from}..{to}@{}", f.level.as_deref().unwrap_or(""))
             } else {
@@ -187,10 +201,10 @@ mod tests {
             level: Some("Date".into()),
             time_flag: None,
             range: None,
-            date_window: Some(crate::mdx::ast::DateWindow {
-                anchor: Vec::new(),
-                period: String::new(),
-                relative: Some((crate::mdx::ast::CmpOp::Ge, -30, "day".into())),
+            date_window: Some(crate::mdx::ast::DateWindow::Relative {
+                op: crate::mdx::ast::CmpOp::Ge,
+                amount: -30,
+                unit: "day".into(),
             }),
         };
         let plain = TypedDimensionFilter {

@@ -37,14 +37,9 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
         );
     }
     // MDX time functions.
-    // `YTD`/`QTD`/`MTD`/`PeriodsToDate` lower to date windows; the rest of the
-    // time-intelligence function library is not supported yet.
-    const TIME_FNS: [&str; 4] = [
-        "PARALLELPERIOD",
-        "LASTPERIODS",
-        "CLOSINGPERIOD",
-        "OPENINGPERIOD",
-    ];
+    // Most time-intelligence functions lower to date windows; the balance
+    // functions (`ClosingPeriod`/`OpeningPeriod`) are not supported yet.
+    const TIME_FNS: [&str; 2] = ["CLOSINGPERIOD", "OPENINGPERIOD"];
     if let Some(name) = fe::first_call(&sel, &TIME_FNS) {
         return Some(format!(
             "the MDX time function `{name}()` is not supported yet"
@@ -1136,12 +1131,8 @@ mod tests {
     fn unsupported_features_are_detected() {
         for (mdx, needle) in [
             (
-                "SELECT {ParallelPeriod([Date].[Date].[Year], -1, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
-                "ParallelPeriod()",
-            ),
-            (
-                "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
-                "LastPeriods()",
+                "SELECT {ClosingPeriod([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+                "ClosingPeriod()",
             ),
             (
                 "WITH SET [Last30] AS 'HEAD(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1), 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
@@ -1184,6 +1175,8 @@ mod tests {
             "SELECT {YTD([Date].[Date].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
             "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+            "SELECT {ParallelPeriod([Date].[Date].[Year], -1, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
+            "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
             "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
         ] {

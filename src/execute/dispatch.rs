@@ -2927,6 +2927,30 @@ mod tests {
                 "MTD starts at the month: {xml}"
             );
 
+            // ParallelPeriod(Year, -1, 2024) → the previous year.
+            let xml = get_execute_statement_response(
+                "SELECT {ParallelPeriod([Date].[Date].[Year], -1, [Date].[Date].[Year].&[2024])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            assert!(xml.contains("<Caption>2023</Caption>"), "{xml}");
+            assert!(!xml.contains("<Caption>2024</Caption>"), "{xml}");
+
+            // LastPeriods(3, 2024) → 2022, 2023, 2024.
+            let xml = get_execute_statement_response(
+                "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            for year in ["2022", "2023", "2024"] {
+                assert!(
+                    xml.contains(&format!("<Caption>{year}</Caption>")),
+                    "LastPeriods includes {year}: {xml}"
+                );
+            }
+            assert!(
+                !xml.contains("<Caption>2021</Caption>"),
+                "LastPeriods stops after three: {xml}"
+            );
+
             // PeriodsToDate(Year, month) matches YTD.
             let xml = get_execute_statement_response(
                 "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
@@ -2981,8 +3005,8 @@ mod tests {
         with_project3(|| {
             for (mdx, needle) in [
                 (
-                    "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
-                    "LastPeriods()",
+                    "SELECT {ClosingPeriod([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+                    "ClosingPeriod()",
                 ),
                 (
                     "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",

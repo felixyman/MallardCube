@@ -717,13 +717,16 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
                 // `Filter(<level set>, <predicate>)` lists the level; the
                 // predicate becomes a window filter in the semantic layer.
                 args.first().and_then(set_expr_from_ast)
-            } else if matches!(upper.as_str(), "YTD" | "QTD" | "MTD" | "PERIODSTODATE") {
-                // Period-to-date sets list the anchor's level; the date window
-                // itself comes from the semantic layer's filter.
-                let anchor = if upper == "PERIODSTODATE" {
-                    args.get(1)
-                } else {
-                    args.first()
+            } else if matches!(
+                upper.as_str(),
+                "YTD" | "QTD" | "MTD" | "PERIODSTODATE" | "PARALLELPERIOD" | "LASTPERIODS"
+            ) {
+                // Time-intelligence sets list the anchor's level; the date
+                // window itself comes from the semantic layer's filter.
+                let anchor = match upper.as_str() {
+                    "PERIODSTODATE" | "LASTPERIODS" => args.get(1),
+                    "PARALLELPERIOD" => args.get(2),
+                    _ => args.first(),
                 }?
                 .as_member()?;
                 Some(SetExpr::LevelMembers {

@@ -121,6 +121,30 @@ fn date_windows(
 ) -> Vec<(String, String, DateWindow)> {
     use crate::mdx::ast::{CmpOp, Expr};
 
+    /// Align a member key path to the model's levels from the anchor's level (a
+    /// short key anchors at that level), returning `(level name, value)` pins.
+    fn align_pins(
+        model: &crate::engine::model::SemanticModel,
+        dim: &str,
+        level: &str,
+        parts: &[String],
+    ) -> Vec<(String, String)> {
+        model
+            .dim_def_opt(dim)
+            .and_then(|d| {
+                let level_idx = d.levels.iter().position(|l| l.name == level)?;
+                let start = (level_idx + 1).saturating_sub(parts.len());
+                Some(
+                    d.levels[start..=level_idx]
+                        .iter()
+                        .map(|l| l.name.clone())
+                        .zip(parts.iter().cloned())
+                        .collect(),
+                )
+            })
+            .unwrap_or_default()
+    }
+
     fn period_for(name: &str) -> Option<&'static str> {
         match name.to_uppercase().as_str() {
             "YTD" => Some("year"),
@@ -137,6 +161,9 @@ fn date_windows(
             Some("quarter")
         } else if l.contains("month") {
             Some("month")
+        } else if l.contains("day") || l.contains("date")
+        {
+            Some("day")
         } else {
             None
         }
@@ -218,27 +245,60 @@ fn date_windows(
                     {
                         // Align the key path to the level chain from the
                         // anchor's level (a short key anchors at that level).
-                        let levels: Vec<(String, String)> = model
-                            .dim_def_opt(&dim)
-                            .and_then(|d| {
-                                let level_idx = d.levels.iter().position(|l| l.name == level)?;
-                                let start = (level_idx + 1).saturating_sub(parts.len());
-                                Some(
-                                    d.levels[start..=level_idx]
-                                        .iter()
-                                        .map(|l| l.name.clone())
-                                        .zip(parts.iter().cloned())
-                                        .collect(),
-                                )
-                            })
-                            .unwrap_or_default();
+                        let pins = align_pins(model, &dim, &level, &parts);
                         out.push((
                             dim,
                             level,
-                            DateWindow {
-                                anchor: levels,
+                            DateWindow::ToDate {
+                                anchor: pins,
                                 period: period.to_string(),
-                                relative: None,
+                            },
+                        ));
+                    }
+                } else if name.eq_ignore_ascii_case("ParallelPeriod") {
+                    if let (Some(level_member), Some(offset), Some(anchor)) = (
+                        args.first().and_then(|a| a.as_member()),
+                        args.get(1).and_then(|a| match a {
+                            Expr::Number(n) => n.parse::<i64>().ok(),
+                            _ => None,
+                        }),
+                        args.get(2).and_then(|a| a.as_member()),
+                    ) && let Some(unit) = level_member.level().and_then(level_period)
+                        && let (Some(level), Some(key)) = (anchor.level(), anchor.key.as_deref())
+                    {
+                        let parts: Vec<String> = key.split('|').map(str::to_string).collect();
+                        let dim = anchor.dim().to_string();
+                        let pins = align_pins(model, &dim, level, &parts);
+                        out.push((
+                            dim,
+                            level.to_string(),
+                            DateWindow::Parallel {
+                                anchor: pins,
+                                level: unit.to_string(),
+                                offset,
+                            },
+                        ));
+                    }
+                } else if name.eq_ignore_ascii_case("LastPeriods") {
+                    if let (Some(count), Some(anchor)) = (
+                        args.first().and_then(|a| match a {
+                            Expr::Number(n) => n.parse::<i64>().ok(),
+                            _ => None,
+                        }),
+                        args.get(1).and_then(|a| a.as_member()),
+                    ) && let (Some(level), Some(key)) = (anchor.level(), anchor.key.as_deref())
+                        && let Some(unit) = level_period(level)
+                    {
+                        let parts: Vec<String> = key.split('|').map(str::to_string).collect();
+                        let dim = anchor.dim().to_string();
+                        let pins = align_pins(model, &dim, level, &parts);
+                        out.push((
+                            dim,
+                            level.to_string(),
+                            DateWindow::LastPeriods {
+                                anchor: pins,
+                                level: unit.to_string(),
+                                count,
                             },
                         ));
                     }
@@ -254,10 +314,10 @@ fn date_windows(
                         out.push((
                             m.dim().to_string(),
                             level.to_string(),
-                            DateWindow {
-                                anchor: Vec::new(),
-                                period: String::new(),
-                                relative: Some((*op, amount, unit)),
+                            DateWindow::Relative {
+                                op: *op,
+                                amount,
+                                unit,
                             },
                         ));
                     }

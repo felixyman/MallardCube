@@ -774,9 +774,11 @@ fn sql_where_with_cols(
             )
             && let Some(level_idx) = d.levels.iter().position(|l| &l.name == level_name)
         {
-            // Period-to-date window (`YTD(m)`): the anchor member's date bounds
-            // the window on the role's full-date column.
+            // Date windows (`YTD(m)`, member-value filters, `ParallelPeriod`,
+            // `LastPeriods`): the anchor member's date bounds the window on the
+            // role's full-date column.
             if let Some(w) = &f.date_window {
+                use crate::mdx::ast::DateWindow;
                 let date_col = model
                     .date_dims
                     .get(&f.dimension)
@@ -787,44 +789,75 @@ fn sql_where_with_cols(
                             .map(|l| l.column.clone())
                             .unwrap_or_else(|| d.physical_field.clone())
                     });
-                // Relative window: `Member_Value <op> CURRENT_DATE ± n unit`.
-                if let Some((op, amount, unit)) = &w.relative {
-                    let cmp = match op {
-                        crate::mdx::ast::CmpOp::Gt => ">",
-                        crate::mdx::ast::CmpOp::Ge => ">=",
-                        crate::mdx::ast::CmpOp::Lt => "<",
-                        crate::mdx::ast::CmpOp::Le => "<=",
-                        crate::mdx::ast::CmpOp::Eq => "=",
-                        crate::mdx::ast::CmpOp::Ne => "<>",
-                    };
-                    parts.push(format!(
-                        "f.{} IN (SELECT {} FROM {} WHERE {date_col} {cmp} (CURRENT_DATE + INTERVAL '{} {}'))",
-                        rel.fact_column, rel.dim_column, rel.dim_table, amount, unit
-                    ));
-                    continue;
-                }
-                let mut pins: Vec<String> = Vec::new();
-                for (level_name, value) in &w.anchor {
-                    if let Some(l) = d.levels.iter().find(|l| &l.name == level_name) {
-                        pins.push(format!(
-                            "CAST({} AS VARCHAR) = '{}'",
-                            l.column,
-                            value.replace('\'', "''")
-                        ));
+                let anchor_pins = |anchor: &[(String, String)]| -> String {
+                    let mut pins: Vec<String> = Vec::new();
+                    for (level_name, value) in anchor {
+                        if let Some(l) = d.levels.iter().find(|l| &l.name == level_name) {
+                            pins.push(format!(
+                                "CAST({} AS VARCHAR) = '{}'",
+                                l.column,
+                                value.replace('\'', "''")
+                            ));
+                        }
                     }
-                }
-                let pin_sql = if pins.is_empty() {
-                    "TRUE".to_string()
-                } else {
-                    pins.join(" AND ")
+                    if pins.is_empty() {
+                        "TRUE".to_string()
+                    } else {
+                        pins.join(" AND ")
+                    }
                 };
-                let anchor = format!(
-                    "(SELECT MAX({date_col}) FROM {} WHERE {pin_sql})",
-                    rel.dim_table
-                );
+                let anchor = |anchor: &[(String, String)]| {
+                    format!(
+                        "(SELECT MAX({date_col}) FROM {} WHERE {})",
+                        rel.dim_table,
+                        anchor_pins(anchor)
+                    )
+                };
+                let window = match w {
+                    DateWindow::Relative { op, amount, unit } => {
+                        let cmp = match op {
+                            crate::mdx::ast::CmpOp::Gt => ">",
+                            crate::mdx::ast::CmpOp::Ge => ">=",
+                            crate::mdx::ast::CmpOp::Lt => "<",
+                            crate::mdx::ast::CmpOp::Le => "<=",
+                            crate::mdx::ast::CmpOp::Eq => "=",
+                            crate::mdx::ast::CmpOp::Ne => "<>",
+                        };
+                        format!("{date_col} {cmp} (CURRENT_DATE + INTERVAL '{amount} {unit}')")
+                    }
+                    DateWindow::ToDate {
+                        anchor: pins,
+                        period,
+                    } => {
+                        let a = anchor(pins);
+                        format!("{date_col} BETWEEN date_trunc('{period}', {a}) AND {a}")
+                    }
+                    DateWindow::Parallel {
+                        anchor: pins,
+                        level,
+                        offset,
+                    } => {
+                        let a = anchor(pins);
+                        let next = offset + 1;
+                        format!(
+                            "{date_col} >= date_trunc('{level}', {a}) + INTERVAL '{offset} {level}' AND {date_col} < date_trunc('{level}', {a}) + INTERVAL '{next} {level}'"
+                        )
+                    }
+                    DateWindow::LastPeriods {
+                        anchor: pins,
+                        level,
+                        count,
+                    } => {
+                        let a = anchor(pins);
+                        let back = (count - 1).max(0);
+                        format!(
+                            "{date_col} >= date_trunc('{level}', {a}) - INTERVAL '{back} {level}' AND {date_col} <= {a}"
+                        )
+                    }
+                };
                 parts.push(format!(
-                    "f.{} IN (SELECT {} FROM {} WHERE {date_col} BETWEEN date_trunc('{}', {anchor}) AND {anchor})",
-                    rel.fact_column, rel.dim_column, rel.dim_table, w.period
+                    "f.{} IN (SELECT {} FROM {} WHERE {window})",
+                    rel.fact_column, rel.dim_column, rel.dim_table
                 ));
                 continue;
             }
