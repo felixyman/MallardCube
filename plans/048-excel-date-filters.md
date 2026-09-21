@@ -40,13 +40,25 @@ add `--auth-key` (and a header in the opencode config) before leaving it up.
      `keyAttribute="1"` and stores `memberValueDatatype`;
    - `MdpropMdxSubqueries` has the two lowest bits set (already advertised: 63).
 
-3. **Still withheld.** With both metadata changes in place, Excel records
-   `keyAttribute="1"` on `[Date].[Date]` (pivot cache definition) but resolves
-   `memberValueDatatype="5"` — the `[Measures]` row's type — instead of the
-   date dimension's 7. Excel's member-value lookup appears to take the first
-   `PROPERTY_NAME=MEMBER_VALUE` row rather than matching the key attribute
-   hierarchy. How SSAS shapes/orders that rowset is unknown here (no SSAS or
-   Power BI XMLA endpoint available).
+3. **Still withheld.** Excel records `keyAttribute="1"` on `[Date].[Date]`
+   (pivot cache definition) but resolves `memberValueDatatype="5"` — not the
+   date dimension's 7 — and still shows no Date Filters. Attempts, each with a
+   `REFRESH CUBE`-triggered cache rewrite and the saved pivot cache definition
+   as evidence:
+   - emitting the time dimension's MEMBER_VALUE rows first (in case Excel takes
+     the first row) — still 5;
+   - marking the date role's key level with `LEVEL_ORIGIN=4` and the day level
+     with the spec value `LEVEL_TYPE=116` (`0x74`) — both genuine fixes, kept —
+     still 5;
+   - removing the `[Measures]` MEMBER_VALUE row — the key-attribute marking
+     disappeared entirely, so Excel expects that row to be present.
+   The remaining 5-valued candidates are the measure `DATA_TYPE` and the
+   MeasuresLevel `LEVEL_DBTYPE` (both correctly 5 for doubles), i.e. Excel may
+   not read the MEMBER_VALUE rowset the way the documentation implies. Only a
+   reference response from a real engine can settle it.
+   Note: the marking is only written on the `REFRESH CUBE` path (context-menu
+   Refresh); `PivotTable.RefreshTable`, `Alt+F5` and `ExecuteMso("RefreshData")`
+   re-read metadata but leave the cache definition unchanged.
 
 ## Changes
 
@@ -57,14 +69,30 @@ add `--auth-key` (and a header in the opencode config) before leaving it up.
   rows (7 date role, 130 string keys, 5 measures).
 - `src/xmla/discover/hierarchies.rs`: a date role's hierarchy reports
   `HIERARCHY_ORIGIN=4` (key attribute).
+- `src/xmla/discover/levels.rs`: a date role's key level reports
+  `LEVEL_ORIGIN=4`, and the day level reports `LEVEL_TYPE=116`
+  (`MDLEVEL_TYPE_TIME_DAYS`; the previous 96 was not a valid time type).
 
 ## Next
 
-- Capture a real SSAS / Power BI XMLA
-  `Discover(MDSCHEMA_PROPERTIES, PROPERTY_NAME=MEMBER_VALUE, PROPERTY_TYPE=5)`
-  response to learn the expected row shape and order, then match it.
-- Alternative: expose a true key attribute hierarchy for the date role
-  ((All) + leaf, origin 6) beside the user hierarchy — the SSAS shape, at the
-  cost of an extra field in Excel's list or renaming `[Date].[Date].[Year]`.
+- **Get a reference engine.** A real SSAS (SQL Server Developer Edition is
+  free) or a Power BI Desktop local AS instance answers this in one capture:
+  run `Discover(MDSCHEMA_PROPERTIES, PROPERTY_NAME=MEMBER_VALUE,
+  PROPERTY_TYPE=5)` against a cube with a date dimension and compare the rows
+  (shape, order, DATA_TYPE) with ours. That also settles every other Excel
+  metadata question.
+- If a key attribute hierarchy turns out to be required: expose one for the
+  date role ((All) + leaf, origin 6) beside the user hierarchy — the SSAS
+  shape, at the cost of an extra field in Excel's list or renaming
+  `[Date].[Date].[Year]`.
 - Once Date Filters appear, capture the MDX they emit (`xmla-trace.jsonl`) and
   check it against the plan 046 date-window lowering.
+
+## Harness notes
+
+- The pivot cache definition is the ground truth for what Excel decided:
+  `SaveCopyAs` a copy and read `xl/pivotCache/pivotCacheDefinition1.xml`
+  (`cacheHierarchy` attributes `time`, `keyAttribute`, `memberValueDatatype`).
+- Menu coordinates shift with the cursor position; verify with a screenshot
+  before clicking (one stray click deleted the pivot table mid-spike; Ctrl+Z
+  restores it, and the workbook was unsaved).

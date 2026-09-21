@@ -5,10 +5,10 @@ use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
 /// Excel uses these to recognize Year/Quarter/Month/Day as time levels.
 fn time_level_type(name: &str) -> u32 {
     match name.to_ascii_lowercase().as_str() {
-        "year" => 20,         // MDLEVEL_TYPE_TIME_YEARS
-        "quarter" => 68,      // MDLEVEL_TYPE_TIME_QUARTERS
-        "month" => 84,        // MDLEVEL_TYPE_TIME_MONTHS
-        "day" | "date" => 96, // MDLEVEL_TYPE_TIME_DAYS
+        "year" => 20,          // MDLEVEL_TYPE_TIME_YEARS
+        "quarter" => 68,       // MDLEVEL_TYPE_TIME_QUARTERS
+        "month" => 84,         // MDLEVEL_TYPE_TIME_MONTHS
+        "day" | "date" => 116, // MDLEVEL_TYPE_TIME_DAYS (0x74)
         _ => 0,
     }
 }
@@ -30,7 +30,7 @@ fn level_db_type(
         return DBTYPE_WSTR;
     }
     match time_level_type(&level.name) {
-        96 => DBTYPE_DBTIMESTAMP,
+        116 => DBTYPE_DBTIMESTAMP,
         20 | 68 | 84 => DBTYPE_I4,
         _ => {
             // Non-English level names: the deepest level of a date role is the
@@ -140,9 +140,19 @@ pub fn get_levels_response() -> String {
         ));
 
         if !d.levels.is_empty() {
+            // MS-SSAS LEVEL_ORIGIN bitmask: 1 = user hierarchy level,
+            // 4 = key attribute level. Excel matches the key attribute's
+            // MEMBER_VALUE row by this bit, so the date role's leaf carries it
+            // (plan 048).
+            let deepest = d.levels.iter().map(|l| l.level_number).max();
             for level in &d.levels {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
                 let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
+                let level_origin = if d.is_date_role && Some(level.level_number) == deepest {
+                    4
+                } else {
+                    1
+                };
                 let level_type = if d.is_date_role {
                     time_level_type(&level.name)
                 } else {
@@ -167,7 +177,7 @@ pub fn get_levels_response() -> String {
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>{lcard}</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <LEVEL_ORIGIN>{level_origin}</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
@@ -177,6 +187,7 @@ pub fn get_levels_response() -> String {
                     lcard = level.cardinality.max(1),
                     ltype = level_type,
                     ldbt = level_dbt,
+                    level_origin = level_origin,
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
                     guid = base_guid + 1 + level.level_number * 2,
@@ -214,7 +225,7 @@ pub fn get_levels_response() -> String {
                 leaf_unique = xml_escape(&d.leaf_level_unique_name()),
                 guid = base_guid + 1,
                 cardinality = d.cardinality_hint,
-                ltype = if d.is_date_role { 96 } else { 0 },
+                ltype = if d.is_date_role { 116 } else { 0 },
                 ldbt = if d.is_date_role {
                     DBTYPE_DBTIMESTAMP
                 } else {
