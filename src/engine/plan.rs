@@ -37,6 +37,8 @@ pub struct TypedDimensionFilter {
     /// When set, this is a time-intelligence filter that joins date_dim
     /// on the given flag column (e.g., "ytd_flag").
     pub time_flag: Option<String>,
+    /// Inclusive member range on `level` (`from_key`, `to_key`).
+    pub range: Option<(String, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +117,9 @@ pub enum QueryPlan {
         dim: DimId,
         group_level: Option<usize>,
         measure: MeasId,
+        /// Slicer filters that restrict the listed members (e.g. a member
+        /// range `{a : b}`).
+        filters: Vec<TypedDimensionFilter>,
     },
 
     Empty,
@@ -159,6 +164,7 @@ pub(crate) fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFil
             members: f.members.clone(),
             level: f.level.clone(),
             time_flag: None,
+            range: f.range.clone(),
         })
         .collect()
 }
@@ -179,6 +185,7 @@ pub(crate) fn filters_with_time_flag(
             members: vec![],
             level: None,
             time_flag: Some(flag.clone()),
+            range: None,
         });
     }
     result
@@ -270,12 +277,17 @@ fn resolve_set_source(
     model: &SemanticModel,
     default: DimId,
 ) -> Option<(DimId, Option<usize>)> {
-    let (dim, level): (String, Option<&String>) = match se {
+    let (dim, level): (String, Option<String>) = match se {
         crate::mdx_parser::SetExpr::MemberList { .. } => return Some((default.clone(), None)),
         // Measures sets are planned as MeasuresList before this runs.
         crate::mdx_parser::SetExpr::Measures => return Some((default.clone(), None)),
         crate::mdx_parser::SetExpr::AllMembers { dim } => (dim.clone(), None),
-        crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.as_ref()),
+        crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.clone()),
+        // A member range groups by the endpoints' level.
+        crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
+            let (dim, level, _) = crate::mdx_parser::parse_level_member(from)?;
+            (dim, Some(level))
+        }
         // Wrappers are pruned at render time; plan on their source.
         crate::mdx_parser::SetExpr::Head(inner, _) | crate::mdx_parser::SetExpr::Tail(inner, _) => {
             return resolve_set_source(inner, model, default);
@@ -482,6 +494,7 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
                 dim: dim_id,
                 group_level,
                 measure: meas,
+                filters: typed_filters(&query.filters),
             }
         }
         SemanticQueryKind::ChildrenCountForAll | SemanticQueryKind::ChildrenCountLeafProduct => {

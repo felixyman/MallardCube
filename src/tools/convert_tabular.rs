@@ -117,7 +117,10 @@ pub fn run(args: Vec<String>) -> i32 {
     fs::create_dir_all(format!("{out_dir}/sql_fallback")).ok();
 
     // Reclassify "simple" measures whose SQL hints return None (placeholder)
-    // as "sql_fallback" so the runtime never executes placeholder SQL.
+    // as "sql_fallback" so the runtime never executes placeholder SQL. The
+    // fact table is cloned so the resolver is available while the measures are
+    // borrowed mutably.
+    let fact_for_resolution = model.fact_table.clone();
     for meas in model
         .fact_table
         .measures
@@ -125,11 +128,10 @@ pub fn run(args: Vec<String>) -> i32 {
         .chain(model.dimensions.iter_mut().flat_map(|t| &mut t.measures))
         .chain(model.date_roles.iter_mut().flat_map(|t| &mut t.measures))
     {
-        if meas.classification == "simple" {
-            let dax_expr = meas.expression.as_str();
-            if dax_to_sql_hint(dax_expr, &meas.classification).is_none() {
-                meas.classification = "sql_fallback".to_string();
-            }
+        if meas.classification == "simple"
+            && dax_to_sql_hint(&meas.expression, "simple", &fact_for_resolution).is_none()
+        {
+            meas.classification = "sql_fallback".to_string();
         }
     }
 
@@ -647,6 +649,8 @@ fn downgrade_time_intelligence_without_flags(model: &mut ConversionModel) {
         let flag_key = match meas.classification.as_str() {
             "time_ytd" => "ytd_flag_column",
             "time_prior_year" => "prior_year_ytd_flag_column",
+            "time_qtd" => "qtd_flag_column",
+            "time_mtd" => "mtd_flag_column",
             _ => continue,
         };
         let (role, _) = time_role_for_measure(&roles, &meas.expression);
@@ -969,6 +973,8 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         let (time_class, flag_key) = match meas.classification.as_str() {
             "time_ytd" => ("time_ytd", "ytd_flag_column"),
             "time_prior_year" => ("time_prior_year", "prior_year_ytd_flag_column"),
+            "time_qtd" => ("time_qtd", "qtd_flag_column"),
+            "time_mtd" => ("time_mtd", "mtd_flag_column"),
             _ => ("", ""),
         };
         let time_role = if time_class.is_empty() {
@@ -979,15 +985,17 @@ fn render_measure_configs(m: &ConversionModel) -> String {
         let time_flag = time_role.and_then(|r| r.flag(flag_key));
         let sql = if !time_class.is_empty() {
             let inner = extract_ti_inner(dax_expr);
-            let expr = dax_to_expr(&inner);
-            expr_to_sql(&expr).unwrap_or_else(|| "null".to_string())
+            simple_aggregate_sql(&m.fact_table, &inner)
+                .or_else(|| expr_to_sql(&dax_to_expr(&inner)))
+                .unwrap_or_else(|| "null".to_string())
         } else {
-            dax_to_sql_hint(dax_expr, &meas.classification).unwrap_or_else(|| "null".to_string())
+            dax_to_sql_hint(dax_expr, &meas.classification, &m.fact_table)
+                .unwrap_or_else(|| "null".to_string())
         };
         // When the converter cannot produce real SQL for a "simple" measure,
         // downgrade it to sql_fallback so the runtime never executes a placeholder.
         let effective_class = if meas.classification == "simple"
-            && dax_to_sql_hint(dax_expr, &meas.classification).is_none()
+            && dax_to_sql_hint(dax_expr, &meas.classification, &m.fact_table).is_none()
         {
             "sql_fallback"
         } else {
@@ -1052,12 +1060,42 @@ fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn dax_to_sql_hint(expr: &str, class: &str) -> Option<String> {
-    match class {
-        "simple" => {
-            let expr = dax_to_expr(expr);
-            expr_to_sql(&expr)
+/// Mechanical plain aggregates (`SUM('T'[col])`, `COUNT(...)`,
+/// `DISTINCTCOUNT(...)`, `AVERAGE(...)`, `MIN/MAX`) lowered to SQL. This is the
+/// boundary's "plain SQL" allowance (docs/DESIGN-INVARIANTS.md): the simplest
+/// measures must return numbers, not stubs. Columns resolve through the fact
+/// table's schema mapping (`Customer ID` → `customerid`).
+fn simple_aggregate_sql(fact: &TableInfo, dax: &str) -> Option<String> {
+    let dax = normalize_dax(dax);
+    let upper = dax.to_uppercase();
+    // `DISTINCTCOUNT(` before `COUNT(` (prefix check).
+    for func in [
+        "DISTINCTCOUNT(",
+        "COUNT(",
+        "SUM(",
+        "AVERAGE(",
+        "MIN(",
+        "MAX(",
+    ] {
+        if let Some(inner) = extract_dax_unary(&upper, func)
+            && let Some(col) = extract_col(&inner)
+        {
+            let col = resolve_column(fact, &col)
+                .map(|c| normalize_ident(&c.source_column))
+                .unwrap_or_else(|| normalize_ident(&col));
+            return Some(match func {
+                "DISTINCTCOUNT(" => format!("COUNT(DISTINCT {col})"),
+                "AVERAGE(" => format!("AVG({col})"),
+                other => format!("{}({col})", other.trim_end_matches('(')),
+            });
         }
+    }
+    None
+}
+
+fn dax_to_sql_hint(expr: &str, class: &str, fact: &TableInfo) -> Option<String> {
+    match class {
+        "simple" => simple_aggregate_sql(fact, expr).or_else(|| expr_to_sql(&dax_to_expr(expr))),
         _ => Some("null".to_string()),
     }
 }
@@ -1173,14 +1211,25 @@ fn dax_to_expr(dax: &str) -> String {
 /// TOTALYTD(inner, dates) → inner
 /// SAMEPERIODLASTYEAR(inner, dates) → inner
 fn extract_ti_inner(dax: &str) -> String {
+    // Exporters keep the leading `=`; strip it so the function name matches.
+    let dax = dax.trim().trim_start_matches('=').trim();
     let upper = dax.to_uppercase();
-    let (_func, dax) = if upper.starts_with("TOTALYTD(") {
-        ("TOTALYTD(", &dax["TOTALYTD(".len()..])
-    } else if upper.starts_with("SAMEPERIODLASTYEAR(") {
-        ("SAMEPERIODLASTYEAR(", &dax["SAMEPERIODLASTYEAR(".len()..])
-    } else if upper.starts_with("DATESYTD(") {
-        ("DATESYTD(", &dax["DATESYTD(".len()..])
-    } else {
+    let mut rest = None;
+    for func in [
+        "TOTALYTD(",
+        "TOTALQTD(",
+        "TOTALMTD(",
+        "DATESYTD(",
+        "DATESQTD(",
+        "DATESMTD(",
+        "SAMEPERIODLASTYEAR(",
+    ] {
+        if upper.starts_with(func) {
+            rest = Some(&dax[func.len()..]);
+            break;
+        }
+    }
+    let Some(dax) = rest else {
         return dax.to_string();
     };
     // Find the closing paren matching the opening func, then extract inner.
@@ -1379,6 +1428,10 @@ fn upstream_suggestion(dax: &str) -> &'static str {
         "grain change (one row per counted entity) or an entity-grain fact"
     } else if upper.contains("TOTALYTD(")
         || upper.contains("DATESYTD(")
+        || upper.contains("TOTALQTD(")
+        || upper.contains("DATESQTD(")
+        || upper.contains("TOTALMTD(")
+        || upper.contains("DATESMTD(")
         || upper.contains("SAMEPERIODLASTYEAR(")
         || upper.contains("YEAR(TODAY())")
     {
@@ -2133,7 +2186,12 @@ fn render_report(m: &ConversionModel) -> String {
             .fact_table
             .measures
             .iter()
-            .filter(|meas| matches!(meas.classification.as_str(), "time_ytd" | "time_prior_year"))
+            .filter(|meas| {
+                matches!(
+                    meas.classification.as_str(),
+                    "time_ytd" | "time_prior_year" | "time_qtd" | "time_mtd"
+                )
+            })
             .map(|meas| {
                 let (role, inferred) = time_role_for_measure(&roles, &meas.expression);
                 format!(
@@ -2158,10 +2216,13 @@ fn render_report(m: &ConversionModel) -> String {
 
     out.push_str("## Simple measures\n\n");
     out.push_str("| Measure | DAX | SQL |\n|---|---|---|\n");
-    for m in &simple {
-        let dax = m.expression.as_str();
-        let sql = expr_to_sql(&dax_to_expr(dax)).unwrap_or_default();
-        out.push_str(&format!("| {} | {} | {} |\n", m.name, dax, sql));
+    let fact_for_sql = &m.fact_table;
+    for meas in &simple {
+        let dax = meas.expression.as_str();
+        let sql = simple_aggregate_sql(fact_for_sql, dax)
+            .or_else(|| expr_to_sql(&dax_to_expr(dax)))
+            .unwrap_or_default();
+        out.push_str(&format!("| {} | {} | {} |\n", meas.name, dax, sql));
     }
 
     out.push_str("\n## Bridge code — define upstream\n\n");
@@ -3080,6 +3141,134 @@ mod tests {
         assert!(
             report.contains("not emitted — this dimension already carries `First`"),
             "{report}"
+        );
+    }
+
+    #[test]
+    fn period_to_date_measures_bind_to_their_flag() {
+        let roles = vec![date_role(
+            "Cal A",
+            &CAL_COLUMNS,
+            &CAL_LEVELS,
+            &["qtd_flag", "mtd_flag"],
+        )];
+        let mut model = model_with_date_roles(roles);
+        model.fact_table.measures = vec![
+            MeasureInfo {
+                name: "QTD".into(),
+                expression: "= TOTALQTD(SUM('Orders'[amount]), 'Cal A'[Full Date])".into(),
+                display_folder: String::new(),
+                classification: "time_qtd".into(),
+            },
+            MeasureInfo {
+                name: "MTD".into(),
+                expression: "= TOTALMTD(SUM('Orders'[amount]), 'Cal A'[Full Date])".into(),
+                display_folder: String::new(),
+                classification: "time_mtd".into(),
+            },
+        ];
+        downgrade_time_intelligence_without_flags(&mut model);
+        assert_eq!(model.fact_table.measures[0].classification, "time_qtd");
+        assert_eq!(model.fact_table.measures[1].classification, "time_mtd");
+
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+        let qtd = cfg.measures.iter().find(|m| m.id == "QTD").unwrap();
+        let qtd_ti = qtd
+            .time_intelligence
+            .as_ref()
+            .expect("QTD time intelligence");
+        assert_eq!(qtd_ti.flag_column, "qtd_flag");
+        assert_eq!(qtd_ti.dimension_id.as_deref(), Some("Cal A"));
+        assert!(
+            qtd.sql_expr.contains("SUM(amount)"),
+            "inner aggregation extracted: {}",
+            qtd.sql_expr
+        );
+        let mtd = cfg.measures.iter().find(|m| m.id == "MTD").unwrap();
+        assert_eq!(
+            mtd.time_intelligence.as_ref().unwrap().flag_column,
+            "mtd_flag"
+        );
+    }
+
+    #[test]
+    fn period_to_date_without_flags_becomes_bridge_code() {
+        // The calendar has a YTD flag but no QTD/MTD flags.
+        let roles = vec![date_role("Cal A", &CAL_COLUMNS, &CAL_LEVELS, &["ytd_flag"])];
+        let mut model = model_with_date_roles(roles);
+        model.fact_table.measures = vec![MeasureInfo {
+            name: "QTD".into(),
+            expression: "= TOTALQTD(SUM('Orders'[amount]), 'Cal A'[Full Date])".into(),
+            display_folder: String::new(),
+            classification: "time_qtd".into(),
+        }];
+        downgrade_time_intelligence_without_flags(&mut model);
+        assert_eq!(model.fact_table.measures[0].classification, "sql_fallback");
+        let report = render_report(&model);
+        assert!(
+            report.contains("date flag columns on the calendar"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn plain_aggregates_are_lowered() {
+        let model = make_generic_model();
+        let fact = &model.fact_table;
+        for (dax, expected) in [
+            ("= SUM('Orders'[Amount])", "SUM(amount)"),
+            ("= COUNT('Orders'[Itemid])", "COUNT(itemid)"),
+            (
+                "= DISTINCTCOUNT('Orders'[Status])",
+                "COUNT(DISTINCT status)",
+            ),
+            ("= AVERAGE('Orders'[Qty])", "AVG(qty)"),
+            ("= MIN('Orders'[Amount])", "MIN(amount)"),
+            ("= MAX('Orders'[Amount])", "MAX(amount)"),
+            (
+                "= CALCULATE(SUM('Orders'[Amount]), 'Orders'[Status] = 1)",
+                "",
+            ),
+        ] {
+            assert_eq!(
+                simple_aggregate_sql(fact, dax).unwrap_or_default(),
+                expected,
+                "{dax}"
+            );
+        }
+
+        // Model column names resolve through the schema mapping
+        // (`Order Quantity` → `orderqty`), like relationships and levels.
+        let mut mapped = model.fact_table.clone();
+        mapped.columns.push(ColumnInfo {
+            name: "Order Quantity".into(),
+            data_type: "int64".into(),
+            source_column: "orderqty".into(),
+            is_hidden: false,
+        });
+        assert_eq!(
+            simple_aggregate_sql(&mapped, "= SUM('Orders'[Order Quantity])").unwrap(),
+            "SUM(orderqty)"
+        );
+    }
+
+    #[test]
+    fn plain_aggregate_measures_keep_real_sql() {
+        let mut model = make_generic_model();
+        model.fact_table.measures = vec![MeasureInfo {
+            name: "Customers".into(),
+            expression: "= DISTINCTCOUNT('Orders'[Status])".into(),
+            display_folder: String::new(),
+            classification: "simple".into(),
+        }];
+        let cfg: crate::project::config::ProxyConfig =
+            serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
+        let meas = cfg.measures.iter().find(|m| m.id == "Customers").unwrap();
+        assert_eq!(meas.sql_expr, "COUNT(DISTINCT status)");
+        assert!(
+            meas.sql_fallback_file.is_none(),
+            "a plain aggregate is not bridge code"
         );
     }
 

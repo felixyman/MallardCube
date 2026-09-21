@@ -2789,6 +2789,53 @@ mod tests {
 
     // Plan 046: unsupported set expressions fault with a named reason instead
     // of returning a dropped axis or a wrong-hierarchy cellset.
+    // Plan 046 slice 3: a bare `{a : b}` set probe lists the members between
+    // the two keys (not just the endpoints, not the whole hierarchy).
+    #[test]
+    fn member_range_set_probe_returns_the_members_between() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            for year in ["2022", "2023", "2024"] {
+                assert!(
+                    xml.contains(&format!(">{year}<")),
+                    "range includes {year}: {xml}"
+                );
+            }
+            for year in ["2020", "2021", "2025"] {
+                assert!(
+                    !xml.contains(&format!(">{year}<")),
+                    "range excludes {year}: {xml}"
+                );
+            }
+        });
+    }
+
+    // A range on a pivot axis (a measure set in the select clause) is not
+    // handled yet — it must fault, not drop the axis.
+    #[test]
+    fn pivot_axis_member_range_faults_loudly() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+            );
+            assert!(xml.contains("<faultstring>"), "{xml}");
+            assert!(xml.contains("member ranges"), "{xml}");
+        });
+    }
+
+    #[test]
+    fn head_of_a_member_range_takes_the_first_member() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(xml.contains(">2022<"), "HEAD takes the first member: {xml}");
+            assert!(!xml.contains(">2023<"), "HEAD prunes the rest: {xml}");
+        });
+    }
+
     #[test]
     fn unsupported_set_expressions_fault_loudly() {
         with_project3(|| {
@@ -2798,7 +2845,7 @@ mod tests {
                     "YTD()",
                 ),
                 (
-                    "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+                    "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
                     "member ranges",
                 ),
                 (

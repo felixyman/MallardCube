@@ -178,7 +178,7 @@ pub fn normalize_dax(s: &str) -> String {
         .replace(" )", ")")
 }
 
-/// Classify a DAX expression into: simple, time_ytd, time_prior_year, sql_fallback, calculated_table, manual.
+/// Classify a DAX expression into: simple, time_ytd, time_prior_year, time_qtd, time_mtd, sql_fallback, calculated_table, manual.
 /// This is the FULL version from the converter (with time intelligence and measure arithmetic detection).
 pub fn classify_dax(expr: &str) -> String {
     let expr = normalize_dax(expr);
@@ -189,6 +189,12 @@ pub fn classify_dax(expr: &str) -> String {
     }
     if upper.contains("SAMEPERIODLASTYEAR") {
         return "time_prior_year".into();
+    }
+    if upper.contains("TOTALQTD") || upper.contains("DATESQTD") {
+        return "time_qtd".into();
+    }
+    if upper.contains("TOTALMTD") || upper.contains("DATESMTD") {
+        return "time_mtd".into();
     }
     if upper.contains("ALLSELECTED")
         || upper.contains("ISONORAFTER")
@@ -356,4 +362,42 @@ pub fn ado_database(map: &std::collections::HashMap<String, String>) -> String {
         .or_else(|| map.get("database"))
         .cloned()
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Plan 046 slice 6: period-to-date DAX maps to the flag vocabulary.
+    #[test]
+    fn classify_dax_period_to_date() {
+        for (dax, expected) in [
+            ("= TOTALYTD(SUM('Sales'[Net]), 'Date'[Date])", "time_ytd"),
+            ("= DATESYTD('Date'[Date])", "time_ytd"),
+            ("= TOTALQTD(SUM('Sales'[Net]), 'Date'[Date])", "time_qtd"),
+            ("= DATESQTD('Date'[Date])", "time_qtd"),
+            ("= TOTALMTD(SUM('Sales'[Net]), 'Date'[Date])", "time_mtd"),
+            ("= DATESMTD('Date'[Date])", "time_mtd"),
+            (
+                "= CALCULATE(SUM('Sales'[Net]), SAMEPERIODLASTYEAR('Date'[Date]))",
+                "time_prior_year",
+            ),
+        ] {
+            assert_eq!(classify_dax(dax), expected, "{dax}");
+        }
+    }
+
+    // QTD/MTD must not be swallowed by the generic aggregate branch (which
+    // would emit a plain total instead of a period-to-date measure).
+    #[test]
+    fn period_to_date_beats_plain_aggregates() {
+        assert_eq!(
+            classify_dax("= TOTALMTD(SUM('Sales'[Qty]), 'Date'[Date])"),
+            "time_mtd"
+        );
+        assert_eq!(
+            classify_dax("= TOTALQTD(COUNTROWS('Sales'), 'Date'[Date])"),
+            "time_qtd"
+        );
+    }
 }

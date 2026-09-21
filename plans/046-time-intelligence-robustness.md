@@ -9,8 +9,8 @@
   metadata-only)
 - **Depends on**: 045 (intake fidelity), 007 (measure-scoped date roles)
 - **Category**: Excel compatibility / MDX
-- **Status**: **IN PROGRESS 2026-09-21** — slices 1–2 landed (level data types +
-  loud faults); slices 3–6 TODO.
+- **Status**: **IN PROGRESS 2026-09-21** — slices 1–3 and 6 landed; slices 4–5
+  TODO (named-set MDX, MDX time functions).
 
 ## Why this matters
 
@@ -55,10 +55,10 @@ Additional findings:
 |---|---|---|---|
 | 1 | **Level data types**: emit the real OLE DB `LEVEL_DBTYPE` per level (date for a date role's leaf, numeric for year/quarter/month) instead of a hardcoded string | S | **DONE** |
 | 2 | **Loud faults**: unsupported set expressions (ranges, time functions, `WITH SET`, member-value `Filter`, VBA functions) return a SOAP fault naming the construct instead of a dropped/bogus axis; capability negotiation stops advertising named sets | S | **DONE** |
-| 3 | **Range sets** (`a : b`) in sets and slicers | S/M | TODO |
+| 3 | **Range sets** (`a : b`) in set probes (`HEAD({a:b},n)`, bare sets) | S/M | **DONE** |
 | 4 | **`WITH SET` + `Filter` with member-value comparisons + `DateAdd`/VBA date functions** (the documented Excel named-set pattern) | M | TODO |
 | 5 | **MDX time functions** `YTD`/`QTD`/`MTD`/`PeriodsToDate`/`ParallelPeriod`/`LastPeriods` compiled to flag predicates/ranges | M | TODO |
-| 6 | **Converter DAX mappings**: `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` → the existing qtd/mtd flags; report suggestions for `DATEADD`/`PARALLELPERIOD` | S | TODO |
+| 6 | **Converter DAX mappings**: `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` → the existing qtd/mtd flags; plain aggregates lowered to real SQL (was stubs) | S | **DONE** |
 
 ## Slice 1 evidence (2026-09-21)
 
@@ -93,6 +93,35 @@ Additional findings:
 - **Capability negotiation**: Excel asks for `MdpropMdxNamedSets` at connect
   time; the proxy advertised 15 (full support) while `WITH SET` returned
   garbage. It now advertises 0 — honest until slice 4 lands.
+
+## Slice 3 evidence (2026-09-21)
+
+- `SetExpr::MemberRange { from, to }` + `parse_member_range` recognise
+  `{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`; the semantic layer turns it into a
+  `DimensionFilter.range` and the SQL emitter compares the level column
+  (`col BETWEEN 'a' AND 'b'`, literals cast to the column type, ancestors
+  pinned for compound keys). The `SetMembers` plan now carries filters.
+- Verified live: `HEAD({2022 : 2024}, 1)` → `2022` (Excel's CUBESET probe) and
+  a bare `{2022 : 2024}` → `2022, 2023, 2024`.
+- **Scope**: ranges are supported in set probes (the captured CUBESET shapes).
+  A range on a pivot axis (a measure set elsewhere in the select clause), in a
+  slicer, or inside a calculated-member `COUNT` still **faults loudly** rather
+  than dropping the axis; extending ranges to those positions is the next step.
+
+## Slice 6 evidence (2026-09-21)
+
+- `classify_dax` maps `TOTALQTD`/`DATESQTD` → `time_qtd` and
+  `TOTALMTD`/`DATESMTD` → `time_mtd`; measures bind to the role's
+  `qtd_flag`/`mtd_flag` and are downgraded to bridge code (with the flag
+  suggestion) when the calendar lacks the flag.
+- **Bug fixed on the way**: `extract_ti_inner` did not strip the leading `=`,
+  so converted time-intelligence measures got `sql_expr: null`.
+- **Plain aggregates are now lowered** (`simple_aggregate_sql`: `SUM`, `COUNT`,
+  `DISTINCTCOUNT`, `AVERAGE`, `MIN`, `MAX`, columns resolved through the
+  fact table's schema mapping). This is the boundary's "plain SQL" allowance
+  and it fixes the largest conversion gap: on the real export, measures with
+  real SQL went **1 → 6** and stubs **23 → 18** (`COUNT(DISTINCT customer_id)`,
+  `COUNT(order_id)`, `AVG(...)` now return numbers instead of blanks).
 
 ## Slice 1 design notes
 

@@ -40,6 +40,7 @@ pub fn sql_for_query_plan_with_context(
             dim,
             group_level,
             measure,
+            filters,
         } => {
             // Mirror the GroupBy emitter (joins + OLS), but group by the FULL
             // ancestor path so compound members stay distinct.
@@ -76,8 +77,10 @@ pub fn sql_for_query_plan_with_context(
                 }
                 None => format!("CAST({} AS VARCHAR)", qual(&d.physical_field)),
             };
+            let (filter_joins, wc) =
+                joins_and_where(model, filters, &mut joined, user, config, table);
             format!(
-                "SELECT {path} AS __path, {} FROM {table} f{joins} GROUP BY 1 ORDER BY 1",
+                "SELECT {path} AS __path, {} FROM {table} f{joins}{filter_joins}{wc} GROUP BY 1 ORDER BY 1",
                 meas.sql_expr
             )
         }
@@ -771,6 +774,42 @@ fn sql_where_with_cols(
             )
             && let Some(level_idx) = d.levels.iter().position(|l| &l.name == level_name)
         {
+            // Inclusive member range (`{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`):
+            // ancestors are equal, the level column is compared directly. The
+            // string literals cast to the column's type, so dates, numbers and
+            // strings all order correctly.
+            if let Some((from, to)) = &f.range {
+                let mut preds: Vec<String> = Vec::new();
+                let from_parts: Vec<&str> = from.split('|').collect();
+                for (j, l) in d.levels.iter().enumerate().take(level_idx) {
+                    if let Some(v) = from_parts.get(j) {
+                        preds.push(format!(
+                            "CAST({} AS VARCHAR) = '{}'",
+                            l.column,
+                            v.replace('\'', "''")
+                        ));
+                    }
+                }
+                if let Some(l) = d.levels.get(level_idx) {
+                    let last = |k: &str| k.rsplit('|').next().unwrap_or(k).to_string();
+                    preds.push(format!(
+                        "{} BETWEEN '{}' AND '{}'",
+                        l.column,
+                        last(from).replace('\'', "''"),
+                        last(to).replace('\'', "''")
+                    ));
+                }
+                if !preds.is_empty() {
+                    parts.push(format!(
+                        "f.{} IN (SELECT {} FROM {} WHERE {})",
+                        rel.fact_column,
+                        rel.dim_column,
+                        rel.dim_table,
+                        preds.join(" AND ")
+                    ));
+                    continue;
+                }
+            }
             let mut ors: Vec<String> = Vec::new();
             for key in &f.members {
                 let parts: Vec<&str> = key.split('|').collect();
@@ -918,6 +957,7 @@ mod tests {
                 level: None,
                 time_flag: None,
                 members: vec!["North".into()],
+                range: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -969,6 +1009,7 @@ mod tests {
                 level: None,
                 time_flag: None,
                 members: vec!["North".into()],
+                range: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -998,12 +1039,14 @@ mod tests {
                     level: None,
                     time_flag: None,
                     members: vec!["North".into()],
+                    range: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
                     level: None,
                     time_flag: None,
                     members: vec!["Category A".into(), "Category B".into()],
+                    range: None,
                 },
             ],
         };
@@ -1090,6 +1133,7 @@ mod tests {
                     level: None,
                     time_flag: None,
                     members: vec!["Widget".into()],
+                    range: None,
                 }],
             },
         );
@@ -1389,6 +1433,7 @@ mod tests {
                 members: vec!["2024".into()],
                 level: None,
                 time_flag: None,
+                range: None,
             }],
             group_levels: vec![Some(1)],
             set_op: None,
@@ -1533,6 +1578,7 @@ mod tests {
                 members: vec![],
                 level: None,
                 time_flag: Some("ytd_flag".into()),
+                range: None,
             }],
         };
         let sql = sql_for_query_plan(model, &plan);

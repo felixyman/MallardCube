@@ -50,6 +50,9 @@ pub struct DimensionFilter {
     /// Hierarchy level name for level-qualified filters (e.g. "Year" in
     /// `[Date].[Date].[Year].&[2024]`), so the SQL can filter the level column.
     pub level: Option<String>,
+    /// Inclusive member range on `level` (`{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`):
+    /// `(from_key, to_key)` in the engine's `|`-joined key format.
+    pub range: Option<(String, String)>,
 }
 
 /// One tuple on the SELECT axis (measure + member slicers), e.g. batched
@@ -75,6 +78,7 @@ fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
                     dimension: dim_str,
                     members: vec![key.clone()],
                     level: level.clone(),
+                    range: None,
                 });
             }
         }
@@ -109,6 +113,7 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
                     dimension: dim_str,
                     members: vec![key.to_string()],
                     level: level.map(|s| s.to_string()),
+                    range: None,
                 });
             }
         };
@@ -561,6 +566,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             dimension: dim_name,
             members: keys,
             level: Some(level_name),
+            range: None,
         });
         // Route to the single-dimension drilldown renderer,
         // not the DrilldownMemberProbe 2-dimension path.
@@ -623,6 +629,33 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     };
     if set_count.is_some() || set_probe.is_some() {
         kind = SemanticQueryKind::SetProbe;
+    }
+
+    // A member range restricts the set (and the aggregate) to the level's
+    // members between the two keys, in hierarchy order.
+    if let Some(se) = &set_probe {
+        let mut cursor = se;
+        loop {
+            match cursor {
+                crate::mdx_parser::SetExpr::Head(inner, _)
+                | crate::mdx_parser::SetExpr::Tail(inner, _) => cursor = inner,
+                crate::mdx_parser::SetExpr::MemberRange { from, to } => {
+                    if let (Some((dim, level, from_key)), Some((_, _, to_key))) = (
+                        crate::mdx_parser::parse_level_member(from),
+                        crate::mdx_parser::parse_level_member(to),
+                    ) {
+                        filters.push(DimensionFilter {
+                            dimension: dim,
+                            members: vec![],
+                            level: Some(level),
+                            range: Some((from_key, to_key)),
+                        });
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
     }
 
     let member_only_unames: Vec<String> = if kind == SemanticQueryKind::MemberOnlyProbe {

@@ -55,15 +55,25 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
-    if has_member_range(mdx) {
-        return Some("member ranges (`member : member`) are not supported yet".into());
+    // Member ranges are supported in set probes (`HEAD({a : b}, n)` / a bare
+    // `{a : b}` set). On a pivot axis (a measure set elsewhere in the select
+    // clause), in slicers, and in calculated-member COUNTs they are not
+    // handled yet.
+    if let Some(pos) = member_range_pos(mdx) {
+        let from_pos = upper.find("FROM").unwrap_or(mdx.len());
+        let select_clause = mdx[..from_pos.min(mdx.len())].to_uppercase();
+        if pos > from_pos || select_clause.contains("[MEASURES].") {
+            return Some(
+                "member ranges outside a set probe (`HEAD({a : b}, n)`) are not supported yet"
+                    .into(),
+            );
+        }
     }
     None
 }
 
-/// A member range is a `:` between two bracketed members, outside brackets:
-/// `{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`.
-fn has_member_range(mdx: &str) -> bool {
+/// Byte position of a `:` between two bracketed members, outside brackets.
+fn member_range_pos(mdx: &str) -> Option<usize> {
     let bytes = mdx.as_bytes();
     let mut depth = 0usize;
     let mut last_non_space: Option<u8> = None;
@@ -77,7 +87,7 @@ fn has_member_range(mdx: &str) -> bool {
                     j += 1;
                 }
                 if j < bytes.len() && bytes[j] == b'[' {
-                    return true;
+                    return Some(i);
                 }
             }
             _ => {}
@@ -86,7 +96,7 @@ fn has_member_range(mdx: &str) -> bool {
             last_non_space = Some(c);
         }
     }
-    false
+    None
 }
 
 // ---- whitespace ----
@@ -680,6 +690,9 @@ pub enum SetExpr {
     /// An explicit member list like `{[D].[H].&[a],[D].[H].&[b]}` (outer
     /// braces stripped by the caller). Unames may be XML-escaped.
     MemberList { unames: Vec<String> },
+    /// A member range `{[D].[H].[L].&[a] : [D].[H].[L].&[b]}` — the members of
+    /// the endpoints' level between the two keys, in hierarchy order.
+    MemberRange { from: String, to: String },
     /// `Head(set, n)` — first n members.
     Head(Box<SetExpr>, usize),
     /// `Tail(set, n)` — last n members.
@@ -762,6 +775,10 @@ pub fn parse_axis_set_expr(input: &str) -> Option<SetExpr> {
     let body = clause[open + 1..close].trim();
 
     let up = body.to_uppercase();
+    // A member range is a set in its own right: `{a : b}`.
+    if let Some((from, to)) = parse_member_range(body) {
+        return Some(SetExpr::MemberRange { from, to });
+    }
     // Explicit member list (bare): `[D].[H].&[a],[D].[H].&[b]` — braces are
     // already stripped by the caller.
     if let Some(unames) = parse_member_list(body) {
@@ -808,7 +825,9 @@ pub fn parse_axis_set_expr(input: &str) -> Option<SetExpr> {
                 .ok()?;
             let src_core = src_text.trim().strip_prefix('{').unwrap_or(src_text.trim());
             let src_core = src_core.strip_suffix('}').unwrap_or(src_core);
-            let src = if src_text.contains("&[") || src_text.contains("&amp;[") {
+            let src = if let Some((from, to)) = parse_member_range(src_core) {
+                SetExpr::MemberRange { from, to }
+            } else if src_text.contains("&[") || src_text.contains("&amp;[") {
                 let unames = parse_member_list(src_core)?;
                 SetExpr::MemberList { unames }
             } else {
@@ -822,6 +841,47 @@ pub fn parse_axis_set_expr(input: &str) -> Option<SetExpr> {
         }
     }
     parse_set_source(body)
+}
+
+/// Parse a member range `[D].[H].[L].&[a] : [D].[H].[L].&[b]`. Both endpoints
+/// must be bracketed member unames; the `:` sits outside brackets.
+fn parse_member_range(text: &str) -> Option<(String, String)> {
+    let t = text
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    if !t.starts_with('[') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut split = None;
+    for (i, &c) in t.as_bytes().iter().enumerate() {
+        match c {
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => {
+                split = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let i = split?;
+    let from = t[..i].trim();
+    let to = t[i + 1..].trim();
+    let is_uname = |s: &str| s.starts_with('[') && (s.contains("&[") || s.contains("&amp;["));
+    (is_uname(from) && is_uname(to)).then(|| (from.to_string(), to.to_string()))
+}
+
+/// `[D].[H].[L].&[k1]&[k2]` → `(dim, level, "k1|k2")` (compound keys join
+/// with `|`, the engine's path separator).
+pub(crate) fn parse_level_member(uname: &str) -> Option<(String, String, String)> {
+    let toks = bracket_tokens(uname, 8);
+    if toks.len() < 4 {
+        return None;
+    }
+    Some((toks[0].clone(), toks[2].clone(), toks[3..].join("|")))
 }
 
 /// Split an explicit member list (`[D].[H].&[a],[D].[H].&[b]`) on commas that
@@ -1464,6 +1524,10 @@ mod tests {
                 "named sets",
             ),
             (
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
+                "member ranges",
+            ),
+            (
                 "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
                 "member ranges",
             ),
@@ -1491,6 +1555,8 @@ mod tests {
             "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
             "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
+            "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
         ] {
             assert!(unsupported_features(mdx).is_none(), "false positive: {mdx}");
         }

@@ -71,9 +71,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   capability now advertises 0 instead of 15 so Excel stops offering a feature
   the proxy cannot serve. Note: Excel refuses pivot filters on OLAP sources via
   VBA (label filters too), so the UI Date Filters capture still needs a human
-  at the VM. Remaining: range sets, `WITH SET` + member-value filters + VBA
-  date arithmetic, MDX time functions, and converter DAX mappings for
-  `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD`.
+  at the VM. Also landed: **range sets** in set probes (`HEAD({a : b}, n)` → the
+  first member in range, a bare `{a : b}` → the members between; pivot-axis
+  ranges still fault loudly), and the converter now maps
+  `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` to the qtd/mtd flags and lowers
+  **plain aggregates** (`SUM`/`COUNT`/`DISTINCTCOUNT`/`AVERAGE`/`MIN`/`MAX`) to
+  real SQL — on the real export, measures with real SQL went 1 → 6 and stubs
+  23 → 18. Remaining: `WITH SET` + member-value filters + VBA date arithmetic,
+  MDX time functions, and ranges outside set probes.
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic

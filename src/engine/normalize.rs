@@ -49,10 +49,14 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             dim,
             group_level,
             measure,
+            filters,
         } => {
             format!(
-                "setmembers|dim={}|level={:?}|m={}",
-                dim, group_level, measure
+                "setmembers|dim={}|level={:?}|m={}{}",
+                dim,
+                group_level,
+                measure,
+                filter_suffix(filters)
             )
         }
 
@@ -145,6 +149,7 @@ mod tests {
                 level: None,
                 time_flag: None,
                 members: vec!["North".into()],
+                range: None,
             }],
         };
         assert_eq!(
@@ -181,12 +186,14 @@ mod tests {
                     level: None,
                     time_flag: None,
                     members: vec!["North".into()],
+                    range: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
                     level: None,
                     time_flag: None,
                     members: vec!["Category B".into(), "Category A".into()],
+                    range: None,
                 },
             ],
         };
@@ -207,12 +214,14 @@ mod tests {
                     level: None,
                     time_flag: None,
                     members: vec!["North".into()],
+                    range: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
                     level: None,
                     time_flag: None,
                     members: vec!["Category A".into()],
+                    range: None,
                 },
             ],
         };
@@ -224,12 +233,14 @@ mod tests {
                     level: None,
                     time_flag: None,
                     members: vec!["Category A".into()],
+                    range: None,
                 },
                 TypedDimensionFilter {
                     dimension: "Region".into(),
                     level: None,
                     time_flag: None,
                     members: vec!["North".into()],
+                    range: None,
                 },
             ],
         };

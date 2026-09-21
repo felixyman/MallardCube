@@ -2167,6 +2167,15 @@ fn build_set_members<B: QueryBackend + ?Sized>(
                     });
                     break (dim.clone(), gl, None);
                 }
+                crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
+                    let (dim, level, _) =
+                        crate::mdx_parser::parse_level_member(from).unwrap_or_default();
+                    let gl = crate::proxy_project::project()
+                        .model
+                        .dim_def_opt(&dim)
+                        .and_then(|def| def.levels.iter().position(|l| l.name == level));
+                    break (dim, gl, None);
+                }
                 crate::mdx_parser::SetExpr::AllMembers { dim } => {
                     break (dim.clone(), Some(0), None);
                 }
