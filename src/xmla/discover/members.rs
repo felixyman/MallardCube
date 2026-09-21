@@ -289,9 +289,12 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                         parent_level,
                         Some(&parent_u),
                         1,
-                        // Compound members carry the full pipe key, matching the
-                        // cellset's MEMBER_KEY (Excel correlates the two).
-                        &key,
+                        // Compound members report the leaf key. The pipe-joined
+                        // key (e9b7ab6) breaks Excel's ability to add hierarchy
+                        // fields to a pivot built against the proxy (plan 048
+                        // bisect; verified by comparing MDSCHEMA_MEMBERS against
+                        // the last good commit).
+                        &name,
                     ),
                     dimension_id: dim.id.clone(),
                     member_unique_name: uname,

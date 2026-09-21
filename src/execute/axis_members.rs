@@ -191,7 +191,12 @@ fn leaf_member_for_dim(
         .and_then(key_from_member_uname)
         .map(|path| format!("{path}|{name}"))
         .unwrap_or_else(|| name.to_string());
-    let caption = name.rsplit('|').next().unwrap_or(name).to_string();
+    // MEMBER_KEY is the *leaf* key, not the pipe-joined path: the reference
+    // SSAS reports the leaf key for compound members, and the pipe key made
+    // Excel refuse to add hierarchy fields to a pivot built against the proxy
+    // (plan 048 bisect).
+    let leaf_key = name.rsplit('|').next().unwrap_or(name).to_string();
+    let caption = leaf_key.clone();
     let (u_name, l_name, l_num) =
         if let (Some(level_idx), true) = (drilldown_level, !dim.levels.is_empty()) {
             if let Some(level) = dim.levels.get(level_idx) {
@@ -232,7 +237,7 @@ fn leaf_member_for_dim(
         dim,
         &caption,
         &u_name,
-        &member_key,
+        &leaf_key,
         requested,
         parent_uname,
         l_num,
