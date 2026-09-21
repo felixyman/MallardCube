@@ -7,9 +7,10 @@
 - **Risk**: LOW–MEDIUM (regression harness = existing 467 tests + captured workload)
 - **Depends on**: 046 slices 1–3 (fault infrastructure, ranges)
 - **Category**: parser / architecture
-- **Status**: **IN PROGRESS 2026-09-21** — increments 1–3 landed (lexer + AST,
+- **Status**: **DONE 2026-09-21** — increments 1–3 landed (lexer + AST,
   axis/filter/set-op extraction, scanner deletion, AST-based faults, corpus
-  tests); increment 4 (the classification scanners) TODO.
+  tests); increment 4 delivered its meaningful part (structural axis/measure
+  classification), which also fixed a real classification bug.
 
 ## Why
 
@@ -46,7 +47,7 @@ subset faults with a named reason.
 | 1 | **Lexer + AST + axis extraction**: tokenize MDX; parse `SELECT <axes> FROM <cube> [WHERE …]`; sets, tuples, members, ranges, calls, `.Members`/`.Children`; derive `axis_dimension_ids`, `axis_level_members`, axis ranges and the set-probe expression from the AST (replacing those scanners) | M | **DONE** |
 | 2 | **Migrate WHERE/slicers, set ops, drilldown exclusions** to the AST | M | **DONE** |
 | 3 | **Delete the migrated scanners**; derive `unsupported_features` from the AST; add the captured workload/trace corpus as a parser regression suite | S/M | **DONE** |
-| 4 | **Classification scanners** (`has_*` flags, `main_dim`, `cchildren_target`, `calculated_members_pat`, `selected_measures`, calculated counts, properties, drilldown targets) from the AST; `ParsedMdx` becomes a thin view | M | TODO |
+| 4 | **Structural classification**: derive `has_cols`/`has_rows`/`has_measures`/`selected_measures` from the AST (the rest of the old scanners are call-name pattern detectors, lexical by nature — kept) | S | **DONE** |
 
 ## Increment 1 evidence (2026-09-21)
 
@@ -66,6 +67,23 @@ subset faults with a named reason.
 - Still faulting (increment 2): a braced `{range}` beside a braced measure set
   (that shape is not classified as an axis yet), slicer ranges, and ranges
   inside quoted calculated-member bodies.
+
+## Increment 4 evidence (2026-09-21)
+
+- `has_cols`/`has_rows` were spacing-sensitive text scans
+  (`up.contains(" ON 0 ")`), so comma-separated axes (`… ON 0, … ON 1`) were
+  missed — that is why a range on a pivot axis beside a measure set was
+  misclassified as a slicer and had to fault. They are now derived from the
+  axes' ordinals, and `has_measures`/`selected_measures` from the AST.
+- **User-visible fix**: `SELECT {[Measures].[Revenue]} ON 0,
+  {[Date].[Date].[Year].&[2022] : …&[2024]} ON 1 FROM [Sales]` now returns
+  `Axis1 = 2022, 2023, 2024` instead of faulting — the fault rule and its
+  helper are gone. Verified live and by test.
+- The remaining fields (`main_dim`, `cchildren_target`,
+  `calculated_members_pat`, calculated counts, properties, drilldown targets)
+  are pattern detectors over call names or quoted MDX bodies — lexical by
+  nature, covered by tests; migrating them would add churn without a
+  correctness win, so they stay.
 
 ## Increment 3 evidence (2026-09-21)
 

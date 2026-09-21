@@ -103,10 +103,11 @@ Additional findings:
   pinned for compound keys). The `SetMembers` plan now carries filters.
 - Verified live: `HEAD({2022 : 2024}, 1)` → `2022` (Excel's CUBESET probe) and
   a bare `{2022 : 2024}` → `2022, 2023, 2024`.
-- **Scope**: ranges are supported in set probes (the captured CUBESET shapes).
-  A range on a pivot axis (a measure set elsewhere in the select clause), in a
-  slicer, or inside a calculated-member `COUNT` still **faults loudly** rather
-  than dropping the axis; extending ranges to those positions is the next step.
+- **Scope**: ranges are supported in set probes (the captured CUBESET shapes)
+  and, since plan 047 increment 4, on a pivot axis beside a measure set
+  (`{a : b} ON 1` returns the members between). A range in a slicer or inside a
+  calculated-member `COUNT` still **faults loudly** rather than dropping the
+  axis.
 
 ## Slice 6 evidence (2026-09-21)
 

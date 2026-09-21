@@ -2812,17 +2812,29 @@ mod tests {
         });
     }
 
-    // A braced `{range}` beside a braced measure set is not an axis shape we
-    // classify yet (plan 047 increment 2) — it must fault, not silently return
-    // a slicer-only cellset.
+    // Plan 047 increment 4: structural `has_cols`/`has_rows` (from the AST, not
+    // a spacing-sensitive text scan) fixed the classification of comma-separated
+    // axes, so a range on a pivot axis beside a measure set now returns the
+    // members between the keys.
     #[test]
-    fn pivot_axis_member_range_faults_loudly() {
+    fn pivot_axis_member_range_returns_the_members_between() {
         with_project3(|| {
             let xml = get_execute_statement_response(
                 "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
             );
-            assert!(xml.contains("<faultstring>"), "{xml}");
-            assert!(xml.contains("member ranges"), "{xml}");
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            for year in ["2022", "2023", "2024"] {
+                assert!(
+                    xml.contains(&format!(">{year}<")),
+                    "range includes {year}: {xml}"
+                );
+            }
+            for year in ["2020", "2021", "2025"] {
+                assert!(
+                    !xml.contains(&format!(">{year}<")),
+                    "range excludes {year}: {xml}"
+                );
+            }
         });
     }
 

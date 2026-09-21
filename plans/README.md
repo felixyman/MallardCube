@@ -54,11 +54,11 @@ honor its STOP conditions, and update your row when done.
 | 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | IN PROGRESS |
 | 045  | Intake fidelity — converted models must arrive with their shape | P1 | L | 044 | IN PROGRESS |
 | 046  | Time intelligence robustness — the SSAS killer feature | P1 | M/L | 045 | IN PROGRESS |
-| 047  | MDX front-end — lexer + AST for the Excel subset | P1 | M | 046 | IN PROGRESS |
+| 047  | MDX front-end — lexer + AST for the Excel subset | P1 | M | 046 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness) and 047 (MDX front-end) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity) and 046 (time intelligence robustness) are IN PROGRESS; 047 (MDX front-end) is DONE. Next milestone: Gate G1 (public validation).**
 
 - 047 (MDX front-end) **IN PROGRESS** 2026-09-21: the parser was a hybrid of
   `nom` fragments and ~20 hand scanners with a flat `ParsedMdx` flag bag and no
@@ -73,9 +73,17 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   probe could be served for a plain probe). Increment 2 (same day) migrated
   WHERE/slicer members, batched CUBEVALUE tuples, DrilldownMember exclusions +
   hierarchy and axis set ops (TopCount/Order/Filter) to the AST — including the
-  name-form member semantics (`[D].[H].[Name]`). Remaining: delete the scanners,
-  retire the lexical unsupported pre-scan, and add the trace corpus as a parser
-  regression suite.
+  name-form member semantics (`[D].[H].[Name]`). Increment 3 made the AST the
+  only parser for that work (no fallback; `parse_error` → fault), derived
+  `unsupported_features` from the AST, deleted the migrated scanners and their
+  obsolete tests, and added corpus tests (every statement in
+  `scripts/bench-workload.jsonl` plus the real Excel probe shapes). Increment 4
+  finished it: `has_cols`/`has_rows` were spacing-sensitive text scans (missed
+  `… ON 0, … ON 1`), so they now come from the AST axes — which fixed a real
+  bug: a range on a pivot axis beside a measure set returns the members between
+  instead of faulting. The remaining scanners are call-name pattern detectors,
+  lexical by nature; they stay. Verified: 478 tests green, smoke 8/8, workload
+  7/7. **Plan 047 DONE.**
 
 - 046 (time intelligence robustness) **IN PROGRESS** 2026-09-21: captured what
   Excel actually sends (real MSOLAP client) for time-intelligence paths —

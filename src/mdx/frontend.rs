@@ -958,6 +958,85 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
     sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk)
 }
 
+/// `(has_cols, has_rows)` from the axes' ordinals — structural, so
+/// comma-separated axes (`… ON 0, … ON 1`) are not missed by a text scan.
+pub fn axis_presence(sel: &Select) -> (bool, bool) {
+    (
+        sel.axes.iter().any(|a| a.ordinal == 0),
+        sel.axes.iter().any(|a| a.ordinal == 1),
+    )
+}
+
+/// Measures referenced on the axes, axis order (0 first), deduplicated.
+pub fn selected_measures(sel: &Select) -> Vec<String> {
+    let mut axes: Vec<&Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
+    let mut out: Vec<String> = Vec::new();
+    for axis in axes {
+        for e in &axis.exprs {
+            collect_measures(e, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_measures(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Measure(name) => {
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        Expr::Set(items) | Expr::Tuple(items) => {
+            for i in items {
+                collect_measures(i, out);
+            }
+        }
+        Expr::Call { args, .. } => {
+            for a in args {
+                collect_measures(a, out);
+            }
+        }
+        Expr::Range(a, b) => {
+            collect_measures(a, out);
+            collect_measures(b, out);
+        }
+        Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => {
+            collect_measures(inner, out)
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_measures(lhs, out);
+            collect_measures(rhs, out);
+        }
+        _ => {}
+    }
+}
+
+/// Is a measure referenced anywhere (axes, slicer, subselect) or defined by a
+/// `WITH MEMBER [Measures].…` clause?
+pub fn mentions_measure(sel: &Select) -> bool {
+    fn walk(e: &Expr) -> bool {
+        match e {
+            Expr::Measure(_) => true,
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().any(walk),
+            Expr::Call { args, .. } => args.iter().any(walk),
+            Expr::Range(a, b) => walk(a) || walk(b),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner),
+            Expr::Binary { lhs, rhs, .. } => walk(lhs) || walk(rhs),
+            _ => false,
+        }
+    }
+    sel.with_members
+        .iter()
+        .any(|(name, _)| name.to_uppercase().starts_with("[MEASURES]"))
+        || sel.axes.iter().flat_map(|a| a.exprs.iter()).any(walk)
+        || sel.where_clause.as_ref().is_some_and(walk)
+        || sel
+            .subquery
+            .as_ref()
+            .is_some_and(|s| s.axes.iter().flat_map(|a| a.exprs.iter()).any(walk))
+}
+
 /// The first call to one of `names` anywhere in the statement (axes, WHERE,
 /// subselect), case-insensitively. Returns the name as written.
 pub fn first_call(sel: &Select, names: &[&str]) -> Option<String> {
@@ -1078,20 +1157,6 @@ pub fn mentions_member_property(sel: &Select) -> bool {
             .subquery
             .as_ref()
             .is_some_and(|s| s.axes.iter().flat_map(|a| a.exprs.iter()).any(in_filter))
-}
-
-/// A braced `{range}` beside a braced measure set — a shape the semantic layer
-/// does not classify as an axis yet.
-pub fn braced_range_beside_measure(sel: &Select) -> bool {
-    let axis_set_has = |pred: &dyn Fn(&Expr) -> bool| {
-        sel.axes.iter().any(|a| {
-            a.exprs
-                .iter()
-                .any(|e| matches!(e, Expr::Set(items) if items.iter().any(pred)))
-        })
-    };
-    axis_set_has(&|e| matches!(e, Expr::Measure(_)))
-        && axis_set_has(&|e| matches!(e, Expr::Range(..)))
 }
 
 fn to_pcmp(op: CmpOp) -> PCmpOp {

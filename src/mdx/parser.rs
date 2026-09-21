@@ -70,13 +70,8 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
-    // A braced `{range}` beside a braced measure set (a shape the semantic
-    // layer does not classify as an axis yet).
-    if fe::braced_range_beside_measure(&sel) {
-        return Some(
-            "member ranges on a pivot axis beside a measure set are not supported yet".into(),
-        );
-    }
+    // (A braced `{range}` beside a braced measure set used to fault here; the
+    // structural axis flags fixed its classification — plan 047 increment 4.)
     None
 }
 
@@ -301,46 +296,6 @@ fn where_clause(input: &str) -> IResult<&str, Vec<MemberRef>> {
 
 // ---- subquery filter parsing ----
 
-/// Extract every `[Measures].[name]` reference on the COLUMNS axis, in order.
-/// Batched CUBEVALUE cells produce a multi-measure tuple set like
-/// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`. Set-function
-/// sort/filter expressions (TopCount/Order/Filter on ROWS) are not axis
-/// measures and are excluded.
-fn find_all_select_measures(input: &str) -> Vec<String> {
-    let upper = input.to_uppercase();
-    let select_pos = upper.find("SELECT").unwrap_or(0);
-    let from_pos = upper[select_pos..]
-        .find("FROM")
-        .map(|i| select_pos + i)
-        .unwrap_or(input.len());
-    let clause = &upper[select_pos..from_pos];
-
-    // The COLUMNS axis is the expression directly before "ON COLUMNS"/"ON 0".
-    let on_cols = clause
-        .find("ON COLUMNS")
-        .or_else(|| clause.find("ON 0"))
-        .unwrap_or(clause.len());
-    let before = &clause[..on_cols];
-    let cols_start = before
-        .rfind("ON ROWS")
-        .map(|i| i + "ON ROWS".len())
-        .or_else(|| before.rfind("ON 1").map(|i| i + "ON 1".len()))
-        .unwrap_or(0);
-    let cols_expr = &input[select_pos + cols_start..select_pos + on_cols];
-
-    let mut result = Vec::new();
-    let mut pos = 0;
-    while let Some(i) = cols_expr[pos..].find("[Measures].[") {
-        let start = pos + i + "[Measures].[".len();
-        let Some(end) = cols_expr[start..].find(']') else {
-            break;
-        };
-        result.push(cols_expr[start..start + end].to_string());
-        pos = start + end + 1;
-    }
-    result
-}
-
 // ---- axis detection ----
 
 /// Find the first non-Measures bracketed identifier in the MDX text.
@@ -549,10 +504,6 @@ fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
 
 fn has_drilldown_member(input: &str) -> bool {
     input.contains("DrilldownMember(")
-}
-
-fn has_measures_in_where_or_cols(input: &str) -> bool {
-    input.to_uppercase().contains("[MEASURES]")
 }
 
 /// An axis set function that transforms the row set (sort / limit / filter).
@@ -1066,7 +1017,18 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
 
     // All measures referenced in the SELECT clause, in order. A single cell
     // holds one measure; batched CUBEVALUE cells produce several.
-    let select_measures = find_all_select_measures(input);
+    let select_measures = match &frontend {
+        Ok(sel) => crate::mdx::frontend::selected_measures(sel),
+        Err(_) => Vec::new(),
+    };
+    let axis_presence = match &frontend {
+        Ok(sel) => crate::mdx::frontend::axis_presence(sel),
+        Err(_) => (false, false),
+    };
+    let mentions_measure_derived = match &frontend {
+        Ok(sel) => crate::mdx::frontend::mentions_measure(sel),
+        Err(_) => false,
+    };
     let selected_measure = where_members
         .iter()
         .find_map(|m| match m {
@@ -1078,8 +1040,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     ParsedMdx {
         dim_props: parse_dimension_properties(input),
         cell_props: parse_cell_properties(input),
-        has_rows: up.contains("ON ROWS") || up.contains(" ON 1 "),
-        has_cols: up.contains("ON COLUMNS") || up.contains(" ON 0 "),
+        has_rows: axis_presence.1,
+        has_cols: axis_presence.0,
         has_crossjoin: has_crossjoin(input),
         has_drilldown: has_drilldown(input),
         has_dot_members: has_dot_members(input),
@@ -1087,7 +1049,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         has_with_member_cchildren: has_with_member_cchildren(input),
         has_where_all_measure: is_slicer_all_measure(input),
         has_drilldown_member: has_drilldown_member(input),
-        has_measures: has_measures_in_where_or_cols(input),
+        has_measures: mentions_measure_derived,
         where_members,
         subquery_members,
         select_members,
@@ -1178,10 +1140,6 @@ mod tests {
                 "member ranges",
             ),
             (
-                "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
-                "member ranges",
-            ),
-            (
                 "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)",
                 "member-property filters",
             ),
@@ -1207,6 +1165,7 @@ mod tests {
             "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
             "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
         ] {
             assert!(unsupported_features(mdx).is_none(), "false positive: {mdx}");
         }
