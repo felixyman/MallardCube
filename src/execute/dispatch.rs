@@ -1750,29 +1750,27 @@ mod tests {
     // (`[Category].[Category].[Category]MEMBER_CAPTION`); a hardcoded whitelist
     // used to drop four of them, leaving requested properties missing.
     #[test]
-    fn qualified_member_properties_are_emitted() {
+    fn standard_member_properties_are_not_duplicated() {
+        // Excel's cellset parser rejects a member that carries MEMBER_CAPTION /
+        // MEMBER_UNIQUE_NAME / LEVEL_NUMBER / LEVEL_UNIQUE_NAME as extra
+        // property elements: those values already travel in the standard
+        // Caption / UName / LNum / LName tags, and the duplicates are not
+        // declared in HierarchyInfo. Excel then refuses to add a pivot field
+        // (plan 048: found by bisecting a working August build).
         with_project3(|| {
             let xml = get_execute_statement_response(
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, [Category].[Category].Members DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Category].[Category].[Category]MEMBER_CAPTION,[Category].[Category].[Category]MEMBER_UNIQUE_NAME,[Category].[Category].[Category]LEVEL_NUMBER,[Category].[Category].[Category]LEVEL_UNIQUE_NAME ON ROWS FROM [Sales]",
             );
+            assert!(xml.contains("<Caption>Automotive</Caption>"), "{xml}");
+            assert!(xml.contains("<LNum>1</LNum>"), "{xml}");
             assert!(
-                xml.contains("<MEMBER_CAPTION>Automotive</MEMBER_CAPTION>"),
-                "MEMBER_CAPTION must be emitted when requested"
+                xml.contains("<LName>[Category].[Category].[Category]</LName>"),
+                "{xml}"
             );
-            assert!(
-                xml.contains("<MEMBER_UNIQUE_NAME>[Category].[Category].&amp;[Automotive]</MEMBER_UNIQUE_NAME>"),
-                "MEMBER_UNIQUE_NAME must be emitted when requested"
-            );
-            assert!(
-                xml.contains("<LEVEL_NUMBER>1</LEVEL_NUMBER>"),
-                "LEVEL_NUMBER must be emitted when requested"
-            );
-            assert!(
-                xml.contains(
-                    "<LEVEL_UNIQUE_NAME>[Category].[Category].[Category]</LEVEL_UNIQUE_NAME>"
-                ),
-                "LEVEL_UNIQUE_NAME must be emitted when requested"
-            );
+            assert!(!xml.contains("<MEMBER_CAPTION>"), "{xml}");
+            assert!(!xml.contains("<MEMBER_UNIQUE_NAME>"), "{xml}");
+            assert!(!xml.contains("<LEVEL_NUMBER>"), "{xml}");
+            assert!(!xml.contains("<LEVEL_UNIQUE_NAME>"), "{xml}");
         });
     }
 

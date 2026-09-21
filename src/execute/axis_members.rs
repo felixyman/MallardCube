@@ -40,7 +40,6 @@ fn dim_def(dim: &str) -> Option<&crate::engine::model::DimensionDef> {
 fn dim_props_leaf(
     dim: &crate::engine::model::DimensionDef,
     name: &str,
-    member_uname: &str,
     member_key: &str,
     requested: &[String],
     parent_uname: Option<&str>,
@@ -49,11 +48,6 @@ fn dim_props_leaf(
     // The parent sits one level above this member (a year at LEVEL_NUMBER 1
     // has its (All) parent at level 0, a quarter's year parent at level 1).
     let parent_level = (level_number - 1).max(0);
-    let level_unique_name = dim
-        .levels
-        .get((level_number - 1).max(0) as usize)
-        .map(|l| format!("{}.[{}]", dim.hierarchy_unique_name(), l.name))
-        .unwrap_or_else(|| dim.leaf_level_unique_name());
     filter_dim_props(
         vec![
             (
@@ -64,13 +58,9 @@ fn dim_props_leaf(
             ),
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), name.to_string()),
-            ("MEMBER_CAPTION".into(), name.to_string()),
-            ("MEMBER_UNIQUE_NAME".into(), member_uname.to_string()),
             ("MEMBER_KEY".into(), member_key.to_string()),
             ("MEMBER_TYPE".into(), "1".into()),
             ("MEMBER_VALUE".into(), name.to_string()),
-            ("LEVEL_NUMBER".into(), level_number.to_string()),
-            ("LEVEL_UNIQUE_NAME".into(), level_unique_name),
             ("PARENT_LEVEL".into(), parent_level.to_string()),
             ("PARENT_COUNT".into(), "1".into()),
         ],
@@ -87,13 +77,9 @@ fn dim_props_all<B: QueryBackend + ?Sized>(
         vec![
             ("HIERARCHY_UNIQUE_NAME".into(), dim.hierarchy_unique_name()),
             ("MEMBER_NAME".into(), "All".into()),
-            ("MEMBER_CAPTION".into(), "All".into()),
-            ("MEMBER_UNIQUE_NAME".into(), dim.all_member_unique_name()),
             ("MEMBER_KEY".into(), "All".into()),
             ("MEMBER_TYPE".into(), "2".into()),
             ("MEMBER_VALUE".into(), "All".into()),
-            ("LEVEL_NUMBER".into(), "0".into()),
-            ("LEVEL_UNIQUE_NAME".into(), dim.all_level_unique_name()),
             ("PARENT_LEVEL".into(), "0".into()),
             ("PARENT_COUNT".into(), "0".into()),
         ],
@@ -233,15 +219,7 @@ fn leaf_member_for_dim(
             )
         };
     let cc = dim.children_cardinality_at(drilldown_level);
-    let dim_props = dim_props_leaf(
-        dim,
-        &caption,
-        &u_name,
-        &leaf_key,
-        requested,
-        parent_uname,
-        l_num,
-    );
+    let dim_props = dim_props_leaf(dim, &caption, &leaf_key, requested, parent_uname, l_num);
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
         u_name,
