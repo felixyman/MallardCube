@@ -815,6 +815,15 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             date_window: None,
         });
     }
+    for (dim_name, level_name, from_key, to_key) in &parsed.where_member_ranges {
+        filters.push(DimensionFilter {
+            dimension: dim_name.clone(),
+            members: vec![],
+            level: Some(level_name.clone()),
+            range: Some((from_key.clone(), to_key.clone())),
+            date_window: None,
+        });
+    }
     for (dim_name, level_name, window) in time_windows {
         filters.push(DimensionFilter {
             dimension: dim_name,

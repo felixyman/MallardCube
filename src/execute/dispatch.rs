@@ -2812,6 +2812,21 @@ mod tests {
         });
     }
 
+    // Slicer ranges restrict the aggregate (the same range filter as axes).
+    #[test]
+    fn slicer_member_range_restricts_the_aggregate() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]}) CELL PROPERTIES VALUE",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            let expected = Backend::test_fixture().query_scalar(
+                "SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year BETWEEN 2022 AND 2024",
+            );
+            assert_eq!(cell_values(&xml), vec![expected]);
+        });
+    }
+
     // Plan 046 slice 4: the documented Excel named-set sliding window
     // (`Filter(…, Member_Value >= DateAdd("d", -30, VBA![Date]()))`).
     #[test]
@@ -2970,7 +2985,7 @@ mod tests {
                     "LastPeriods()",
                 ),
                 (
-                    "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
+                    "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
                     "member ranges",
                 ),
                 (

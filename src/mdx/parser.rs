@@ -69,11 +69,11 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
-    // Member ranges outside the axis: in a slicer, or inside a quoted
-    // calculated-member body (`COUNT({a : b})`).
-    if fe::has_range_in_slicer(&sel) || fe::bodies_contain_range(&sel) {
+    // Member ranges inside a quoted calculated-member body (`COUNT({a : b})`)
+    // are not handled yet; axis and slicer ranges are.
+    if fe::bodies_contain_range(&sel) {
         return Some(
-            "member ranges outside the axis (`{a : b}` in a slicer or a calculated member) are not supported yet"
+            "member ranges inside a calculated member (`COUNT({a : b})`) are not supported yet"
                 .into(),
         );
     }
@@ -775,6 +775,8 @@ pub struct ParsedMdx {
     pub axis_level_members: Vec<(String, String)>,
     /// Member ranges on the axes: `(dim, level, from_key, to_key)`.
     pub axis_member_ranges: Vec<(String, String, String, String)>,
+    /// Member ranges in the slicer (`WHERE ({a : b})`).
+    pub where_member_ranges: Vec<(String, String, String, String)>,
     /// When the front-end cannot parse the statement, the reason. The execute
     /// path faults on this instead of degrading to a dropped axis (plan 047).
     pub parse_error: Option<String>,
@@ -980,16 +982,22 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     // the execute path faults on it instead of degrading.
     let frontend = crate::mdx::frontend::parse_select(input);
     let parse_error = frontend.as_ref().err().map(|e| e.to_string());
-    let (axis_dimension_ids, axis_level_members, axis_member_ranges, axis_set_expr) =
-        match &frontend {
-            Ok(sel) => (
-                crate::mdx::frontend::axis_dimension_ids(sel),
-                crate::mdx::frontend::axis_level_members(sel),
-                crate::mdx::frontend::axis_member_ranges(sel),
-                crate::mdx::frontend::set_probe_expr(sel),
-            ),
-            Err(_) => (Vec::new(), Vec::new(), Vec::new(), None),
-        };
+    let (
+        axis_dimension_ids,
+        axis_level_members,
+        axis_member_ranges,
+        where_member_ranges,
+        axis_set_expr,
+    ) = match &frontend {
+        Ok(sel) => (
+            crate::mdx::frontend::axis_dimension_ids(sel),
+            crate::mdx::frontend::axis_level_members(sel),
+            crate::mdx::frontend::axis_member_ranges(sel),
+            crate::mdx::frontend::where_member_ranges(sel),
+            crate::mdx::frontend::set_probe_expr(sel),
+        ),
+        Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
+    };
 
     // Parse excluded members from DrilldownMember if present.
     // Filter/set-op derivations from the same AST (see above).
@@ -1075,6 +1083,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         calculated_counts: parse_calculated_count(input).into_iter().collect(),
         axis_level_members,
         axis_member_ranges,
+        where_member_ranges,
         parse_error,
         drilldown_targets: parse_drilldown_targets(before_from),
     }
@@ -1139,7 +1148,7 @@ mod tests {
                 "member-property filters",
             ),
             (
-                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
                 "member ranges",
             ),
             (

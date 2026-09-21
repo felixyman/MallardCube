@@ -607,6 +607,15 @@ pub fn axis_member_ranges(sel: &Select) -> Vec<(String, String, String, String)>
     out
 }
 
+/// Member ranges in the slicer (`WHERE ({a : b})`).
+pub fn where_member_ranges(sel: &Select) -> Vec<(String, String, String, String)> {
+    let mut out = Vec::new();
+    if let Some(w) = &sel.where_clause {
+        collect_ranges(w, &mut out);
+    }
+    out
+}
+
 fn collect_ranges(expr: &Expr, out: &mut Vec<(String, String, String, String)>) {
     match expr {
         Expr::Range(a, b) => {
@@ -819,10 +828,10 @@ fn flatten_members(e: &Expr, out: &mut Vec<PMemberRef>) {
                 flatten_members(item, out);
             }
         }
-        Expr::Range(a, b) => {
-            flatten_members(a, out);
-            flatten_members(b, out);
-        }
+        // A range is not a member list: its endpoints must not become plain
+        // member filters (that would AND an OR-of-endpoints filter with the
+        // range and drop the members between them).
+        Expr::Range(..) => {}
         Expr::Exclude(inner) => flatten_members(inner, out),
         // Level sets (`.Members`) are handled by the level-drag path, not as
         // member filters.
