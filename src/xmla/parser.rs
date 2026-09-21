@@ -1,6 +1,20 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
+/// Values from a Discover request's `RestrictionList` (MS-SSAS). Discover
+/// responses must honour these: Excel asks for one hierarchy's member
+/// properties at a time while it builds pivot cache fields, and returning rows
+/// for other hierarchies corrupts the cache field (plan 048).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Restrictions {
+    pub catalog_name: Option<String>,
+    pub cube_name: Option<String>,
+    pub dimension_unique_name: Option<String>,
+    pub hierarchy_unique_name: Option<String>,
+    pub level_unique_name: Option<String>,
+    pub property_name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum XmlaRequest {
     DiscoverProperties {
@@ -17,6 +31,7 @@ pub enum XmlaRequest {
     MdschemaLevels,
     MdschemaProperties {
         property_type: Option<i32>,
+        restrictions: Restrictions,
     },
     MdschemaMembers {
         member_unique_name: Option<String>,
@@ -56,6 +71,9 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut in_property_type = false;
     let mut in_member_unique_name = false;
     let mut in_tree_op = false;
+    let mut in_restriction_list = false;
+    let mut restriction_name: Option<Vec<u8>> = None;
+    let mut restrictions = Restrictions::default();
 
     let mut parsed_request_type = String::new();
     let mut requested_properties: Vec<String> = Vec::new();
@@ -75,7 +93,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 b"PROPERTY_TYPE" => in_property_type = true,
                 b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
                 b"TREE_OP" => in_tree_op = true,
-                _ => (),
+                b"RestrictionList" => in_restriction_list = true,
+                name => {
+                    if in_restriction_list {
+                        restriction_name = Some(name.to_vec());
+                    }
+                }
             },
             Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
                 is_execute = true;
@@ -84,6 +107,23 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 let text = e.unescape().unwrap_or_default().trim().to_string();
 
                 if !text.is_empty() {
+                    if in_restriction_list && let Some(name) = restriction_name.as_deref() {
+                        match name {
+                            b"CATALOG_NAME" => restrictions.catalog_name = Some(text.clone()),
+                            b"CUBE_NAME" => restrictions.cube_name = Some(text.clone()),
+                            b"DIMENSION_UNIQUE_NAME" => {
+                                restrictions.dimension_unique_name = Some(text.clone())
+                            }
+                            b"HIERARCHY_UNIQUE_NAME" => {
+                                restrictions.hierarchy_unique_name = Some(text.clone())
+                            }
+                            b"LEVEL_UNIQUE_NAME" => {
+                                restrictions.level_unique_name = Some(text.clone())
+                            }
+                            b"PROPERTY_NAME" => restrictions.property_name = Some(text.clone()),
+                            _ => {}
+                        }
+                    }
                     if in_request_type {
                         parsed_request_type = text;
                     } else if in_property_name {
@@ -108,7 +148,15 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 b"PROPERTY_TYPE" => in_property_type = false,
                 b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
                 b"TREE_OP" => in_tree_op = false,
-                _ => (),
+                b"RestrictionList" => {
+                    in_restriction_list = false;
+                    restriction_name = None;
+                }
+                _ => {
+                    if in_restriction_list {
+                        restriction_name = None;
+                    }
+                }
             },
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -131,7 +179,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "MDSCHEMA_MEASURES" => return XmlaRequest::MdschemaMeasures,
         "MDSCHEMA_HIERARCHIES" => return XmlaRequest::MdschemaHierarchies,
         "MDSCHEMA_LEVELS" => return XmlaRequest::MdschemaLevels,
-        "MDSCHEMA_PROPERTIES" => return XmlaRequest::MdschemaProperties { property_type },
+        "MDSCHEMA_PROPERTIES" => {
+            return XmlaRequest::MdschemaProperties {
+                property_type,
+                restrictions,
+            };
+        }
         "MDSCHEMA_MEMBERS" => {
             return XmlaRequest::MdschemaMembers {
                 member_unique_name,
@@ -169,4 +222,57 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     }
 
     XmlaRequest::Unknown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restriction_list_is_parsed() {
+        let xml = r#"<?xml version="1.0"?>
+        <Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">
+          <Body>
+            <Discover xmlns="urn:schemas-microsoft-com:xml-analysis">
+              <RequestType>MDSCHEMA_PROPERTIES</RequestType>
+              <Restrictions>
+                <RestrictionList>
+                  <CATALOG_NAME>SALES_ANALYTICS</CATALOG_NAME>
+                  <CUBE_NAME>Sales</CUBE_NAME>
+                  <HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>
+                  <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
+                  <PROPERTY_TYPE>1</PROPERTY_TYPE>
+                </RestrictionList>
+              </Restrictions>
+              <Properties/>
+            </Discover>
+          </Body>
+        </Envelope>"#;
+        match parse_xmla(xml) {
+            XmlaRequest::MdschemaProperties {
+                property_type,
+                restrictions,
+            } => {
+                assert_eq!(property_type, Some(1));
+                assert_eq!(
+                    restrictions.catalog_name.as_deref(),
+                    Some("SALES_ANALYTICS")
+                );
+                assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
+                assert_eq!(
+                    restrictions.hierarchy_unique_name.as_deref(),
+                    Some("[Date].[Date]")
+                );
+                assert_eq!(restrictions.property_name.as_deref(), Some("MEMBER_VALUE"));
+                assert_eq!(restrictions.dimension_unique_name, None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discover_without_restrictions_parses() {
+        let xml = r#"<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>MDSCHEMA_LEVELS</RequestType><Restrictions/><Properties/></Discover></Body></Envelope>"#;
+        assert_eq!(parse_xmla(xml), XmlaRequest::MdschemaLevels);
+    }
 }

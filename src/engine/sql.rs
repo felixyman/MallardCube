@@ -777,8 +777,8 @@ fn sql_where_with_cols(
             }
             continue;
         }
-        // Level-qualified filter (e.g. [Date].[Date].[Year].&[2024], or a
-        // compound [Date].[Date].[Quarter].&[2026]&[4]): filter the hierarchy
+        // Level-qualified filter (e.g. [Date].[Calendar].[Year].&[2024], or a
+        // compound [Date].[Calendar].[Quarter].&[2026]&[4]): filter the hierarchy
         // level's column via a subquery on the relationship's dim table. A
         // compound key carries ancestor values, so every ancestor predicate is
         // applied (year=2026 AND quarter=4) to scope correctly.
@@ -1535,7 +1535,7 @@ mod tests {
                 description: String::new(),
                 visible: true,
                 ordinal: 1,
-                hierarchy_name: "Date".into(),
+                hierarchy_name: "Calendar".into(),
                 all_level_name: "(All)".into(),
                 leaf_level_name: "Date".into(),
                 cardinality_hint: 5000,

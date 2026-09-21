@@ -250,7 +250,7 @@ fn leaf_member_for_dim(
 }
 
 /// Extract the key path from a member UName (compound aware), e.g.
-/// `[Date].[Date].[Year].&[2026]` -> `2026`.
+/// `[Date].[Calendar].[Year].&[2026]` -> `2026`.
 pub(crate) fn key_from_member_uname(uname: &str) -> Option<String> {
     let start = uname.rfind(".&amp;[")? + 7;
     let mut rest = &uname[start..];
@@ -567,7 +567,7 @@ pub(crate) fn leaf_member_for(
     }
 }
 
-/// Leaf member for a specific hierarchy level (e.g. `[Date].[Date].[Year].&[2024]`).
+/// Leaf member for a specific hierarchy level (e.g. `[Date].[Calendar].[Year].&[2024]`).
 pub(crate) fn leaf_member_for_level(
     dim: &str,
     name: &str,
@@ -740,7 +740,7 @@ mod tests {
             description: String::new(),
             visible: true,
             ordinal: 5,
-            hierarchy_name: "Date".into(),
+            hierarchy_name: "Calendar".into(),
             all_level_name: "(All)".into(),
             leaf_level_name: "Date".into(),
             cardinality_hint: 5000,
@@ -788,14 +788,14 @@ mod tests {
     fn leaf_member_uname_level_qualified() {
         let d = date_dim_with_levels();
         let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
-        assert_eq!(m.u_name, "[Date].[Date].[Year].&amp;[2020]");
+        assert_eq!(m.u_name, "[Date].[Calendar].[Year].&amp;[2020]");
     }
 
     #[test]
     fn leaf_member_lname_level_qualified() {
         let d = date_dim_with_levels();
         let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
-        assert_eq!(m.l_name, "[Date].[Date].[Year]");
+        assert_eq!(m.l_name, "[Date].[Calendar].[Year]");
     }
 
     #[test]
@@ -807,7 +807,7 @@ mod tests {
             "1",
             &req,
             Some(1),
-            Some("[Date].[Date].[Year].&amp;[2024]"),
+            Some("[Date].[Calendar].[Year].&amp;[2024]"),
         );
         let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
         assert!(pun.is_some(), "should have PARENT_UNIQUE_NAME prop");
@@ -825,7 +825,7 @@ mod tests {
         let m = leaf_member_for_dim(&d, "2020", &req, Some(0), None);
         let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
         assert!(pun.is_some());
-        assert_eq!(pun.unwrap().1, "[Date].[Date].[All]");
+        assert_eq!(pun.unwrap().1, "[Date].[Calendar].[All]");
     }
 
     #[test]

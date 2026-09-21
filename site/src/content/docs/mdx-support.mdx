@@ -12,11 +12,11 @@ Excel PivotTables issue MDX `SELECT` statements. The shapes MallardCube handles:
 
 - Measures on columns or rows, for example `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]`.
 - Slicers in the `WHERE` clause, including level-qualified members such as
-  `[Date].[Date].[Year].&[2024]`.
+  `[Date].[Calendar].[Year].&[2024]`.
 - Drilldown with `DrilldownLevel` and `DrilldownMember`, including
   `DrilldownLevel(set, <level>)` and multi-parent expansion (Excel's `Expand
   Entire Field` and `Expand to <Level>` commands).
-- Level drags and level sets, for example `[Date].[Date].[Quarter].Members` or
+- Level drags and level sets, for example `[Date].[Calendar].[Quarter].Members` or
   `{...AllMembers}`, returned with compound unique names.
 - Crossjoin of two dimensions with `CrossJoin`.
 - FROM-clause subselects (`FROM (SELECT ...)`), applied as slicer restrictions.
@@ -43,7 +43,7 @@ Sets built with `HEAD`, `TAIL`, and `.Members` are evaluated, and
 functions resolve:
 
 ```
-=CUBESET("Connection","[Date].[Date].[Year].Members")
+=CUBESET("Connection","[Date].[Calendar].[Year].Members")
 =CUBESETCOUNT(<set cell>)
 =CUBERANKEDMEMBER("Connection", <set cell>, 3)
 ```

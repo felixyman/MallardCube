@@ -58,7 +58,7 @@ pub struct DimensionFilter {
     pub dimension: String,
     pub members: Vec<String>,
     /// Hierarchy level name for level-qualified filters (e.g. "Year" in
-    /// `[Date].[Date].[Year].&[2024]`), so the SQL can filter the level column.
+    /// `[Date].[Calendar].[Year].&[2024]`), so the SQL can filter the level column.
     pub level: Option<String>,
     /// Inclusive member range on `level` (`{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`):
     /// `(from_key, to_key)` in the engine's `|`-joined key format.
@@ -822,7 +822,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
     // Whole-hierarchy drags (`DrilldownLevel({...All})`) start at the top
     // level; Excel may instead name the level explicitly
-    // (`DrilldownLevel({...All}, [Date].[Date].[Quarter])` or `, , N`).
+    // (`DrilldownLevel({...All}, [Date].[Calendar].[Quarter])` or `, , N`).
     for target in &parsed.drilldown_targets {
         let Some(i) = axis_dims.iter().position(|d| *d == target.dim) else {
             continue;
@@ -913,7 +913,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     filters.extend(extra_filters);
 
     // A drill scoped by a compound member (a slicer or subselect like
-    // `[Date].[Date].[Quarter].&[2026]&[4]`) starts one level below that
+    // `[Date].[Calendar].[Quarter].&[2026]&[4]`) starts one level below that
     // member: expanding Q4-2026 shows its months, scoped to that year.
     if parsed.has_drilldown || parsed.has_drilldown_member {
         for f in &filters {
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn cubecount_probe_classifies_as_set_count() {
-        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
         let q = semantic_query_from_mdx(mdx);
         assert_eq!(q.kind, SemanticQueryKind::SetProbe);
         let cc = q.set_count.expect("set_count set");
@@ -1079,7 +1079,7 @@ mod tests {
 
     #[test]
     fn cubeset_probe_classifies_as_set_member_probe() {
-        let mdx = "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
+        let mdx = "SELECT {HEAD([Date].[Calendar].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
         let q = semantic_query_from_mdx(mdx);
         assert_eq!(q.kind, SemanticQueryKind::SetProbe);
         assert!(q.set_count.is_none());
@@ -1093,7 +1093,7 @@ mod tests {
     fn regular_queries_do_not_classify_as_set_probe() {
         // DrilldownLevel pivot render
         let q = semantic_query_from_mdx(
-            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
         );
         assert_ne!(q.kind, SemanticQueryKind::SetProbe);
         assert!(q.set_probe.is_none() && q.set_count.is_none());
@@ -1111,7 +1111,7 @@ mod tests {
         let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3");
         crate::project::project::with_test_project(p, || {
-            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Date].[Quarter].Members ON ROWS FROM [Sales]";
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Calendar].[Quarter].Members ON ROWS FROM [Sales]";
             let q = semantic_query_from_mdx(mdx);
             assert_eq!(q.axis_dimensions, vec!["Date"]);
             assert_eq!(q.drilldown_levels, vec![Some(1)], "Quarter is level 1");
@@ -1126,7 +1126,7 @@ mod tests {
         let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3");
         crate::project::project::with_test_project(p, || {
-            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)})) ON ROWS FROM [Sales]";
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)})) ON ROWS FROM [Sales]";
             let q = semantic_query_from_mdx(mdx);
             assert_eq!(q.axis_dimensions, vec!["Category", "Date"]);
             assert_eq!(q.drilldown_levels, vec![None, Some(0)]);
@@ -1151,7 +1151,7 @@ mod tests {
 
     #[test]
     fn extract_drillmembers_single_year() {
-        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
         let r = extract_drill_members(mdx);
         assert_eq!(r, Some(("Date".into(), "Year".into(), vec!["2024".into()])));
     }
@@ -1159,7 +1159,7 @@ mod tests {
     #[test]
     fn extract_drillmembers_multiple_years() {
         // "Expand Entire Field" sends every parent member in one set.
-        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2026],[Date].[Date].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+        let mdx = r##"SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026],[Date].[Calendar].[Year].&[2027]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
         let r = extract_drill_members(mdx);
         assert_eq!(
             r,
@@ -1173,21 +1173,21 @@ mod tests {
 
     #[test]
     fn extract_drillmembers_none_without_member_set() {
-        let mdx = "DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)";
+        let mdx = "DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)";
         assert_eq!(extract_drill_members(mdx), None);
     }
 
     #[test]
     fn amp_key_normal() {
         assert_eq!(
-            parse_amp_key("[Date].[Date].[Year].&[2024]"),
+            parse_amp_key("[Date].[Calendar].[Year].&[2024]"),
             Some("2024".into())
         );
     }
 
     #[test]
     fn amp_key_no_amp() {
-        assert_eq!(parse_amp_key("[Date].[Date].[Year]"), None);
+        assert_eq!(parse_amp_key("[Date].[Calendar].[Year]"), None);
     }
 
     #[test]

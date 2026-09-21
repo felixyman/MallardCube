@@ -111,7 +111,7 @@ await tools["excel-mcp"].file({ action: "close", session_id: sid, save: false })
 Member/measure reference syntax:
 
 - Measure: `"[Measures].[Revenue]"`, `"[Measures].[RevenueYTD]"`
-- Member: `"[Category].[Category].&[Electronics]"` (leaf), `"[Date].[Date].[Year].&[2023]"` (level-qualified)
+- Member: `"[Category].[Category].&[Electronics]"` (leaf), `"[Date].[Calendar].[Year].&[2023]"` (level-qualified)
 - Set: `"[Category].[Category].Members"` (for `CUBESET`), then `CUBECOUNT(conn, cellref)`
 - `CUBEMEMBER` returns the member caption; `CUBEVALUE` returns the numeric cell.
 
@@ -220,7 +220,7 @@ skill and `plans/048-excel-date-filters.md`.
   - Bare single-member `WHERE (member)` slicers are honoured:
     `SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])`
     → `24719896` (same as the tuple-on-axis form). Level-qualified slices work
-    too: `WHERE ([Date].[Date].[Year].&[2024])` must equal the raw-SQL
+    too: `WHERE ([Date].[Calendar].[Year].&[2024])` must equal the raw-SQL
     expectation for that year — the demo data is bounded to "today", so the
     number shifts over time. Compare against
     `SELECT SUM(revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = 2024`

@@ -915,9 +915,13 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::MdschemaProperties { property_type } => {
+        XmlaRequest::MdschemaProperties {
+            property_type,
+            restrictions,
+        } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
-            let resp = mdschema_properties::get_mdschema_properties_response(*property_type);
+            let resp =
+                mdschema_properties::get_mdschema_properties_response(*property_type, restrictions);
             mallardcube::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
             resp
         }

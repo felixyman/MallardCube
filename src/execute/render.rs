@@ -957,7 +957,7 @@ fn ancestor_members<B: QueryBackend + ?Sized>(
 
 /// Member unique name for a level, converting an internal pipe path to the
 /// SSAS compound-key form: `2026|4` at level `Quarter` becomes
-/// `[Date].[Date].[Quarter].&amp;[2026]&amp;[4]`.
+/// `[Date].[Calendar].[Quarter].&amp;[2026]&amp;[4]`.
 fn level_member_uname(
     dim: &crate::engine::model::DimensionDef,
     level_idx: usize,

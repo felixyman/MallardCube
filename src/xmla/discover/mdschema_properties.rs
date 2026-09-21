@@ -1,21 +1,73 @@
 use crate::proxy_project;
 use crate::response::discover_rowset_envelope;
 
-// OLE DB DBTYPEs used for MEMBER_VALUE rows. Excel only offers its date
-// filters on an OLAP pivot when the key attribute's MEMBER_VALUE DATA_TYPE is
-// a date type (the OOXML `memberValueDatatype` note names 7); with no
-// DATA_TYPE it falls back to label filters only (plan 048).
+use crate::engine::model::{DimensionDef, LevelDef};
+use crate::xmla::parser::Restrictions;
+
+// OLE DB DBTYPEs used for MEMBER_VALUE rows. Excel offers its Date Filters only
+// on a field whose MEMBER_VALUE DATA_TYPE is a date type (7 = DBTYPE_DATE, the
+// value the OOXML `memberValueDatatype` note names); the other levels keep
+// their key types (plan 048).
 const DBTYPE_R8: i32 = 5;
+const DBTYPE_I4: i32 = 3;
 const DBTYPE_DATE: i32 = 7;
 const DBTYPE_WSTR: i32 = 130;
 
-/// MEMBER_VALUE data type for a dimension's key attribute.
-fn member_value_data_type(d: &crate::engine::model::DimensionDef) -> i32 {
-    if d.is_date_role {
+/// MEMBER_VALUE data type for one level: the level's key type.
+fn level_member_value_type(d: &DimensionDef, level: &LevelDef) -> i32 {
+    if !d.is_date_role {
+        return DBTYPE_WSTR;
+    }
+    let deepest = d.levels.iter().map(|l| l.level_number).max();
+    if Some(level.level_number) == deepest {
         DBTYPE_DATE
     } else {
-        DBTYPE_WSTR
+        DBTYPE_I4
     }
+}
+
+/// One MEMBER_VALUE row target: `(hierarchy unique name, level unique name,
+/// MEMBER_VALUE data type)`. A date role exposes its user hierarchy's levels
+/// plus a single-level key attribute hierarchy; a flat dimension exposes its
+/// (All) and leaf levels (plan 048).
+fn member_value_targets(d: &DimensionDef) -> Vec<(String, String, i32)> {
+    let mut out = Vec::new();
+    if d.levels.is_empty() {
+        out.push((
+            d.hierarchy_unique_name(),
+            d.all_level_unique_name(),
+            DBTYPE_WSTR,
+        ));
+        out.push((
+            d.hierarchy_unique_name(),
+            d.leaf_level_unique_name(),
+            if d.is_date_role {
+                DBTYPE_DATE
+            } else {
+                DBTYPE_WSTR
+            },
+        ));
+        return out;
+    }
+
+    let user = d.hierarchy_unique_name();
+    out.push((user.clone(), d.all_level_unique_name(), DBTYPE_WSTR));
+    for level in &d.levels {
+        out.push((
+            user.clone(),
+            format!("{user}.[{}]", level.name),
+            level_member_value_type(d, level),
+        ));
+    }
+    if let (Some(key), Some(level)) = (d.key_hierarchy_unique_name(), d.key_level()) {
+        out.push((
+            key.clone(),
+            format!("{key}.[{}]", d.all_level_name),
+            DBTYPE_WSTR,
+        ));
+        out.push((key.clone(), format!("{key}.[{}]", level.name), DBTYPE_DATE));
+    }
+    out
 }
 
 const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -67,7 +119,38 @@ fn member_property_row(
     )
 }
 
-fn member_property_rows() -> String {
+/// Does a row for these coordinates satisfy the request's restriction list?
+/// Excel restricts `MDSCHEMA_PROPERTIES` to one hierarchy at a time while it
+/// builds pivot cache fields; rows for other hierarchies corrupt the cache
+/// field (plan 048).
+fn matches_restrictions(restrictions: &Restrictions, dim: &str, hier: &str, level: &str) -> bool {
+    if let Some(d) = &restrictions.dimension_unique_name
+        && d != dim
+    {
+        return false;
+    }
+    if let Some(h) = &restrictions.hierarchy_unique_name
+        && h != hier
+    {
+        return false;
+    }
+    if let Some(l) = &restrictions.level_unique_name
+        && l != level
+    {
+        return false;
+    }
+    true
+}
+
+/// Is a property row with this name requested?
+fn property_requested(restrictions: &Restrictions, prop_name: &str) -> bool {
+    match &restrictions.property_name {
+        Some(p) => p == prop_name,
+        None => true,
+    }
+}
+
+fn member_property_rows(restrictions: &Restrictions) -> String {
     const PROPS: &[(&str, u8)] = &[
         ("MEMBER_CAPTION", 0),
         ("MEMBER_NAME", 0),
@@ -90,17 +173,26 @@ fn member_property_rows() -> String {
     let mut out = String::new();
     for d in &model.dimensions {
         let dim = &d.dimension_unique_name();
-        let hier = &d.hierarchy_unique_name();
-        for level in &[d.all_level_unique_name(), d.leaf_level_unique_name()] {
-            let coords = RowCoords { dim, hier, level };
+        for (hier, level, data_type) in member_value_targets(d) {
+            if !matches_restrictions(restrictions, dim, &hier, &level) {
+                continue;
+            }
+            let coords = RowCoords {
+                dim,
+                hier: &hier,
+                level: &level,
+            };
             for (name, content) in PROPS {
+                if !property_requested(restrictions, name) {
+                    continue;
+                }
                 out.push_str(&member_property_row(
                     catalog,
                     cube,
                     &coords,
                     name,
                     *content,
-                    (*name == "MEMBER_VALUE").then(|| member_value_data_type(d)),
+                    (*name == "MEMBER_VALUE").then_some(data_type),
                 ));
                 out.push('\n');
             }
@@ -119,16 +211,26 @@ fn member_property_rows() -> String {
         hier: "[Measures]",
         level: "[Measures].[MeasuresLevel]",
     };
-    for (name, content) in M_PROPS {
-        out.push_str(&member_property_row(
-            catalog,
-            cube,
-            &measures_coords,
-            name,
-            *content,
-            (*name == "MEMBER_VALUE").then_some(DBTYPE_R8),
-        ));
-        out.push('\n');
+    if matches_restrictions(
+        restrictions,
+        measures_coords.dim,
+        measures_coords.hier,
+        measures_coords.level,
+    ) {
+        for (name, content) in M_PROPS {
+            if !property_requested(restrictions, name) {
+                continue;
+            }
+            out.push_str(&member_property_row(
+                catalog,
+                cube,
+                &measures_coords,
+                name,
+                *content,
+                (*name == "MEMBER_VALUE").then_some(DBTYPE_R8),
+            ));
+            out.push('\n');
+        }
     }
 
     out
@@ -168,7 +270,7 @@ fn system_property_rows() -> String {
     out
 }
 
-fn member_value_rows() -> String {
+fn member_value_rows(restrictions: &Restrictions) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let catalog = &project.config.catalog;
@@ -178,8 +280,16 @@ fn member_value_rows() -> String {
     // [Measures] MEMBER_VALUE row (special case). Excel's cache build expects
     // this row to be present; removing it made the key-attribute marking in
     // the pivot cache definition disappear (plan 048).
-    out.push_str(&format!(
-        r#"          <row>
+    if property_requested(restrictions, "MEMBER_VALUE")
+        && matches_restrictions(
+            restrictions,
+            "[Measures]",
+            "[Measures]",
+            "[Measures].[MeasuresLevel]",
+        )
+    {
+        out.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
@@ -192,13 +302,16 @@ fn member_value_rows() -> String {
             <DATA_TYPE>{data_type}</DATA_TYPE>
           </row>
 "#,
-        data_type = DBTYPE_R8,
-    ));
+            data_type = DBTYPE_R8,
+        ));
+    }
 
     for d in &model.dimensions {
         let dim = &d.dimension_unique_name();
-        let hier = &d.hierarchy_unique_name();
-        for level in &[d.all_level_unique_name(), d.leaf_level_unique_name()] {
+        for (hier, level, data_type) in member_value_targets(d) {
+            if !matches_restrictions(restrictions, dim, &hier, &level) {
+                continue;
+            }
             out.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -213,7 +326,6 @@ fn member_value_rows() -> String {
             <DATA_TYPE>{data_type}</DATA_TYPE>
           </row>
 "#,
-                data_type = member_value_data_type(d),
             ));
         }
     }
@@ -221,12 +333,19 @@ fn member_value_rows() -> String {
     out
 }
 
-pub fn get_mdschema_properties_response(property_type: Option<i32>) -> String {
+pub fn get_mdschema_properties_response(
+    property_type: Option<i32>,
+    restrictions: &Restrictions,
+) -> String {
     let rows = match property_type {
-        Some(1) => member_property_rows(),
+        Some(1) => member_property_rows(restrictions),
         Some(2) => system_property_rows(),
-        Some(5) => member_value_rows(),
-        _ => format!("{}\n{}", system_property_rows(), member_value_rows()),
+        Some(5) => member_value_rows(restrictions),
+        _ => format!(
+            "{}\n{}",
+            system_property_rows(),
+            member_value_rows(restrictions)
+        ),
     };
     discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, &rows)
 }
@@ -235,6 +354,7 @@ pub fn get_mdschema_properties_response(property_type: Option<i32>) -> String {
 mod tests {
     use crate::project::project::ProxyProject;
     use crate::project::project::with_test_project;
+    use crate::xmla::parser::Restrictions;
 
     fn member_value_row(resp: &str, level_unique_name: &str) -> String {
         let needle = format!("<LEVEL_UNIQUE_NAME>{level_unique_name}</LEVEL_UNIQUE_NAME>");
@@ -252,11 +372,46 @@ mod tests {
         // attribute's MEMBER_VALUE DATA_TYPE is a date type (plan 048).
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_mdschema_properties_response(None);
-            let date_row = member_value_row(&resp, "[Date].[Date].[Date]");
+            let resp = super::get_mdschema_properties_response(None, &Restrictions::default());
+            let date_row = member_value_row(&resp, "[Date].[Calendar].[Date]");
             assert!(date_row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{date_row}");
             let cat_row = member_value_row(&resp, "[Category].[Category].[Category]");
             assert!(cat_row.contains("<DATA_TYPE>130</DATA_TYPE>"), "{cat_row}");
+        });
+    }
+
+    #[test]
+    fn hierarchy_restriction_filters_rows() {
+        // Excel asks for one hierarchy's member properties at a time while it
+        // builds pivot cache fields; rows for other hierarchies corrupt the
+        // cache field and make Excel refuse to add the field (plan 048).
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Date].[Date]".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(Some(1), &restrictions);
+            assert!(
+                resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Date]</HIERARCHY_UNIQUE_NAME>"),
+                "{resp}"
+            );
+            assert!(
+                !resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Calendar]</HIERARCHY_UNIQUE_NAME>"),
+                "{resp}"
+            );
+            assert!(
+                !resp.contains(
+                    "<HIERARCHY_UNIQUE_NAME>[Category].[Category]</HIERARCHY_UNIQUE_NAME>"
+                ),
+                "{resp}"
+            );
+            assert!(
+                !resp.contains("<DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>"),
+                "{resp}"
+            );
+            let row = member_value_row(&resp, "[Date].[Date].[Date]");
+            assert!(row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{row}");
         });
     }
 }

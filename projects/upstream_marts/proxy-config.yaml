@@ -28,6 +28,9 @@ dimensions:
   - id: Date
     physical_field: full_date
     caption: Date
+    # SSAS shape: the user hierarchy is named after the calendar, and the
+    # full-date level is exposed as the key attribute hierarchy [Date].[Date].
+    hierarchy_name: Calendar
     is_date_role: true
     cardinality_hint: 1200
     hierarchy_levels:

@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn lexes_a_drilldown_member_statement() {
         let toks = lex(
-            "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2022]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales]",
+            "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2022]},,,INCLUDE_CALC_MEMBERS)) ON COLUMNS FROM [Sales]",
         )
         .expect("lex");
         assert!(toks.iter().any(|t| t.is_ident("DrilldownMember")));
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn lexes_xml_escaped_keys() {
-        let toks = lex("[Date].[Date].[Year].&amp;[2024]").expect("lex");
+        let toks = lex("[Date].[Calendar].[Year].&amp;[2024]").expect("lex");
         assert_eq!(toks.last(), Some(&Token::Key("2024".into())));
     }
 

@@ -362,6 +362,41 @@ impl DimensionDef {
             self.caption, self.hierarchy_name, self.leaf_level_name
         )
     }
+
+    /// SSAS shape for a date role with hierarchy levels: the full-date level is
+    /// exposed as the dimension's **key attribute hierarchy** beside the user
+    /// hierarchy. Its name is the dimension caption (`[Date].[Date]`) and its
+    /// only level is the deepest hierarchy level. Excel only offers its Date
+    /// Filters on such a single-level attribute hierarchy (plan 048).
+    ///
+    /// Requires the config to give the user hierarchy a distinct name
+    /// (`hierarchy_name: Calendar`); otherwise the unique names would collide
+    /// and no key hierarchy is emitted.
+    pub fn key_hierarchy_name(&self) -> Option<&str> {
+        (self.is_date_role && !self.levels.is_empty() && self.hierarchy_name != self.caption)
+            .then_some(self.caption.as_str())
+    }
+
+    /// The key attribute hierarchy's only level (the full-date level).
+    pub fn key_level(&self) -> Option<&LevelDef> {
+        self.key_hierarchy_name().and_then(|_| self.levels.last())
+    }
+
+    pub fn key_hierarchy_unique_name(&self) -> Option<String> {
+        self.key_hierarchy_name()
+            .map(|name| format!("[{}].[{}]", self.caption, name))
+    }
+
+    pub fn key_all_level_unique_name(&self) -> Option<String> {
+        self.key_hierarchy_name()
+            .map(|name| format!("[{}].[{}].[{}]", self.caption, name, self.all_level_name))
+    }
+
+    pub fn key_level_unique_name(&self) -> Option<String> {
+        let name = self.key_hierarchy_name()?;
+        let level = self.levels.last()?;
+        Some(format!("[{}].[{}].[{}]", self.caption, name, level.name))
+    }
 }
 
 pub struct MeasureDef {
@@ -1264,7 +1299,7 @@ mod tests {
             description: String::new(),
             visible: true,
             ordinal: 5,
-            hierarchy_name: "Date".into(),
+            hierarchy_name: "Calendar".into(),
             all_level_name: "(All)".into(),
             leaf_level_name: "Date".into(),
             cardinality_hint: 5000,

@@ -78,7 +78,7 @@
       "physical_field": "full_date",
       "caption": "Date",
       "description": "Calendar date dimension",
-      "hierarchy_name": "Date",
+      "hierarchy_name": "Calendar",
       "all_level_name": "(All)",
       "leaf_level_name": "Date",
       "ordinal": 5,

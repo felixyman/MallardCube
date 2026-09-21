@@ -717,23 +717,32 @@ mod tests {
         let rows = project3_rows();
         let years: Vec<&MemberRow> = rows
             .iter()
-            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Year].&["))
+            .filter(|r| {
+                r.member_unique_name
+                    .starts_with("[Date].[Calendar].[Year].&[")
+            })
             .collect();
         assert_eq!(years.len(), 11, "one row per demo year");
         let quarters: Vec<&MemberRow> = rows
             .iter()
             .filter(|r| {
                 r.member_unique_name
-                    .starts_with("[Date].[Date].[Quarter].&[")
+                    .starts_with("[Date].[Calendar].[Quarter].&[")
             })
             .collect();
         let months = rows
             .iter()
-            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Month].&["))
+            .filter(|r| {
+                r.member_unique_name
+                    .starts_with("[Date].[Calendar].[Month].&[")
+            })
             .count();
         let days = rows
             .iter()
-            .filter(|r| r.member_unique_name.starts_with("[Date].[Date].[Date].&["))
+            .filter(|r| {
+                r.member_unique_name
+                    .starts_with("[Date].[Calendar].[Date].&[")
+            })
             .count();
         assert!(!quarters.is_empty() && quarters.len().is_multiple_of(4));
         assert!(months > quarters.len());
@@ -748,11 +757,11 @@ mod tests {
         );
 
         // A year: level 1, parented by (All), four quarter children.
-        let year = find_row(&rows, "[Date].[Date].[Year].&[2024]");
+        let year = find_row(&rows, "[Date].[Calendar].[Year].&[2024]");
         assert_eq!(extract_tag(&year.xml, "LEVEL_NUMBER").as_deref(), Some("1"));
         assert_eq!(
             extract_tag(&year.xml, "PARENT_UNIQUE_NAME").as_deref(),
-            Some("[Date].[Date].[All]")
+            Some("[Date].[Calendar].[All]")
         );
         assert_eq!(extract_tag(&year.xml, "PARENT_LEVEL").as_deref(), Some("0"));
         assert_eq!(
@@ -761,14 +770,14 @@ mod tests {
         );
 
         // A compound-key quarter: level 2, parented by its year.
-        let quarter = find_row(&rows, "[Date].[Date].[Quarter].&[2024]&[2]");
+        let quarter = find_row(&rows, "[Date].[Calendar].[Quarter].&[2024]&[2]");
         assert_eq!(
             extract_tag(&quarter.xml, "LEVEL_NUMBER").as_deref(),
             Some("2")
         );
         assert_eq!(
             extract_tag(&quarter.xml, "PARENT_UNIQUE_NAME").as_deref(),
-            Some("[Date].[Date].[Year].&amp;[2024]")
+            Some("[Date].[Calendar].[Year].&amp;[2024]")
         );
         assert_eq!(
             extract_tag(&quarter.xml, "PARENT_LEVEL").as_deref(),
@@ -792,8 +801,8 @@ mod tests {
         let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3");
         with_test_project(p, || {
-            let year_u = "[Date].[Date].[Year].&[2024]";
-            let quarter_u = "[Date].[Date].[Quarter].&[2024]&[2]";
+            let year_u = "[Date].[Calendar].[Year].&[2024]";
+            let quarter_u = "[Date].[Calendar].[Quarter].&[2024]&[2]";
             let project = proxy_project::project();
 
             // SELF on a year: exactly one row.
@@ -856,7 +865,7 @@ mod tests {
 
             // Unknown key fails closed.
             let xml = get_members_response_with_backend(
-                Some("[Date].[Date].[Year].&[1999]"),
+                Some("[Date].[Calendar].[Year].&[1999]"),
                 Some(8),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),

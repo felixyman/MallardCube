@@ -15,13 +15,18 @@ fn time_level_type(name: &str) -> u32 {
 
 // OLE DB DBTYPE values (oledb.h / mdstypes.h).
 const DBTYPE_I4: i32 = 3;
-const DBTYPE_DBTIMESTAMP: i32 = 135;
+const DBTYPE_DATE: i32 = 7;
 const DBTYPE_WSTR: i32 = 130;
 
 /// OLE DB `LEVEL_DBTYPE` for a level's member key. Date-role leaves report a
-/// date type so Excel treats the hierarchy as dates (Date Filters, timelines);
-/// everything else stays a string. SSAS reports DBTYPE_DBTIMESTAMP for date
-/// columns.
+/// date type so Excel treats the hierarchy as dates; everything else stays a
+/// string.
+///
+/// Verified against the reference SSAS 2025 (tabular) and the pivot cache Excel
+/// writes: the date level reports `DBTYPE_DATE` (7), and Excel stores that as
+/// the hierarchy's `memberValueDatatype="7"` — the flag that gates its Date
+/// Filters. Reporting `DBTYPE_DBTIMESTAMP` (135) instead made Excel fall back to
+/// `memberValueDatatype="5"` and withhold the date filters (plan 048).
 fn level_db_type(
     d: &crate::engine::model::DimensionDef,
     level: &crate::engine::model::LevelDef,
@@ -30,14 +35,14 @@ fn level_db_type(
         return DBTYPE_WSTR;
     }
     match time_level_type(&level.name) {
-        116 => DBTYPE_DBTIMESTAMP,
+        116 => DBTYPE_DATE,
         20 | 68 | 84 => DBTYPE_I4,
         _ => {
             // Non-English level names: the deepest level of a date role is the
             // full date, the ones above it are period parts.
             let deepest = d.levels.iter().map(|l| l.level_number).max();
             if Some(level.level_number) == deepest {
-                DBTYPE_DBTIMESTAMP
+                DBTYPE_DATE
             } else {
                 DBTYPE_I4
             }
@@ -140,19 +145,12 @@ pub fn get_levels_response() -> String {
         ));
 
         if !d.levels.is_empty() {
-            // MS-SSAS LEVEL_ORIGIN bitmask: 1 = user hierarchy level,
-            // 4 = key attribute level. Excel matches the key attribute's
-            // MEMBER_VALUE row by this bit, so the date role's leaf carries it
-            // (plan 048).
-            let deepest = d.levels.iter().map(|l| l.level_number).max();
+            // Levels of the user hierarchy: LEVEL_ORIGIN 1 (MS-SSAS bitmask:
+            // 1 = user hierarchy level). The key attribute hierarchy's own
+            // levels are emitted below with origins 2/6 (plan 048).
             for level in &d.levels {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
                 let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
-                let level_origin = if d.is_date_role && Some(level.level_number) == deepest {
-                    4
-                } else {
-                    1
-                };
                 let level_type = if d.is_date_role {
                     time_level_type(&level.name)
                 } else {
@@ -176,8 +174,8 @@ pub fn get_levels_response() -> String {
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>{lcard}</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>{level_origin}</LEVEL_ORIGIN>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
@@ -187,7 +185,6 @@ pub fn get_levels_response() -> String {
                     lcard = level.cardinality.max(1),
                     ltype = level_type,
                     ldbt = level_dbt,
-                    level_origin = level_origin,
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
                     guid = base_guid + 1 + level.level_number * 2,
@@ -214,7 +211,7 @@ pub fn get_levels_response() -> String {
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
-            <LEVEL_KEY_CARDINALITY>{cardinality}</LEVEL_KEY_CARDINALITY>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
@@ -227,10 +224,81 @@ pub fn get_levels_response() -> String {
                 cardinality = d.cardinality_hint,
                 ltype = if d.is_date_role { 116 } else { 0 },
                 ldbt = if d.is_date_role {
-                    DBTYPE_DBTIMESTAMP
+                    DBTYPE_DATE
                 } else {
                     DBTYPE_WSTR
                 },
+                catalog = project.config.catalog,
+                cube = project.config.cube,
+            ));
+        }
+
+        // The key attribute hierarchy of a date role: (All) + the full-date
+        // level, shaped exactly like the reference SSAS 2025 date column
+        // (attribute hierarchy, origin 2, plain LEVEL_TYPE 0 on the date level).
+        // That shape is what makes Excel read the level's DBTYPE (7 = date) and
+        // store memberValueDatatype="7" — the flag that gates its Date Filters
+        // (plan 048).
+        if let (Some(key_name), Some(level)) = (d.key_hierarchy_name(), d.key_level()) {
+            let key_hier_u = format!("[{}].[{}]", d.caption, key_name);
+            let level_unique = format!("{key_hier_u}.[{}]", level.name);
+            let cardinality = level.cardinality.max(1);
+            rows.push_str(&format!(
+                r#"          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{all_name}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{hier_u}.[{all_name}]</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{guid_all:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{all_name}</LEVEL_CAPTION>
+            <LEVEL_NUMBER>0</LEVEL_NUMBER>
+            <LEVEL_CARDINALITY>1</LEVEL_CARDINALITY>
+            <LEVEL_TYPE>1</LEVEL_TYPE>
+            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>0</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_ORDERING_PROPERTY>{all_name}</LEVEL_ORDERING_PROPERTY>
+            <LEVEL_DBTYPE>{all_dbtype}</LEVEL_DBTYPE>
+            <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{all_name}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>2</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+          </row>
+          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier_u}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_NAME>{lname}</LEVEL_NAME>
+            <LEVEL_UNIQUE_NAME>{lunique}</LEVEL_UNIQUE_NAME>
+            <LEVEL_GUID>00000000-0000-0000-0000-{guid_level:012}</LEVEL_GUID>
+            <LEVEL_CAPTION>{lname}</LEVEL_CAPTION>
+            <LEVEL_NUMBER>1</LEVEL_NUMBER>
+            <LEVEL_CARDINALITY>{cardinality}</LEVEL_CARDINALITY>
+            <LEVEL_TYPE>0</LEVEL_TYPE>
+            <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
+            <LEVEL_UNIQUE_SETTINGS>0</LEVEL_UNIQUE_SETTINGS>
+            <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
+            <LEVEL_ORDERING_PROPERTY>{lname}</LEVEL_ORDERING_PROPERTY>
+            <LEVEL_DBTYPE>{level_dbtype}</LEVEL_DBTYPE>
+            <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{lname}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
+            <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
+            <LEVEL_ORIGIN>2</LEVEL_ORIGIN>
+            <CUBE_SOURCE>1</CUBE_SOURCE>
+          </row>
+"#,
+                all_name = xml_escape(&d.all_level_name),
+                lname = xml_escape(&level.name),
+                lunique = xml_escape(&level_unique),
+                cardinality = cardinality,
+                level_dbtype = DBTYPE_DATE,
+                all_dbtype = DBTYPE_I4,
+                guid_all = base_guid + 8,
+                guid_level = base_guid + 9,
+                dim_u = xml_escape(&d.dimension_unique_name()),
+                hier_u = xml_escape(&key_hier_u),
                 catalog = project.config.catalog,
                 cube = project.config.cube,
             ));
@@ -261,12 +329,15 @@ mod tests {
             assert!(date_leaf, "should have Date leaf level");
 
             // Date levels report real data types (Excel needs a date type for
-            // Date Filters): the leaf is a date, the period parts are numeric.
+            // Date Filters): the leaves are dates (7 = DBTYPE_DATE, matching the
+            // reference SSAS and what Excel stores as memberValueDatatype="7"),
+            // the period parts are numeric.
             for (lvl, expected) in [
-                ("[Date].[Date].[Year]", "3"),
-                ("[Date].[Date].[Quarter]", "3"),
-                ("[Date].[Date].[Month]", "3"),
-                ("[Date].[Date].[Date]", "135"),
+                ("[Date].[Calendar].[Year]", "3"),
+                ("[Date].[Calendar].[Quarter]", "3"),
+                ("[Date].[Calendar].[Month]", "3"),
+                ("[Date].[Calendar].[Date]", "7"),
+                ("[Date].[Date].[Date]", "7"),
             ] {
                 let marker = format!("<LEVEL_UNIQUE_NAME>{lvl}</LEVEL_UNIQUE_NAME>");
                 let start = resp

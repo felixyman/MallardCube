@@ -1459,7 +1459,7 @@ mod tests {
     #[test]
     fn parses_a_drilldown_member_statement() {
         let sel = parse_select(
-            "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Date].[Year].&[2022]},,,INCLUDE_CALC_MEMBERS)) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
+            "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2022]},,,INCLUDE_CALC_MEMBERS)) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE",
         )
         .expect("parse");
         assert_eq!(sel.cube.as_deref(), Some("Sales"));
@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn parses_a_member_range() {
         let sel = parse_select(
-            "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {HEAD({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
         )
         .expect("parse");
         assert_eq!(
@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn parses_two_axes_without_confusing_the_sets() {
         let sel = parse_select(
-            "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+            "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]} ON 1 FROM [Sales]",
         )
         .expect("parse");
         assert_eq!(sel.axes.len(), 2);
@@ -1513,7 +1513,7 @@ mod tests {
     #[test]
     fn parses_level_members_and_calls() {
         let sel = parse_select(
-            "SELECT [Date].[Date].[Quarter].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            "SELECT [Date].[Calendar].[Quarter].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
         )
         .expect("parse");
         assert_eq!(
@@ -1525,7 +1525,7 @@ mod tests {
     #[test]
     fn parses_with_member_and_subselect() {
         let sel = parse_select(
-            "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+            "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
         )
         .expect("parse");
         assert_eq!(sel.with_members.len(), 1);
@@ -1590,7 +1590,7 @@ mod tests {
         );
 
         let sel = parse_select(
-            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Date].[Date].[Year].&[2024])",
+            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Date].[Calendar].[Year].&[2024])",
         )
         .expect("parse");
         let members = where_members(&sel);
@@ -1656,7 +1656,7 @@ mod tests {
     #[test]
     fn member_property_filter_is_detected_not_silent() {
         let sel = parse_select(
-            "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)",
+            "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= 1)",
         )
         .expect("parse");
         assert!(mentions_member_property(&sel));

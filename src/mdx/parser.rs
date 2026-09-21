@@ -230,7 +230,7 @@ fn member_named(input: &str) -> IResult<&str, MemberRef> {
 
 /// Level-qualified key member `[Dim].[Hier].[Level].&[key]` — the level is
 /// carried so the SQL emitter can filter on the level's column (e.g. the
-/// `year` column for `[Date].[Date].[Year].&[2024]`). Excel emits this for
+/// `year` column for `[Date].[Calendar].[Year].&[2024]`). Excel emits this for
 /// date-hierarchy filters.
 fn member_level_leaf(input: &str) -> IResult<&str, MemberRef> {
     let (input, (dim, _hier)) = dim_hierarchy(input)?;
@@ -558,7 +558,7 @@ pub enum SetExpr {
 }
 
 /// A calculated member whose body is `COUNT(<set>)`, e.g. Excel's
-/// `WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)'`.
+/// `WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)'`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CalculatedCount {
     pub member_name: String,
@@ -1041,27 +1041,27 @@ mod tests {
     fn unsupported_features_are_detected() {
         for (mdx, needle) in [
             (
-                "SELECT {ClosingPeriod([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+                "SELECT {ClosingPeriod([Date].[Calendar].[Year], [Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
                 "ClosingPeriod()",
             ),
             (
-                "WITH SET [Last30] AS 'HEAD(Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1), 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                "WITH SET [Last30] AS 'HEAD(Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= 1), 1)' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
                 "member-property filters",
             ),
             (
-                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
                 "member ranges",
             ),
             (
-                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
                 "member ranges",
             ),
             (
-                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)",
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= 1)",
                 "member-property filters",
             ),
             (
-                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, DateAdd(\"d\", -30, VBA![Date]()) <= 1)",
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Calendar].[Date].Members, DateAdd(\"d\", -30, VBA![Date]()) <= 1)",
                 "date arithmetic",
             ),
         ] {
@@ -1074,21 +1074,21 @@ mod tests {
     fn supported_mdx_is_not_flagged() {
         for mdx in [
             "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
-            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
             "SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0 FROM [Sales]",
             "SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
-            "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
+            "SELECT {HEAD([Date].[Calendar].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
             "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
-            "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "SELECT {YTD([Date].[Date].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
-            "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
-            "SELECT {ParallelPeriod([Date].[Date].[Year], -1, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
-            "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
-            "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-            "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+            "SELECT {HEAD({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {HEAD(YTD([Date].[Calendar].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {YTD([Date].[Calendar].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {PeriodsToDate([Date].[Calendar].[Year], [Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+            "WITH SET [Last30] AS 'Filter([Date].[Calendar].[Date].Members, [Date].[Calendar].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+            "SELECT {ParallelPeriod([Date].[Calendar].[Year], -1, [Date].[Calendar].[Year].&[2024])} ON 1 FROM [Sales]",
+            "SELECT {LastPeriods(3, [Date].[Calendar].[Year].&[2024])} ON 1 FROM [Sales]",
+            "SELECT {[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]} ON 1 FROM [Sales]",
         ] {
             assert!(unsupported_features(mdx).is_none(), "false positive: {mdx}");
         }
@@ -1271,7 +1271,7 @@ mod set_expr_tests {
 
     #[test]
     fn parses_all_members_level() {
-        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Date].[Quarter].AllMembers} ON ROWS FROM [Sales]";
+        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Calendar].[Quarter].AllMembers} ON ROWS FROM [Sales]";
         assert_eq!(
             parse_axis_level_members(mdx),
             vec![("Date".to_string(), "Quarter".to_string())]
@@ -1280,27 +1280,27 @@ mod set_expr_tests {
 
     #[test]
     fn parses_drilldown_level_arguments() {
-        let level_expr = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]}, [Date].[Date].[Quarter])}) ON COLUMNS FROM [Sales]";
+        let level_expr = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]}, [Date].[Calendar].[Quarter])}) ON COLUMNS FROM [Sales]";
         let t = parse_drilldown_targets(level_expr);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].dim, "Date");
         assert_eq!(t[0].level.as_deref(), Some("Quarter"));
         assert_eq!(t[0].index, None);
 
-        let index = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,1)}) ON COLUMNS FROM [Sales]";
+        let index = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,1)}) ON COLUMNS FROM [Sales]";
         let t = parse_drilldown_targets(index);
         assert_eq!(t[0].index, Some(1));
         assert_eq!(t[0].level, None);
 
         // Plain hierarchy drag: no level or index argument.
-        let plain = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]";
+        let plain = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]";
         let t = parse_drilldown_targets(plain);
         assert_eq!((t[0].level.clone(), t[0].index), (None, None));
     }
 
     #[test]
     fn parses_calculated_count() {
-        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
         let cc = parse_calculated_count(mdx).expect("calculated count");
         assert_eq!(cc.member_name, "XL_SD");
         assert_eq!(
@@ -1314,14 +1314,14 @@ mod set_expr_tests {
 
     #[test]
     fn parses_calculated_count_over_explicit_list() {
-        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Date].[Year].&[2020],[Date].[Date].[Year].&[2021]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
+        let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Calendar].[Year].&[2020],[Date].[Calendar].[Year].&[2021]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
         let cc = parse_calculated_count(mdx).expect("calculated count");
         assert_eq!(
             cc.set,
             SetExpr::MemberList {
                 unames: vec![
-                    "[Date].[Date].[Year].&[2020]".into(),
-                    "[Date].[Date].[Year].&[2021]".into()
+                    "[Date].[Calendar].[Year].&[2020]".into(),
+                    "[Date].[Calendar].[Year].&[2021]".into()
                 ]
             }
         );
