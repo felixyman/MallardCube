@@ -21,6 +21,13 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     user: &UserContext,
     config: &ProxyConfig,
 ) -> (String, Timings) {
+    // Excel's pivot Refresh issues `REFRESH CUBE [<cube>]`; the data is live,
+    // so answer with an empty success instead of a fault (plan 048).
+    if let Some(resp) = crate::execute::builders::ddl_noop_response(mdx) {
+        let timings = Timings::new(RuntimePath::DirectSql, "ddl-noop".to_string(), 0, 0);
+        return (resp, timings);
+    }
+
     // Unsupported constructs fault loudly instead of returning a dropped axis
     // or a wrong-hierarchy cellset (plan 046).
     if let Some(fault) = crate::execute::builders::unsupported_fault(mdx) {

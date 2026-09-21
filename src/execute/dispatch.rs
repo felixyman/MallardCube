@@ -3054,6 +3054,19 @@ mod tests {
     }
 
     #[test]
+    fn refresh_cube_succeeds_as_noop() {
+        with_project3(|| {
+            // Excel's pivot Refresh sends `REFRESH CUBE [<cube>]`; a fault here
+            // aborts the UI refresh with "The query did not run" (plan 048).
+            for mdx in ["REFRESH CUBE [Sales]", "  refresh  cube [Sales]"] {
+                let xml = crate::execute_builders::get_execute_cellset_response(mdx);
+                assert!(!xml.contains("faultstring"), "{mdx} → {xml}");
+                assert!(xml.contains("xml-analysis:empty"), "{mdx} → {xml}");
+            }
+        });
+    }
+
+    #[test]
     fn time_intelligence_revenue_ytd_plan_has_date_dim_filter() {
         with_project3(|| {
             use crate::engine::plan::plan_from_semantic_with_model;

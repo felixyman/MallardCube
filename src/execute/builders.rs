@@ -28,6 +28,15 @@ pub fn unsupported_fault(mdx: &str) -> Option<String> {
         .map(|reason| crate::response::fault_response(&reason))
 }
 
+/// SSAS statements that are no-ops for a live DuckDB-backed cube, answered
+/// with an empty success. Excel's pivot Refresh issues `REFRESH CUBE [<cube>]`
+/// (plan 048); there is no cube cache to rebuild, and faulting would make
+/// Excel abort the refresh with "The query did not run".
+pub fn ddl_noop_response(mdx: &str) -> Option<String> {
+    crate::mdx_semantic::is_refresh_cube(mdx)
+        .then(crate::execute::dispatch::get_empty_execute_response)
+}
+
 // ---- test seams ----
 //
 // These helpers carry no backend parameter and use the demo fixture; they
@@ -54,6 +63,9 @@ pub fn execute_semantic_query_with_backend<B: QueryBackend>(
 
 #[cfg(test)]
 pub fn get_execute_cellset_response(mdx: &str) -> String {
+    if let Some(resp) = ddl_noop_response(mdx) {
+        return resp;
+    }
     if let Some(fault) = unsupported_fault(mdx) {
         return fault;
     }

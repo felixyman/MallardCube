@@ -21,6 +21,16 @@ pub fn is_drillthrough(statement: &str) -> bool {
     upper.starts_with("DRILLTHROUGH")
 }
 
+/// SSAS statement Excel sends when the user hits Refresh on an OLAP pivot
+/// (`REFRESH CUBE [<cube>]`). The proxy's data is live, so refreshing is a
+/// no-op that must succeed: a fault here makes Excel report "The query did
+/// not run" and abort the refresh (plan 048).
+pub fn is_refresh_cube(statement: &str) -> bool {
+    let mut words = statement.split_whitespace();
+    matches!(words.next(), Some(w) if w.eq_ignore_ascii_case("REFRESH"))
+        && matches!(words.next(), Some(w) if w.eq_ignore_ascii_case("CUBE"))
+}
+
 pub fn is_mdx_select(mdx: &str) -> bool {
     let trimmed = mdx.trim_start();
     let upper = trimmed.to_uppercase();
