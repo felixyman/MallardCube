@@ -181,9 +181,21 @@ connects to it, so every metadata question can be answered by comparison
    from the Filter menu instead.
 3. **Then**: Date Filters → capture the MDX they emit (`xmla-trace.jsonl`) and
    check it against the plan 046 date-window lowering.
-4. Also worth fixing: `DrilldownLevel` drops the All root for flat dimensions
-   and resolves `[Date].[Date].All` to the user hierarchy (both differ from
-   SSAS; neither blocks the field add, but they will bite elsewhere).
+4. **`DrilldownMember` drops the un-expanded members** (found from a live Excel
+   session: "expand 2022 to quarters" errored). The query
+   `CrossJoin(Hierarchize({DrilldownLevel({[Channel].[Channel].[All]})}),
+   Hierarchize(DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]})}},
+   {[Date].[Calendar].[Year].&[2022]})))` must return the *full input set* with
+   2022 expanded in place — the reference SSAS returns 12 members (All, 2020,
+   2021, **2022**, Q1–Q4, 2023, 2024, 2025, 2026); we return 6 (All, 2022, its
+   quarters) because the drill targets are applied as an axis *filter* instead
+   of an expansion. The same response also drops the `All` root on the flat
+   `[Channel]` leg. Fix: keep the input set on the axis, expand only the target
+   keys (the pre-order walk already synthesizes unexpanded roots with their own
+   aggregates via `level0_member_values`; the multi-dimension path needs the
+   same treatment), and strengthen the test to assert the whole member list —
+   the existing `drilldown_member_year_to_quarter` only checks that the
+   expanded branch is present, which is why this slipped through.
 5. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
