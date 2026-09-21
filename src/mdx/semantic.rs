@@ -53,7 +53,11 @@ pub struct DimensionFilter {
     /// Inclusive member range on `level` (`{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`):
     /// `(from_key, to_key)` in the engine's `|`-joined key format.
     pub range: Option<(String, String)>,
+    /// Period-to-date window on a date role's full-date column (`YTD(m)`).
+    pub date_window: Option<DateWindow>,
 }
+
+pub use crate::mdx::ast::DateWindow;
 
 /// One tuple on the SELECT axis (measure + member slicers), e.g. batched
 /// CUBEVALUE cells with different slicers.
@@ -79,6 +83,7 @@ fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
                     members: vec![key.clone()],
                     level: level.clone(),
                     range: None,
+                    date_window: None,
                 });
             }
         }
@@ -99,6 +104,124 @@ fn dim_ref_str(dim: &DimRef) -> String {
     }
 }
 
+/// Lower period-to-date MDX calls into date windows: `(dim, level, window)`.
+///
+/// The anchor member's key parts map to the model's levels by index, so the
+/// window pins the anchor exactly (`year=2024 AND month=6`) and the SQL bounds
+/// it with `date_trunc(<period>, anchor date) .. anchor date`.
+fn period_to_date_windows(
+    mdx: &str,
+    model: &crate::engine::model::SemanticModel,
+) -> Vec<(String, String, DateWindow)> {
+    fn period_for(name: &str) -> Option<&'static str> {
+        match name.to_uppercase().as_str() {
+            "YTD" => Some("year"),
+            "QTD" => Some("quarter"),
+            "MTD" => Some("month"),
+            _ => None,
+        }
+    }
+    fn level_period(level: &str) -> Option<&'static str> {
+        let l = level.to_lowercase();
+        if l.contains("year") {
+            Some("year")
+        } else if l.contains("quarter") {
+            Some("quarter")
+        } else if l.contains("month") {
+            Some("month")
+        } else {
+            None
+        }
+    }
+    fn anchor_of(m: &crate::mdx::ast::MemberRef) -> Option<(String, String, Vec<String>)> {
+        let level = m.level()?.to_string();
+        let key = m.key.clone()?;
+        let parts: Vec<String> = key.split('|').map(str::to_string).collect();
+        Some((m.dim().to_string(), level, parts))
+    }
+    let Ok(sel) = crate::mdx::frontend::parse_select(mdx) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String, DateWindow)> = Vec::new();
+    fn walk(
+        e: &crate::mdx::ast::Expr,
+        model: &crate::engine::model::SemanticModel,
+        out: &mut Vec<(String, String, DateWindow)>,
+    ) {
+        match e {
+            crate::mdx::ast::Expr::Call { name, args } => {
+                let period = period_for(name).or_else(|| {
+                    // `PeriodsToDate(level, anchor)`
+                    if name.eq_ignore_ascii_case("PeriodsToDate") {
+                        args.first()
+                            .and_then(|a| a.as_member())
+                            .and_then(|m| m.level())
+                            .and_then(level_period)
+                    } else {
+                        None
+                    }
+                });
+                let anchor_member = if name.eq_ignore_ascii_case("PeriodsToDate") {
+                    args.get(1).and_then(|a| a.as_member())
+                } else {
+                    args.first().and_then(|a| a.as_member())
+                };
+                if let (Some(period), Some(m)) = (period, anchor_member)
+                    && let Some((dim, level, parts)) = anchor_of(m)
+                {
+                    // Align the key path to the level chain from the anchor's
+                    // level (a short key anchors at that level), like the range
+                    // SQL does.
+                    let levels: Vec<(String, String)> = model
+                        .dim_def_opt(&dim)
+                        .and_then(|d| {
+                            let level_idx = d.levels.iter().position(|l| l.name == level)?;
+                            let start = (level_idx + 1).saturating_sub(parts.len());
+                            Some(
+                                d.levels[start..=level_idx]
+                                    .iter()
+                                    .map(|l| l.name.clone())
+                                    .zip(parts.iter().cloned())
+                                    .collect(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    out.push((
+                        dim,
+                        level,
+                        DateWindow {
+                            anchor: levels,
+                            period: period.to_string(),
+                        },
+                    ));
+                }
+                for a in args {
+                    walk(a, model, out);
+                }
+            }
+            crate::mdx::ast::Expr::Set(items) | crate::mdx::ast::Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, model, out);
+                }
+            }
+            crate::mdx::ast::Expr::Range(a, b) => {
+                walk(a, model, out);
+                walk(b, model, out);
+            }
+            crate::mdx::ast::Expr::Members(inner)
+            | crate::mdx::ast::Expr::Children(inner)
+            | crate::mdx::ast::Expr::Exclude(inner) => walk(inner, model, out),
+            _ => {}
+        }
+    }
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(e, model, &mut out);
+        }
+    }
+    out
+}
+
 fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
     let mut result: Vec<DimensionFilter> = Vec::new();
 
@@ -114,6 +237,7 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
                     members: vec![key.to_string()],
                     level: level.map(|s| s.to_string()),
                     range: None,
+                    date_window: None,
                 });
             }
         };
@@ -529,6 +653,22 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         }
     }
 
+    // Period-to-date time functions (`YTD(m)`, `QTD(m)`, `MTD(m)`,
+    // `PeriodsToDate(level, m)`) lower to a date window on the anchor's date
+    // role; the axis lists the anchor's level, restricted by the window.
+    let time_windows = period_to_date_windows(mdx, &project.model);
+    for (dim_name, level_name, _) in &time_windows {
+        if let Some(i) = axis_dims.iter().position(|d| d == dim_name)
+            && let Some(level_idx) = project
+                .model
+                .dim_def_opt(dim_name)
+                .and_then(|d| d.levels.iter().position(|l| l.name == *level_name))
+        {
+            drilldown_levels[i] = Some(level_idx);
+            level_drag = true;
+        }
+    }
+
     // Whole-hierarchy drags (`DrilldownLevel({...All})`) start at the top
     // level; Excel may instead name the level explicitly
     // (`DrilldownLevel({...All}, [Date].[Date].[Quarter])` or `, , N`).
@@ -582,6 +722,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             members: keys,
             level: Some(level_name),
             range: None,
+            date_window: None,
         });
         // Route to the single-dimension drilldown renderer,
         // not the DrilldownMemberProbe 2-dimension path.
@@ -597,6 +738,16 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             members: vec![],
             level: Some(level_name.clone()),
             range: Some((from_key.clone(), to_key.clone())),
+            date_window: None,
+        });
+    }
+    for (dim_name, level_name, window) in time_windows {
+        filters.push(DimensionFilter {
+            dimension: dim_name,
+            members: vec![],
+            level: Some(level_name),
+            range: None,
+            date_window: Some(window),
         });
     }
     filters.extend(extra_filters);
@@ -672,6 +823,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                             members: vec![],
                             level: Some(level),
                             range: Some((from_key, to_key)),
+                            date_window: None,
                         });
                     }
                     break;

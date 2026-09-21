@@ -36,11 +36,9 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
     }
     let _ = &sel;
     // MDX time functions.
-    const TIME_FNS: [&str; 8] = [
-        "YTD",
-        "QTD",
-        "MTD",
-        "PERIODSTODATE",
+    // `YTD`/`QTD`/`MTD`/`PeriodsToDate` lower to date windows; the rest of the
+    // time-intelligence function library is not supported yet.
+    const TIME_FNS: [&str; 4] = [
         "PARALLELPERIOD",
         "LASTPERIODS",
         "CLOSINGPERIOD",
@@ -1120,12 +1118,12 @@ mod tests {
     fn unsupported_features_are_detected() {
         for (mdx, needle) in [
             (
-                "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales]",
-                "YTD()",
+                "SELECT {ParallelPeriod([Date].[Date].[Year], -1, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
+                "ParallelPeriod()",
             ),
             (
-                "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[6])} ON 1 FROM [Sales]",
-                "PeriodsToDate()",
+                "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
+                "LastPeriods()",
             ),
             (
                 "WITH SET [Last30] AS 'x' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
@@ -1164,6 +1162,9 @@ mod tests {
             "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
             "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
             "SELECT {HEAD({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {YTD([Date].[Date].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[6])} ON 1 FROM [Sales]",
             "SELECT {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
         ] {

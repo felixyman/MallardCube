@@ -39,6 +39,8 @@ pub struct TypedDimensionFilter {
     pub time_flag: Option<String>,
     /// Inclusive member range on `level` (`from_key`, `to_key`).
     pub range: Option<(String, String)>,
+    /// Period-to-date window on a date role's full-date column.
+    pub date_window: Option<crate::mdx::semantic::DateWindow>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +167,7 @@ pub(crate) fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFil
             level: f.level.clone(),
             time_flag: None,
             range: f.range.clone(),
+            date_window: f.date_window.clone(),
         })
         .collect()
 }
@@ -186,6 +189,7 @@ pub(crate) fn filters_with_time_flag(
             level: None,
             time_flag: Some(flag.clone()),
             range: None,
+            date_window: None,
         });
     }
     result

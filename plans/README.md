@@ -104,7 +104,12 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   **plain aggregates** (`SUM`/`COUNT`/`DISTINCTCOUNT`/`AVERAGE`/`MIN`/`MAX`) to
   real SQL — on the real export, measures with real SQL went 1 → 6 and stubs
   23 → 18. Remaining: `WITH SET` + member-value filters + VBA date arithmetic,
-  MDX time functions, and ranges outside set probes.
+  Slice 5 (same day, partial) lowered `YTD`/`QTD`/`MTD`/`PeriodsToDate` to date
+  windows on the anchor's date role (`date_trunc(<period>, anchor) .. anchor`),
+  so `HEAD(YTD([Year].&[2024]),1)` → 2024 and `QTD(June 2024)` → months 4–6;
+  `ParallelPeriod`/`LastPeriods` still fault. Remaining: slice 4 (named-set
+  MDX: `WITH SET` + member-value filters + `DateAdd`/VBA), ranges in slicers,
+  and the rest of slice 5.
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic

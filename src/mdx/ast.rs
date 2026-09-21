@@ -59,6 +59,16 @@ pub enum Expr {
     Str(String),
 }
 
+/// A period-to-date window on a date-role dimension: the anchor member's date
+/// bounds the window (`YTD(m)` → `date_trunc('year', anchor) .. anchor`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DateWindow {
+    /// `(level name, value)` equalities identifying the anchor member.
+    pub anchor: Vec<(String, String)>,
+    /// `year` | `quarter` | `month` — the period-to-date grain.
+    pub period: String,
+}
+
 /// Comparison operators in filter predicates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {

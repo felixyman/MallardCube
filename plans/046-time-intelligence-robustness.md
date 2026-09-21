@@ -9,8 +9,9 @@
   metadata-only)
 - **Depends on**: 045 (intake fidelity), 007 (measure-scoped date roles)
 - **Category**: Excel compatibility / MDX
-- **Status**: **IN PROGRESS 2026-09-21** — slices 1–3 and 6 landed; slices 4–5
-  TODO (named-set MDX, MDX time functions).
+- **Status**: **IN PROGRESS 2026-09-21** — slices 1–3, 5 (partial) and 6 landed;
+  slice 4 (named-set MDX) and the rest of 5 (`ParallelPeriod`/`LastPeriods`)
+  TODO.
 
 ## Why this matters
 
@@ -57,7 +58,7 @@ Additional findings:
 | 2 | **Loud faults**: unsupported set expressions (ranges, time functions, `WITH SET`, member-value `Filter`, VBA functions) return a SOAP fault naming the construct instead of a dropped/bogus axis; capability negotiation stops advertising named sets | S | **DONE** |
 | 3 | **Range sets** (`a : b`) in set probes (`HEAD({a:b},n)`, bare sets) | S/M | **DONE** |
 | 4 | **`WITH SET` + `Filter` with member-value comparisons + `DateAdd`/VBA date functions** (the documented Excel named-set pattern) | M | TODO |
-| 5 | **MDX time functions** `YTD`/`QTD`/`MTD`/`PeriodsToDate`/`ParallelPeriod`/`LastPeriods` compiled to flag predicates/ranges | M | TODO |
+| 5 | **MDX time functions**: `YTD`/`QTD`/`MTD`/`PeriodsToDate` lowered to date windows on the anchor's date role; `ParallelPeriod`/`LastPeriods` still fault | M | **PARTIAL** |
 | 6 | **Converter DAX mappings**: `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD` → the existing qtd/mtd flags; plain aggregates lowered to real SQL (was stubs) | S | **DONE** |
 
 ## Slice 1 evidence (2026-09-21)
@@ -93,6 +94,26 @@ Additional findings:
 - **Capability negotiation**: Excel asks for `MdpropMdxNamedSets` at connect
   time; the proxy advertised 15 (full support) while `WITH SET` returned
   garbage. It now advertises 0 — honest until slice 4 lands.
+
+## Slice 5 evidence (2026-09-21, partial)
+
+- `YTD(m)`/`QTD(m)`/`MTD(m)`/`PeriodsToDate(level, m)` lower to a **date window**
+  on the anchor's date role: `DateWindow { anchor: [(level, value)…], period }`
+  on `DimensionFilter`/`TypedDimensionFilter`, emitted as
+  `<date_col> BETWEEN date_trunc('<period>', <anchor date>) AND <anchor date>`
+  with the anchor pinned by the key path aligned to the model's levels (a short
+  key anchors at the anchor's level, like the range SQL).
+- The anchor's level is listed on the axis / in the set probe (level drag or
+  `SetExpr::LevelMembers`), so `{YTD(m)}` returns the window's members and
+  `HEAD(YTD(m), n)` prunes them.
+- Verified live: `HEAD(YTD([Year].&[2024]), 1)` → 2024 (the captured CUBESET
+  shape), `YTD(June 2024)` → months 1–6, `QTD(June 2024)` → 4–6,
+  `MTD(June 2024)` → 6, `PeriodsToDate(Year, June 2024)` → 1–6.
+  `ParallelPeriod`/`LastPeriods` still fault with named reasons.
+- The plan key fingerprints date windows (`anchor@period`) so the result cache
+  cannot serve one window for another.
+- Fiscal calendars: `date_trunc` is calendar-based — fiscal period-to-date
+  belongs upstream as flag columns (plan 044 invariant 2), documented here.
 
 ## Slice 3 evidence (2026-09-21)
 

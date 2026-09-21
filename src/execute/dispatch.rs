@@ -2812,6 +2812,79 @@ mod tests {
         });
     }
 
+    // Plan 046 slice 5: period-to-date functions lower to date windows on the
+    // anchor's date role.
+    #[test]
+    fn period_to_date_functions_return_the_window_members() {
+        with_project3(|| {
+            // YTD of a year member is the year itself.
+            let xml = get_execute_statement_response(
+                "SELECT {YTD([Date].[Date].[Year].&[2024])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            assert!(xml.contains("<Caption>2024</Caption>"), "{xml}");
+            assert!(
+                !xml.contains("<Caption>2023</Caption>"),
+                "the window starts at the year: {xml}"
+            );
+
+            // YTD of a month member is that year's months up to it.
+            let xml = get_execute_statement_response(
+                "SELECT {YTD([Date].[Date].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            for month in ["1", "2", "3", "4", "5", "6"] {
+                assert!(
+                    xml.contains(&format!("<Caption>{month}</Caption>")),
+                    "YTD includes month {month}: {xml}"
+                );
+            }
+            for month in ["7", "8"] {
+                assert!(
+                    !xml.contains(&format!("<Caption>{month}</Caption>")),
+                    "YTD excludes month {month}: {xml}"
+                );
+            }
+
+            // QTD of a month member is that quarter's months up to it.
+            let xml = get_execute_statement_response(
+                "SELECT {QTD([Date].[Date].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            for month in ["4", "5", "6"] {
+                assert!(
+                    xml.contains(&format!("<Caption>{month}</Caption>")),
+                    "QTD includes {month}: {xml}"
+                );
+            }
+            assert!(
+                !xml.contains("<Caption>3</Caption>"),
+                "QTD excludes the previous quarter: {xml}"
+            );
+
+            // MTD of a month member is the month itself.
+            let xml = get_execute_statement_response(
+                "SELECT {MTD([Date].[Date].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            assert!(xml.contains("<Caption>6</Caption>"), "{xml}");
+            assert!(
+                !xml.contains("<Caption>5</Caption>"),
+                "MTD starts at the month: {xml}"
+            );
+
+            // PeriodsToDate(Year, month) matches YTD.
+            let xml = get_execute_statement_response(
+                "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(!xml.contains("<faultstring>"), "{xml}");
+            assert!(
+                xml.contains("<Caption>1</Caption>") && xml.contains("<Caption>6</Caption>"),
+                "{xml}"
+            );
+        });
+    }
+
     // Plan 047 increment 4: structural `has_cols`/`has_rows` (from the AST, not
     // a spacing-sensitive text scan) fixed the classification of comma-separated
     // axes, so a range on a pivot axis beside a measure set now returns the
@@ -2854,8 +2927,8 @@ mod tests {
         with_project3(|| {
             for (mdx, needle) in [
                 (
-                    "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
-                    "YTD()",
+                    "SELECT {LastPeriods(3, [Date].[Date].[Year].&[2024])} ON 1 FROM [Sales]",
+                    "LastPeriods()",
                 ),
                 (
                     "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE ({[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]})",

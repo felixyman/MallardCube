@@ -774,6 +774,44 @@ fn sql_where_with_cols(
             )
             && let Some(level_idx) = d.levels.iter().position(|l| &l.name == level_name)
         {
+            // Period-to-date window (`YTD(m)`): the anchor member's date bounds
+            // the window on the role's full-date column.
+            if let Some(w) = &f.date_window {
+                let date_col = model
+                    .date_dims
+                    .get(&f.dimension)
+                    .map(|dd| dd.full_date_column.clone())
+                    .unwrap_or_else(|| {
+                        d.levels
+                            .last()
+                            .map(|l| l.column.clone())
+                            .unwrap_or_else(|| d.physical_field.clone())
+                    });
+                let mut pins: Vec<String> = Vec::new();
+                for (level_name, value) in &w.anchor {
+                    if let Some(l) = d.levels.iter().find(|l| &l.name == level_name) {
+                        pins.push(format!(
+                            "CAST({} AS VARCHAR) = '{}'",
+                            l.column,
+                            value.replace('\'', "''")
+                        ));
+                    }
+                }
+                let pin_sql = if pins.is_empty() {
+                    "TRUE".to_string()
+                } else {
+                    pins.join(" AND ")
+                };
+                let anchor = format!(
+                    "(SELECT MAX({date_col}) FROM {} WHERE {pin_sql})",
+                    rel.dim_table
+                );
+                parts.push(format!(
+                    "f.{} IN (SELECT {} FROM {} WHERE {date_col} BETWEEN date_trunc('{}', {anchor}) AND {anchor})",
+                    rel.fact_column, rel.dim_column, rel.dim_table, w.period
+                ));
+                continue;
+            }
             // Inclusive member range (`{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`):
             // ancestors are equal, the level column is compared directly. The
             // string literals cast to the column's type, so dates, numbers and
@@ -958,6 +996,7 @@ mod tests {
                 time_flag: None,
                 members: vec!["North".into()],
                 range: None,
+                date_window: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -1010,6 +1049,7 @@ mod tests {
                 time_flag: None,
                 members: vec!["North".into()],
                 range: None,
+                date_window: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -1040,6 +1080,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["North".into()],
                     range: None,
+                    date_window: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -1047,6 +1088,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["Category A".into(), "Category B".into()],
                     range: None,
+                    date_window: None,
                 },
             ],
         };
@@ -1134,6 +1176,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["Widget".into()],
                     range: None,
+                    date_window: None,
                 }],
             },
         );
@@ -1434,6 +1477,7 @@ mod tests {
                 level: None,
                 time_flag: None,
                 range: None,
+                date_window: None,
             }],
             group_levels: vec![Some(1)],
             set_op: None,
@@ -1579,6 +1623,7 @@ mod tests {
                 level: None,
                 time_flag: Some("ytd_flag".into()),
                 range: None,
+                date_window: None,
             }],
         };
         let sql = sql_for_query_plan(model, &plan);

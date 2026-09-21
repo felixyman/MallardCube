@@ -98,7 +98,7 @@ pub fn plan_key(plan: &QueryPlan) -> String {
 fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
     if filters
         .iter()
-        .all(|f| f.members.is_empty() && f.range.is_none())
+        .all(|f| f.members.is_empty() && f.range.is_none() && f.date_window.is_none())
     {
         return String::new();
     }
@@ -110,12 +110,21 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
 
     let parts: Vec<String> = ordered
         .iter()
-        .filter(|(f, _)| !f.members.is_empty() || f.range.is_some())
+        .filter(|(f, _)| !f.members.is_empty() || f.range.is_some() || f.date_window.is_some())
         .map(|(f, dk)| {
-            // A member range must change the key too, or the result cache
-            // serves a range probe's response for a plain probe (and vice
-            // versa).
-            if let Some((from, to)) = &f.range {
+            // Ranges and date windows must change the key too, or the result
+            // cache serves one probe's response for another (and vice versa).
+            if let Some(w) = &f.date_window {
+                format!(
+                    "{dk}={}@{}",
+                    w.anchor
+                        .iter()
+                        .map(|(l, v)| format!("{l}:{v}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    w.period
+                )
+            } else if let Some((from, to)) = &f.range {
                 format!("{dk}={from}..{to}@{}", f.level.as_deref().unwrap_or(""))
             } else {
                 let mut members: Vec<&str> = f.members.iter().map(|s| s.as_str()).collect();
@@ -149,6 +158,7 @@ mod tests {
             level: Some("Year".into()),
             time_flag: None,
             range: Some(("2022".into(), "2024".into())),
+            date_window: None,
         };
         let plain = TypedDimensionFilter {
             dimension: "Date".into(),
@@ -156,6 +166,7 @@ mod tests {
             level: Some("Year".into()),
             time_flag: None,
             range: None,
+            date_window: None,
         };
         assert_ne!(
             filter_suffix(std::slice::from_ref(&ranged)),
@@ -186,6 +197,7 @@ mod tests {
                 time_flag: None,
                 members: vec!["North".into()],
                 range: None,
+                date_window: None,
             }],
         };
         assert_eq!(
@@ -223,6 +235,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["North".into()],
                     range: None,
+                    date_window: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -230,6 +243,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["Category B".into(), "Category A".into()],
                     range: None,
+                    date_window: None,
                 },
             ],
         };
@@ -251,6 +265,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["North".into()],
                     range: None,
+                    date_window: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -258,6 +273,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["Category A".into()],
                     range: None,
+                    date_window: None,
                 },
             ],
         };
@@ -270,6 +286,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["Category A".into()],
                     range: None,
+                    date_window: None,
                 },
                 TypedDimensionFilter {
                     dimension: "Region".into(),
@@ -277,6 +294,7 @@ mod tests {
                     time_flag: None,
                     members: vec!["North".into()],
                     range: None,
+                    date_window: None,
                 },
             ],
         };

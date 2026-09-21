@@ -679,6 +679,19 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
                 } else {
                     SetExpr::Tail(Box::new(src), n)
                 })
+            } else if matches!(upper.as_str(), "YTD" | "QTD" | "MTD" | "PERIODSTODATE") {
+                // Period-to-date sets list the anchor's level; the date window
+                // itself comes from the semantic layer's filter.
+                let anchor = if upper == "PERIODSTODATE" {
+                    args.get(1)
+                } else {
+                    args.first()
+                }?
+                .as_member()?;
+                Some(SetExpr::LevelMembers {
+                    dim: anchor.dim().to_string(),
+                    level: anchor.level().map(str::to_string),
+                })
             } else {
                 None
             }
