@@ -10,6 +10,22 @@ struct Property {
     value: Option<&'static str>,
 }
 
+/// Read-only integer capability property (MDX/OLE DB negotiation). Excel asks
+/// for these by name at connect time; a missing answer can make it withhold
+/// member-bearing fields. Values match the reference SSAS 2025 and the
+/// documented defaults ("Supported XMLA Properties",
+/// learn.microsoft.com/analysis-services).
+const fn int_capability(name: &'static str, value: &'static str) -> Property {
+    Property {
+        name,
+        description: name,
+        prop_type: "int",
+        access_type: "Read",
+        is_required: false,
+        value: Some(value),
+    }
+}
+
 const PROPERTIES: &[Property] = &[
     Property {
         name: "ProviderName",
@@ -129,6 +145,48 @@ const PROPERTIES: &[Property] = &[
         access_type: "Read",
         is_required: false,
         value: Some("Core"),
+    },
+    // MDX capability bitmasks Excel negotiates at connect time (see
+    // `int_capability` above).
+    int_capability("ProviderType", "6"),
+    int_capability("MdpropMdxCaseSupport", "3"),
+    int_capability("MdpropMdxDescFlags", "7"),
+    int_capability("MdpropMdxFormulas", "63"),
+    int_capability("MdpropMdxJoinCubes", "1"),
+    int_capability("MdpropMdxMemberFunctions", "15"),
+    int_capability("MdpropMdxNonMeasureExpressions", "0"),
+    int_capability("MdpropMdxNumericFunctions", "2047"),
+    int_capability("MdpropMdxObjQualification", "496"),
+    int_capability("MdpropMdxOuterReference", "0"),
+    int_capability("MdpropMdxRangeRowset", "4"),
+    int_capability("MdpropMdxSetFunctions", "524287"),
+    int_capability("MdpropMdxSlicer", "2"),
+    int_capability("MdpropMdxStringCompop", "15"),
+    int_capability("DbpropMsmdMDXCompatibility", "0"),
+    int_capability("DbpropMsmdMDXUniqueNameStyle", "0"),
+    Property {
+        name: "MdxMissingMemberMode",
+        description: "MdxMissingMemberMode",
+        prop_type: "string",
+        access_type: "ReadWrite",
+        is_required: false,
+        value: Some("Default"),
+    },
+    Property {
+        name: "MdpropMdxQueryByProperty",
+        description: "MdpropMdxQueryByProperty",
+        prop_type: "boolean",
+        access_type: "Read",
+        is_required: false,
+        value: Some("true"),
+    },
+    Property {
+        name: "StateSupport",
+        description: "StateSupport",
+        prop_type: "string",
+        access_type: "Read",
+        is_required: false,
+        value: Some("Sessions"),
     },
 ];
 
