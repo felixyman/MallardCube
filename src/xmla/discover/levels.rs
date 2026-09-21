@@ -13,6 +13,38 @@ fn time_level_type(name: &str) -> u32 {
     }
 }
 
+// OLE DB DBTYPE values (oledb.h / mdstypes.h).
+const DBTYPE_I4: i32 = 3;
+const DBTYPE_DBTIMESTAMP: i32 = 135;
+const DBTYPE_WSTR: i32 = 130;
+
+/// OLE DB `LEVEL_DBTYPE` for a level's member key. Date-role leaves report a
+/// date type so Excel treats the hierarchy as dates (Date Filters, timelines);
+/// everything else stays a string. SSAS reports DBTYPE_DBTIMESTAMP for date
+/// columns.
+fn level_db_type(
+    d: &crate::engine::model::DimensionDef,
+    level: &crate::engine::model::LevelDef,
+) -> i32 {
+    if !d.is_date_role {
+        return DBTYPE_WSTR;
+    }
+    match time_level_type(&level.name) {
+        96 => DBTYPE_DBTIMESTAMP,
+        20 | 68 | 84 => DBTYPE_I4,
+        _ => {
+            // Non-English level names: the deepest level of a date role is the
+            // full date, the ones above it are period parts.
+            let deepest = d.levels.iter().map(|l| l.level_number).max();
+            if Some(level.level_number) == deepest {
+                DBTYPE_DBTIMESTAMP
+            } else {
+                DBTYPE_I4
+            }
+        }
+    }
+}
+
 const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string"/>
@@ -116,6 +148,7 @@ pub fn get_levels_response() -> String {
                 } else {
                     0
                 };
+                let level_dbt = level_db_type(d, level);
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -132,7 +165,7 @@ pub fn get_levels_response() -> String {
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
+            <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>{lcard}</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -143,6 +176,7 @@ pub fn get_levels_response() -> String {
                     lnum = level_num,
                     lcard = level.cardinality.max(1),
                     ltype = level_type,
+                    ldbt = level_dbt,
                     dim_u = xml_escape(&d.dimension_unique_name()),
                     hier_u = xml_escape(&d.hierarchy_unique_name()),
                     guid = base_guid + 1 + level.level_number * 2,
@@ -164,11 +198,11 @@ pub fn get_levels_response() -> String {
             <LEVEL_CAPTION>{leaf_name}</LEVEL_CAPTION>
             <LEVEL_NUMBER>1</LEVEL_NUMBER>
             <LEVEL_CARDINALITY>{cardinality}</LEVEL_CARDINALITY>
-            <LEVEL_TYPE>0</LEVEL_TYPE>
+            <LEVEL_TYPE>{ltype}</LEVEL_TYPE>
             <CUSTOM_ROLLUP_SETTINGS>0</CUSTOM_ROLLUP_SETTINGS>
             <LEVEL_UNIQUE_SETTINGS>1</LEVEL_UNIQUE_SETTINGS>
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
-            <LEVEL_DBTYPE>130</LEVEL_DBTYPE>
+            <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>{cardinality}</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
@@ -180,6 +214,12 @@ pub fn get_levels_response() -> String {
                 leaf_unique = xml_escape(&d.leaf_level_unique_name()),
                 guid = base_guid + 1,
                 cardinality = d.cardinality_hint,
+                ltype = if d.is_date_role { 96 } else { 0 },
+                ldbt = if d.is_date_role {
+                    DBTYPE_DBTIMESTAMP
+                } else {
+                    DBTYPE_WSTR
+                },
                 catalog = project.config.catalog,
                 cube = project.config.cube,
             ));
@@ -208,6 +248,38 @@ mod tests {
             assert!(quarter, "should have Quarter level");
             assert!(month, "should have Month level");
             assert!(date_leaf, "should have Date leaf level");
+
+            // Date levels report real data types (Excel needs a date type for
+            // Date Filters): the leaf is a date, the period parts are numeric.
+            for (lvl, expected) in [
+                ("[Date].[Date].[Year]", "3"),
+                ("[Date].[Date].[Quarter]", "3"),
+                ("[Date].[Date].[Month]", "3"),
+                ("[Date].[Date].[Date]", "135"),
+            ] {
+                let marker = format!("<LEVEL_UNIQUE_NAME>{lvl}</LEVEL_UNIQUE_NAME>");
+                let start = resp
+                    .find(&marker)
+                    .unwrap_or_else(|| panic!("missing {lvl}"));
+                let end = start + resp[start..].find("</row>").unwrap();
+                let row = &resp[start..end];
+                let dbt = row
+                    .split("<LEVEL_DBTYPE>")
+                    .nth(1)
+                    .and_then(|s| s.split('<').next())
+                    .unwrap_or("");
+                assert_eq!(dbt, expected, "LEVEL_DBTYPE for {lvl}: {row}");
+            }
+
+            // Non-date dimensions stay strings.
+            let cat_row = resp
+                .split("<row>")
+                .find(|r| r.contains("<DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>"))
+                .expect("Category level row");
+            assert!(
+                cat_row.contains("<LEVEL_DBTYPE>130</LEVEL_DBTYPE>"),
+                "Category should stay a string level: {cat_row}"
+            );
         });
     }
 

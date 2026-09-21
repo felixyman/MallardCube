@@ -14,6 +14,81 @@ use nom::{
     sequence::delimited,
 };
 
+// ---- unsupported constructs (plan 046) ----
+
+/// Constructs MallardCube does not support yet, detected up front so the
+/// execute path can return a clear fault instead of a dropped axis or a
+/// wrong-hierarchy cellset.
+///
+/// Deliberately conservative: only constructs that are verified broken today.
+pub fn unsupported_features(mdx: &str) -> Option<String> {
+    let upper = mdx.to_uppercase();
+    if upper.contains("WITH SET") {
+        return Some("named sets (`WITH SET`) are not supported yet".into());
+    }
+    for (needle, name) in [
+        ("PERIODSTODATE(", "PeriodsToDate()"),
+        ("PARALLELPERIOD(", "ParallelPeriod()"),
+        ("LASTPERIODS(", "LastPeriods()"),
+        ("CLOSINGPERIOD(", "ClosingPeriod()"),
+        ("OPENINGPERIOD(", "OpeningPeriod()"),
+        ("YTD(", "YTD()"),
+        ("QTD(", "QTD()"),
+        ("MTD(", "MTD()"),
+    ] {
+        if upper.contains(needle) {
+            return Some(format!(
+                "the MDX time function `{name}` is not supported yet"
+            ));
+        }
+    }
+    if upper.contains("VBA!") || upper.contains("DATEADD(") {
+        return Some("MDX date arithmetic (`DateAdd`/`VBA!`) is not supported yet".into());
+    }
+    if upper.contains("FILTER(")
+        && (upper.contains("MEMBER_VALUE")
+            || upper.contains("MEMBER_KEY")
+            || upper.contains("CURRENTMEMBER"))
+    {
+        return Some(
+            "member-property filters (`Filter` over `Member_Value`/`Member_Key`) are not supported yet"
+                .into(),
+        );
+    }
+    if has_member_range(mdx) {
+        return Some("member ranges (`member : member`) are not supported yet".into());
+    }
+    None
+}
+
+/// A member range is a `:` between two bracketed members, outside brackets:
+/// `{[D].[H].[L].&[a] : [D].[H].[L].&[b]}`.
+fn has_member_range(mdx: &str) -> bool {
+    let bytes = mdx.as_bytes();
+    let mut depth = 0usize;
+    let mut last_non_space: Option<u8> = None;
+    for (i, &c) in bytes.iter().enumerate() {
+        match c {
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 && last_non_space == Some(b']') => {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'[' {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        if !c.is_ascii_whitespace() {
+            last_non_space = Some(c);
+        }
+    }
+    false
+}
+
 // ---- whitespace ----
 
 fn ws(input: &str) -> IResult<&str, &str> {
@@ -1372,6 +1447,54 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_features_are_detected() {
+        for (mdx, needle) in [
+            (
+                "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales]",
+                "YTD()",
+            ),
+            (
+                "SELECT {PeriodsToDate([Date].[Date].[Year], [Date].[Date].[Month].&[2024]&[6])} ON 1 FROM [Sales]",
+                "PeriodsToDate()",
+            ),
+            (
+                "WITH SET [Last30] AS 'x' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                "named sets",
+            ),
+            (
+                "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+                "member ranges",
+            ),
+            (
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)",
+                "member-property filters",
+            ),
+            (
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, DateAdd(\"d\", -30, VBA![Date]()) <= 1)",
+                "date arithmetic",
+            ),
+        ] {
+            let reason = unsupported_features(mdx).unwrap_or_else(|| panic!("not detected: {mdx}"));
+            assert!(reason.contains(needle), "{mdx} → {reason}");
+        }
+    }
+
+    #[test]
+    fn supported_mdx_is_not_flagged() {
+        for mdx in [
+            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+            "SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0 FROM [Sales]",
+            "SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Date].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
+            "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
+        ] {
+            assert!(unsupported_features(mdx).is_none(), "false positive: {mdx}");
+        }
+    }
 
     #[test]
     fn parse_member_all() {

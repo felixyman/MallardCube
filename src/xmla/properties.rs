@@ -108,7 +108,11 @@ const PROPERTIES: &[Property] = &[
         prop_type: "int",
         access_type: "Read",
         is_required: false,
-        value: Some("15"),
+        // Named sets (`WITH SET` / `CREATE SET`) are not implemented yet
+        // (plan 046). SSAS returns a capability bitmask; 0 is honest until
+        // the MDX support lands — otherwise Excel offers "Manage Sets" and
+        // sends MDX the proxy cannot execute.
+        value: Some("0"),
     },
     Property {
         name: "MdpropMdxDdlExtensions",
@@ -181,4 +185,21 @@ pub fn get_single_property_response(name: &str, value: &str) -> String {
           </row>"#,
     );
     discover_rowset_envelope(UUID_TYPE, PROPERTY_ROW_FIELDS, &row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Plan 046: named sets are not implemented, so the capability must not be
+    // advertised (Excel otherwise offers "Manage Sets" and sends `WITH SET`).
+    #[test]
+    fn named_sets_are_advertised_as_unsupported() {
+        let resp = get_properties_response(&["MdpropMdxNamedSets".to_string()]);
+        assert!(
+            resp.contains("<PropertyName>MdpropMdxNamedSets</PropertyName>"),
+            "{resp}"
+        );
+        assert!(resp.contains("<Value>0</Value>"), "{resp}");
+    }
 }

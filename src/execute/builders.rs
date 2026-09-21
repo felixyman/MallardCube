@@ -20,6 +20,14 @@ use crate::response::wrap_in_soap_envelope;
 // Re-export runtime entry point at the same path callers expect.
 pub use crate::execute::runtime::get_execute_cellset_response_with_backend_and_context;
 
+/// Fault envelope for MDX the proxy does not support yet, or `None` when the
+/// statement is fine. Shared by the production and test entry points so both
+/// fault identically (plan 046).
+pub fn unsupported_fault(mdx: &str) -> Option<String> {
+    crate::mdx_parser::unsupported_features(mdx)
+        .map(|reason| crate::response::fault_response(&reason))
+}
+
 // ---- test seams ----
 //
 // These helpers carry no backend parameter and use the demo fixture; they
@@ -46,6 +54,9 @@ pub fn execute_semantic_query_with_backend<B: QueryBackend>(
 
 #[cfg(test)]
 pub fn get_execute_cellset_response(mdx: &str) -> String {
+    if let Some(fault) = unsupported_fault(mdx) {
+        return fault;
+    }
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     execute_semantic_query(&query)
 }

@@ -43,6 +43,19 @@ pub fn xml_escape(s: &str) -> String {
     out
 }
 
+/// SOAP fault envelope for requests the proxy cannot honour. Used for
+/// unsupported MDX constructs (plan 046) and internal errors: a clear fault
+/// beats a silently dropped axis or a wrong-hierarchy cellset.
+pub fn fault_response(message: &str) -> String {
+    format!(
+        "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+         <soap:Body><soap:Fault><faultcode>XMLAnalysisError</faultcode>\
+         <faultstring>{}</faultstring></soap:Fault></soap:Body>\
+         </soap:Envelope>",
+        xml_escape(message)
+    )
+}
+
 pub const UUID_TYPE: &str = r#"<xsd:simpleType name="uuid">
               <xsd:restriction base="xsd:string">
                 <xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/>

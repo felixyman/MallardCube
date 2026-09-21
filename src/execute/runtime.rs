@@ -21,6 +21,13 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     user: &UserContext,
     config: &ProxyConfig,
 ) -> (String, Timings) {
+    // Unsupported constructs fault loudly instead of returning a dropped axis
+    // or a wrong-hierarchy cellset (plan 046).
+    if let Some(fault) = crate::execute::builders::unsupported_fault(mdx) {
+        let timings = Timings::new(RuntimePath::DirectSql, "unsupported".to_string(), 0, 0);
+        return (fault, timings);
+    }
+
     let t0 = Instant::now();
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
     let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;

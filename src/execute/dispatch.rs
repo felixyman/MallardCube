@@ -2787,6 +2787,38 @@ mod tests {
         });
     }
 
+    // Plan 046: unsupported set expressions fault with a named reason instead
+    // of returning a dropped axis or a wrong-hierarchy cellset.
+    #[test]
+    fn unsupported_set_expressions_fault_loudly() {
+        with_project3(|| {
+            for (mdx, needle) in [
+                (
+                    "SELECT {HEAD(YTD([Date].[Date].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                    "YTD()",
+                ),
+                (
+                    "SELECT {[Measures].[Revenue]} ON 0, {[Date].[Date].[Year].&[2022] : [Date].[Date].[Year].&[2024]} ON 1 FROM [Sales]",
+                    "member ranges",
+                ),
+                (
+                    "WITH SET [Last30] AS 'Filter([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= DateAdd(\"d\", -30, VBA![Date]()))' SELECT {[Measures].[Revenue]} ON 0 FROM [Sales]",
+                    "named sets",
+                ),
+            ] {
+                let xml = crate::execute_builders::get_execute_cellset_response(mdx);
+                assert!(xml.contains("<faultstring>"), "{mdx} → {xml}");
+                assert!(xml.contains(needle), "{mdx} → {xml}");
+            }
+
+            // Supported shapes are untouched.
+            let xml = crate::execute_builders::get_execute_cellset_response(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+        });
+    }
+
     #[test]
     fn time_intelligence_revenue_ytd_plan_has_date_dim_filter() {
         with_project3(|| {

@@ -53,10 +53,27 @@ honor its STOP conditions, and update your row when done.
 | 043  | RLS-aware aggregation routing (rollup-expressible role predicates) | P1 | M | — | DONE |
 | 044  | Boundary contract — a protocol adapter, not a semantic layer | P1 | M | — | IN PROGRESS |
 | 045  | Intake fidelity — converted models must arrive with their shape | P1 | L | 044 | IN PROGRESS |
+| 046  | Time intelligence robustness — the SSAS killer feature | P1 | M/L | 045 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract) and 045 (intake fidelity) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity) and 046 (time intelligence robustness) are IN PROGRESS. Next milestone: Gate G1 (public validation).**
+
+- 046 (time intelligence robustness) **IN PROGRESS** 2026-09-21: captured what
+  Excel actually sends (real MSOLAP client) for time-intelligence paths —
+  `CUBESET` with `YTD()` (`HEAD(YTD(…),1)`), the named-set sliding window
+  (`Filter(…, Member_Value >= DateAdd('d',-30,VBA![Date]()))`), member ranges
+  (`{a:b}`) and `WITH SET` — all previously failed **silently** (dropped axes,
+  or a wrong-hierarchy `[Category]` cellset). Slices 1–2 landed:
+  `LEVEL_DBTYPE` now reflects the level (date-role leaves 135, period parts 3,
+  strings 130), and unsupported constructs fault loudly with a named reason
+  (`unsupported_features` + `unsupported_fault`); the `MdpropMdxNamedSets`
+  capability now advertises 0 instead of 15 so Excel stops offering a feature
+  the proxy cannot serve. Note: Excel refuses pivot filters on OLAP sources via
+  VBA (label filters too), so the UI Date Filters capture still needs a human
+  at the VM. Remaining: range sets, `WITH SET` + member-value filters + VBA
+  date arithmetic, MDX time functions, and converter DAX mappings for
+  `TOTALQTD`/`TOTALMTD`/`DATESQTD`/`DATESMTD`.
 
 - 036 (AutoModel) DONE 2026-08-15 (pulled forward from behind Gate G1): zero-config
   detection from any DuckDB — fact table, SUM measures, FK/name-heuristic
