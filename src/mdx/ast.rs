@@ -47,8 +47,27 @@ pub enum Expr {
     Members(Box<Expr>),
     /// `<expr>.Children`
     Children(Box<Expr>),
+    /// `-{ … }` — an excluded set (DrilldownMember collapse).
+    Exclude(Box<Expr>),
+    /// A comparison predicate (`[Measures].[X] > 100`) inside `Filter`.
+    Binary {
+        op: CmpOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     Number(String),
     Str(String),
+}
+
+/// Comparison operators in filter predicates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
 }
 
 /// A bracketed member reference: `[D]`, `[D].[H]`, `[D].[H].[L]`,
@@ -80,6 +99,17 @@ impl Expr {
         match self {
             Expr::Member(m) => Some(m),
             Expr::Members(inner) | Expr::Children(inner) => inner.as_member(),
+            _ => None,
+        }
+    }
+
+    /// The member reference at the root of an excluded/wrapped expression.
+    pub fn root_member(&self) -> Option<&MemberRef> {
+        match self {
+            Expr::Member(m) => Some(m),
+            Expr::Exclude(inner) | Expr::Members(inner) | Expr::Children(inner) => {
+                inner.root_member()
+            }
             _ => None,
         }
     }

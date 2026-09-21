@@ -7,8 +7,9 @@
 - **Risk**: LOW–MEDIUM (regression harness = existing 467 tests + captured workload)
 - **Depends on**: 046 slices 1–3 (fault infrastructure, ranges)
 - **Category**: parser / architecture
-- **Status**: **IN PROGRESS 2026-09-21** — increment 1 (lexer + AST + axis
-  extraction) landed; increments 2–3 TODO.
+- **Status**: **IN PROGRESS 2026-09-21** — increments 1–2 landed (lexer + AST +
+  axis/filter extraction); increment 3 (delete the scanners, retire the lexical
+  pre-scan, trace corpus) TODO.
 
 ## Why
 
@@ -43,7 +44,7 @@ subset faults with a named reason.
 | # | Increment | Effort | Status |
 |---|---|---|---|
 | 1 | **Lexer + AST + axis extraction**: tokenize MDX; parse `SELECT <axes> FROM <cube> [WHERE …]`; sets, tuples, members, ranges, calls, `.Members`/`.Children`; derive `axis_dimension_ids`, `axis_level_members`, axis ranges and the set-probe expression from the AST (replacing those scanners) | M | **DONE** |
-| 2 | **Migrate WHERE/slicers, calculated members/set counts, drilldown targets** to the AST; retire the lexical `unsupported_features` pre-scan in favour of structured parse errors | M | TODO |
+| 2 | **Migrate WHERE/slicers, set ops, drilldown exclusions** to the AST | M | **DONE** |
 | 3 | **Delete the hand scanners**; `ParsedMdx` becomes a thin view over the AST (or is replaced); add the captured workload/trace corpus as a parser regression suite | S/M | TODO |
 
 ## Increment 1 evidence (2026-09-21)
@@ -64,6 +65,25 @@ subset faults with a named reason.
 - Still faulting (increment 2): a braced `{range}` beside a braced measure set
   (that shape is not classified as an axis yet), slicer ranges, and ranges
   inside quoted calculated-member bodies.
+
+## Increment 2 evidence (2026-09-21)
+
+- Lexer/AST extended with comparison operators, a minus token and
+  `Expr::{Binary, Exclude}`; the parser accepts `-{ … }` collapse exclusions
+  and predicates inside `Filter(...)`.
+- `ParsedMdx` now derives `where_members`, `subquery_members`,
+  `select_members`, `select_tuples`, `excluded_members`,
+  `drilldown_member_hierarchy` and `axis_set_op` from the AST (the legacy
+  scanners remain as the fallback for unparseable statements).
+- Name-form member references (`[Category].[Category].[Electronics]`) map to a
+  leaf key like the old parser, while `.Members` level sets stay on the
+  level-drag path (found by the suite: the name-form WHERE filter regressed
+  until the conversion handled it).
+- Verified: 482 tests green, smoke 8/8, the captured workload replays 7/7 with
+  no faults, name-form WHERE → 24,719,896, TopCount/Order/Filter behave.
+- Deferred to increment 3: retiring the lexical `unsupported_features` pre-scan
+  (it still works and is covered by tests; the AST rewrite lands with the
+  scanner deletion and the trace corpus).
 
 ## Increment 1 design
 

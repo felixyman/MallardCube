@@ -70,9 +70,12 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   the AST, with the legacy scanners as a transitional fallback. The captured
   Excel workload replays 7/7 without faults and smoke stays 8/8. Also fixed a
   cache-key bug the AST work exposed (`filter_suffix` ignored ranges, so a range
-  probe could be served for a plain probe). Remaining: migrate WHERE/slicers,
-  calculated members and drilldown targets; retire the scanners and the lexical
-  unsupported pre-scan; add the trace corpus as a parser regression suite.
+  probe could be served for a plain probe). Increment 2 (same day) migrated
+  WHERE/slicer members, batched CUBEVALUE tuples, DrilldownMember exclusions +
+  hierarchy and axis set ops (TopCount/Order/Filter) to the AST — including the
+  name-form member semantics (`[D].[H].[Name]`). Remaining: delete the scanners,
+  retire the lexical unsupported pre-scan, and add the trace corpus as a parser
+  regression suite.
 
 - 046 (time intelligence robustness) **IN PROGRESS** 2026-09-21: captured what
   Excel actually sends (real MSOLAP client) for time-intelligence paths —

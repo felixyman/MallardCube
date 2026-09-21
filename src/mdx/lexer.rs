@@ -27,6 +27,13 @@ pub enum Token {
     RBrace,
     /// `!` — for VBA-style references (`VBA![Date]()`).
     Bang,
+    Minus,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
 }
 
 impl Token {
@@ -136,6 +143,35 @@ pub fn lex(input: &str) -> Result<Vec<Token>, ParseError> {
             }
             b'!' => {
                 out.push(Token::Bang);
+                i += 1;
+            }
+            b'-' if !b.get(i + 1).is_some_and(|n| n.is_ascii_digit()) => {
+                out.push(Token::Minus);
+                i += 1;
+            }
+            b'>' => {
+                if b.get(i + 1) == Some(&b'=') {
+                    out.push(Token::Ge);
+                    i += 2;
+                } else {
+                    out.push(Token::Gt);
+                    i += 1;
+                }
+            }
+            b'<' => {
+                if b.get(i + 1) == Some(&b'>') {
+                    out.push(Token::Ne);
+                    i += 2;
+                } else if b.get(i + 1) == Some(&b'=') {
+                    out.push(Token::Le);
+                    i += 2;
+                } else {
+                    out.push(Token::Lt);
+                    i += 1;
+                }
+            }
+            b'=' => {
+                out.push(Token::Eq);
                 i += 1;
             }
             _ if c.is_ascii_digit()

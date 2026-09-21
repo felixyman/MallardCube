@@ -1468,11 +1468,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
             .map(|end| after_from[..end].to_string())
     });
 
-    // Parse axis dimension IDs from the select clause in positional order.
-    // Strategy: split on CrossJoin( / DrilldownLevel( to find axis expressions,
-    // then extract the first non-Measures bracketed identifier in each.
-    // Plan 047: the front-end (lexer + AST) owns axis extraction when it can
-    // parse the statement; the legacy scanners remain as a transitional
+    // Plan 047: the front-end (lexer + AST) owns axis/filter extraction when it
+    // can parse the statement; the legacy scanners remain as a transitional
     // fallback for shapes the AST does not model yet.
     let frontend = crate::mdx::frontend::parse_select(input);
     let (axis_dimension_ids, axis_level_members, axis_member_ranges, axis_set_expr) =
@@ -1492,26 +1489,50 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         };
 
     // Parse excluded members from DrilldownMember if present.
-    let excluded_members = if has_drilldown_member(input) {
-        parse_excluded_members_from_mdx(input)
-    } else {
-        Vec::new()
+    // Filter/set-op derivations from the same AST (see above).
+    let (
+        where_members,
+        subquery_members,
+        select_members,
+        select_tuples,
+        excluded_members,
+        drilldown_member_hierarchy,
+        axis_set_op,
+    ) = match &frontend {
+        Ok(sel) => (
+            crate::mdx::frontend::where_members(sel),
+            crate::mdx::frontend::subquery_members(sel),
+            crate::mdx::frontend::select_members(sel),
+            crate::mdx::frontend::select_tuples(sel),
+            crate::mdx::frontend::excluded_members(sel),
+            crate::mdx::frontend::drilldown_member_hierarchy(sel),
+            crate::mdx::frontend::axis_set_op(sel),
+        ),
+        Err(_) => {
+            let excluded = if has_drilldown_member(input) {
+                parse_excluded_members_from_mdx(input)
+            } else {
+                Vec::new()
+            };
+            let hierarchy = if has_drilldown_member(input) {
+                parse_drilldown_member_hierarchy_from_mdx(input)
+            } else {
+                None
+            };
+            let all_subquery = find_all_subquery_members(input);
+            let mut sq: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
+            sq.extend(find_subselect_members(input));
+            (
+                find_where_clause(input).unwrap_or_default(),
+                sq,
+                find_select_tuple_members(input),
+                find_select_tuples(input),
+                excluded,
+                hierarchy,
+                detect_axis_set_op(input),
+            )
+        }
     };
-
-    let drilldown_member_hierarchy = if has_drilldown_member(input) {
-        parse_drilldown_member_hierarchy_from_mdx(input)
-    } else {
-        None
-    };
-
-    let where_members = find_where_clause(input).unwrap_or_default();
-
-    let all_subquery = find_all_subquery_members(input);
-    let mut subquery_members: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
-    subquery_members.extend(find_subselect_members(input));
-
-    let select_members = find_select_tuple_members(input);
-    let select_tuples = find_select_tuples(input);
 
     // All measures referenced in the SELECT clause, in order. A single cell
     // holds one measure; batched CUBEVALUE cells produce several.
@@ -1550,7 +1571,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         axis_dimension_ids,
         excluded_members,
         drilldown_member_hierarchy,
-        axis_set_op: detect_axis_set_op(input),
+        axis_set_op,
         axis_set_expr,
         calculated_counts: parse_calculated_count(input).into_iter().collect(),
         axis_level_members,

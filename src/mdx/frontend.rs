@@ -9,7 +9,7 @@
 //! `parser.rs` for axis extraction (`axis_dimension_ids`, `axis_level_members`,
 //! axis ranges and the set-probe expression).
 
-use super::ast::{Axis, Expr, MemberRef, Select};
+use super::ast::{Axis, CmpOp, Expr, MemberRef, Select};
 use super::lexer::{ParseError, Token, lex};
 use super::parser::SetExpr;
 
@@ -242,17 +242,43 @@ impl<'a> Parser<'a> {
         out
     }
 
-    /// A set/tuple/member expression, including ranges.
+    /// A set/tuple/member expression, including ranges and comparisons.
     fn expr(&mut self) -> Result<Expr, ParseError> {
         let primary = self.primary()?;
         if self.eat(&Token::Colon) {
             let rhs = self.primary()?;
             return Ok(Expr::Range(Box::new(primary), Box::new(rhs)));
         }
+        if let Some(op) = self.peek_cmp() {
+            self.pos += 1;
+            let rhs = self.primary()?;
+            return Ok(Expr::Binary {
+                op,
+                lhs: Box::new(primary),
+                rhs: Box::new(rhs),
+            });
+        }
         Ok(primary)
     }
 
+    fn peek_cmp(&self) -> Option<CmpOp> {
+        match self.peek() {
+            Some(Token::Gt) => Some(CmpOp::Gt),
+            Some(Token::Ge) => Some(CmpOp::Ge),
+            Some(Token::Lt) => Some(CmpOp::Lt),
+            Some(Token::Le) => Some(CmpOp::Le),
+            Some(Token::Eq) => Some(CmpOp::Eq),
+            Some(Token::Ne) => Some(CmpOp::Ne),
+            _ => None,
+        }
+    }
+
     fn primary(&mut self) -> Result<Expr, ParseError> {
+        // `-{ … }` — an excluded set (DrilldownMember collapse).
+        if self.eat(&Token::Minus) {
+            let inner = self.primary()?;
+            return Ok(Expr::Exclude(Box::new(inner)));
+        }
         let mut base = match self.peek() {
             Some(Token::LBrace) => {
                 self.pos += 1;
@@ -626,6 +652,250 @@ fn uname(m: &MemberRef) -> String {
     s
 }
 
+// ---------------------------------------------------------------------------
+// Filter/set-op derivations (increment 2)
+// ---------------------------------------------------------------------------
+
+use super::parser::{AxisSetOp, CmpOp as PCmpOp, DimRef, MemberRef as PMemberRef};
+
+fn ast_to_member(e: &Expr) -> Option<PMemberRef> {
+    match e {
+        Expr::Member(m) => {
+            let dim = if m.dim().eq_ignore_ascii_case("Measures") {
+                DimRef::Measures
+            } else {
+                DimRef::Cube(m.dim().to_string())
+            };
+            match &m.key {
+                // `[D].[H].[L].&[k]` — level-qualified key.
+                Some(k) => Some(PMemberRef::Leaf {
+                    dim,
+                    key: k.clone(),
+                    level: m.level().map(str::to_string),
+                }),
+                None => {
+                    let last = m.parts.last().map(String::as_str).unwrap_or("");
+                    if last.eq_ignore_ascii_case("All") || last.eq_ignore_ascii_case("(All)") {
+                        return Some(PMemberRef::All(dim));
+                    }
+                    // Name-form member references (no `&` key qualifier):
+                    // `[D].[H].[Name]` and `[D].[H].[Level].[Name]`. These are
+                    // member *names*, not level references — the level-drag
+                    // path handles `.Members` separately.
+                    match m.parts.len() {
+                        3 => Some(PMemberRef::Leaf {
+                            dim,
+                            key: m.parts[2].clone(),
+                            level: None,
+                        }),
+                        4.. => Some(PMemberRef::Leaf {
+                            dim,
+                            key: m.parts[3].clone(),
+                            level: Some(m.parts[2].clone()),
+                        }),
+                        _ => None,
+                    }
+                }
+            }
+        }
+        Expr::Measure(name) => Some(PMemberRef::Measure(name.clone())),
+        _ => None,
+    }
+}
+
+fn flatten_members(e: &Expr, out: &mut Vec<PMemberRef>) {
+    match e {
+        Expr::Set(items) | Expr::Tuple(items) => {
+            for item in items {
+                flatten_members(item, out);
+            }
+        }
+        Expr::Range(a, b) => {
+            flatten_members(a, out);
+            flatten_members(b, out);
+        }
+        Expr::Exclude(inner) => flatten_members(inner, out),
+        // Level sets (`.Members`) are handled by the level-drag path, not as
+        // member filters.
+        Expr::Members(_) | Expr::Children(_) => {}
+        // A comparison predicate is not a member.
+        Expr::Binary { .. } => {}
+        other => {
+            if let Some(m) = ast_to_member(other) {
+                out.push(m);
+            }
+        }
+    }
+}
+
+/// Slicer members (`WHERE (…)` / `WHERE {…}`).
+pub fn where_members(sel: &Select) -> Vec<PMemberRef> {
+    let mut out = Vec::new();
+    if let Some(w) = &sel.where_clause {
+        flatten_members(w, &mut out);
+    }
+    out
+}
+
+/// Members of a `FROM (SELECT …)` subselect.
+pub fn subquery_members(sel: &Select) -> Vec<PMemberRef> {
+    let mut out = Vec::new();
+    if let Some(sub) = &sel.subquery {
+        for axis in &sub.axes {
+            for e in &axis.exprs {
+                flatten_members(e, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Members of parenthesized tuples on the outer axes (`SELECT {(a, b), …}`).
+pub fn select_members(sel: &Select) -> Vec<PMemberRef> {
+    let mut out = Vec::new();
+    for tuple in select_tuples(sel) {
+        out.extend(tuple);
+    }
+    out
+}
+
+/// Batched CUBEVALUE tuples on the outer axes.
+pub fn select_tuples(sel: &Select) -> Vec<Vec<PMemberRef>> {
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            if let Expr::Set(items) = e {
+                for item in items {
+                    if let Expr::Tuple(tuple) = item {
+                        let mut members = Vec::new();
+                        for part in tuple {
+                            flatten_members(part, &mut members);
+                        }
+                        out.push(members);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Members excluded from a DrilldownMember collapse (`-{ … }`).
+pub fn excluded_members(sel: &Select) -> Vec<(String, String)> {
+    fn walk(e: &Expr, out: &mut Vec<(String, String)>) {
+        match e {
+            Expr::Exclude(inner) => {
+                let mut members = Vec::new();
+                flatten_members(inner, &mut members);
+                for m in members {
+                    if let PMemberRef::Leaf { dim, key, .. } = m {
+                        let dim = match dim {
+                            DimRef::Cube(d) => d,
+                            DimRef::Measures => "Measures".to_string(),
+                        };
+                        out.push((dim, key));
+                    }
+                }
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) => walk(inner, out),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(e, &mut out);
+        }
+    }
+    out
+}
+
+/// The dimension token following a DrilldownMember exclusion set.
+pub fn drilldown_member_hierarchy(sel: &Select) -> Option<String> {
+    fn walk(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("DrilldownMember") => {
+                args.iter().rev().find_map(|a| {
+                    let m = a.as_member()?;
+                    (m.key.is_none() && !m.parts.is_empty()).then(|| m.dim().to_string())
+                })
+            }
+            Expr::Call { args, .. } => args.iter().find_map(walk),
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().find_map(walk),
+            Expr::Range(a, b) => walk(a).or_else(|| walk(b)),
+            Expr::Members(inner) | Expr::Children(inner) => walk(inner),
+            _ => None,
+        }
+    }
+    sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk)
+}
+
+/// A TopCount/BottomCount/TopPercent/Order/Filter wrapper around the axis set.
+pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
+    fn num(e: &Expr) -> Option<f64> {
+        match e {
+            Expr::Number(n) => n.parse().ok(),
+            _ => None,
+        }
+    }
+    fn walk(e: &Expr) -> Option<AxisSetOp> {
+        match e {
+            Expr::Call { name, args } => match name.to_uppercase().as_str() {
+                "TOPCOUNT" | "BOTTOMCOUNT" => Some(AxisSetOp::TopCount {
+                    n: num(args.get(1)?)? as usize,
+                    desc: name.eq_ignore_ascii_case("TopCount"),
+                }),
+                "TOPPERCENT" | "BOTTOMPERCENT" => Some(AxisSetOp::TopPercent {
+                    p: num(args.get(1)?)?,
+                }),
+                "ORDER" => Some(AxisSetOp::Order {
+                    desc: args
+                        .iter()
+                        .any(|a| matches!(a, Expr::Str(s) if s.eq_ignore_ascii_case("DESC"))),
+                }),
+                "FILTER" => match args.get(1) {
+                    Some(Expr::Binary { op, rhs, .. }) => Some(AxisSetOp::Filter {
+                        op: to_pcmp(*op),
+                        value: num(rhs)?,
+                    }),
+                    _ => None,
+                },
+                _ => args.iter().find_map(walk),
+            },
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().find_map(walk),
+            Expr::Range(a, b) => walk(a).or_else(|| walk(b)),
+            Expr::Members(inner) | Expr::Children(inner) => walk(inner),
+            _ => None,
+        }
+    }
+    sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk)
+}
+
+fn to_pcmp(op: CmpOp) -> PCmpOp {
+    match op {
+        CmpOp::Gt => PCmpOp::Gt,
+        CmpOp::Ge => PCmpOp::Ge,
+        CmpOp::Lt => PCmpOp::Lt,
+        CmpOp::Le => PCmpOp::Le,
+        CmpOp::Eq => PCmpOp::Eq,
+        CmpOp::Ne => PCmpOp::Ne,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +980,82 @@ mod tests {
         )
         .expect("parse");
         assert!(sel.subquery.is_some());
+    }
+
+    #[test]
+    fn derives_where_members_both_forms() {
+        let sel = parse_select(
+            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Category].[Category].[Electronics])",
+        )
+        .expect("parse");
+        let members = where_members(&sel);
+        assert!(
+            matches!(&members[..], [PMemberRef::Leaf { key, level: None, .. }] if key == "Electronics"),
+            "{members:?}"
+        );
+
+        let sel = parse_select(
+            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Date].[Date].[Year].&[2024])",
+        )
+        .expect("parse");
+        let members = where_members(&sel);
+        assert!(
+            matches!(&members[..], [PMemberRef::Leaf { key, level: Some(l), .. }] if key == "2024" && l == "Year"),
+            "{members:?}"
+        );
+    }
+
+    #[test]
+    fn derives_batched_cubevalue_tuples() {
+        let sel = parse_select(
+            "SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics]),([Measures].[Revenue],[Category].[Category].&[Books])} ON 0 FROM [Sales]",
+        )
+        .expect("parse");
+        assert_eq!(select_tuples(&sel).len(), 2);
+        assert_eq!(select_members(&sel).len(), 4);
+    }
+
+    #[test]
+    fn derives_collapse_exclusions_and_hierarchy() {
+        let sel = parse_select(
+            "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[ProductCategory].[ProductCategory].[All],[ProductCategory].[ProductCategory].[ProductCategory].AllMembers}, {([Region].[Region].[All])}), {-{[ProductCategory].[ProductCategory].&[Category A]}}, [Region].[Region])) ON COLUMNS FROM [Model]",
+        )
+        .expect("parse");
+        assert_eq!(
+            excluded_members(&sel),
+            vec![("ProductCategory".to_string(), "Category A".to_string())]
+        );
+        assert_eq!(drilldown_member_hierarchy(&sel).as_deref(), Some("Region"));
+    }
+
+    #[test]
+    fn derives_axis_set_ops() {
+        let sel = parse_select(
+            "SELECT TopCount([Category].[Category].Members, 5, [Measures].[Revenue]) ON 0 FROM [Sales]",
+        )
+        .expect("parse");
+        assert_eq!(
+            axis_set_op(&sel),
+            Some(AxisSetOp::TopCount { n: 5, desc: true })
+        );
+
+        let sel = parse_select(
+            "SELECT Order([Category].[Category].Members, [Measures].[Revenue], DESC) ON 0 FROM [Sales]",
+        )
+        .expect("parse");
+        assert_eq!(axis_set_op(&sel), Some(AxisSetOp::Order { desc: true }));
+
+        let sel = parse_select(
+            "SELECT Filter([Category].[Category].Members, [Measures].[Revenue] > 100) ON 0 FROM [Sales]",
+        )
+        .expect("parse");
+        assert_eq!(
+            axis_set_op(&sel),
+            Some(AxisSetOp::Filter {
+                op: PCmpOp::Gt,
+                value: 100.0
+            })
+        );
     }
 
     #[test]
