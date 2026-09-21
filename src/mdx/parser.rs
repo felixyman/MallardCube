@@ -1,109 +1,89 @@
-/// nom-based parser for the Excel MDX subset.
-///
-/// Parses member references, WHERE clauses, property clauses,
-/// and axis expressions from Excel MDX probe/query strings.
-///
-/// Dimension names are dynamic — no hardcoded dimension vocabulary.
+//! `ParsedMdx` — the flat view the semantic layer consumes.
+//!
+//! Plan 047 moved axis/filter extraction to the front-end (`lexer` + `ast` +
+//! `frontend`): `parse_mdx` derives members, ranges, set probes, exclusions and
+//! axis set ops from the AST and records `parse_error` when the statement is
+//! outside the supported subset. The remaining scanners (classification flags,
+//! drilldown targets, calculated counts, properties) are the next migration
+//! step. Dimension names are dynamic — no hardcoded dimension vocabulary.
 use nom::{
     IResult,
     branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::{char, multispace0},
-    combinator::map,
     multi::separated_list0,
     sequence::delimited,
 };
 
 // ---- unsupported constructs (plan 046) ----
 
-/// Constructs MallardCube does not support yet, detected up front so the
-/// execute path can return a clear fault instead of a dropped axis or a
-/// wrong-hierarchy cellset.
-///
-/// Deliberately conservative: only constructs that are verified broken today.
+/// Constructs MallardCube does not support yet, detected from the AST (plan
+/// 047) so the execute path faults with a named reason instead of degrading to
+/// a dropped axis or a wrong-hierarchy cellset.
 pub fn unsupported_features(mdx: &str) -> Option<String> {
-    let upper = mdx.to_uppercase();
-    if upper.contains("WITH SET") {
+    let sel = match crate::mdx::frontend::parse_select(mdx) {
+        Ok(sel) => sel,
+        // A statement the front-end cannot parse faults with its reason.
+        Err(e) => return Some(format!("unsupported MDX: {e}")),
+    };
+    use crate::mdx::frontend as fe;
+
+    // Named sets — Excel's "Manage Sets" feature. Only the explicit
+    // `WITH SET` form faults: probe shapes use a bare `Set X As '…'` clause
+    // whose set is consumed by the probe itself.
+    if mdx.to_uppercase().contains("WITH SET") {
         return Some("named sets (`WITH SET`) are not supported yet".into());
     }
-    for (needle, name) in [
-        ("PERIODSTODATE(", "PeriodsToDate()"),
-        ("PARALLELPERIOD(", "ParallelPeriod()"),
-        ("LASTPERIODS(", "LastPeriods()"),
-        ("CLOSINGPERIOD(", "ClosingPeriod()"),
-        ("OPENINGPERIOD(", "OpeningPeriod()"),
-        ("YTD(", "YTD()"),
-        ("QTD(", "QTD()"),
-        ("MTD(", "MTD()"),
-    ] {
-        if upper.contains(needle) {
-            return Some(format!(
-                "the MDX time function `{name}` is not supported yet"
-            ));
-        }
+    let _ = &sel;
+    // MDX time functions.
+    const TIME_FNS: [&str; 8] = [
+        "YTD",
+        "QTD",
+        "MTD",
+        "PERIODSTODATE",
+        "PARALLELPERIOD",
+        "LASTPERIODS",
+        "CLOSINGPERIOD",
+        "OPENINGPERIOD",
+    ];
+    if let Some(name) = fe::first_call(&sel, &TIME_FNS) {
+        return Some(format!(
+            "the MDX time function `{name}()` is not supported yet"
+        ));
     }
-    if upper.contains("VBA!") || upper.contains("DATEADD(") {
+    // VBA date arithmetic (`DateAdd('d', -30, VBA![Date]())`).
+    if fe::first_call(&sel, &["DATEADD"]).is_some() || fe::bodies_contain(&sel, "VBA!") {
         return Some("MDX date arithmetic (`DateAdd`/`VBA!`) is not supported yet".into());
     }
-    if upper.contains("FILTER(")
-        && (upper.contains("MEMBER_VALUE")
-            || upper.contains("MEMBER_KEY")
-            || upper.contains("CURRENTMEMBER"))
-    {
+    // Member-property filters (`Filter(…, [D].[H].CurrentMember.Member_Value …)`).
+    if fe::mentions_member_property(&sel) {
         return Some(
             "member-property filters (`Filter` over `Member_Value`/`Member_Key`) are not supported yet"
                 .into(),
         );
     }
-    // A braced `{range}` beside a braced measure set (`{[Measures].[X]} ON 0,
-    // {a : b} ON 1`) is not classified as an axis yet — fault instead of
-    // returning a slicer-only cellset.
-    if let Ok(sel) = crate::mdx::frontend::parse_select(mdx) {
-        let axis_set_has = |pred: &dyn Fn(&crate::mdx::ast::Expr) -> bool| {
-            sel.axes.iter().any(|a| {
-                a.exprs.iter().any(
-                    |e| matches!(e, crate::mdx::ast::Expr::Set(items) if items.iter().any(pred)),
-                )
-            })
-        };
-        if axis_set_has(&|e| matches!(e, crate::mdx::ast::Expr::Measure(_)))
-            && axis_set_has(&|e| matches!(e, crate::mdx::ast::Expr::Range(..)))
-        {
-            return Some(
-                "member ranges on a pivot axis beside a measure set are not supported yet".into(),
-            );
-        }
+    // Member ranges outside the axis: in a slicer, or inside a quoted
+    // calculated-member body (`COUNT({a : b})`).
+    if fe::has_range_in_slicer(&sel) || fe::bodies_contain_range(&sel) {
+        return Some(
+            "member ranges outside the axis (`{a : b}` in a slicer or a calculated member) are not supported yet"
+                .into(),
+        );
     }
-
-    // Member ranges are supported on the axis (a pivot axis, a set probe, or a
-    // bare set). In a slicer, or inside a quoted calculated-member body
-    // (`COUNT({a : b})`), they are not handled yet.
-    if let Some(pos) = member_range_pos(mdx) {
-        let from_pos = upper.find("FROM").unwrap_or(mdx.len());
-        if pos > from_pos || inside_quotes(mdx, pos) {
-            return Some(
-                "member ranges outside the axis (`{a : b}` in a slicer or a calculated member) are not supported yet"
-                    .into(),
-            );
-        }
+    // A braced `{range}` beside a braced measure set (a shape the semantic
+    // layer does not classify as an axis yet).
+    if fe::braced_range_beside_measure(&sel) {
+        return Some(
+            "member ranges on a pivot axis beside a measure set are not supported yet".into(),
+        );
     }
     None
 }
 
-/// Is a byte position inside a quoted string (`'…'` / `"…"`)?
-fn inside_quotes(mdx: &str, pos: usize) -> bool {
-    let mut quote: Option<char> = None;
-    for (i, c) in mdx.char_indices() {
-        if i >= pos {
-            break;
-        }
-        match (quote, c) {
-            (None, '\'' | '"') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            _ => {}
-        }
-    }
-    quote.is_some()
+/// Is there a `] : [` member range in this text? (Used for quoted bodies the
+/// AST cannot see into.)
+pub(crate) fn text_has_member_range(text: &str) -> bool {
+    member_range_pos(text).is_some()
 }
 
 /// Byte position of a `:` between two bracketed members, outside brackets.
@@ -321,61 +301,6 @@ fn where_clause(input: &str) -> IResult<&str, Vec<MemberRef>> {
 
 // ---- subquery filter parsing ----
 
-fn subquery_body(input: &str) -> IResult<&str, Vec<MemberRef>> {
-    let (input, _) = tag("SELECT ")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = tag("({")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, members) = separated_list0(delimited(ws, char(','), ws), member_ref)(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = tag("})")(input)?;
-    Ok((input, members))
-}
-
-fn find_all_subquery_members(input: &str) -> Vec<Vec<MemberRef>> {
-    let mut results = Vec::new();
-    let mut search_from = 0;
-    while let Some(pos) = input[search_from..].find("SELECT ({") {
-        let sub = &input[search_from + pos..];
-        if let Ok((_, members)) = subquery_body(sub) {
-            results.push(members);
-        }
-        search_from += pos + "SELECT (".len();
-    }
-    results
-}
-
-/// Parse a `{ member | (tuple), ... }` axis set into its member refs.
-fn member_set(input: &str) -> IResult<&str, Vec<MemberRef>> {
-    let (input, _) = ws(input)?;
-    let (input, _) = char('{')(input)?;
-    let (input, _) = ws(input)?;
-    let (input, items) = separated_list0(
-        delimited(ws, char(','), ws),
-        alt((map(paren_members, |ms| ms), map(member_ref, |m| vec![m]))),
-    )(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = char('}')(input)?;
-    Ok((input, items.into_iter().flatten().collect()))
-}
-
-/// Members restricted by a FROM-clause subselect:
-/// `FROM (SELECT {[Dim].[Hier].&[k]} ON COLUMNS FROM [Cube])`. SSAS applies
-/// these as slicer-axis restrictions.
-fn find_subselect_members(input: &str) -> Vec<MemberRef> {
-    let mut results = Vec::new();
-    let upper = input.to_uppercase();
-    let mut search_from = 0;
-    while let Some(pos) = upper[search_from..].find("(SELECT ") {
-        let after = &input[search_from + pos + "(SELECT ".len()..];
-        if let Ok((_, members)) = member_set(after) {
-            results.extend(members);
-        }
-        search_from += pos + "(SELECT ".len();
-    }
-    results
-}
-
 /// Extract every `[Measures].[name]` reference on the COLUMNS axis, in order.
 /// Batched CUBEVALUE cells produce a multi-measure tuple set like
 /// `SELECT {([Measures].[Revenue]),([Measures].[Units])} ON 0`. Set-function
@@ -414,60 +339,6 @@ fn find_all_select_measures(input: &str) -> Vec<String> {
         pos = start + end + 1;
     }
     result
-}
-
-/// Parse a parenthesized, comma-separated member list (e.g. the tuple
-/// `([Measures].[Revenue],[Category].[Category].&[Electronics])`).
-fn paren_members(input: &str) -> IResult<&str, Vec<MemberRef>> {
-    let (input, _) = ws(input)?;
-    let (input, _) = char('(')(input)?;
-    let (input, _) = ws(input)?;
-    let (input, members) = separated_list0(delimited(ws, char(','), ws), member_ref)(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = char(')')(input)?;
-    Ok((input, members))
-}
-
-/// Find dimension/measure members written as a tuple on the main SELECT axis,
-/// e.g. `SELECT {([Measures].[Revenue],[Category].[Category].&[Electronics])} ON 0`.
-fn find_select_tuple_members(input: &str) -> Vec<MemberRef> {
-    let mut results = Vec::new();
-    let mut search_from = 0;
-    while let Some(pos) = input[search_from..].find("SELECT {(") {
-        let after_brace = &input[search_from + pos + "SELECT {".len()..];
-        if let Ok((_, members)) = paren_members(after_brace) {
-            results.extend(members);
-        }
-        search_from += pos + "SELECT {(".len();
-    }
-    results
-}
-
-/// Parse a `{ (tuple), (tuple), ... }` set of parenthesized tuples.
-fn select_set(input: &str) -> IResult<&str, Vec<Vec<MemberRef>>> {
-    let (input, _) = ws(input)?;
-    let (input, _) = char('{')(input)?;
-    let (input, _) = ws(input)?;
-    let (input, tuples) = separated_list0(delimited(ws, char(','), ws), paren_members)(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = char('}')(input)?;
-    Ok((input, tuples))
-}
-
-/// Find a set of parenthesized tuples on the SELECT axis, one `Vec<MemberRef>`
-/// per tuple. Batched CUBEVALUE cells with different slicers produce
-/// `SELECT {([M],[D].[L].&[k1]),([M],[D].[L2].&[k2])} ON 0`.
-fn find_select_tuples(input: &str) -> Vec<Vec<MemberRef>> {
-    let mut results = Vec::new();
-    let mut search_from = 0;
-    while let Some(pos) = input[search_from..].find("SELECT {") {
-        let after_brace = &input[search_from + pos + "SELECT ".len()..];
-        if let Ok((_, tuples)) = select_set(after_brace) {
-            results.extend(tuples);
-        }
-        search_from += pos + "SELECT ".len();
-    }
-    results
 }
 
 // ---- axis detection ----
@@ -792,132 +663,6 @@ fn parse_set_source(text: &str) -> Option<SetExpr> {
     }
 }
 
-/// Parse the SELECT-axis set expression: `{ HEAD(src, n) }`, `{ TAIL(src, n) }`,
-/// or a bare `{ src }`. Returns None when the axis isn't a simple set probe.
-pub fn parse_axis_set_expr(input: &str) -> Option<SetExpr> {
-    let upper = input.to_uppercase();
-    let select_pos = upper.find("SELECT")?;
-    let from_rel = upper[select_pos..].find("FROM")?;
-    let clause = &input[select_pos..select_pos + from_rel];
-
-    // Outermost braces around the axis set.
-    let open = clause.find('{')?;
-    let close = clause.rfind('}')?;
-    if close <= open {
-        return None;
-    }
-    let body = clause[open + 1..close].trim();
-
-    let up = body.to_uppercase();
-    // A member range is a set in its own right: `{a : b}`.
-    if let Some((from, to)) = parse_member_range(body) {
-        return Some(SetExpr::MemberRange { from, to });
-    }
-    // Explicit member list (bare): `[D].[H].&[a],[D].[H].&[b]` — braces are
-    // already stripped by the caller.
-    if let Some(unames) = parse_member_list(body) {
-        return Some(SetExpr::MemberList { unames });
-    }
-    for (fn_name, is_head) in [("HEAD(", true), ("TAIL(", false)] {
-        if let Some(p) = up.find(fn_name) {
-            let after = &body[p + fn_name.len()..];
-            // Split the count from the source: a brace-wrapped set ends at its
-            // closing brace; otherwise at the first top-level comma.
-            let trimmed = after.trim_start();
-            let (src_text, n_text) = if trimmed.starts_with('{') {
-                let close = trimmed.find('}')?;
-                (&trimmed[..=close], &trimmed[close + 1..])
-            } else {
-                let mut depth = 0i32;
-                let mut comma = None;
-                for (j, ch) in after.char_indices() {
-                    match ch {
-                        '[' | '(' => depth += 1,
-                        ']' | ')' => {
-                            depth -= 1;
-                            if ch == ')' && depth == 0 {
-                                break;
-                            }
-                        }
-                        ',' if depth == 0 => {
-                            comma = Some(j);
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                let c = comma?;
-                (&after[..c], &after[c + 1..])
-            };
-            let n: usize = n_text
-                .trim()
-                .trim_start_matches(',')
-                .trim()
-                .trim_end_matches(')')
-                .trim()
-                .parse()
-                .ok()?;
-            let src_core = src_text.trim().strip_prefix('{').unwrap_or(src_text.trim());
-            let src_core = src_core.strip_suffix('}').unwrap_or(src_core);
-            let src = if let Some((from, to)) = parse_member_range(src_core) {
-                SetExpr::MemberRange { from, to }
-            } else if src_text.contains("&[") || src_text.contains("&amp;[") {
-                let unames = parse_member_list(src_core)?;
-                SetExpr::MemberList { unames }
-            } else {
-                parse_set_source(src_core)?
-            };
-            return Some(if is_head {
-                SetExpr::Head(Box::new(src), n)
-            } else {
-                SetExpr::Tail(Box::new(src), n)
-            });
-        }
-    }
-    parse_set_source(body)
-}
-
-/// Parse a member range `[D].[H].[L].&[a] : [D].[H].[L].&[b]`. Both endpoints
-/// must be bracketed member unames; the `:` sits outside brackets.
-fn parse_member_range(text: &str) -> Option<(String, String)> {
-    let t = text
-        .trim()
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .trim();
-    if !t.starts_with('[') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut split = None;
-    for (i, &c) in t.as_bytes().iter().enumerate() {
-        match c {
-            b'[' => depth += 1,
-            b']' => depth = depth.saturating_sub(1),
-            b':' if depth == 0 => {
-                split = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-    let i = split?;
-    let from = t[..i].trim();
-    let to = t[i + 1..].trim();
-    let is_uname = |s: &str| s.starts_with('[') && (s.contains("&[") || s.contains("&amp;["));
-    (is_uname(from) && is_uname(to)).then(|| (from.to_string(), to.to_string()))
-}
-
-/// `[D].[H].[L].&[k1]&[k2]` → `(dim, level, "k1|k2")` (compound keys join
-/// with `|`, the engine's path separator).
-pub(crate) fn parse_level_member(uname: &str) -> Option<(String, String, String)> {
-    let toks = bracket_tokens(uname, 8);
-    if toks.len() < 4 {
-        return None;
-    }
-    Some((toks[0].clone(), toks[2].clone(), toks[3..].join("|")))
-}
-
 /// Split an explicit member list (`[D].[H].&[a],[D].[H].&[b]`) on commas that
 /// sit outside brackets. Returns None when the text isn't a member list.
 fn parse_member_list(text: &str) -> Option<Vec<String>> {
@@ -998,98 +743,6 @@ pub fn parse_calculated_count(input: &str) -> Option<CalculatedCount> {
     })
 }
 
-/// Detect an axis set function (TopCount/BottomCount/Order/Filter) in the outer
-/// SELECT clause. Only measure-based sorts/filters are supported (label filters
-/// and TopPercent/BottomPercent are not).
-pub fn detect_axis_set_op(input: &str) -> Option<AxisSetOp> {
-    let upper = input.to_uppercase();
-    let select_pos = upper.find("SELECT").unwrap_or(0);
-    let from_pos = upper[select_pos..]
-        .find("FROM")
-        .map(|i| select_pos + i)
-        .unwrap_or(input.len());
-    let clause = &input[select_pos..from_pos];
-    let up = clause.to_uppercase();
-
-    if let Some(pos) = up.find("TOPCOUNT(") {
-        let after = &clause[pos + "TopCount(".len()..];
-        let comma = after.find(',')?;
-        let n: usize = after[comma + 1..]
-            .trim()
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .ok()?;
-        return Some(AxisSetOp::TopCount { n, desc: true });
-    }
-    if let Some(pos) = up.find("BOTTOMCOUNT(") {
-        let after = &clause[pos + "BottomCount(".len()..];
-        let comma = after.find(',')?;
-        let n: usize = after[comma + 1..]
-            .trim()
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .ok()?;
-        return Some(AxisSetOp::TopCount { n, desc: false });
-    }
-    if let Some(pos) = up.find("TOPPERCENT(") {
-        let after = &clause[pos + "TopPercent(".len()..];
-        let comma = after.find(',')?;
-        let p: f64 = after[comma + 1..]
-            .trim()
-            .chars()
-            .take_while(|c| c.is_ascii_digit() || *c == '.')
-            .collect::<String>()
-            .parse()
-            .ok()?;
-        return Some(AxisSetOp::TopPercent { p });
-    }
-    if let Some(pos) = up.find("ORDER(") {
-        let after = &clause[pos + "Order(".len()..];
-        let desc = after.to_uppercase().contains("DESC");
-        return Some(AxisSetOp::Order { desc });
-    }
-    if let Some(pos) = up.find("FILTER(") {
-        let after = &clause[pos + "Filter(".len()..];
-        if let Some((op, value)) = parse_filter_condition(after) {
-            return Some(AxisSetOp::Filter { op, value });
-        }
-    }
-    None
-}
-
-/// Parse `[Measures].[X] OP value` from a Filter() condition.
-fn parse_filter_condition(s: &str) -> Option<(CmpOp, f64)> {
-    let measure_pos = s.find("[Measures].[")?;
-    let after_measure = &s[measure_pos + "[Measures].[".len()..];
-    let name_end = after_measure.find(']')?;
-    let after_name = after_measure[name_end + 1..].trim_start();
-    let (op, rest) = if let Some(r) = after_name.strip_prefix(">=") {
-        (CmpOp::Ge, r)
-    } else if let Some(r) = after_name.strip_prefix("<=") {
-        (CmpOp::Le, r)
-    } else if let Some(r) = after_name.strip_prefix("<>") {
-        (CmpOp::Ne, r)
-    } else if let Some(r) = after_name.strip_prefix('>') {
-        (CmpOp::Gt, r)
-    } else if let Some(r) = after_name.strip_prefix('<') {
-        (CmpOp::Lt, r)
-    } else {
-        let r = after_name.strip_prefix('=')?;
-        (CmpOp::Eq, r)
-    };
-    let value: f64 = rest
-        .trim()
-        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
-        .next()?
-        .parse()
-        .ok()?;
-    Some((op, value))
-}
-
 /// True when the WHERE clause contains exactly one cube-dimension
 /// member (All or Leaf) and one measure member.
 fn is_slicer_all_measure(input: &str) -> bool {
@@ -1164,6 +817,9 @@ pub struct ParsedMdx {
     pub axis_level_members: Vec<(String, String)>,
     /// Member ranges on the axes: `(dim, level, from_key, to_key)`.
     pub axis_member_ranges: Vec<(String, String, String, String)>,
+    /// When the front-end cannot parse the statement, the reason. The execute
+    /// path faults on this instead of degrading to a dropped axis (plan 047).
+    pub parse_error: Option<String>,
     /// `DrilldownLevel(...)` targets on the axes (dimension + optional level
     /// expression/index). Without a level they drill to the top level below
     /// `(All)` — the whole-hierarchy drag.
@@ -1293,6 +949,16 @@ pub(crate) fn matching_paren(text: &str, open: usize) -> Option<usize> {
     None
 }
 
+/// `[D].[H].[L].&[k1]&[k2]` → `(dim, level, "k1|k2")` (compound keys join
+/// with `|`, the engine's path separator). Used by the range planner.
+pub(crate) fn parse_level_member(uname: &str) -> Option<(String, String, String)> {
+    let toks = bracket_tokens(uname, 8);
+    if toks.len() < 4 {
+        return None;
+    }
+    Some((toks[0].clone(), toks[2].clone(), toks[3..].join("|")))
+}
+
 /// `DrilldownLevel(...)` targets on the axes: the dimension, plus an explicit
 /// level expression or numeric index when present. Without either, the call
 /// drills to the top level below `(All)` (Excel's whole-hierarchy drag).
@@ -1337,123 +1003,6 @@ fn parse_drilldown_targets(input: &str) -> Vec<DrilldownTarget> {
     out
 }
 
-/// Extract dimension IDs from the select clause in positional order.
-///
-/// Mirrors the `parse_axis_dimensions()` logic from semantic.rs: finds the
-/// axis expression (before `DIMENSION PROPERTIES` or `ON COLUMNS`), then
-/// collects all non-Measures bracketed identifiers in left-to-right order,
-/// deduplicated.
-fn parse_axis_dimension_ids(before_from: &str) -> Vec<String> {
-    // Axes live in the outer SELECT clause (between SELECT and the outer FROM);
-    // subquery SELECTs sit inside FROM (...) and must not contribute.
-    let upper = before_from.to_uppercase();
-    let select_pos = upper.find("SELECT").unwrap_or(0);
-    let from_pos = upper[select_pos..]
-        .find("FROM")
-        .map(|i| select_pos + i)
-        .unwrap_or(before_from.len());
-    let clause = &before_from[select_pos..from_pos];
-
-    // Drop each "DIMENSION PROPERTIES <props> ON <axis>" segment (member-property
-    // names would otherwise be mistaken for dimensions), then scan the remainder
-    // — which includes both the COLUMNS and ROWS axis expressions.
-    let mut scan = String::new();
-    let mut rest = clause;
-    loop {
-        let upper = rest.to_uppercase();
-        match upper.find("DIMENSION PROPERTIES") {
-            Some(dp) => {
-                scan.push_str(&rest[..dp]);
-                let after = &upper[dp + "DIMENSION PROPERTIES".len()..];
-                let end = after
-                    .find("ON COLUMNS")
-                    .or_else(|| after.find("ON ROWS"))
-                    .or_else(|| after.find(" ON 0 "))
-                    .or_else(|| after.find(" ON 1 "))
-                    .unwrap_or(0);
-                rest = &rest[dp + "DIMENSION PROPERTIES".len() + end..];
-            }
-            None => {
-                scan.push_str(rest);
-                break;
-            }
-        }
-    }
-
-    let mut ids = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut pos = 0;
-    while let Some(open) = scan[pos..].find('[') {
-        let abs = pos + open + 1;
-        let close = scan[abs..].find(']').unwrap_or(scan.len() - abs);
-        let id = &scan[abs..abs + close];
-        if id != "Measures" && !id.is_empty() && seen.insert(id.to_string()) {
-            ids.push(id.to_string());
-        }
-        pos = abs + close + 1;
-    }
-    ids
-}
-
-/// Parse excluded members from a DrilldownMember collapse expression.
-/// Only scans within the `{-{ ... }}` exclusion set boundary — does NOT
-/// pick up later WHERE slicer members.
-fn parse_excluded_members_from_mdx(input: &str) -> Vec<(String, String)> {
-    let mut result = Vec::new();
-    let Some(excl_start) = input.find("{-{") else {
-        return result;
-    };
-
-    // Bound to the closing }} of the exclusion set.
-    let after_excl = &input[excl_start..];
-    let Some(close) = after_excl[2..].find("}}") else {
-        return result;
-    };
-    let excl_end = 2 + close + 2;
-    let excl = &after_excl[..excl_end];
-
-    let mut search_from = 0;
-    while let Some(amp) = excl[search_from..].find("&[") {
-        let begin = search_from + amp + 2;
-        if let Some(end) = excl[begin..].find(']') {
-            let key = excl[begin..begin + end].to_string();
-            // Look backwards for the preceding [Dimension].
-            let before = &excl[..search_from + amp];
-            let dim = if let Some(last_dot) = before.rfind("].") {
-                if let Some(open) = before[..last_dot].rfind('[') {
-                    before[open + 1..last_dot].to_string()
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            };
-            result.push((dim, key));
-            search_from = begin + end;
-        } else {
-            break;
-        }
-    }
-    result
-}
-
-/// Parse the hierarchy target following a DrilldownMember exclusion set.
-fn parse_drilldown_member_hierarchy_from_mdx(input: &str) -> Option<String> {
-    let excl_start = input.find("{-{")?;
-    let after_excl = &input[excl_start..];
-    let close = after_excl[2..].find("}}")?;
-    let rest = &after_excl[2 + close + 2..];
-    let trimmed = rest.trim_start();
-    let trimmed = trimmed.strip_prefix(',').unwrap_or(trimmed).trim_start();
-    if !trimmed.starts_with('[') {
-        return None;
-    }
-    let bracket_end = trimmed[1..].find(']')?;
-    let hier = &trimmed[1..bracket_end + 1];
-    let hier = hier.trim_matches(|c: char| c == '[' || c == ']');
-    Some(hier.to_string())
-}
-
 pub fn parse_mdx(input: &str) -> ParsedMdx {
     let up = input.to_uppercase();
 
@@ -1468,10 +1017,11 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
             .map(|end| after_from[..end].to_string())
     });
 
-    // Plan 047: the front-end (lexer + AST) owns axis/filter extraction when it
-    // can parse the statement; the legacy scanners remain as a transitional
-    // fallback for shapes the AST does not model yet.
+    // Plan 047: the front-end (lexer + AST) is the source of truth for axis and
+    // filter extraction. A statement it cannot parse carries `parse_error`, and
+    // the execute path faults on it instead of degrading.
     let frontend = crate::mdx::frontend::parse_select(input);
+    let parse_error = frontend.as_ref().err().map(|e| e.to_string());
     let (axis_dimension_ids, axis_level_members, axis_member_ranges, axis_set_expr) =
         match &frontend {
             Ok(sel) => (
@@ -1480,12 +1030,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
                 crate::mdx::frontend::axis_member_ranges(sel),
                 crate::mdx::frontend::set_probe_expr(sel),
             ),
-            Err(_) => (
-                parse_axis_dimension_ids(before_from),
-                parse_axis_level_members(before_from),
-                Vec::new(),
-                parse_axis_set_expr(input),
-            ),
+            Err(_) => (Vec::new(), Vec::new(), Vec::new(), None),
         };
 
     // Parse excluded members from DrilldownMember if present.
@@ -1508,30 +1053,15 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
             crate::mdx::frontend::drilldown_member_hierarchy(sel),
             crate::mdx::frontend::axis_set_op(sel),
         ),
-        Err(_) => {
-            let excluded = if has_drilldown_member(input) {
-                parse_excluded_members_from_mdx(input)
-            } else {
-                Vec::new()
-            };
-            let hierarchy = if has_drilldown_member(input) {
-                parse_drilldown_member_hierarchy_from_mdx(input)
-            } else {
-                None
-            };
-            let all_subquery = find_all_subquery_members(input);
-            let mut sq: Vec<MemberRef> = all_subquery.into_iter().flatten().collect();
-            sq.extend(find_subselect_members(input));
-            (
-                find_where_clause(input).unwrap_or_default(),
-                sq,
-                find_select_tuple_members(input),
-                find_select_tuples(input),
-                excluded,
-                hierarchy,
-                detect_axis_set_op(input),
-            )
-        }
+        Err(_) => (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        ),
     };
 
     // All measures referenced in the SELECT clause, in order. A single cell
@@ -1576,6 +1106,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         calculated_counts: parse_calculated_count(input).into_iter().collect(),
         axis_level_members,
         axis_member_ranges,
+        parse_error,
         drilldown_targets: parse_drilldown_targets(before_from),
     }
 }
@@ -1583,6 +1114,45 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Plan 047: the captured Excel workload is the parser regression corpus.
+    // Every statement must parse (no parse_error) and keep the derivations the
+    // semantic layer relies on.
+    #[test]
+    fn workload_corpus_parses_and_derives() {
+        let text = std::fs::read_to_string("scripts/bench-workload.jsonl")
+            .expect("read the captured workload corpus");
+        let mut statements: Vec<String> = Vec::new();
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let xml = v["request_xml"].as_str().unwrap_or("");
+            let Some(start) = xml.find("<Statement>") else {
+                continue;
+            };
+            let Some(end) = xml[start..].find("</Statement>") else {
+                continue;
+            };
+            statements.push(xml[start + "<Statement>".len()..start + end].to_string());
+        }
+        assert!(!statements.is_empty(), "the corpus should not be empty");
+        for mdx in &statements {
+            let parsed = parse_mdx(mdx);
+            assert!(
+                parsed.parse_error.is_none(),
+                "corpus statement must parse: {mdx}\n  error: {:?}",
+                parsed.parse_error
+            );
+            assert!(parsed.cube_name.is_some(), "cube name missing for {mdx}");
+            if mdx.contains("Drilldown") {
+                assert!(
+                    !parsed.axis_dimension_ids.is_empty(),
+                    "drilldown axis dimensions missing for {mdx}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn unsupported_features_are_detected() {
@@ -1699,13 +1269,6 @@ mod tests {
                 level: None,
             }
         );
-    }
-
-    #[test]
-    fn parse_subquery() {
-        let _input = "SELECT ({[ProductCategory].[ProductCategory].&[Category A],[ProductCategory].[ProductCategory].&[Category C]}) ON COLUMNS FROM [Model]";
-        let (_rest, m) = subquery_body("SELECT ({[ProductCategory].[ProductCategory].&[Category A],[ProductCategory].[ProductCategory].&[Category C]})").unwrap();
-        assert_eq!(m.len(), 2);
     }
 
     // ---- project3 tests (dynamic dimension names) ----
@@ -1825,59 +1388,6 @@ mod set_expr_tests {
     use super::*;
 
     #[test]
-    fn parses_head_over_level_members() {
-        let mdx = "SELECT {HEAD([Date].[Date].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
-        assert_eq!(
-            parse_axis_set_expr(mdx),
-            Some(SetExpr::Head(
-                Box::new(SetExpr::LevelMembers {
-                    dim: "Date".into(),
-                    level: Some("Year".into())
-                }),
-                1
-            ))
-        );
-    }
-
-    #[test]
-    fn parses_bare_level_members() {
-        let mdx = "SELECT {[Date].[Date].[Year].Members} ON 0 FROM [Sales]";
-        assert_eq!(
-            parse_axis_set_expr(mdx),
-            Some(SetExpr::LevelMembers {
-                dim: "Date".into(),
-                level: Some("Year".into())
-            })
-        );
-    }
-
-    #[test]
-    fn parses_tail_and_all_members() {
-        let mdx = "SELECT {TAIL([Date].[Date].[(All)].Members,2)} ON 0 FROM [Sales]";
-        assert_eq!(
-            parse_axis_set_expr(mdx),
-            Some(SetExpr::Tail(
-                Box::new(SetExpr::AllMembers { dim: "Date".into() }),
-                2
-            ))
-        );
-    }
-
-    #[test]
-    fn ignores_non_set_axes() {
-        assert_eq!(
-            parse_axis_set_expr("SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]"),
-            None
-        );
-        assert_eq!(
-            parse_axis_set_expr(
-                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]"
-            ),
-            None
-        );
-    }
-
-    #[test]
     fn parses_all_members_level() {
         let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Date].[Quarter].AllMembers} ON ROWS FROM [Sales]";
         assert_eq!(
@@ -1904,24 +1414,6 @@ mod set_expr_tests {
         let plain = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]";
         let t = parse_drilldown_targets(plain);
         assert_eq!((t[0].level.clone(), t[0].index), (None, None));
-    }
-
-    #[test]
-    fn parses_subselect_members() {
-        let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS FROM (SELECT {[Date].[Date].[Year].&[2024]} ON COLUMNS FROM [Sales])";
-        let members = find_subselect_members(mdx);
-        assert_eq!(members.len(), 1, "{members:?}");
-        match &members[0] {
-            MemberRef::Leaf {
-                dim: DimRef::Cube(name),
-                key,
-                ..
-            } => {
-                assert_eq!(name, "Date");
-                assert_eq!(key, "2024");
-            }
-            other => panic!("expected leaf member, got {other:?}"),
-        }
     }
 
     #[test]

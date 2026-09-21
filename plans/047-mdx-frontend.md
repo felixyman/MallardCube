@@ -7,9 +7,9 @@
 - **Risk**: LOW–MEDIUM (regression harness = existing 467 tests + captured workload)
 - **Depends on**: 046 slices 1–3 (fault infrastructure, ranges)
 - **Category**: parser / architecture
-- **Status**: **IN PROGRESS 2026-09-21** — increments 1–2 landed (lexer + AST +
-  axis/filter extraction); increment 3 (delete the scanners, retire the lexical
-  pre-scan, trace corpus) TODO.
+- **Status**: **IN PROGRESS 2026-09-21** — increments 1–3 landed (lexer + AST,
+  axis/filter/set-op extraction, scanner deletion, AST-based faults, corpus
+  tests); increment 4 (the classification scanners) TODO.
 
 ## Why
 
@@ -45,7 +45,8 @@ subset faults with a named reason.
 |---|---|---|---|
 | 1 | **Lexer + AST + axis extraction**: tokenize MDX; parse `SELECT <axes> FROM <cube> [WHERE …]`; sets, tuples, members, ranges, calls, `.Members`/`.Children`; derive `axis_dimension_ids`, `axis_level_members`, axis ranges and the set-probe expression from the AST (replacing those scanners) | M | **DONE** |
 | 2 | **Migrate WHERE/slicers, set ops, drilldown exclusions** to the AST | M | **DONE** |
-| 3 | **Delete the hand scanners**; `ParsedMdx` becomes a thin view over the AST (or is replaced); add the captured workload/trace corpus as a parser regression suite | S/M | TODO |
+| 3 | **Delete the migrated scanners**; derive `unsupported_features` from the AST; add the captured workload/trace corpus as a parser regression suite | S/M | **DONE** |
+| 4 | **Classification scanners** (`has_*` flags, `main_dim`, `cchildren_target`, `calculated_members_pat`, `selected_measures`, calculated counts, properties, drilldown targets) from the AST; `ParsedMdx` becomes a thin view | M | TODO |
 
 ## Increment 1 evidence (2026-09-21)
 
@@ -65,6 +66,32 @@ subset faults with a named reason.
 - Still faulting (increment 2): a braced `{range}` beside a braced measure set
   (that shape is not classified as an axis yet), slicer ranges, and ranges
   inside quoted calculated-member bodies.
+
+## Increment 3 evidence (2026-09-21)
+
+- The AST is the **only** parser for axis/filter/set-op extraction: the
+  fallback arms are gone and `ParsedMdx.parse_error` carries the front-end's
+  reason, which `unsupported_features` turns into a fault.
+- `unsupported_features` is now AST-derived (named sets, time functions,
+  `DateAdd`/`VBA!`, member-property filters, ranges outside the axis, a braced
+  range beside a measure set) and faults on any statement outside the subset.
+- Deleted the migrated scanners: `parse_axis_set_expr` + helpers,
+  `parse_axis_dimension_ids`, `parse_axis_level_members`' consumers,
+  `find_where_clause`'s consumers, `find_subselect_members` /
+  `find_all_subquery_members`, `find_select_tuple_members` / `find_select_tuples`
+  (+ `paren_members`, `select_set`, `subquery_body`, `member_set`),
+  `parse_excluded_members_from_mdx`,
+  `parse_drilldown_member_hierarchy_from_mdx`, `detect_axis_set_op`, the nom
+  member-ref machinery and their obsolete tests. `parse_level_member` stays
+  (the range planner still uses it).
+- Corpus tests: `workload_corpus_parses_and_derives` replays every statement in
+  `scripts/bench-workload.jsonl` through `parse_mdx` (no parse errors, cube
+  names, drilldown axis dimensions) and `parses_trace_shapes` covers the real
+  Excel probe shapes (CCHILDREN with bare member/set names, an empty select
+  clause, nested subselects, `FROM` without a cube name).
+- Verified live: smoke 8/8, the workload replays 7/7 with no faults, range HEAD
+  → 2022, plain HEAD → 2020, name-form WHERE → 24,719,896, and `WITH SET` /
+  member-value filters fault with named reasons. 478 tests green, clippy clean.
 
 ## Increment 2 evidence (2026-09-21)
 

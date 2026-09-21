@@ -77,29 +77,39 @@ impl<'a> Parser<'a> {
     fn select(&mut self) -> Result<Select, ParseError> {
         let mut sel = Select::default();
 
-        // `WITH SET [name] AS <expr>` / `WITH MEMBER [Measures].[x] AS <expr>`
-        while self.eat_ident("WITH") {
-            if self.eat_ident("SET") {
-                let name = self.bracket_name()?;
-                self.expect_ident("AS")?;
-                let body = self.expr()?;
-                sel.with_sets.push((name, body));
-            } else if self.eat_ident("MEMBER") {
-                let name = self.member_ref_name()?;
-                self.expect_ident("AS")?;
-                let body = self.expr()?;
-                sel.with_members.push((name, body));
-            } else {
-                return Err(ParseError::Unsupported(
-                    "unsupported `WITH` clause (expected SET or MEMBER)".into(),
-                ));
+        // `WITH SET [name] AS <expr>` / `WITH MEMBER [Measures].[x] AS <expr>`.
+        // Excel repeats the clause without another `WITH`:
+        // `WITH MEMBER a AS '…' MEMBER b AS '…' SELECT …`.
+        if self.eat_ident("WITH") {
+            loop {
+                if self.eat_ident("SET") {
+                    let name = self.bracket_name()?;
+                    self.expect_ident("AS")?;
+                    let body = self.expr()?;
+                    sel.with_sets.push((name, body));
+                } else if self.eat_ident("MEMBER") {
+                    let name = self.member_ref_name()?;
+                    self.expect_ident("AS")?;
+                    let body = self.expr()?;
+                    sel.with_members.push((name, body));
+                } else if self.at_ident("SELECT") {
+                    break;
+                } else {
+                    return Err(ParseError::Unsupported(
+                        "unsupported `WITH` clause (expected SET or MEMBER)".into(),
+                    ));
+                }
             }
         }
 
         self.expect_ident("SELECT")?;
 
-        // Axes: `<set expr> [DIMENSION PROPERTIES …] ON (COLUMNS|ROWS|n)`
+        // Axes: `<set expr> [DIMENSION PROPERTIES …] ON (COLUMNS|ROWS|n)`.
+        // An empty select clause (`SELECT  FROM [Model]`) has none.
         loop {
+            if self.at_ident("FROM") {
+                break;
+            }
             let non_empty = self.eat_ident("NON") && {
                 self.expect_ident("EMPTY")?;
                 true
@@ -169,11 +179,9 @@ impl<'a> Parser<'a> {
                 sel.cube = inner.cube.clone();
                 sel.subquery = Some(Box::new(inner));
             }
-            other => {
-                return Err(ParseError::Malformed(format!(
-                    "expected a cube name after FROM, found {other:?}"
-                )));
-            }
+            // Some metadata probes omit the cube name entirely
+            // (`FROM  CELL PROPERTIES VALUE`); treat it as unspecified.
+            _ => {}
         }
 
         if self.eat_ident("WHERE") {
@@ -186,12 +194,14 @@ impl<'a> Parser<'a> {
         Ok(sel)
     }
 
-    /// `[name]` → `name` (for `WITH SET` names).
+    /// A set/member name: `[name]` or a bare identifier
+    /// (`Set FilteredMembers As '…'`).
     fn bracket_name(&mut self) -> Result<String, ParseError> {
         match self.bump() {
             Some(Token::Bracket(n)) => Ok(n.clone()),
+            Some(Token::Ident(n)) => Ok(n.clone()),
             other => Err(ParseError::Malformed(format!(
-                "expected [name], found {other:?}"
+                "expected a name, found {other:?}"
             ))),
         }
     }
@@ -219,25 +229,46 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Comma-separated bare identifiers (properties).
+    /// Comma-separated property names. Excel mixes bare (`PARENT_UNIQUE_NAME`)
+    /// and bracketed (`[Region].[Region].[Region]MEMBER_CAPTION`) forms; both
+    /// are consumed here (the semantic layer keeps its own prop scanner).
     fn prop_list(&mut self) -> Vec<String> {
-        let mut out = Vec::new();
+        let mut out: Vec<String> = Vec::new();
+        let mut current = String::new();
         loop {
             match self.peek() {
-                Some(Token::Ident(p))
-                    if !p.eq_ignore_ascii_case("ON")
-                        && !p.eq_ignore_ascii_case("FROM")
-                        && !p.eq_ignore_ascii_case("WHERE")
-                        && !p.eq_ignore_ascii_case("CELL") =>
-                {
-                    out.push(p.clone());
+                Some(Token::Ident(p)) => {
+                    let p = p.clone();
+                    if p.eq_ignore_ascii_case("ON")
+                        || p.eq_ignore_ascii_case("FROM")
+                        || p.eq_ignore_ascii_case("WHERE")
+                        || p.eq_ignore_ascii_case("CELL")
+                    {
+                        break;
+                    }
+                    current.push_str(&p);
+                    self.pos += 1;
+                }
+                Some(Token::Bracket(b)) => {
+                    let b = b.clone();
+                    current.push_str(&format!("[{b}]"));
+                    self.pos += 1;
+                }
+                Some(Token::Dot) => {
+                    current.push('.');
+                    self.pos += 1;
+                }
+                Some(Token::Comma) => {
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
                     self.pos += 1;
                 }
                 _ => break,
             }
-            if !self.eat(&Token::Comma) {
-                break;
-            }
+        }
+        if !current.is_empty() {
+            out.push(current);
         }
         out
     }
@@ -321,6 +352,14 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Ident(name)) => {
                 let name = name.clone();
+                // `VBA![Date]()` — VBA date arithmetic is not supported.
+                if name.eq_ignore_ascii_case("VBA")
+                    && self.toks.get(self.pos + 1) == Some(&Token::Bang)
+                {
+                    return Err(ParseError::Unsupported(
+                        "MDX date arithmetic (`DateAdd`/`VBA!`) is not supported yet".into(),
+                    ));
+                }
                 self.pos += 1;
                 if self.eat(&Token::LParen) {
                     let mut args = Vec::new();
@@ -361,6 +400,24 @@ impl<'a> Parser<'a> {
             } else if self.eat_ident("ALL") {
                 base = Expr::Members(Box::new(base));
             } else {
+                let prop = match self.peek() {
+                    Some(Token::Ident(p)) => p.to_uppercase(),
+                    _ => String::new(),
+                };
+                if matches!(
+                    prop.as_str(),
+                    "CURRENTMEMBER"
+                        | "MEMBER_VALUE"
+                        | "MEMBER_KEY"
+                        | "MEMBER_UNIQUE_NAME"
+                        | "MEMBER_CAPTION"
+                        | "MEMBER_NAME"
+                ) {
+                    return Err(ParseError::Unsupported(
+                        "member-property filters (`Filter` over `Member_Value`/`Member_Key`) are not supported yet"
+                            .into(),
+                    ));
+                }
                 return Err(ParseError::Unsupported(
                     "unsupported postfix after `.` (expected Members/Children)".into(),
                 ));
@@ -396,10 +453,20 @@ impl<'a> Parser<'a> {
                     }
                 }
                 // `.Members` / `.Children` / … are postfix operators handled by
-                // the caller: put the `.` back and stop.
-                Some(Token::Ident(_)) => {
-                    self.pos -= 1;
-                    break;
+                // the caller: put the `.` back and stop. Any other bare
+                // identifier is a member-name part (`[Measures].cChildren`,
+                // `[D].[H].currentmember`).
+                Some(Token::Ident(name)) => {
+                    let n = name.clone();
+                    if matches!(
+                        n.to_uppercase().as_str(),
+                        "MEMBERS" | "ALLMEMBERS" | "CHILDREN" | "ALL"
+                    ) {
+                        self.pos -= 1;
+                        break;
+                    }
+                    parts.push(n);
+                    self.pos += 1;
                 }
                 other => {
                     return Err(ParseError::Malformed(format!(
@@ -737,15 +804,21 @@ pub fn where_members(sel: &Select) -> Vec<PMemberRef> {
     out
 }
 
-/// Members of a `FROM (SELECT …)` subselect.
+/// Members of `FROM (SELECT …)` subselects (nested subselects included).
 pub fn subquery_members(sel: &Select) -> Vec<PMemberRef> {
-    let mut out = Vec::new();
-    if let Some(sub) = &sel.subquery {
+    fn collect(sub: &Select, out: &mut Vec<PMemberRef>) {
         for axis in &sub.axes {
             for e in &axis.exprs {
-                flatten_members(e, &mut out);
+                flatten_members(e, out);
             }
         }
+        if let Some(inner) = &sub.subquery {
+            collect(inner, out);
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(sub) = &sel.subquery {
+        collect(sub, &mut out);
     }
     out
 }
@@ -885,6 +958,142 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
     sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk)
 }
 
+/// The first call to one of `names` anywhere in the statement (axes, WHERE,
+/// subselect), case-insensitively. Returns the name as written.
+pub fn first_call(sel: &Select, names: &[&str]) -> Option<String> {
+    fn walk(e: &Expr, names: &[&str]) -> Option<String> {
+        match e {
+            Expr::Call { name, args } => {
+                if names.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+                    return Some(name.clone());
+                }
+                args.iter().find_map(|a| walk(a, names))
+            }
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().find_map(|i| walk(i, names)),
+            Expr::Range(a, b) => walk(a, names).or_else(|| walk(b, names)),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => {
+                walk(inner, names)
+            }
+            Expr::Binary { lhs, rhs, .. } => walk(lhs, names).or_else(|| walk(rhs, names)),
+            _ => None,
+        }
+    }
+    let in_axes = sel
+        .axes
+        .iter()
+        .flat_map(|a| a.exprs.iter())
+        .find_map(|e| walk(e, names));
+    in_axes
+        .or_else(|| sel.where_clause.as_ref().and_then(|w| walk(w, names)))
+        .or_else(|| {
+            sel.subquery.as_ref().and_then(|sub| {
+                sub.axes
+                    .iter()
+                    .flat_map(|a| a.exprs.iter())
+                    .find_map(|e| walk(e, names))
+            })
+        })
+}
+
+/// Do any quoted `WITH MEMBER` / `WITH SET` bodies contain `needle`
+/// (case-insensitive)? The bodies are opaque MDX text to the AST.
+pub fn bodies_contain(sel: &Select, needle: &str) -> bool {
+    let needle = needle.to_uppercase();
+    sel.with_members
+        .iter()
+        .chain(sel.with_sets.iter())
+        .any(|(_, body)| match body {
+            Expr::Str(s) => s.to_uppercase().contains(&needle),
+            _ => false,
+        })
+}
+
+/// Is a member range present in the slicer (`WHERE {a : b}`)?
+pub fn has_range_in_slicer(sel: &Select) -> bool {
+    fn walk(e: &Expr) -> bool {
+        match e {
+            Expr::Range(..) => true,
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().any(walk),
+            Expr::Call { args, .. } => args.iter().any(walk),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner),
+            Expr::Binary { lhs, rhs, .. } => walk(lhs) || walk(rhs),
+            _ => false,
+        }
+    }
+    sel.where_clause.as_ref().is_some_and(walk)
+}
+
+/// Does a quoted calculated-member body contain a member range
+/// (`COUNT({a : b})`)?
+pub fn bodies_contain_range(sel: &Select) -> bool {
+    sel.with_members.iter().any(|(_, body)| match body {
+        Expr::Str(s) => crate::mdx::parser::text_has_member_range(s),
+        _ => false,
+    })
+}
+
+/// Does a `Filter(...)` predicate reference a member property
+/// (`[D].[H].CurrentMember.Member_Value`, …)? Those filters are not supported
+/// yet. Other `.currentmember` uses (e.g. `Ascendants(...)`) are fine.
+pub fn mentions_member_property(sel: &Select) -> bool {
+    const PROPS: [&str; 6] = [
+        "CURRENTMEMBER",
+        "MEMBER_VALUE",
+        "MEMBER_KEY",
+        "MEMBER_UNIQUE_NAME",
+        "MEMBER_CAPTION",
+        "MEMBER_NAME",
+    ];
+    fn walk(e: &Expr) -> bool {
+        match e {
+            Expr::Member(m) => m
+                .parts
+                .iter()
+                .any(|p| PROPS.iter().any(|prop| p.eq_ignore_ascii_case(prop))),
+            Expr::Measure(_) => false,
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().any(walk),
+            Expr::Call { args, .. } => args.iter().any(walk),
+            Expr::Range(a, b) => walk(a) || walk(b),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner),
+            Expr::Binary { lhs, rhs, .. } => walk(lhs) || walk(rhs),
+            _ => false,
+        }
+    }
+    fn in_filter(e: &Expr) -> bool {
+        match e {
+            Expr::Call { name, args } => {
+                (name.eq_ignore_ascii_case("Filter") && args.iter().any(walk))
+                    || args.iter().any(in_filter)
+            }
+            Expr::Set(items) | Expr::Tuple(items) => items.iter().any(in_filter),
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => in_filter(inner),
+            Expr::Range(a, b) => in_filter(a) || in_filter(b),
+            _ => false,
+        }
+    }
+    let in_axes = sel.axes.iter().flat_map(|a| a.exprs.iter()).any(in_filter);
+    in_axes
+        || sel.where_clause.as_ref().is_some_and(in_filter)
+        || sel
+            .subquery
+            .as_ref()
+            .is_some_and(|s| s.axes.iter().flat_map(|a| a.exprs.iter()).any(in_filter))
+}
+
+/// A braced `{range}` beside a braced measure set — a shape the semantic layer
+/// does not classify as an axis yet.
+pub fn braced_range_beside_measure(sel: &Select) -> bool {
+    let axis_set_has = |pred: &dyn Fn(&Expr) -> bool| {
+        sel.axes.iter().any(|a| {
+            a.exprs
+                .iter()
+                .any(|e| matches!(e, Expr::Set(items) if items.iter().any(pred)))
+        })
+    };
+    axis_set_has(&|e| matches!(e, Expr::Measure(_)))
+        && axis_set_has(&|e| matches!(e, Expr::Range(..)))
+}
+
 fn to_pcmp(op: CmpOp) -> PCmpOp {
     match op {
         CmpOp::Gt => PCmpOp::Gt,
@@ -982,6 +1191,45 @@ mod tests {
         assert!(sel.subquery.is_some());
     }
 
+    // Trace shapes from real Excel sessions: they must parse and derive the
+    // fields the semantic layer consumes.
+    #[test]
+    fn parses_trace_shapes() {
+        // CCHILDREN probe: bare member names, a bare `Set X As` clause, an
+        // empty `FROM` is not present here but `Ascendants(…currentmember)` is.
+        let sel = parse_select(
+            "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([ProductCategory].[ProductCategory].currentmember.children).count' Set FilteredMembers As '{[ProductCategory].[ProductCategory].&[Category B]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([ProductCategory].[ProductCategory].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Model]",
+        )
+        .expect("CCHILDREN probe parses");
+        assert_eq!(sel.with_members.len(), 1);
+        assert_eq!(
+            axis_dimension_ids(&sel),
+            vec!["ProductCategory".to_string()]
+        );
+
+        // Empty select clause with a slicer (report-filter probes).
+        let sel = parse_select(
+            "SELECT  FROM [Model] WHERE ([ProductCategory].[ProductCategory].&[Category A],[Measures].[Total Sales]) CELL PROPERTIES VALUE",
+        )
+        .expect("empty select parses");
+        assert!(sel.axes.is_empty());
+        assert_eq!(where_members(&sel).len(), 2);
+
+        // Nested subselects.
+        let sel = parse_select(
+            "SELECT {[Measures].[Revenue]} ON COLUMNS FROM (SELECT ({[Region].[Region].&[North]}) ON COLUMNS FROM (SELECT ({[ProductCategory].[ProductCategory].&[Category A]}) ON COLUMNS FROM [Model])) WHERE ([Measures].[Total Sales]) CELL PROPERTIES VALUE",
+        )
+        .expect("nested subselect parses");
+        assert_eq!(subquery_members(&sel).len(), 2);
+
+        // Metadata probe: `FROM` without a cube name.
+        let sel = parse_select(
+            "WITH MEMBER [Measures].[XL_SD0] AS 'strtomember(\"[Measures].[Revenue]\").UniqueName' SELECT {[Measures].[XL_SD0]} ON 0 FROM  CELL PROPERTIES VALUE",
+        )
+        .expect("empty FROM parses");
+        assert!(sel.cube.is_none());
+    }
+
     #[test]
     fn derives_where_members_both_forms() {
         let sel = parse_select(
@@ -1059,9 +1307,17 @@ mod tests {
     }
 
     #[test]
-    fn unknown_postfix_is_unsupported_not_silent() {
-        let err =
-            parse_select("SELECT [Date].[Date].[Year].Unknown ON 0 FROM [Sales]").unwrap_err();
-        assert!(matches!(err, ParseError::Unsupported(_)), "{err}");
+    fn member_property_filter_is_detected_not_silent() {
+        let sel = parse_select(
+            "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Date].[Date].Members, [Date].[Date].CurrentMember.Member_Value >= 1)",
+        )
+        .expect("parse");
+        assert!(mentions_member_property(&sel));
+        // A bare `.currentmember` elsewhere (Ascendants) is fine.
+        let sel = parse_select(
+            "SELECT Hierarchize(Generate({[D].[H].&[x]}, Ascendants([D].[H].currentmember))) ON 0 FROM [Sales]",
+        )
+        .expect("parse");
+        assert!(!mentions_member_property(&sel));
     }
 }
