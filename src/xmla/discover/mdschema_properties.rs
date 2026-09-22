@@ -98,7 +98,7 @@ fn member_property_row(
     cube: &str,
     coords: &RowCoords<'_>,
     prop_name: &str,
-    content_type: u8,
+    property_type: u8,
     data_type: Option<i32>,
     origin: u32,
 ) -> String {
@@ -116,8 +116,8 @@ fn member_property_row(
             <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
             <PROPERTY_NAME>{prop_name}</PROPERTY_NAME>
             <PROPERTY_CAPTION>{prop_name}</PROPERTY_CAPTION>
-            <PROPERTY_TYPE>1</PROPERTY_TYPE>
-            <PROPERTY_CONTENT_TYPE>{content_type}</PROPERTY_CONTENT_TYPE>{data_type_xml}
+            <PROPERTY_TYPE>{property_type}</PROPERTY_TYPE>
+            <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>{data_type_xml}
             <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
             <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>"#,
@@ -155,27 +155,25 @@ fn property_requested(restrictions: &Restrictions, prop_name: &str) -> bool {
     }
 }
 
-fn member_property_rows(restrictions: &Restrictions) -> String {
-    const PROPS: &[(&str, u8)] = &[
-        ("MEMBER_CAPTION", 0),
-        ("MEMBER_NAME", 0),
-        ("MEMBER_UNIQUE_NAME", 1),
-        ("MEMBER_KEY", 1),
-        ("MEMBER_TYPE", 0),
-        ("MEMBER_VALUE", 0),
-        ("LEVEL_NUMBER", 0),
-        ("LEVEL_UNIQUE_NAME", 1),
-        ("PARENT_LEVEL", 0),
-        ("PARENT_UNIQUE_NAME", 1),
-        ("PARENT_COUNT", 0),
-        ("CHILDREN_CARDINALITY", 0),
-    ];
+/// Is this level the hierarchy's `(All)` level?
+fn is_all_level(d: &DimensionDef, level: &str) -> bool {
+    level.ends_with(&format!(".[{}]", d.all_level_name))
+}
 
+/// The property rows the tabular reference returns for one hierarchy: per
+/// level `KEY0` and `MEMBER_VALUE`, plus `NAME` on the `(All)` level, all
+/// `PROPERTY_TYPE=5` (internal member property). Excel reads the key
+/// attribute's `MEMBER_VALUE` from here for Date Filters (plan 048), and this
+/// shape — rather than a fabricated list of the standard member properties —
+/// is what keeps its pivot MDX on the short `DIMENSION PROPERTIES
+/// PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` form the reference sees.
+fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut out = String::new();
+
     for d in &model.dimensions {
         let dim = &d.dimension_unique_name();
         for (hier, level, data_type) in member_value_targets(d) {
@@ -192,7 +190,7 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
             } else {
                 2
             };
-            for (name, content) in PROPS {
+            for name in ["KEY0", "MEMBER_VALUE"] {
                 if !property_requested(restrictions, name) {
                     continue;
                 }
@@ -201,22 +199,22 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
                     cube,
                     &coords,
                     name,
-                    *content,
-                    (*name == "MEMBER_VALUE").then_some(data_type),
+                    5,
+                    (name == "MEMBER_VALUE").then_some(data_type),
                     origin,
+                ));
+                out.push('\n');
+            }
+            if is_all_level(d, &level) && property_requested(restrictions, "NAME") {
+                out.push_str(&member_property_row(
+                    catalog, cube, &coords, "NAME", 5, None, origin,
                 ));
                 out.push('\n');
             }
         }
     }
 
-    // [Measures] intrinsic member properties (special case)
-    const M_PROPS: &[(&str, u8)] = &[
-        ("MEMBER_CAPTION", 0),
-        ("MEMBER_NAME", 0),
-        ("MEMBER_UNIQUE_NAME", 1),
-        ("MEMBER_VALUE", 0),
-    ];
+    // [Measures] intrinsic rows (special case)
     let measures_coords = RowCoords {
         dim: "[Measures]",
         hier: "[Measures]",
@@ -228,7 +226,7 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
         measures_coords.hier,
         measures_coords.level,
     ) {
-        for (name, content) in M_PROPS {
+        for name in ["KEY0", "MEMBER_VALUE"] {
             if !property_requested(restrictions, name) {
                 continue;
             }
@@ -237,8 +235,8 @@ fn member_property_rows(restrictions: &Restrictions) -> String {
                 cube,
                 &measures_coords,
                 name,
-                *content,
-                (*name == "MEMBER_VALUE").then_some(DBTYPE_R8),
+                5,
+                (name == "MEMBER_VALUE").then_some(DBTYPE_R8),
                 2,
             ));
             out.push('\n');
@@ -358,10 +356,19 @@ pub fn get_mdschema_properties_response(
     property_type: Option<i32>,
     restrictions: &Restrictions,
 ) -> String {
+    let hierarchy_restricted =
+        restrictions.hierarchy_unique_name.is_some() || restrictions.level_unique_name.is_some();
     let rows = match property_type {
-        Some(1) => member_property_rows(restrictions),
+        // Member properties: the reference answers with the hierarchy's own
+        // rows (KEY0 / NAME / MEMBER_VALUE), never a standard member-property
+        // list. That list made Excel request 38 properties in its pivot MDX
+        // where the reference is asked for two.
+        Some(1) => hierarchy_property_rows(restrictions),
         Some(2) => system_property_rows(),
         Some(5) => member_value_rows(restrictions),
+        // A request that names one hierarchy gets only that hierarchy's rows;
+        // mixing the cell properties in is what Excel rejects (plan 048).
+        _ if hierarchy_restricted => hierarchy_property_rows(restrictions),
         _ => format!(
             "{}\n{}",
             system_property_rows(),
@@ -385,6 +392,56 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("no MEMBER_VALUE row for {level_unique_name}"))
             .to_string()
+    }
+
+    /// The row for one level and property, or empty when there is none.
+    fn row_for(resp: &str, level_unique_name: &str, prop: &str) -> String {
+        let level_needle = format!("<LEVEL_UNIQUE_NAME>{level_unique_name}</LEVEL_UNIQUE_NAME>");
+        let prop_needle = format!("<PROPERTY_NAME>{prop}</PROPERTY_NAME>");
+        resp.split("<row>")
+            .find(|r| r.contains(&level_needle) && r.contains(&prop_needle))
+            .map(|r| r.to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn hierarchy_rows_match_the_tabular_reference_shape() {
+        // The reference answers a hierarchy-restricted request with, per level,
+        // KEY0 and MEMBER_VALUE — plus NAME on the (All) level — all
+        // PROPERTY_TYPE=5, and no cell properties. That shape is what keeps
+        // Excel's pivot MDX on the short property list the reference sees.
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Date].[Calendar]".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(None, &restrictions);
+            assert!(
+                resp.contains("<PROPERTY_NAME>KEY0</PROPERTY_NAME>"),
+                "{resp}"
+            );
+            assert!(
+                resp.contains("<PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>"),
+                "{resp}"
+            );
+            assert!(resp.contains("<PROPERTY_TYPE>5</PROPERTY_TYPE>"), "{resp}");
+            assert!(!resp.contains("<PROPERTY_TYPE>2</PROPERTY_TYPE>"), "{resp}");
+            assert!(
+                !resp.contains("<PROPERTY_NAME>MEMBER_CAPTION</PROPERTY_NAME>"),
+                "{resp}"
+            );
+            // NAME only on the (All) level.
+            let all_row = row_for(&resp, "[Date].[Calendar].[(All)]", "NAME");
+            assert!(
+                all_row.contains("<PROPERTY_NAME>NAME</PROPERTY_NAME>"),
+                "{all_row}"
+            );
+            assert!(
+                row_for(&resp, "[Date].[Calendar].[Year]", "NAME").is_empty(),
+                "NAME should only be on the (All) level"
+            );
+        });
     }
 
     #[test]
