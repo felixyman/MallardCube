@@ -118,6 +118,93 @@ Useful facts learned here:
   UIA still works but screenshots can go black; ask the user to keep the session
   connected for pixel work.
 
+## SSAS HTTP tracing: the pump + a plain-XML relay (no Fiddler needed)
+
+The VM has the real **`msmdpump.dll`** ISAPI pump deployed, so Excel can talk to
+SSAS 2025 over HTTP — and with one header stripped the pump answers **plain
+`text/xml`** instead of the binary `application/sx+xpress`, which makes tracing
+trivial.
+
+**Pump layout** (IIS site `Default Web Site`, app `olap`, app pool
+`SSAS_AppPool`):
+
+- `C:\inetpub\wwwroot\olap\msmdpump.dll` (+ `Resources\1033\*.rll`), config in
+  `msmdpump.ini` next to it: `<ServerName>localhost:2383</ServerName>` targets
+  the default SSAS instance (the `MallardRef` reference). The app's handler
+  `SSAS ISAPI Handler` maps `*.dll` to the pump (the built-in `ISAPI-dll` is
+  disabled by default and must be enabled too).
+- **The pump refuses plain HTTP**: a POST to `http://…/olap/msmdpump.dll`
+  returns `500` with the SOAP fault *"Connections to SQL Server Analysis
+  Services through msmdpump.dll must use secure channels, for example
+  HTTPS."* — an HTTPS binding is required (we use port **8443**).
+- The ini and IIS config are ACL-protected: the interactive user is a
+  UAC-*filtered* admin, so writes need an elevated process. On this VM
+  `Start-Process powershell -Verb RunAs …` elevates **without a prompt**
+  (`ConsentPromptBehaviorAdmin=0`); registering a scheduled task with
+  `-RunLevel Highest` fails with "Access is denied". HTTPS setup (elevated):
+  `New-SelfSignedCertificate -DnsName localhost,win11 -CertStoreLocation
+  Cert:\LocalMachine\My`, export+import to `Cert:\LocalMachine\Root`,
+  `New-WebBinding -Name 'Default Web Site' -Protocol https -Port 8443`,
+  `netsh http add sslcert ipport=0.0.0.0:8443 certhash=<thumb>
+  appid={4dc3e181-e14b-4a21-b022-59fc669b0914}`.
+
+**The relay** (`C:\Users\Public\Documents\pump-proxy2.ps1`): a C# `HttpListener`
+on `127.0.0.1:8090` forwarding to `https://localhost:8443`, which
+
+- **strips `X-Transport-Caps-Negotiation-Flags`** (and `Accept-Encoding`) from
+  the forwarded request. MSOLAP sends `0,1,0,1,1`; when the pump sees it it
+  answers `application/sx+xpress`. Stripped, it answers `Content-Type:
+  text/xml` (response caps `0,0,0,0,0`);
+- logs bodies **and headers** to `C:\Users\Public\Documents\pumpproxy\` as
+  `NNN_req.xml`, `NNN_resp.xml`, `NNN_req_headers.txt`, `NNN_resp_headers.txt`
+  (restart the relay to reset the counter).
+
+Point Excel at `Data Source=http://127.0.0.1:8090/OLAP/msmdpump.dll`,
+`Initial Catalog=MallardRef`, cube `Model`. MSOLAP adds `X-AS-ActivityID`,
+`X-AS-RequestID`, `X-AS-CurrentActivityID`, `X-AS-SessionID`,
+`SspropInitAppName: Excel` and a `SOAPAction` header; the pump never echoes the
+activity IDs. MSOLAP **bypasses the system proxy for `localhost`/`127.0.0.1`** —
+to get Fiddler to see it, use `ipv4.fiddler` as the host (Fiddler's loopback
+alias); our own relay is a real destination, so it needs no such trick.
+
+Native (TCP) capture, when the pump is not in play: `relay.ps1` forwards
+`localhost:2399 → 2383` and logs the native protocol. There the payloads are
+`sx+xpress` and decode with `ntdll!RtlDecompressBuffer` (format 3) starting a
+few bytes into the payload; the output is UTF-16.
+
+## Excel pivot expand testing (learned the hard way)
+
+- **Gesture**: select the member cell via COM (`$pt.TableRange2.Cells.Item(r,1).Select()`),
+  send `Shift+F10`, screenshot, click `Expand/Collapse`, then `Expand`.
+  Coordinates move with the window/cell — always screenshot the open menu.
+  `Drill Down/Drill Up` is the row below; a stray click there drills instead.
+- The expand MDX is `Hierarchize(DrilldownMember({{DrilldownLevel({All})}},
+  {member}))`. **What Excel asks for in `DIMENSION PROPERTIES` depends on the
+  pivot cache's metadata**, which is built from `MDSCHEMA_PROPERTIES` at pivot
+  creation:
+  - advertising the standard member properties (MEMBER_CAPTION, MEMBER_NAME, …)
+    makes Excel request ~38 properties and (with MallardCube before the fix)
+    silently ignore the expansion response;
+  - advertising the tabular reference shape (per level `KEY0` + `MEMBER_VALUE`,
+    `NAME` on `(All)`, `PROPERTY_TYPE=5`, no cell properties) keeps it on the
+    short list (`PARENT_UNIQUE_NAME,[Year]KEY0,[Year]MEMBER_VALUE,…`) plus
+    `WHERE ([Measures].[Revenue])`, and the expansion renders.
+- **After changing metadata, build a fresh pivot** (`Connections.Add2` →
+  `PivotCaches().Create(2, $conn)` → `CreatePivotTable`) — `RefreshTable()`
+  reuses the old cache field metadata.
+- **Multi-instance Excel**: `GetActiveObject('Excel.Application')` returns one
+  registered instance, not necessarily yours. A new instance created with
+  `New-Object -ComObject Excel.Application` cannot be reattached from a later
+  tool call (each PowerShell call is a fresh process) — symptoms are
+  `Workbooks.Count = 0` and "You cannot call a method on a null-valued
+  expression". Drive the existing instance instead.
+- **Modal dialogs block COM** (same null-valued symptoms). Screenshot and click
+  the dialog's button before anything else; a failed connection swap can leave
+  the "Analysis Services Connection" wizard open, and a bad catalog shows
+  "Errors in the OLE DB provider … the catalog does not exist".
+- `SaveAs(path, 51)` for an unzip-able xlsx; `SaveCopyAs` follows the default
+  format (it wrote an ODF file with an .xlsx name here).
+
 ## Safety
 
 The endpoint is **unauthenticated on the LAN** and has full system access

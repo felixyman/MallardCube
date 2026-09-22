@@ -267,10 +267,30 @@ connects to it, so every metadata question can be answered by comparison
    `MDSCHEMA_LEVELS` (`LEVEL_ATTRIBUTE_HIERARCHY_NAME` of the key hierarchy's
    `(All)` level: reference empty, we write `(All)`).
 
-   Next diagnostic: build a tiny **HTTP XMLA bridge on the VM** (HttpListener +
-   ADOMD against the reference) and point Excel at it — if the reference's
-   responses render through HTTP, diff the bridge's responses against ours; if
-   they do not, the transport/session layer is the difference.
+   **Resolved.** The blocker was `MDSCHEMA_PROPERTIES`. The reference answers a
+   hierarchy-scoped request with, per level, `KEY0` and `MEMBER_VALUE` (plus
+   `NAME` on the `(All)` level), all `PROPERTY_TYPE=5`, and no cell properties;
+   we answered with a fabricated list of twelve standard member properties
+   (type 1) plus the cell properties. That list made Excel ask ~38 dimension
+   properties in every pivot query — the reference is asked for two — and left
+   the expansion silently ignored.
+
+   How it was found: the pump (`C:\inetpub\wwwroot\olap\msmdpump.dll`) was
+   pointed at the reference over HTTPS (8443) and fronted by a logging relay
+   that strips `X-Transport-Caps-Negotiation-Flags`, so the reference answers
+   plain `text/xml` instead of `application/sx+xpress` and every exchange is
+   readable in `C:\Users\Public\Documents\pumpproxy\NNN_*.xml`. Excel's
+   requests to the two servers could then be diffed directly: to the reference
+   `DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` +
+   `WHERE ([Measures].[Revenue])`; to us the 38-property list.
+
+   With the reference shape (`src/xmla/discover/mdschema_properties.rs`,
+   commit `72a2e59`): a fresh pivot's expand query is
+   `DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Year]KEY0,[Year]MEMBER_VALUE,
+   [Quarter]KEY0,[Quarter]MEMBER_VALUE … WHERE ([Measures].[Revenue])`, and
+   **the expansion renders in Excel against our proxy** (2021 → 1,2,3,4 with
+   all sibling years kept, verified live). The date-role `MEMBER_VALUE`
+   `DATA_TYPE` (7) is preserved for the Date Filters work.
 6. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
 
 ## Harness notes
