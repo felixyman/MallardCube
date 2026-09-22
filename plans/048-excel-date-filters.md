@@ -1,9 +1,11 @@
 # Plan 048 — Excel date filters: metadata requirements + UI spike
 
-Status: **in progress** — the pivot field-add regression is **fixed** (bisected to
-`e9b7ab6` and repaired: duplicate standard member properties in the cellset).
-Excel still withholds Date Filters: it does not write `memberValueDatatype` for
-the date attribute hierarchy, so the field is not typed as a date.
+Status: **mostly done** — the date field is typed (`memberValueDatatype="7"`),
+renders its dates, and Excel offers **Date Filters** with the Date Filter dialog
+(session 4; see the findings below). Two follow-ups stay open: Excel's
+date-filter MDX is still uncaptured (the modal dialog cannot be driven from the
+test VM — `PivotFilters.Add2` is refused on OLAP pivots, also against the
+reference), and label filters fault rather than being lowered.
 
 ## Why
 

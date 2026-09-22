@@ -55,10 +55,11 @@ honor its STOP conditions, and update your row when done.
 | 045  | Intake fidelity — converted models must arrive with their shape | P1 | L | 044 | IN PROGRESS |
 | 046  | Time intelligence robustness — the SSAS killer feature | P1 | M/L | 045 | IN PROGRESS |
 | 047  | MDX front-end — lexer + AST for the Excel subset | P1 | M | 046 | DONE |
+| 048  | Excel date filters — the SSAS date-filter surface | P1 | M | 046 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity) and 046 (time intelligence robustness) are IN PROGRESS; 047 (MDX front-end) is DONE. Next milestone: Gate G1 (public validation).**
+**Plans 001–033 and 035–043 DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness) and 048 (Excel date filters) are IN PROGRESS; 047 (MDX front-end) is DONE. Next milestone: Gate G1 (public validation).**
 
 - 047 (MDX front-end) **IN PROGRESS** 2026-09-21: the parser was a hybrid of
   `nom` fragments and ~20 hand scanners with a flat `ParsedMdx` flag bag and no
