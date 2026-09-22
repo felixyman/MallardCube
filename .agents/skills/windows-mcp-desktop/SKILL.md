@@ -240,6 +240,34 @@ few bytes into the payload; the output is UTF-16.
   disabled items. Check it with: right-click a member cell → `Move` to the menu
   item → screenshot the submenu (no click needed).
 
+## Which pivot gestures COM can and cannot drive (OLAP, measured 2026-09-22)
+
+A layout sweep comparing the proxy and the mirror engine renders each layout in a
+hidden Excel instance and diffs the grids (`sweep2.ps1` / `sweep3.ps1` in
+`C:\Users\Public\Documents\parity\`). What actually applies through COM:
+
+| Gesture | COM call | Works for OLAP? |
+|---|---|---|
+| Row/column/data fields | `CubeFields(name).Orientation = 1/2/4` | yes |
+| Adding a measure to Values | `CubeFields(measure).Orientation = 4` | yes (only with the fixed metadata — see plan 049) |
+| Nested fields, cross-tabs, totals off, sort by value | `Orientation`, `RowGrand`/`ColumnGrand` | yes |
+| Show Values As (% of total) | `DataFields(1).Calculation = 8` | yes (client-side) |
+| Number format | `DataFields(1).NumberFormat` | yes |
+| Label filter on a field | `PivotFields(f).PivotFilters.Add2(18, [Type]::Missing, "B")` | yes — the pivot re-renders filtered |
+| Top-N / value filters | `PivotFilters.Add2(6/10, PivotFields(measure), n)` | **no** — the filter object is created but the pivot does not change |
+| Page/report filter member | `PivotFields(f).CurrentPage` | **no** — `PivotItems()` is empty for the page field |
+| Multi-select page filter | `PivotFields(f).VisibleItemsList` | **no** (same) |
+| Subtotals off | `PivotFields(f).Subtotals = @()` | **no** |
+| Drill-through | `Range.ShowDetail = $true` | **no** via this path |
+| Second pivot on the same cache | `PivotCache.CreatePivotTable(...)` | errored (0x800A03EC) in the sweep |
+
+For the "no" rows use the UI (context menus, dialogs) and capture the MDX from
+`xmla-trace.jsonl` (proxy) or the relay logs (mirror); that is how the date and
+label filters were verified. `GetActiveObject` only works while Excel's own
+instance is registered in the ROT — a hidden instance created with
+`New-Object -ComObject Excel.Application` inside the *same* PowerShell call is
+the reliable path for a whole sweep.
+
 ## Safety
 
 The endpoint is **unauthenticated on the LAN** and has full system access
