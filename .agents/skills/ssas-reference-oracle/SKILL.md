@@ -182,6 +182,19 @@ $xml = Get-Content "probe_x\xl\pivotCache\pivotCacheDefinition1.xml" -Raw
   hierarchy name from `DrilldownLevel({[DateDim].[FullDate].[All]})` makes it
   list the user hierarchy's years instead.
 
+- **Excel reads member elements positionally.** A cellset member must carry the
+  standard five in the reference's order — `UName`, `Caption`, `LName`, `LNum`,
+  `DisplayInfo` — followed by the *requested* dimension properties.
+  `CHILDREN_CARDINALITY` is declared and emitted **only when the query asks for
+  it**; shipping it unrequested shifts `PARENT_UNIQUE_NAME` by one and Excel
+  crashes on multi-level expansion (`Expand to Month` / `Expand to Full Date`),
+  while single-level expansion still looks fine (plan 048).
+- **Compound member UNames** in the reference name the *top* level and then one
+  key segment each: `[DateDim].[Calendar].[Year].&[2024].&[1]` for a quarter,
+  `…&[1].&[1]` for a month. MallardCube names the member's own level
+  (`[Date].[Calendar].[Quarter].&[2024]&[1]`); Excel round-trips either, and the
+  difference is still open as a parity item.
+
 ## Caveat: tabular ≠ multidimensional
 
 This instance is **tabular**. Multidimensional SSAS date filters key off the

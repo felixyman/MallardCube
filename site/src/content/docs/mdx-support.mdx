@@ -69,11 +69,6 @@ startup; see `parent_child` in the [Model reference](./model/).
 - **DuckDB only.** Attached data sources such as Postgres, SQL Server, or S3
   are not wired up.
 - **One model per server.** The server serves a single `proxy-config.json`.
-- **Deep hierarchy expansion can crash Excel.** Expanding more than one level
-  in a single step ("Expand to Month") or expanding the deepest level (month →
-  dates) triggers a native fault in `EXCEL.EXE`. The server responses match
-  SSAS conventions and MSOLAP reads them without error; expand one level at a
-  time (Year → Quarter → Month), which works at every level.
 - **Level and set listings are data-driven.** Members without facts are
   omitted from `[Level].Members`, `HEAD`, and `TAIL` listings; counts stay
   dimension-based. Excel pivots send `NON EMPTY`, so the pivot path is
@@ -99,7 +94,7 @@ startup; see `parent_child` in the [Model reference](./model/).
 | Batched `CUBEVALUE` with different slicers | Works |
 | DRILLTHROUGH | Works |
 | Time intelligence (`YTD`, `QTD`, `MTD`) | Works |
-| Deep expansion in one step ("Expand to Month") | Crashes Excel — expand stepwise |
+| Deep expansion in one step ("Expand to Month", "Expand to Full Date") | Works |
 | DAX queries | Not supported |
 | Writeback | Not supported |
 | Calculation groups | Not supported |

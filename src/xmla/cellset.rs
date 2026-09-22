@@ -31,6 +31,12 @@ pub struct TupleConfig {
 pub struct HierarchyConfig {
     pub name: String,
     pub dim_prop_decls: Vec<(String, String, String)>,
+    /// Emit (and declare) `<CHILDREN_CARDINALITY>` on members — only when the
+    /// query asked for it in `DIMENSION PROPERTIES`. The tabular reference
+    /// emits it on request only; shipping it unrequested shifts the member
+    /// properties Excel reads positionally, which corrupts its hierarchy walk
+    /// and crashes Excel on multi-level expansion (plan 048).
+    pub include_children_cardinality: bool,
 }
 
 /// One cell in CellData.
@@ -80,35 +86,37 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
     let mut out = String::new();
     let p = &hier.name; // qualified-name prefix
 
-    let standard: &[(&str, &str, &str)] = &[
+    let mut standard: Vec<(&str, String, &str)> = vec![
         (
             "UName",
-            &hier_qualified(p, "[MEMBER_UNIQUE_NAME]"),
+            hier_qualified(p, "[MEMBER_UNIQUE_NAME]"),
             "xsd:string",
         ),
         (
             "Caption",
-            &hier_qualified(p, "[MEMBER_CAPTION]"),
+            hier_qualified(p, "[MEMBER_CAPTION]"),
             "xsd:string",
         ),
         (
             "LName",
-            &hier_qualified(p, "[LEVEL_UNIQUE_NAME]"),
+            hier_qualified(p, "[LEVEL_UNIQUE_NAME]"),
             "xsd:string",
         ),
-        ("LNum", &hier_qualified(p, "[LEVEL_NUMBER]"), "xsd:int"),
+        ("LNum", hier_qualified(p, "[LEVEL_NUMBER]"), "xsd:int"),
         (
             "DisplayInfo",
-            &hier_qualified(p, "[DISPLAY_INFO]"),
-            "xsd:unsignedInt",
-        ),
-        (
-            "CHILDREN_CARDINALITY",
-            &hier_qualified(p, "[CHILDREN_CARDINALITY]"),
+            hier_qualified(p, "[DISPLAY_INFO]"),
             "xsd:unsignedInt",
         ),
     ];
-    for (tag, qname, typ) in standard {
+    if hier.include_children_cardinality {
+        standard.push((
+            "CHILDREN_CARDINALITY",
+            hier_qualified(p, "[CHILDREN_CARDINALITY]"),
+            "xsd:unsignedInt",
+        ));
+    }
+    for (tag, qname, typ) in &standard {
         out.push_str(&format!(
             r#"                  <{tag} name="{qname}" type="{typ}"/>
 "#,
@@ -116,7 +124,7 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
     }
     // Requested member properties must not redeclare the standard ones
     // (duplicate declarations confuse Excel's axis parser).
-    let declared: Vec<&str> = standard.iter().map(|(_, q, _)| *q).collect();
+    let declared: Vec<&str> = standard.iter().map(|(_, q, _)| q.as_str()).collect();
     for (tag, qname, typ) in &hier.dim_prop_decls {
         if declared.contains(&qname.as_str()) {
             continue;
@@ -129,8 +137,10 @@ fn render_hierarchy_info(hier: &HierarchyConfig) -> String {
     out
 }
 
-/// Produce the <Member> XML for one member.
-fn render_member(m: &MemberConfig) -> String {
+/// Produce the <Member> XML for one member. `include_children_cardinality`
+/// mirrors the hierarchy's declaration: the element is only emitted when the
+/// query requested it.
+fn render_member(m: &MemberConfig, include_children_cardinality: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         r#"                  <Member Hierarchy="{hier}">
@@ -139,7 +149,6 @@ fn render_member(m: &MemberConfig) -> String {
                     <LName>{l}</LName>
                     <LNum>{ln}</LNum>
                     <DisplayInfo>{di}</DisplayInfo>
-                    <CHILDREN_CARDINALITY>{cc}</CHILDREN_CARDINALITY>
 "#,
         hier = m.hierarchy,
         u = m.u_name,
@@ -147,8 +156,14 @@ fn render_member(m: &MemberConfig) -> String {
         l = m.l_name,
         ln = m.l_num,
         di = m.display_info,
-        cc = m.children_cardinality,
     ));
+    if include_children_cardinality {
+        out.push_str(&format!(
+            r#"                    <CHILDREN_CARDINALITY>{cc}</CHILDREN_CARDINALITY>
+"#,
+            cc = m.children_cardinality,
+        ));
+    }
     for (tag, val) in &m.dim_props {
         out.push_str(&format!(
             r#"                    <{tag}>{val}</{tag}>
@@ -166,10 +181,21 @@ fn render_axes(axes: &[AxisConfig]) -> String {
     for axis in axes {
         out.push_str(&format!("            <Axis name=\"{}\">\n", axis.name));
         out.push_str("              <Tuples>\n");
+        // Members follow their hierarchy's declaration: only hierarchies whose
+        // query asked for CHILDREN_CARDINALITY emit it (plan 048).
+        let with_cc: Vec<&str> = axis
+            .hierarchies
+            .iter()
+            .filter(|h| h.include_children_cardinality)
+            .map(|h| h.name.as_str())
+            .collect();
         for tuple in &axis.tuples {
             out.push_str("                <Tuple>\n");
             for member in &tuple.members {
-                out.push_str(&render_member(member));
+                out.push_str(&render_member(
+                    member,
+                    with_cc.contains(&member.hierarchy.as_str()),
+                ));
             }
             out.push_str("                </Tuple>\n");
         }

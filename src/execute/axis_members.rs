@@ -160,6 +160,7 @@ fn hierarchy_for_dim(
     cellset::HierarchyConfig {
         name: dim.hierarchy_unique_name(),
         dim_prop_decls: filter_dim_prop_decls(dim_decls(dim), requested),
+        include_children_cardinality: includes_prop(requested, "CHILDREN_CARDINALITY"),
     }
 }
 
@@ -487,6 +488,7 @@ pub(crate) fn measures_hierarchy() -> cellset::HierarchyConfig {
     cellset::HierarchyConfig {
         name: MEASURES_HIER.into(),
         dim_prop_decls: vec![],
+        include_children_cardinality: false,
     }
 }
 
@@ -582,6 +584,7 @@ pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::Hierarc
         None => cellset::HierarchyConfig {
             name: format!("[{dim}].[{dim}]"),
             dim_prop_decls: vec![],
+            include_children_cardinality: false,
         },
     }
 }

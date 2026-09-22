@@ -13,7 +13,7 @@ use crate::engine::plan::QueryResult;
 /// Converts a `SemanticQuery` + `QueryResult` into an XMLA cellset
 /// XML string.  Each `build_*` function handles one query shape.
 /// `dispatch()` routes by `SemanticQueryKind`.
-use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
+use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind, includes_prop};
 use crate::response::xml_escape;
 
 pub(crate) fn ordered_pair(
@@ -2522,6 +2522,7 @@ fn build_set_members<B: QueryBackend + ?Sized>(
         let hc = cellset::HierarchyConfig {
             name: hier_u,
             dim_prop_decls: vec![],
+            include_children_cardinality: includes_prop(&query.dim_props, "CHILDREN_CARDINALITY"),
         };
         (ms, hc)
     } else {
@@ -2586,6 +2587,7 @@ fn build_member_only_probe<B: QueryBackend + ?Sized>(query: &SemanticQuery, back
         cellset::HierarchyConfig {
             name: hier_name,
             dim_prop_decls: vec![],
+            include_children_cardinality: includes_prop(&query.dim_props, "CHILDREN_CARDINALITY"),
         },
         members,
     );

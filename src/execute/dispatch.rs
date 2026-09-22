@@ -369,13 +369,18 @@ mod tests {
             let abs = pos + i;
             let close = abs + slice[abs..].find("</Member>").unwrap() + "</Member>".len();
             let block = &slice[abs..close];
+            let display_info: u32 = tag_value(block, "DisplayInfo").parse().unwrap_or(0);
+            // CHILDREN_CARDINALITY is only emitted when the query asks for it
+            // (the reference behaves the same); Excel reads the child count
+            // from DisplayInfo's low 16 bits, so fall back to those.
+            let children: u32 = tag_value(block, "CHILDREN_CARDINALITY")
+                .parse()
+                .unwrap_or(display_info & 0xFFFF);
             out.push((
                 tag_value(block, "Caption"),
                 tag_value(block, "UName"),
-                tag_value(block, "DisplayInfo").parse().unwrap_or(0),
-                tag_value(block, "CHILDREN_CARDINALITY")
-                    .parse()
-                    .unwrap_or(0),
+                display_info,
+                children,
             ));
             pos = close;
         }
@@ -1734,7 +1739,7 @@ mod tests {
     #[test]
     fn mixed_level_member_expand_to_month_inside_crossjoin() {
         with_project3(|| {
-            let mdx = r##"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Segment].[Segment].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026],[Date].[Calendar].[Quarter].&[2026]&[1],[Date].[Calendar].[Quarter].&[2026]&[2],[Date].[Calendar].[Quarter].&[2026]&[3],[Date].[Calendar].[Quarter].&[2026]&[4]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+            let mdx = r##"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Segment].[Segment].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026],[Date].[Calendar].[Quarter].&[2026]&[1],[Date].[Calendar].[Quarter].&[2026]&[2],[Date].[Calendar].[Quarter].&[2026]&[3],[Date].[Calendar].[Quarter].&[2026]&[4]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Calendar].[Month]CHILDREN_CARDINALITY ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
             let xml = get_execute_statement_response(mdx);
 
             let mut pairs: Vec<(String, Option<String>, u32)> = Vec::new();
@@ -3136,6 +3141,52 @@ mod tests {
                 assert!(xml.contains(kind), "{mdx} → {xml}");
                 assert!(!xml.contains("expected `SELECT`"), "{mdx} → {xml}");
             }
+        });
+    }
+
+    // Excel reads member elements positionally: an unrequested
+    // CHILDREN_CARDINALITY element (or its declaration) shifts the properties
+    // it reads, corrupting its hierarchy walk — this crashed Excel on
+    // "Expand to Month" and "Expand to Full Date". The reference emits it only
+    // when asked (plan 048).
+    #[test]
+    fn children_cardinality_is_only_emitted_when_requested() {
+        with_project3(|| {
+            let two_level = "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024],[Date].[Calendar].[Quarter].&[2024]&[1]},,,INCLUDE_CALC_MEMBERS)) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE";
+            let xml = get_execute_statement_response(two_level);
+            assert!(
+                !xml.contains("CHILDREN_CARDINALITY"),
+                "must not emit or declare it unrequested: {xml}"
+            );
+            // The requested properties still follow the standard five, in the
+            // reference's order (check a level-1 member; (All) has no parent).
+            let member = xml
+                .split("<Member Hierarchy=\"[Date].[Calendar]\">")
+                .find(|m| m.contains("<LNum>1</LNum>"))
+                .expect("a level-1 calendar member");
+            let elements = [
+                "UName",
+                "Caption",
+                "LName",
+                "LNum",
+                "DisplayInfo",
+                "PARENT_UNIQUE_NAME",
+            ];
+            let mut cursor = 0;
+            for el in elements {
+                let at = member[cursor..]
+                    .find(&format!("<{el}>"))
+                    .unwrap_or_else(|| panic!("{el} missing or out of order in {member}"));
+                cursor += at;
+            }
+
+            let requested = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Calendar].[Month]CHILDREN_CARDINALITY ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE";
+            let xml = get_execute_statement_response(requested);
+            assert!(xml.contains("<CHILDREN_CARDINALITY>"), "{xml}");
+            assert!(
+                xml.contains("[CHILDREN_CARDINALITY]"),
+                "declared when requested: {xml}"
+            );
         });
     }
 

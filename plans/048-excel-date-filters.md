@@ -230,6 +230,35 @@ session: the drill-through Excel sends on a value double-click
 Date].&[2020-01-01]))`) and the key-attribute-hierarchy field drill. The corpus
 test now skips non-MDX statements (DRILLTHROUGH/DAX have their own paths).
 
+## Findings (session 5 — the multi-level expansion crash)
+
+The README carried a "Partial": expanding a whole field more than one step
+("Expand to Month") or to the deepest level ("Expand to Full Date") crashed
+`EXCEL.EXE`. It was ours, not Excel's:
+
+- **Reproduced**: a fresh pivot on `[Date].[Calendar]`, Expand/Collapse →
+  "Expand to Month" on a year → native access violation; Excel recovered the
+  workbook. The statement Excel sends is a nested
+  `DrilldownMember({{DrilldownMember(...)}}, {year, quarter…})`.
+- **The reference survives the same gesture** (a `[DateDim].[Calendar]` pivot
+  against `MallardRef` expands 2024 → months without faulting), so the axis
+  shape was the place to look.
+- **Root cause**: we emitted `<CHILDREN_CARDINALITY>` on every member and
+  declared it in the axis `HierarchyInfo`, whether or not the query asked for
+  it. The reference emits the standard five (`UName`, `Caption`, `LName`,
+  `LNum`, `DisplayInfo`) followed by the *requested* properties only. Excel
+  reads member elements **positionally**, so the extra element shifted
+  `PARENT_UNIQUE_NAME` (and everything after it) by one — the same class of bug
+  as the `MDSCHEMA_PROPERTIES` element-order fix. Single-level expansion
+  tolerated the shift; multi-level walks need the parent linkage and crashed.
+- **Fix**: `HierarchyConfig::include_children_cardinality` (set from the
+  query's `DIMENSION PROPERTIES`), so the declaration and the element are
+  emitted only when requested — byte-identical member shape to the reference.
+- **Verified live**: 2024 → Quarter → Month renders with all four quarters and
+  twelve months; 2020 → "Expand to Full Date" renders quarters, months and
+  days. Both documented crash cases are gone; README and the docs site now list
+  one-step expansion as working.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
