@@ -1171,7 +1171,8 @@ mod tests {
 
     #[test]
     fn parse_where_leaf() {
-        let input = "WHERE ([ProductCategory].[ProductCategory].&[Category B],[Measures].[Total Sales])";
+        let input =
+            "WHERE ([ProductCategory].[ProductCategory].&[Category B],[Measures].[Total Sales])";
         let (_rest, members) = where_clause(input).unwrap();
         assert_eq!(members.len(), 2);
         assert_eq!(

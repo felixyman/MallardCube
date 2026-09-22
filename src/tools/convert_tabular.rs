@@ -241,11 +241,11 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
                     .iter()
                     .all(|m| m.expression.to_uppercase().contains("LOOKUPVALUE"));
             // Schema-agnostic warehouse naming: `<schema> F_<name>` is a fact,
-            // `*Calendar*`/`*Calendar*`/`Dates` a date role, `<schema> D_<name>`
+            // `*Calendar*`/`Dates` a date role, `<schema> D_<name>`
             // a dimension. Never key off a specific customer's prefix.
             if (lower.contains("f_") || t.measures.len() > 5) && !has_lookupvalue_only {
                 fact.push(t);
-            } else if lower.contains("calendar") || lower.contains("calendar") || lower == "dates" {
+            } else if lower.contains("calendar") || lower == "dates" {
                 dates.push(t);
             } else if lower.contains(" d_") {
                 dims.push(t);
@@ -555,7 +555,7 @@ impl DateRole {
     }
 }
 
-/// Resolve a date-part column: an exact source column (`year`, `år`), then a
+/// Resolve a date-part column: an exact source column (`year`), then a
 /// numeric sibling (`quarternumber`), then any matching display name.
 fn date_part_column(t: &TableInfo, words: &[&str]) -> Option<String> {
     for w in words {
@@ -603,11 +603,11 @@ fn build_date_role(m: &ConversionModel, t: &TableInfo) -> DateRole {
                 continue;
             };
             let n = level.name.to_lowercase();
-            if hier_year.is_none() && (n.contains("year") || n.contains("år")) {
+            if hier_year.is_none() && n.contains("year") {
                 hier_year = Some(col.clone());
-            } else if hier_quarter.is_none() && (n.contains("quarter")) {
+            } else if hier_quarter.is_none() && n.contains("quarter") {
                 hier_quarter = Some(col.clone());
-            } else if hier_month.is_none() && (n.contains("month")) {
+            } else if hier_month.is_none() && n.contains("month") {
                 hier_month = Some(col.clone());
             }
             full_date = Some(col);

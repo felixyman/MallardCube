@@ -195,8 +195,7 @@ fn date_windows(
             Some("quarter")
         } else if l.contains("month") {
             Some("month")
-        } else if l.contains("day") || l.contains("date")
-        {
+        } else if l.contains("day") || l.contains("date") {
             Some("day")
         } else {
             None
@@ -1312,10 +1311,7 @@ mod tests {
         let mdx = r##"WITH MEMBER [Measures].[XL_SD0] AS 'strtomember("[Measures].[Total Sales]").UniqueName' MEMBER [Measures].[XL_SD1] AS 'strtomember("[Measures].[Total Sales]").properties("caption")' MEMBER [Measures].[XL_SD2] AS '{strtomember("[Measures].[Total Sales]")}.item(0).item(0).level.UniqueName' SELECT {[Measures].[XL_SD0],[Measures].[XL_SD1],[Measures].[XL_SD2]} ON 0 FROM  CELL PROPERTIES VALUE"##;
         let q = semantic_query_from_mdx(mdx);
         assert_eq!(q.kind, SemanticQueryKind::MeasureMetadataProbe);
-        assert_eq!(
-            q.metadata_probe_targets,
-            vec!["[Measures].[Total Sales]"]
-        );
+        assert_eq!(q.metadata_probe_targets, vec!["[Measures].[Total Sales]"]);
         assert_eq!(q.metadata_probe_properties.len(), 3);
     }
 }

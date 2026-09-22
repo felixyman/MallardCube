@@ -97,9 +97,9 @@ fn build_inventory(parsed: TabularModel) -> Inventory {
         } else {
             let lower = t.name.to_lowercase();
             // Schema-agnostic warehouse naming: `<schema> D_<name>` is a
-            // dimension, `<schema> F_<name>` a fact, `*Calendar*`/`*Calendar*`
+            // dimension, `<schema> F_<name>` a fact, `*Calendar*`
             // a date role. Never key off a specific customer's prefix.
-            let is_date_role = lower.contains("calendar") || lower.contains("calendar");
+            let is_date_role = lower.contains("calendar");
             let is_dimension = lower.contains(" d_");
             let is_fact = lower.contains("f_");
 

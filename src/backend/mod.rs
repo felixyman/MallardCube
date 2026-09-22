@@ -569,11 +569,9 @@ impl Backend {
 
     pub fn region_count(&self) -> u32 {
         let conn = self.lock_conn();
-        conn.query_row(
-            "SELECT COUNT(DISTINCT region) FROM fact_table",
-            [],
-            |row| row.get::<_, u32>(0),
-        )
+        conn.query_row("SELECT COUNT(DISTINCT region) FROM fact_table", [], |row| {
+            row.get::<_, u32>(0)
+        })
         .unwrap_or(0)
     }
 
