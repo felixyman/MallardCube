@@ -77,6 +77,10 @@ pub enum DateWindow {
         amount: i64,
         unit: String,
     },
+    /// Absolute window from Excel's Date Filters
+    /// (`Filter(…, CurrentMember.MemberValue = CDate("2026-09-23"))`): the date
+    /// column compared to a fixed ISO date.
+    Absolute { op: CmpOp, date: String },
     /// `ParallelPeriod(level, n, anchor)`: the period at `level` shifted by `n`.
     Parallel {
         anchor: Vec<(String, String)>,

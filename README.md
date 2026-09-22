@@ -386,6 +386,10 @@ For detailed documentation:
 - PivotTable execution: filtering, drilldown, crossjoin, collapse
 - Multi-level date hierarchies (Year→Quarter→Month→Date expand/collapse, including one-step
   "Expand to Month" / "Expand to Full Date")
+- Excel **Date Filters** — Excel sends
+  `Filter(<key attribute>.Levels(1).AllMembers, CurrentMember.MemberValue <op> CDate("…"))`
+  in a subquery; the proxy lowers it to a date window on the role's full-date column
+  (verified end-to-end in Excel)
 - DRILLTHROUGH (double-click cell → filtered source rows)
 - Single or multiple fact tables with shared/scoped dimensions
 - Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
@@ -403,7 +407,6 @@ For detailed documentation:
 
 **Partial:**
 - Fallback SQL for composite DAX — 6 mechanical patterns, labelled **bridge code**: the conversion report lists a suggested upstream artifact per measure, and `qualify --strict` fails while bridge code remains
-- Excel **Date Filters** — the date key attribute is typed as a date, so Excel offers Date Filters and the Date Filter dialog opens (verified against the tabular reference); applying a filter end-to-end is still unverified because the modal dialog cannot be driven from the test VM
 - **Label filters** (`Filter(set, InStr(caption, …) > 0)`) are not lowered: they fault with an actionable message rather than returning the unfiltered set. Value filters, Top/Bottom N, and value sorting work
 - SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
 

@@ -1218,7 +1218,7 @@ pub fn member_property_filter_count(sel: &Select) -> usize {
         e.as_member().is_some_and(|m| {
             m.parts
                 .iter()
-                .any(|p| p.eq_ignore_ascii_case("Member_Value"))
+                .any(|p| p.replace('_', "").eq_ignore_ascii_case("membervalue"))
         })
     }
     fn walk(e: &Expr, out: &mut usize) {
@@ -1276,6 +1276,104 @@ pub fn member_property_filter_count(sel: &Select) -> usize {
     out
 }
 
+/// Excel's Date Filters predicate:
+/// `Filter(<hierarchy>.Levels(n).AllMembers, CurrentMember.MemberValue <op>
+/// CDate("YYYY-MM-DD"))`, typically inside a `FROM (SELECT …)` subquery.
+/// Returns `(dimension, op, ISO date)` for each predicate found.
+///
+/// The front-end parses `.Levels(n)` as a member whose last part is `Levels`
+/// plus a stray argument, so the call is matched structurally: one argument
+/// names the hierarchy, another carries the level number, and one is the
+/// comparison against a `CDate` literal.
+pub fn date_value_filters(sel: &Select) -> Vec<(String, CmpOp, String)> {
+    fn iso_date(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Str(s) => Some(s.clone()),
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("CDate") => match args.first() {
+                Some(Expr::Str(s)) => Some(s.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn is_member_value(e: &Expr) -> bool {
+        e.as_member().is_some_and(|m| {
+            m.parts.iter().any(|p| {
+                let p = p.replace('_', "").to_lowercase();
+                p == "membervalue" || p == "memberkey"
+            })
+        })
+    }
+    fn walk(e: &Expr, out: &mut Vec<(String, CmpOp, String)>) {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("Filter") => {
+                let dim = args.iter().find_map(|a| match a {
+                    Expr::Member(m) if m.parts.len() >= 2 => Some(m.parts[0].clone()),
+                    _ => None,
+                });
+                let cmp = args
+                    .iter()
+                    .find_map(|a| match a {
+                        // Only comparisons: the set argument and the level
+                        // number are not the condition.
+                        Expr::Tuple(items) => {
+                            items.first().filter(|c| matches!(c, Expr::Binary { .. }))
+                        }
+                        Expr::Binary { .. } => Some(a),
+                        _ => None,
+                    })
+                    .and_then(|c| match c {
+                        Expr::Binary { op, lhs, rhs } if is_member_value(lhs) => {
+                            iso_date(rhs).map(|d| (*op, d))
+                        }
+                        _ => None,
+                    });
+                if let (Some(dim), Some((op, date))) = (dim, cmp) {
+                    out.push((dim, op, date));
+                }
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let sets = named_sets(sel);
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(&expand_named_sets(e, &sets), &mut out);
+        }
+    }
+    if let Some(sub) = &sel.subquery {
+        for axis in &sub.axes {
+            for e in &axis.exprs {
+                walk(&expand_named_sets(e, &sets), &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// `Filter(set, <condition>)` calls the proxy does not lower. Label filters
 /// (`Filter(set, InStr(<caption>, …) > 0)`, caption/name comparisons) would
 /// otherwise be dropped silently — the axis came back unfiltered while Excel
@@ -1286,7 +1384,8 @@ pub fn unsupported_filter_count(sel: &Select) -> usize {
     fn is_member_property(e: &Expr) -> bool {
         e.as_member().is_some_and(|m| {
             m.parts.iter().any(|p| {
-                p.eq_ignore_ascii_case("Member_Value") || p.eq_ignore_ascii_case("Member_Key")
+                let p = p.replace('_', "").to_lowercase();
+                p == "membervalue" || p == "memberkey"
             })
         })
     }
@@ -1294,8 +1393,33 @@ pub fn unsupported_filter_count(sel: &Select) -> usize {
         match e {
             Expr::Call { name, args } => {
                 if name.eq_ignore_ascii_case("Filter") {
-                    let lowered = match args.get(1) {
-                        Some(Expr::Binary { lhs, .. }) if is_member_property(lhs) => true,
+                    // The condition is usually the second argument, but
+                    // Excel's `.Levels(n).AllMembers` set parses into extra
+                    // arguments, so find the comparison wherever it landed.
+                    let condition = args.iter().find_map(|a| match a {
+                        // The condition may be wrapped in a tuple; ignore the
+                        // set argument and the level number that Excel's
+                        // `.Levels(n).AllMembers` parses into.
+                        Expr::Tuple(items) => {
+                            items.first().filter(|c| matches!(c, Expr::Binary { .. }))
+                        }
+                        Expr::Binary { .. } => Some(a),
+                        _ => None,
+                    });
+                    let lowered = match condition {
+                        // `Member_Value`/`MemberValue` comparisons lower to
+                        // date windows: relative (`DateAdd`) or absolute
+                        // (`CDate`, Excel's Date Filters).
+                        Some(Expr::Binary { lhs, rhs, .. }) if is_member_property(lhs) => {
+                            matches!(**rhs, Expr::Number(_) | Expr::Str(_))
+                                || matches!(
+                                    rhs.as_ref(),
+                                    Expr::Call { name, .. }
+                                        if name.eq_ignore_ascii_case("DateAdd")
+                                            || name.eq_ignore_ascii_case("CDate")
+                                            || name == "VBA_DATE"
+                                )
+                        }
                         Some(Expr::Binary { lhs, rhs, .. }) => {
                             matches!(**lhs, Expr::Measure(_)) && matches!(**rhs, Expr::Number(_))
                         }

@@ -259,6 +259,43 @@ The README carried a "Partial": expanding a whole field more than one step
   days. Both documented crash cases are gone; README and the docs site now list
   one-step expansion as working.
 
+## Findings (session 6 — Date Filters captured and lowered)
+
+The dialog that blocked capture is drivable after all; the trick is that its
+buttons are drawn by Office (no child windows), the mouse only reaches them
+through a *committed* field, and the date field's text is not committed until
+the calendar picker sets it. Clicking the picker's **Today** button commits the
+value, which enables OK.
+
+What Excel then sends (captured verbatim):
+
+```
+SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)})
+  DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Full Date].[Full Date]KEY0,[Date].[Full Date].[Full Date]MEMBER_VALUE
+  ON COLUMNS
+  FROM (SELECT Filter([Date].[Full Date].Levels(1).AllMembers,
+                      ([Date].[Full Date].CurrentMember.MemberValue = CDate("2026-09-23")))
+        ON COLUMNS FROM [Sales])
+  WHERE ([Measures].[Revenue])
+```
+
+- The predicate is a **subquery**: `Filter(<key attribute>.Levels(1).AllMembers,
+  CurrentMember.MemberValue <op> CDate("YYYY-MM-DD"))`. `<op>` follows the menu
+  choice (`=`, `<>`, `<`, `<=`, `>`, `>=`).
+- The front-end parses `.Levels(1).AllMembers` into extra arguments (a member
+  whose last part is `Levels`, plus the level number), so the predicate is
+  matched **structurally** rather than positionally
+  (`frontend::date_value_filters`).
+- Lowering: `DateWindow::Absolute { op, date }` on the date role, emitted as
+  `<full-date column> <op> DATE '<iso>'` (both SQL sites). Equality is the
+  common case (`equals`, and the period items Excel computes client-side).
+- The label-filter guard now recognises `MemberValue`/`Member_Value` in any
+  argument position, so these predicates are not mistaken for caption filters.
+
+Verified live: with the filter applied the pivot shows exactly `2026-09-22` and
+its revenue; `=`, `<`, `<=`, `>` and `<>` all return the expected member counts
+against the demo model.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.

@@ -3149,6 +3149,32 @@ mod tests {
     // it reads, corrupting its hierarchy walk — this crashed Excel on
     // "Expand to Month" and "Expand to Full Date". The reference emits it only
     // when asked (plan 048).
+    // Excel's Date Filters arrive as a subquery predicate:
+    // `Filter(<hierarchy>.Levels(n).AllMembers, CurrentMember.MemberValue <op>
+    // CDate("YYYY-MM-DD"))`. It lowers to an absolute window on the date role's
+    // full-date column — the exact MDX Excel sent when a Date Filter was
+    // applied against the proxy (plan 048).
+    #[test]
+    fn excel_date_filters_lower_to_absolute_date_windows() {
+        with_project3(|| {
+            let set = "[Date].[Full Date].Levels(1).AllMembers";
+            let members = |condition: &str| {
+                let mdx = format!(
+                    "SELECT NON EMPTY Hierarchize({{DrilldownLevel({{[Date].[Full Date].[All]}},,,INCLUDE_CALC_MEMBERS)}}) \
+                     ON COLUMNS FROM (SELECT Filter({set}, ([Date].[Full Date].CurrentMember.MemberValue{condition})) \
+                     ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"
+                );
+                let xml = get_execute_statement_response(&mdx);
+                assert!(!xml.contains("faultstring"), "{condition} → {xml}");
+                axis0_member_infos(&xml).len()
+            };
+            // (All) plus exactly the matching date.
+            assert_eq!(members("=CDate(\"2020-01-02\")"), 2);
+            // A strict comparison keeps a subset (two days before 2020-01-03).
+            assert_eq!(members("<CDate(\"2020-01-03\")"), 3);
+        });
+    }
+
     #[test]
     fn children_cardinality_is_only_emitted_when_requested() {
         with_project3(|| {

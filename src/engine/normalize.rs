@@ -151,6 +151,9 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
                     DateWindow::Relative { op, amount, unit } => {
                         format!("{dk}=rel:{op:?}:{amount}{unit}")
                     }
+                    DateWindow::Absolute { op, date } => {
+                        format!("{dk}=abs:{op:?}:{date}")
+                    }
                     DateWindow::ToDate { anchor, period } => {
                         format!("{dk}={}@{period}", pins(anchor))
                     }

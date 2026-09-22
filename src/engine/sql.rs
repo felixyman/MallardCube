@@ -840,6 +840,17 @@ fn sql_where_with_cols(
                         };
                         format!("{date_col} {cmp} (CURRENT_DATE + INTERVAL '{amount} {unit}')")
                     }
+                    DateWindow::Absolute { op, date } => {
+                        let cmp = match op {
+                            crate::mdx::ast::CmpOp::Gt => ">",
+                            crate::mdx::ast::CmpOp::Ge => ">=",
+                            crate::mdx::ast::CmpOp::Lt => "<",
+                            crate::mdx::ast::CmpOp::Le => "<=",
+                            crate::mdx::ast::CmpOp::Eq => "=",
+                            crate::mdx::ast::CmpOp::Ne => "<>",
+                        };
+                        format!("{date_col} {cmp} DATE '{}'", date.replace('\'', "''"))
+                    }
                     DateWindow::ToDate {
                         anchor: pins,
                         period,
@@ -1041,6 +1052,17 @@ fn date_window_predicate(
                 crate::mdx::ast::CmpOp::Ne => "<>",
             };
             format!("{date_col} {cmp} (CURRENT_DATE + INTERVAL '{amount} {unit}')")
+        }
+        DateWindow::Absolute { op, date } => {
+            let cmp = match op {
+                crate::mdx::ast::CmpOp::Gt => ">",
+                crate::mdx::ast::CmpOp::Ge => ">=",
+                crate::mdx::ast::CmpOp::Lt => "<",
+                crate::mdx::ast::CmpOp::Le => "<=",
+                crate::mdx::ast::CmpOp::Eq => "=",
+                crate::mdx::ast::CmpOp::Ne => "<>",
+            };
+            format!("{date_col} {cmp} DATE '{}'", date.replace('\'', "''"))
         }
         DateWindow::ToDate { anchor: a, period } => {
             let a = anchor(a);

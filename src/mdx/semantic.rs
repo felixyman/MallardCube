@@ -931,6 +931,26 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     }
 
     let mut filters = filters_from_parsed(&parsed);
+
+    // Excel's Date Filters arrive as a subquery predicate
+    // (`Filter(<hierarchy>.Levels(n).AllMembers, CurrentMember.MemberValue <op>
+    // CDate("YYYY-MM-DD"))`). Lower it to an absolute window on the date
+    // role's full-date column (plan 048).
+    if mdx.contains("CDate")
+        && let Ok(sel) = crate::mdx::frontend::parse_select(mdx)
+    {
+        for (dim_name, op, date) in crate::mdx::frontend::date_value_filters(&sel) {
+            if let Some(d) = crate::proxy_project::project().model.dim_def_opt(&dim_name) {
+                filters.push(DimensionFilter {
+                    dimension: d.id.clone(),
+                    members: vec![],
+                    level: d.levels.last().map(|l| l.name.clone()),
+                    range: None,
+                    date_window: Some(DateWindow::Absolute { op, date }),
+                });
+            }
+        }
+    }
     for (dim_name, level_name, from_key, to_key) in &parsed.axis_member_ranges {
         filters.push(DimensionFilter {
             dimension: dim_name.clone(),

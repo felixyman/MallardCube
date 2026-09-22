@@ -195,6 +195,28 @@ $xml = Get-Content "probe_x\xl\pivotCache\pivotCacheDefinition1.xml" -Raw
   (`[Date].[Calendar].[Quarter].&[2024]&[1]`); Excel round-trips either, and the
   difference is still open as a parity item.
 
+**Excel's Date Filters (captured verbatim, 2026-09-22):**
+
+```sql
+SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)})
+  DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Full Date].[Full Date]KEY0,[Date].[Full Date].[Full Date]MEMBER_VALUE
+  ON COLUMNS
+  FROM (SELECT Filter([Date].[Full Date].Levels(1).AllMembers,
+                      ([Date].[Full Date].CurrentMember.MemberValue = CDate("2026-09-23")))
+        ON COLUMNS FROM [Sales])
+  WHERE ([Measures].[Revenue])
+```
+
+- The filter is a **subquery** over the key attribute hierarchy, with
+  `Levels(1)` for its single level; the operator follows the menu item
+  (`=`, `<>`, `<`, `<=`, `>`, `>=`). Excel computes the period items
+  (`Today`, `This Month`, …) client-side and sends a plain `CDate`.
+- Driving the dialog: its buttons are **drawn by Office** (no child HWNDs), the
+  date field's text is not committed until the **calendar picker** sets it, and
+  OK stays disabled until then. Click the picker's `Today` button, then OK.
+  `WM_COMMAND`/`SendMessage` do not reach it; synthetic clicks do once the
+  dialog is the foreground window.
+
 ## Caveat: tabular ≠ multidimensional
 
 This instance is **tabular**. Multidimensional SSAS date filters key off the

@@ -47,7 +47,9 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
     }
     // `DateAdd`/`VBA!` are lowered inside member-value filters; elsewhere they
     // are not handled yet.
-    let lowered_windows = fe::member_value_filters(&sel).len();
+    // Relative windows (`DateAdd`) and Excel's absolute Date Filters
+    // (`CDate`) both lower to date windows.
+    let lowered_windows = fe::member_value_filters(&sel).len() + fe::date_value_filters(&sel).len();
     if (fe::first_call(&sel, &["DATEADD"]).is_some() || fe::bodies_contain(&sel, "VBA!"))
         && lowered_windows == 0
     {
