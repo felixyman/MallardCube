@@ -93,6 +93,9 @@ startup; see `parent_child` in the [Model reference](./model/).
 | Parent-child hierarchies | Works |
 | Multi-parent expand ("Expand Entire Field") | Works |
 | Set functions (`TopCount`, `Order`, `Filter`) | Works |
+| Value filters, Top/Bottom N, value sorting | Works |
+| Label filters (`Filter` over member captions/names) | Not lowered — faults with an actionable message instead of returning unfiltered members |
+| Excel **Date Filters** dialog (equals / before / after / between) | Offered on the date-typed key attribute hierarchy; applying a filter end-to-end is not yet verified |
 | Batched `CUBEVALUE` with different slicers | Works |
 | DRILLTHROUGH | Works |
 | Time intelligence (`YTD`, `QTD`, `MTD`) | Works |

@@ -351,7 +351,7 @@ cargo test --lib
 Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
 does this automatically).
 
-450 tests covering MDX parsing, semantic classification, plan generation, SQL
+Tests cover MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
 multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
 time intelligence, security roles, AutoModel detection, and compatibility-gate
@@ -375,6 +375,7 @@ For detailed documentation:
 | `docs/SCALING.md` | 100M-row measurements and the reproduction harness |
 | `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
 | `docs/converting-models.md` | SSAS Tabular conversion: intake loop, qualify, compatibility gate |
+| `docs/config-reference.md` | Every `proxy-config` key, its default, and worked examples |
 | `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
 | `docs/cellset-reference.md` | XMLA cellset layout reference |
 
@@ -401,6 +402,8 @@ For detailed documentation:
 
 **Partial:**
 - Fallback SQL for composite DAX — 6 mechanical patterns, labelled **bridge code**: the conversion report lists a suggested upstream artifact per measure, and `qualify --strict` fails while bridge code remains
+- Excel **Date Filters** — the date key attribute is typed as a date, so Excel offers Date Filters and the Date Filter dialog opens (verified against the tabular reference); applying a filter end-to-end is still unverified because the modal dialog cannot be driven from the test VM
+- **Label filters** (`Filter(set, InStr(caption, …) > 0)`) are not lowered: they fault with an actionable message rather than returning the unfiltered set. Value filters, Top/Bottom N, and value sorting work
 - SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
 - Deep hierarchy expansion in Excel — expanding a whole field more than one level in a single step
   (e.g. Year → "Expand to Month") or expanding the deepest level (Month → dates) can crash

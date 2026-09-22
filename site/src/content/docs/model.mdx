@@ -278,6 +278,13 @@ dimension:
 
 This block is required for time-intelligence measures and for date drilldown.
 
+A dimension marked `is_date_role: true` with `hierarchy_levels` also exposes its
+leaf level as a single-level **key attribute hierarchy**, named after that level
+(`[Date].[Full Date]` beside the user hierarchy `[Date].[Calendar]`). That
+hierarchy carries the date data type, which is what makes Excel offer
+**Date Filters** (equals / is before / is after / between, plus the calendar
+picker) on the date field. The field list shows both hierarchies; drag either.
+
 ## Multiple fact tables
 
 For models with more than one fact table, list them in `fact_tables` and scope
