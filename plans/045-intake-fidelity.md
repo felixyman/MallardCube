@@ -76,7 +76,7 @@ fidelity gaps, ordered by how badly they hurt:
   `date_key_column` from the role's relationship, `full_date_column` from the
   primary hierarchy's leaf, and year/quarter/month from the date-part columns
   (`year`/`quarternumber`/`monthnumber` in the retail sample;
-  `year`/`quarter`/`month` in the real export). Flag columns are emitted only when
+  localized date-part column names in the real export). Flag columns are emitted only when
   the table has them — flags are upstream (plan 044, invariant 2).
 - Time-intelligence measures bind to the role their DAX references
   (`TOTALYTD(…, 'Cal B'[Date])` → `Cal B`); the report marks inferred vs
