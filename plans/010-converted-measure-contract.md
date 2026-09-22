@@ -64,12 +64,12 @@ let sql = fallback_sql
 ```
 
 ```sql
--- generated_project/sql_fallback/median_order_to_ship
+-- generated_project/sql_fallback/median_order_to_ship.sql
 SELECT MEDIAN(order_to_ship_days) FROM dw_sales_f_orders;
 ```
 
 ```sql
--- generated_project/sql_fallback/completed_orders
+-- generated_project/sql_fallback/completed_orders_(mtd)_cy.sql
 SELECT
   c.month,
   c.year,

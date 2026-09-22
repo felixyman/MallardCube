@@ -240,11 +240,14 @@ fn classify_model(parsed: TabularModel) -> ConversionModel {
                 && t.measures
                     .iter()
                     .all(|m| m.expression.to_uppercase().contains("LOOKUPVALUE"));
+            // Schema-agnostic warehouse naming: `<schema> F_<name>` is a fact,
+            // `*Calendar*`/`*Calendar*`/`Dates` a date role, `<schema> D_<name>`
+            // a dimension. Never key off a specific customer's prefix.
             if (lower.contains("f_") || t.measures.len() > 5) && !has_lookupvalue_only {
                 fact.push(t);
-            } else if lower.contains("calendar") || lower == "dates" {
+            } else if lower.contains("calendar") || lower.contains("calendar") || lower == "dates" {
                 dates.push(t);
-            } else if lower.starts_with("dw_sales d_") {
+            } else if lower.contains(" d_") {
                 dims.push(t);
             } else {
                 lookups.push(t);
@@ -528,7 +531,7 @@ const FLAG_COLUMNS: [(&str, &str); 5] = [
 struct DateRole {
     /// Config dimension id (`ssas_name`).
     dim_id: String,
-    /// Model table name, as referenced by DAX (`Calendar_DeliveryDate`).
+    /// Model table name, as referenced by DAX (`Calendar_OrderDate`).
     source_name: String,
     /// Physical table name in `schema.sql`.
     table_name: String,
@@ -660,7 +663,7 @@ fn downgrade_time_intelligence_without_flags(model: &mut ConversionModel) {
     }
 }
 
-/// Quoted table references in a DAX expression (`'Calendar_X'[Date]`).
+/// Quoted table references in a DAX expression (`'Calendar_OrderDate'[Date]`).
 fn dax_table_refs(dax: &str) -> Vec<String> {
     let mut refs = Vec::new();
     let mut rest = dax;
@@ -3257,14 +3260,18 @@ mod tests {
     fn plain_aggregate_measures_keep_real_sql() {
         let mut model = make_generic_model();
         model.fact_table.measures = vec![MeasureInfo {
-            name: "Customers".into(),
+            name: "Status Count".into(),
             expression: "= DISTINCTCOUNT('Orders'[Status])".into(),
             display_folder: String::new(),
             classification: "simple".into(),
         }];
         let cfg: crate::project::config::ProxyConfig =
             serde_json::from_str(&render_proxy_config(&model)).expect("config parses");
-        let meas = cfg.measures.iter().find(|m| m.id == "Customers").unwrap();
+        let meas = cfg
+            .measures
+            .iter()
+            .find(|m| m.id == "Status Count")
+            .unwrap();
         assert_eq!(meas.sql_expr, "COUNT(DISTINCT status)");
         assert!(
             meas.sql_fallback_file.is_none(),

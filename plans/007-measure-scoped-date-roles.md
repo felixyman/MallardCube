@@ -28,7 +28,7 @@ the project3 demo, but it does not fit the repo's own converted-model target:
 
 If the proxy is going to replace real SSAS cubes for Excel users, time-aware
 measures must bind to the correct date role (`Order Date`, `Ship Date`,
-`ShipDate`, etc.), not to one global calendar chosen at startup.
+`Delivery Date`, etc.), not to one global calendar chosen at startup.
 
 ## Current state
 

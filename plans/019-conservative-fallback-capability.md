@@ -43,7 +43,7 @@ Some(FallbackCapability::Universal)
 ```
 
 ```sql
--- generated_project/sql_fallback/avg_ship_to_delivery
+-- generated_project/sql_fallback/avg_ship_to_delivery_(non_urgent).sql
 SELECT AVG(avg_per_order) AS value
 FROM (
     SELECT order_id, AVG(...) AS avg_per_order

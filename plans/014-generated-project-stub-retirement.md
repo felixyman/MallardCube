@@ -37,7 +37,7 @@ honest and more complete Excel proof.
 - `src/tools/convert_tabular.rs` — when no supported fallback SQL generator applies, it emits an annotated stub ending with `SELECT 1 AS dummy;`.
 - `src/engine/model.rs` and `src/engine/plan.rs` — now classify and gate fallback SQL via `FallbackCapability`, so stubs fail closed instead of returning misleading grouped/scalar data.
 - `generated_project/conversion-report.md` — still reports 11 SQL fallback measures.
-- `generated_project/sql_fallback/delivered_orders_dvt.sql` and `generated_project/sql_fallback/avg_ship_to_delivery — are still TODO stubs.
+- `generated_project/sql_fallback/delivered_orders_dvt.sql` and `generated_project/sql_fallback/avg_ship_to_delivery_(non_urgent).sql` — are still TODO stubs.
 
 Relevant excerpts:
 
@@ -74,7 +74,7 @@ SELECT 1 AS dummy;
 ```
 
 ```sql
--- generated_project/sql_fallback/avg_ship_to_delivery
+-- generated_project/sql_fallback/avg_ship_to_delivery_(non_urgent).sql:8-11
 -- TODO: Implement DuckDB SQL equivalent.
 SELECT 1 AS dummy;
 ```

@@ -18,5 +18,13 @@ skills-lock.json
 opencode.json.backup
 .agents/skills/excel-mcp/
 
-# Customer models: never commit (plan 044 — generic examples only)
-projects/private_model/
+# Private/local models: never commit (plan 044 — generic examples only).
+# Only the sample projects below belong to the repo; anything else dropped
+# under projects/ stays local.
+projects/*
+!projects/generated_contoso/
+!projects/generated_retail_analytics/
+!projects/project2/
+!projects/project3/
+!projects/project4/
+!projects/upstream_marts/

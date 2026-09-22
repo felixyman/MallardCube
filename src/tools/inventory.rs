@@ -95,9 +95,13 @@ fn build_inventory(parsed: TabularModel) -> Inventory {
         if t.is_calculated() {
             calculated_tables.push(t.name.clone());
         } else {
-            let is_date_role = t.name.to_lowercase().contains("calendar");
-            let is_dimension = t.name.to_lowercase().starts_with("dw_sales d_");
-            let is_fact = t.name.to_lowercase().contains("f_");
+            let lower = t.name.to_lowercase();
+            // Schema-agnostic warehouse naming: `<schema> D_<name>` is a
+            // dimension, `<schema> F_<name>` a fact, `*Calendar*`/`*Calendar*`
+            // a date role. Never key off a specific customer's prefix.
+            let is_date_role = lower.contains("calendar") || lower.contains("calendar");
+            let is_dimension = lower.contains(" d_");
+            let is_fact = lower.contains("f_");
 
             if t.measures.len() > 5 || is_fact {
                 fact_tables.push(t.name.clone());
