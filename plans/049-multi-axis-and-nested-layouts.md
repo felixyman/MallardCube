@@ -1,6 +1,6 @@
 # Plan 049 — Multi-axis and nested layouts: two engine bugs, verified against the reference
 
-Status: findings verified 2026-09-22; fixes not started.
+Status: findings verified 2026-09-22; fixed in `8ab03e3` (see Fixed / Still open).
 Related: plan 048 (Excel metadata/date filters), the mirror model `MallardDemo`,
 `.agents/skills/ssas-reference-oracle` (relay recipe).
 
@@ -85,6 +85,57 @@ axis-structure mismatch (Excel indexes the axis it asked for; it gets three).
 3. Regression tests from the two statements above: member counts and captions
    per axis (101 tuples for Finding 2; 16 tuples for Finding 1), plus a cellset
    comparison against the mirror.
+
+## Fixed (commit `8ab03e3`)
+
+All three findings, verified against the mirror with Excel's own MDX:
+
+| layout | mirror | proxy before | proxy now |
+|---|---|---|---|
+| `CrossJoin(Calendar, {Revenue,Units}) ON COLUMNS` | 1 axis, 32 members, 16 cells | 3 axes, 28 members, 14 cells | **identical** |
+| `{[Measures].[Revenue]} ON COLUMNS, <nested rows> ON ROWS` | Axis1 = 82 members / 41 cells | 40 members / 20 cells | **identical** |
+| `CrossJoin(Calendar, {Revenue}) ON COLUMNS, Category ON ROWS` | 16 × 21, 168 cells | 1 axis, 420 members | **identical** |
+| `DrilldownMember(… {-{Baby}} …)` (collapse) | 40 tuples | 20 tuples | **identical** |
+
+Mechanism:
+
+- `src/mdx/frontend.rs`: `AxisSpec` (ordinal, dimensions, measures, slot
+  order) + `axis_specs()`, threaded through `ParsedMdx` and `SemanticQuery`.
+- `src/execute/render.rs`: `measure_dim_axis` / `merged_measure_axis` /
+  `finish_dim_axis` keep the measures on their axis and place each axis at its
+  requested ordinal; `build_cross_tab` renders a field-in-Columns × field-in-Rows
+  pivot (one axis per edge, `(All)` first, cells row-major); `build_drilldown_member`
+  emits the root tuple and each parent's `(parent, All)` aggregate; the
+  multi-measure renderers emit the `(All)` member Excel reads as the Grand Total.
+- `src/xmla/discover/{hierarchies,levels}.rs` now honour their restrictions
+  (Excel asks for one hierarchy/level at a time while building a cache; both
+  returned every row). `discover/mod.rs` carries the shared matcher.
+- Regression tests: `crossjoined_measures_stay_on_the_requested_axis`,
+  `two_axis_cross_tab_keeps_one_axis_per_edge`,
+  `nested_rows_drilldown_returns_parents_and_totals`,
+  `measures_axis_keeps_its_ordinal`.
+
+## Still open
+
+- **3-dimension layouts** (`CrossJoin(Calendar, {Revenue,Units}) ON COLUMNS`
+  with `DrilldownMember(Category → Channel) ON ROWS`): the plan groups by all
+  `axis_dimensions` and `query_pairs`/`MultiGrouped2` read only two columns, so
+  the nested Rows structure and its values are lost (336 cells against the
+  mirror's 656). Needs a per-axis grouping plan and a nested-axis renderer.
+- **Top-level `(All)` member on single-axis pivots**: the reference returns
+  `All` + members for `DrilldownLevel({All})`; the proxy omits it. Excel
+  tolerates it today (it renders the Grand Total from the cells), and adding it
+  broke six capture-based tests, so it was left as is.
+- **Slicer axis hierarchy list**: the reference includes the axis dimensions'
+  other hierarchies (e.g. `[Date].[Full Date]` beside `[Date].[Calendar]`);
+  the proxy lists only the query's non-axis dimensions (plan 048 note).
+- **Excel cannot add a measure to Values via COM against a fresh proxy pivot**
+  (`Orientation = 4` → `0x800A03EC`, silently in the field list too) while the
+  mirror accepts it; an older proxy workbook still renders values. Restriction
+  handling in `MDSCHEMA_HIERARCHIES`/`MDSCHEMA_LEVELS` was fixed while chasing
+  it, but the cause is still open — compare the pivot cache definition of a
+  fresh proxy pivot (no `[Measures]` cache field) with the mirror's.
+
 
 ## Harness notes (verified)
 
