@@ -115,13 +115,40 @@ Mechanism:
   `nested_rows_drilldown_returns_parents_and_totals`,
   `measures_axis_keeps_its_ordinal`.
 
+## Refactor phases 1–3 (commits `b324ddb`, `23d97ba`, `1a0ea91`)
+
+The three findings above were symptoms of the same architecture: the AST was
+parsed, then flattened into a flag bag, a `SemanticQueryKind`, a `QueryPlan` and
+a `QueryResult` shape, and each layer re-guessed what the one above knew. The
+first three phases of the parser/render refactor are done:
+
+1. **Oracle corpus** (`b324ddb`): five layouts Excel sends are pinned to the
+   mirror's structures and values (nested rows, collapse, two measures on one
+   axis, channel × category cross-tab, year × category cross-tab), plus the
+   three-dimension case. It caught two more quirks on the way: cross-tab axes
+   listed members in data order rather than the dimension's order, and cells
+   for combinations with no data were sent as 0 where the reference omits them
+   (sparse cell data — Excel shows a blank).
+2. **Classification from the AST** (`23d97ba`): the `contains("CrossJoin(")`
+   family, `detect_axis_dimension`, `parse_axis_level_members`,
+   `parse_drilldown_targets`, the `AddCalculatedMembers` classification and
+   `extract_drill_members` are AST questions now (`frontend::mentions_call`,
+   `find_call`, `walk_expr`, `first_axis_dimension`, `with_body`). Only what MDX
+   keeps opaque stays text-matched: the *quoted* `AS '…'` bodies and the
+   `strtomember` probe, which is outside the supported syntax subset.
+3. **N-dimension grouping** (`1a0ea91`): `QueryBackend::query_grouped_n` and
+   `QueryResult::MultiGroupedN` carry N key columns; `build_multi_dim_pivot`
+   renders one axis per requested edge with nested parents/children and
+   coordinate-keyed, sparse cells. The three-dimension layout now matches the
+   mirror (656 cells, identical tuples and values).
+
+Remaining candidates (phase 4, only if a gesture forces it): fold
+`SemanticQueryKind` into the axis plan so the probe compat layer is the only
+shape-matching left, and retire the per-shape renderers behind one
+coordinate-keyed renderer.
+
 ## Still open
 
-- **3-dimension layouts** (`CrossJoin(Calendar, {Revenue,Units}) ON COLUMNS`
-  with `DrilldownMember(Category → Channel) ON ROWS`): the plan groups by all
-  `axis_dimensions` and `query_pairs`/`MultiGrouped2` read only two columns, so
-  the nested Rows structure and its values are lost (336 cells against the
-  mirror's 656). Needs a per-axis grouping plan and a nested-axis renderer.
 - **Top-level `(All)` member on single-axis pivots**: the reference returns
   `All` + members for `DrilldownLevel({All})`; the proxy omits it. Excel
   tolerates it today (it renders the Grand Total from the cells), and adding it
