@@ -373,6 +373,8 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
     };
     let n_measures = measure_members.len().max(1);
 
+    // Members in the dimension's own order (the labels arrive grouped by the
+    // other axis, so dedupe then sort, as the single-axis renderers do).
     let mut dim0_values: Vec<String> = Vec::new();
     let mut dim1_values: Vec<String> = Vec::new();
     for (a, b, _) in &rows {
@@ -383,6 +385,8 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
             dim1_values.push(b.clone());
         }
     }
+    dim0_values.sort();
+    dim1_values.sort();
 
     let member_for = |dim: &str, value: &str| -> cellset::MemberConfig {
         leaf_members_from(
@@ -406,30 +410,29 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
         m
     };
 
-    let value_at = |a: &str, b: &str, mi: usize| -> f64 {
+    let value_at = |a: &str, b: &str, mi: usize| -> Option<f64> {
         rows.iter()
             .find(|(ra, rb, _)| ra == a && rb == b)
             .and_then(|(_, _, values)| values.get(mi).copied())
-            .unwrap_or(0.0)
     };
-    // (All, b) sums over dim0, (a, All) sums over dim1, (All, All) is the total.
-    let cell_value = |a: Option<&str>, b: Option<&str>, mi: usize| -> f64 {
+    // (All, b) sums over dim0, (a, All) sums over dim1, (All, All) is the
+    // total. `None` means the combination has no data: the reference omits
+    // those cells (sparse cell data) instead of sending a zero, so Excel shows
+    // a blank rather than 0.
+    let cell_value = |a: Option<&str>, b: Option<&str>, mi: usize| -> Option<f64> {
+        let sum = |pred: &dyn Fn(&str, &str) -> bool| -> Option<f64> {
+            let values: Vec<f64> = rows
+                .iter()
+                .filter(|(ra, rb, _)| pred(ra, rb))
+                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
+                .collect();
+            (!values.is_empty()).then(|| values.iter().sum())
+        };
         match (a, b) {
             (Some(a), Some(b)) => value_at(a, b, mi),
-            (Some(a), None) => rows
-                .iter()
-                .filter(|(ra, _, _)| ra == a)
-                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
-                .sum(),
-            (None, Some(b)) => rows
-                .iter()
-                .filter(|(_, rb, _)| rb == b)
-                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
-                .sum(),
-            (None, None) => rows
-                .iter()
-                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
-                .sum(),
+            (Some(a), None) => sum(&|ra, _| ra == a),
+            (None, Some(b)) => sum(&|_, rb| rb == b),
+            (None, None) => sum(&|_, _| true),
         }
     };
 
@@ -448,8 +451,9 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
                 .into_iter()
                 .enumerate()
             {
-                let value = cell_value(a, b, mi);
-                cells.push(measurement_cell_for(ordinal, value, &measure_id));
+                if let Some(value) = cell_value(a, b, mi) {
+                    cells.push(measurement_cell_for(ordinal, value, &measure_id));
+                }
                 ordinal += 1;
             }
         }

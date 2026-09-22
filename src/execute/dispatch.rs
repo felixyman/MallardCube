@@ -3563,6 +3563,108 @@ mod tests {
         });
     }
 
+    // ---- Oracle corpus (plan 049, phase 1) --------------------------------
+    //
+    // Axis structures captured from the reference SSAS 2025 tabular mirror
+    // (`MallardDemo`, 2026-09-22) for the layouts Excel actually sends. The
+    // tuples are the mirror's captions joined per tuple; the cell lists are
+    // checked against the mirror's values. This is the safety net for the
+    // parser/render refactor: it pins the *reference's* shapes, not ours.
+
+    /// Axis tuples as `cap/cap,cap/cap,…` (the mirror's caption strings).
+    fn axis_signature(xml: &str, axis: &str) -> String {
+        axis_tuple_captions(xml, axis)
+            .iter()
+            .map(|tuple| tuple.join("/"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    const NESTED_ROWS_TUPLES: &str = "All/All,Automotive/All,Automotive/Retail,Baby/All,Baby/Retail,Beauty/All,Beauty/Direct,Books/All,Books/Direct,Clothing/All,Clothing/Direct,Electronics/All,Electronics/Wholesale,Food/All,Food/Online,Furniture/All,Furniture/Retail,Garden/All,Garden/Online,Health/All,Health/Wholesale,Home/All,Home/Online,Jewelry/All,Jewelry/Direct,Music/All,Music/Direct,Office/All,Office/Retail,Outdoors/All,Outdoors/Retail,Pet Supplies/All,Pet Supplies/Wholesale,Shoes/All,Shoes/Online,Sports/All,Sports/Wholesale,Tools/All,Tools/Wholesale,Toys/All,Toys/Online";
+
+    #[test]
+    fn oracle_nested_rows_returns_parents_and_channels() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY {[Measures].[Revenue]} ON COLUMNS, NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) ON ROWS FROM [Sales]",
+            );
+            assert_eq!(axis_signature(&xml, "Axis0"), "Revenue");
+            assert_eq!(axis_signature(&xml, "Axis1"), NESTED_ROWS_TUPLES);
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 41, "mirror: 41 cells");
+            assert_eq!(values[0], 521_586_767.0, "root = grand total");
+            assert_eq!(values[1], 25_102_648.0, "Automotive total");
+            assert_eq!(values[2], 25_102_648.0, "Automotive's only channel");
+        });
+    }
+
+    #[test]
+    fn oracle_nested_rows_collapse_keeps_the_parent_aggregate() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), {-{[Category].[Category].&[Baby]}}, [Channel].[Channel])) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+            );
+            let expected = NESTED_ROWS_TUPLES.replace("Baby/All,Baby/Retail", "Baby/All");
+            assert_eq!(axis_signature(&xml, "Axis0"), expected);
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 40, "mirror: 40 cells (Baby collapsed)");
+            assert_eq!(values[0], 521_586_767.0);
+        });
+    }
+
+    const CATEGORY_2MEAS_TUPLES: &str = "All/Revenue,All/Units,Automotive/Revenue,Automotive/Units,Baby/Revenue,Baby/Units,Beauty/Revenue,Beauty/Units,Books/Revenue,Books/Units,Clothing/Revenue,Clothing/Units,Electronics/Revenue,Electronics/Units,Food/Revenue,Food/Units,Furniture/Revenue,Furniture/Units,Garden/Revenue,Garden/Units,Health/Revenue,Health/Units,Home/Revenue,Home/Units,Jewelry/Revenue,Jewelry/Units,Music/Revenue,Music/Units,Office/Revenue,Office/Units,Outdoors/Revenue,Outdoors/Units,Pet Supplies/Revenue,Pet Supplies/Units,Shoes/Revenue,Shoes/Units,Sports/Revenue,Sports/Units,Tools/Revenue,Tools/Units,Toys/Revenue,Toys/Units";
+
+    #[test]
+    fn oracle_category_with_two_measures_keeps_them_on_one_axis() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue],[Measures].[Units]}) ON COLUMNS FROM [Sales]",
+            );
+            assert_eq!(axis_signature(&xml, "Axis0"), CATEGORY_2MEAS_TUPLES);
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 42, "21 rows × 2 measures");
+            assert_eq!(&values[0..4], &[521_586_767.0, 4_931_640.0, 25_102_648.0, 232_966.0]);
+        });
+    }
+
+    #[test]
+    fn oracle_channel_by_category_cross_tab_is_sparse_like_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON COLUMNS, NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS FROM [Sales]",
+            );
+            assert_eq!(
+                axis_signature(&xml, "Axis0"),
+                "All/Revenue,Direct/Revenue,Online/Revenue,Retail/Revenue,Wholesale/Revenue"
+            );
+            assert_eq!(
+                axis_signature(&xml, "Axis1"),
+                "All,Automotive,Baby,Beauty,Books,Clothing,Electronics,Food,Furniture,Garden,Health,Home,Jewelry,Music,Office,Outdoors,Pet Supplies,Shoes,Sports,Tools,Toys"
+            );
+            // The reference sends only the combinations with data (45 of 105).
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 45, "mirror: 45 cells, sparse");
+            assert_eq!(&values[0..4], &[521_586_767.0, 130_516_005.0, 131_632_046.0, 129_699_084.0]);
+        });
+    }
+
+    #[test]
+    fn oracle_year_by_category_cross_tab_keeps_the_all_column() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON COLUMNS, NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS FROM [Sales]",
+            );
+            let mut expected = vec!["All/Revenue".to_string()];
+            expected.extend(data_year_keys().iter().map(|y| format!("{y}/Revenue")));
+            assert_eq!(axis_signature(&xml, "Axis0"), expected.join(","));
+            assert_eq!(axis_tuple_captions(&xml, "Axis1").len(), 21, "All + categories");
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), (data_year_keys().len() + 1) * 21);
+            assert_eq!(values[0], 521_586_767.0, "All × All");
+            assert_eq!(values[1], 77_866_061.0, "2020 × All");
+        });
+    }
+
     // Plan 049: Excel cross-joins the Values area with whatever field sits on
     // the same edge. The response must keep both on that axis — splitting the
     // measures onto their own axis broke every layout with a field in Columns
