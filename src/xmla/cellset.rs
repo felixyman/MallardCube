@@ -218,13 +218,16 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
                 cell.format_string
             ));
         }
-        if resp.include_back_color {
+        // The reference declares BACK_COLOR/FORE_COLOR but omits the elements
+        // when the cell has no explicit colour; emitting an empty element made
+        // Excel read it as a colour value (plan 048 parity pass).
+        if resp.include_back_color && !cell.back_color.is_empty() {
             out.push_str(&format!(
                 "              <BackColor>{}</BackColor>\n",
                 cell.back_color
             ));
         }
-        if resp.include_fore_color {
+        if resp.include_fore_color && !cell.fore_color.is_empty() {
             out.push_str(&format!(
                 "              <ForeColor>{}</ForeColor>\n",
                 cell.fore_color
@@ -308,10 +311,12 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
             .push_str("              <FormatString name=\"FORMAT_STRING\" type=\"xsd:string\"/>\n");
     }
     if r.include_back_color {
-        olap_info.push_str("              <BackColor name=\"BACK_COLOR\" type=\"xsd:string\"/>\n");
+        olap_info
+            .push_str("              <BackColor name=\"BACK_COLOR\" type=\"xsd:unsignedInt\"/>\n");
     }
     if r.include_fore_color {
-        olap_info.push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:string\"/>\n");
+        olap_info
+            .push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:unsignedInt\"/>\n");
     }
     if r.include_cell_ordinal {
         olap_info.push_str(
