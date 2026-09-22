@@ -37,6 +37,7 @@ pub use xmla::discover::cubes;
 pub use xmla::discover::datasources;
 pub use xmla::discover::dimensions;
 pub use xmla::discover::enumerators;
+pub use xmla::discover::functions;
 pub use xmla::discover::hierarchies;
 pub use xmla::discover::keywords;
 pub use xmla::discover::kpis;

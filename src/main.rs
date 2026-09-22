@@ -1085,10 +1085,22 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
+        XmlaRequest::MdschemaFunctions { restrictions } => {
+            println!("📥 MDSCHEMA_FUNCTIONS");
+            let resp = functions::get_functions_response(restrictions);
+            mallardcube::xmla_trace::trace_request("MdschemaFunctions", body, &resp, None, None);
+            resp
+        }
         XmlaRequest::Unknown => {
+            // Answer with a fault: an empty body makes Excel report "XML
+            // parsing failed … a document must contain exactly one root
+            // element", which hides what actually went wrong (plan 049).
             eprintln!("Unknown request: {}", body);
-            mallardcube::xmla_trace::trace_request("Unknown", body, "", None, None);
-            String::new()
+            let resp = mallardcube::response::fault_response(
+                "unsupported request: this proxy does not handle this XMLA request type",
+            );
+            mallardcube::xmla_trace::trace_request("Unknown", body, &resp, None, None);
+            resp
         }
     }
 }

@@ -13,6 +13,9 @@ pub struct Restrictions {
     pub hierarchy_unique_name: Option<String>,
     pub level_unique_name: Option<String>,
     pub property_name: Option<String>,
+    /// `MDSCHEMA_FUNCTIONS` restriction: 1 = built-in MDX functions,
+    /// 2 = user-defined (plan 049).
+    pub origin: Option<i32>,
     /// `DISCOVER_SCHEMA_ROWSETS` restriction (`SchemaName`, no underscore).
     /// Excel asks for one rowset's entry to learn its restrictions; answering
     /// with the whole list makes it miss `HIERARCHY_VISIBILITY` and skip the
@@ -40,6 +43,9 @@ pub enum XmlaRequest {
         restrictions: Restrictions,
     },
     MdschemaLevels {
+        restrictions: Restrictions,
+    },
+    MdschemaFunctions {
         restrictions: Restrictions,
     },
     MdschemaProperties {
@@ -134,6 +140,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                                 restrictions.level_unique_name = Some(text.clone())
                             }
                             b"PROPERTY_NAME" => restrictions.property_name = Some(text.clone()),
+                            b"ORIGIN" => restrictions.origin = text.trim().parse().ok(),
                             b"SchemaName" => restrictions.schema_name = Some(text.clone()),
                             _ => {}
                         }
@@ -202,6 +209,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         }
         "MDSCHEMA_LEVELS" => {
             return XmlaRequest::MdschemaLevels {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "MDSCHEMA_FUNCTIONS" => {
+            return XmlaRequest::MdschemaFunctions {
                 restrictions: restrictions.clone(),
             };
         }

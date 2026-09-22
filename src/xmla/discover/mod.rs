@@ -3,6 +3,7 @@ pub mod cubes;
 pub mod datasources;
 pub mod dimensions;
 pub mod enumerators;
+pub mod functions;
 pub mod hierarchies;
 pub mod keywords;
 pub mod kpis;
