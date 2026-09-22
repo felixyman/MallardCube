@@ -616,62 +616,40 @@ impl SemanticQuery {
 
 // ---- main classification entry point ----
 
-/// All members of a `DrilldownMember(<set>, {members}, ...)` expansion:
-/// `(dimension, level, keys)` in set order. Excel sends several members when
-/// the user runs "Expand Entire Field" / "Expand to <Level>".
+/// The members a `DrilldownMember(<set>, {members}, …)` call expands or
+/// collapses: `(dimension, level, keys)` in set order. Excel sends several
+/// members when the user runs "Expand Entire Field" / "Expand to <Level>".
+///
+/// Read from the AST (plan 049, phase 2): the target set is the call's second
+/// argument, and its member references already carry the `&[key]` parts.
 pub(crate) fn extract_drill_members(mdx: &str) -> Option<(String, String, Vec<String>)> {
-    let upper = mdx.to_uppercase();
-    let pos = upper.find("DRILLDOWNMEMBER(")?;
-    let open = pos + "DRILLDOWNMEMBER".len();
-    let close = crate::mdx_parser::matching_paren(mdx, open)?;
-    let args = crate::mdx_parser::split_top_level_args(&mdx[open + 1..close]);
-    let set = args.get(1)?.trim();
-    let inner = set
-        .trim()
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .trim();
+    let sel = crate::mdx::frontend::parse_select(mdx).ok()?;
+    let call = crate::mdx::frontend::find_call(&sel, "DrilldownMember")?;
+    let crate::mdx::ast::Expr::Call { args, .. } = call else {
+        return None;
+    };
+    let targets = args.get(1)?;
     let mut dim: Option<String> = None;
     let mut level = String::new();
     let mut keys: Vec<String> = Vec::new();
-    for item in crate::mdx_parser::split_top_level_args(inner) {
-        let toks = crate::mdx_parser::bracket_tokens(&item, 3);
-        if toks.len() < 2 {
-            continue;
+    crate::mdx::frontend::walk_expr(targets, &mut |e| {
+        if let crate::mdx::ast::Expr::Member(m) = e
+            && let Some(key) = &m.key
+        {
+            if dim.is_none() {
+                dim = Some(m.dim().to_string());
+                level = m.level().unwrap_or_default().to_string();
+            }
+            if !keys.contains(key) {
+                keys.push(key.clone());
+            }
         }
-        let Some(key) = parse_amp_key(&item) else {
-            continue;
-        };
-        if dim.is_none() {
-            dim = Some(toks[0].clone());
-            level = toks.get(2).cloned().unwrap_or_default();
-        }
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
+    });
     let dim = dim?;
     if keys.is_empty() {
         return None;
     }
     Some((dim, level, keys))
-}
-
-pub(crate) fn parse_amp_key(s: &str) -> Option<String> {
-    let idx = s.find(".&[")?;
-    let mut rest = &s[idx + 3..];
-    let mut parts = Vec::new();
-    loop {
-        let end = rest.find(']')?;
-        parts.push(rest[..end].to_string());
-        rest = &rest[end + 1..];
-        if let Some(next) = rest.strip_prefix("&[") {
-            rest = next;
-        } else {
-            break;
-        }
-    }
-    Some(parts.join("|"))
 }
 
 fn extract_strtomember_targets(mdx: &str) -> Vec<String> {
@@ -1308,18 +1286,7 @@ mod tests {
         assert_eq!(extract_drill_members(mdx), None);
     }
 
-    #[test]
-    fn amp_key_normal() {
-        assert_eq!(
-            parse_amp_key("[Date].[Calendar].[Year].&[2024]"),
-            Some("2024".into())
-        );
-    }
 
-    #[test]
-    fn amp_key_no_amp() {
-        assert_eq!(parse_amp_key("[Date].[Calendar].[Year]"), None);
-    }
 
     #[test]
     fn is_measure_metadata_probe_detects_strtomember() {

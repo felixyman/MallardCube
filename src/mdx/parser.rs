@@ -312,43 +312,12 @@ fn where_clause(input: &str) -> IResult<&str, Vec<MemberRef>> {
 
 // ---- axis detection ----
 
-/// Find the first non-Measures bracketed identifier in the MDX text.
-fn detect_axis_dimension(input: &str) -> DimRef {
-    let mut pos = 0;
-    while let Some(open) = input[pos..].find('[') {
-        let start = pos + open + 1;
-        if let Some(close) = input[start..].find(']') {
-            let name = &input[start..start + close];
-            if name != "Measures" {
-                return DimRef::Cube(name.to_string());
-            }
-            pos = start + close + 1;
-        } else {
-            break;
-        }
-    }
-    DimRef::Measures
-}
-
-fn has_crossjoin(input: &str) -> bool {
-    input.contains("CrossJoin(")
-}
-
-fn has_drilldown(input: &str) -> bool {
-    input.contains("DrilldownLevel")
-}
-
-fn has_dot_members(input: &str) -> bool {
-    input.contains(".Members")
-}
-
-fn has_dot_children(input: &str) -> bool {
-    input.contains(".Children")
-}
-
-fn has_with_member_cchildren(input: &str) -> bool {
-    input.contains("WITH MEMBER [Measures].cChildren")
-}
+// ---- classification flags (plan 049, phase 2) --------------------------
+//
+// Every flag below used to be a `contains(...)` on the MDX text. They are now
+// AST questions (`frontend::mentions_call` / `mentions_members` / …), so a
+// pattern that appears in a different context (a `DrilldownMember` inside a
+// `Filter`, `.Members` inside a subselect) can no longer flip a flag.
 
 // ---- property clause extraction ----
 
@@ -434,15 +403,13 @@ pub enum CalculatedMembersPat {
     LeafLevelMembers,
 }
 
-fn detect_cchildren_target(input: &str) -> CChildrenTarget {
-    let Some(start) = input.find("FilteredMembers As '") else {
+/// Classify the `FilteredMembers` set body (a *quoted* MDX fragment: only the
+/// inner text says which member it names, so this stays pattern matching on
+/// the body the AST extracted).
+fn detect_cchildren_target(set: &str) -> CChildrenTarget {
+    if set.is_empty() {
         return CChildrenTarget::None;
-    };
-    let after_open = &input[start + "FilteredMembers As '".len()..];
-    let Some(end) = after_open.find('\'') else {
-        return CChildrenTarget::None;
-    };
-    let set = &after_open[..end];
+    }
 
     // Only measures mentioned, no cube dimension brackets at all
     if set.contains("[Measures]") && !set.contains("&[") && !set.contains("&amp;[") {
@@ -479,11 +446,28 @@ fn detect_cchildren_target(input: &str) -> CChildrenTarget {
     CChildrenTarget::All
 }
 
-fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
-    let Some(pos) = input.to_uppercase().find("ADDCALCULATEDMEMBERS({") else {
+/// Classify an `AddCalculatedMembers(<set>)` probe.
+///
+/// The axis form (`SELECT {AddCalculatedMembers({[D].[H].Members})} …`) is
+/// parsed by the AST, so the inner set decides. The quoted `WITH MEMBER …
+/// AS 'AddCalculatedMembers(…)'` form is opaque text and keeps the pattern
+/// rules (plan 049, phase 2).
+fn detect_calculated_members_pat(
+    sel: &crate::mdx::ast::Select,
+    body: &str,
+) -> CalculatedMembersPat {
+    use crate::mdx::ast::Expr;
+
+    if let Some(Expr::Call { args, .. }) = crate::mdx::frontend::find_call(sel, "AddCalculatedMembers")
+        && let Some(inner) = args.first()
+    {
+        return classify_add_calculated_members(inner, sel);
+    }
+
+    let Some(pos) = body.to_uppercase().find("ADDCALCULATEDMEMBERS({") else {
         return CalculatedMembersPat::None;
     };
-    let rest = &input[pos..];
+    let rest = &body[pos..];
 
     if rest.contains("[Measures]") && rest.contains(".Children}") {
         return CalculatedMembersPat::MeasureChildrenEmpty;
@@ -502,11 +486,7 @@ fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
     }
 
     if rest.contains(".Members}") || rest.contains(".MEMBERS}") {
-        // A level-qualified source (`{AddCalculatedMembers({[D].[H].[Level].Members})}`)
-        // is a normal level set: the plan and renderer honor the level and emit
-        // level-qualified unique names. Only the unqualified
-        // `[D].[H].Members` form means the leaf grain.
-        return if parse_axis_level_members(input).is_empty() {
+        return if crate::mdx::frontend::axis_level_members(sel).is_empty() {
             CalculatedMembersPat::LeafLevelMembers
         } else {
             CalculatedMembersPat::None
@@ -516,8 +496,48 @@ fn detect_calculated_members_pat(input: &str) -> CalculatedMembersPat {
     CalculatedMembersPat::None
 }
 
-fn has_drilldown_member(input: &str) -> bool {
-    input.contains("DrilldownMember(")
+/// The inner set of an axis-form `AddCalculatedMembers(...)` probe.
+fn classify_add_calculated_members(
+    inner: &crate::mdx::ast::Expr,
+    sel: &crate::mdx::ast::Select,
+) -> CalculatedMembersPat {
+    use crate::mdx::ast::Expr;
+    match inner {
+        // `{[Measures].Children}` / `{[D].[H].&[k].Children}`
+        Expr::Children(base) => match base.as_member() {
+            Some(m) if m.dim().eq_ignore_ascii_case("Measures") => {
+                CalculatedMembersPat::MeasureChildrenEmpty
+            }
+            Some(m) if m.key.is_some() => CalculatedMembersPat::LeafChildrenEmpty,
+            // `[D].[H].[All].Children` — the All member's children are the leaf
+            // grain (Excel's "expand the field" probe).
+            Some(m)
+                if m.level()
+                    .is_some_and(|l| l.eq_ignore_ascii_case("all") || l.eq_ignore_ascii_case("(all)")) =>
+            {
+                CalculatedMembersPat::LeafLevelMembers
+            }
+            _ => CalculatedMembersPat::None,
+        },
+        // `{[D].[H].(All).Members}` is the All level; `{[D].[H].Members}` is the
+        // leaf grain; a level-qualified source is a normal level set.
+        Expr::Members(base) => match base.as_member() {
+            Some(m) => match m.level() {
+                Some(l) if l.eq_ignore_ascii_case("(all)") || l.eq_ignore_ascii_case("all") => {
+                    CalculatedMembersPat::AllLevelMembers
+                }
+                Some(_) => CalculatedMembersPat::None,
+                None => CalculatedMembersPat::LeafLevelMembers,
+            },
+            None => CalculatedMembersPat::None,
+        },
+        // `{AddCalculatedMembers({…})}` — a set of one member/expression.
+        Expr::Set(items) if items.len() == 1 => classify_add_calculated_members(&items[0], sel),
+        _ => {
+            let _ = sel;
+            CalculatedMembersPat::None
+        }
+    }
 }
 
 /// An axis set function that transforms the row set (sort / limit / filter).
@@ -579,61 +599,58 @@ pub struct CalculatedCount {
 
 /// Find `WITH MEMBER [Measures].[name] AS '<expr>'` where expr is exactly
 /// `COUNT(<set>)`. Tolerates XML-escaped ampersands in member unames.
-pub fn parse_calculated_count(input: &str) -> Option<CalculatedCount> {
-    let up = input.to_uppercase();
-    let wm = up.find("WITH MEMBER ")?;
-    let rest = &input[wm + "WITH MEMBER ".len()..];
-    // Member reference: [Measures].[Name]
-    let open = rest.find("[Measures].")?;
-    let after = &rest[open + "[Measures].".len()..];
-    let b_open = after.find('[')?;
-    let b_close = after[b_open..].find(']')?;
-    let name = after[b_open + 1..b_open + b_close].to_string();
-
-    let as_pos = up[wm..].find(" AS '")?;
-    let expr_start = wm + as_pos + " AS '".len();
-    let expr_rest = &input[expr_start..];
-    let quote_end = expr_rest.find('\'')?;
-    let expr = &expr_rest[..quote_end];
-    let eup = expr.trim_start().to_uppercase();
-    // The body must be exactly COUNT(<set>) — other calculated-member
-    // expressions (cchildren etc.) are not handled here.
-    if !eup.starts_with("COUNT(") {
-        return None;
+/// A `WITH MEMBER [Measures].[Name] AS 'COUNT(<set>)'` calculated member, from
+/// the AST. The body is quoted MDX, so the inner set is parsed on its own.
+pub fn parse_calculated_count(sel: &crate::mdx::ast::Select) -> Option<CalculatedCount> {
+    for (declared, body) in &sel.with_members {
+        let crate::mdx::ast::Expr::Str(text) = body else {
+            continue;
+        };
+        let trimmed = text.trim();
+        if !trimmed.to_uppercase().starts_with("COUNT(") {
+            continue;
+        }
+        let inner = trimmed["COUNT(".len()..]
+            .trim_end()
+            .strip_suffix(')')
+            .unwrap_or("")
+            .replace("&amp;", "&");
+        let set = crate::mdx::frontend::parse_set_expr(&inner)
+            .ok()
+            .and_then(|e| crate::mdx::frontend::set_expr_from_ast(&e))?;
+        // The declared name is `[Measures].[XL_SD]`.
+        let name = declared
+            .rsplit(".[")
+            .next()
+            .unwrap_or(declared)
+            .trim_end_matches(']')
+            .to_string();
+        return Some(CalculatedCount {
+            member_name: name,
+            set,
+        });
     }
-    let cp = eup.find("COUNT(")?;
-    let set_text = expr[cp + "COUNT(".len()..]
-        .trim_end()
-        .strip_suffix(')')
-        .unwrap_or("")
-        .replace("&amp;", "&");
-    // Plan 047: the set body goes through the front-end (it understands
-    // `Filter(...)` windows, ranges, HEAD/Tail and time-intelligence calls).
-    let set = crate::mdx::frontend::parse_set_expr(&set_text)
-        .ok()
-        .and_then(|e| crate::mdx::frontend::set_expr_from_ast(&e))?;
-    Some(CalculatedCount {
-        member_name: name,
-        set,
-    })
+    None
 }
 
 /// True when the WHERE clause contains exactly one cube-dimension
 /// member (All or Leaf) and one measure member.
-fn is_slicer_all_measure(input: &str) -> bool {
-    let members = match find_where_clause(input) {
-        Some(m) => m,
-        None => return false,
+/// Is the slicer a tuple of exactly one cube member (All or leaf) and one
+/// measure — the shape Excel sends for a pivot whose values sit in the WHERE?
+fn is_slicer_all_measure(sel: &crate::mdx::ast::Select) -> bool {
+    use crate::mdx::ast::Expr;
+    let Some(Expr::Tuple(items)) = &sel.where_clause else {
+        return false;
     };
-    let cube_count = members
+    if items.len() != 2 {
+        return false;
+    }
+    let measures = items.iter().filter(|e| matches!(e, Expr::Measure(_))).count();
+    let members = items
         .iter()
-        .filter(|m| matches!(m, MemberRef::All(_) | MemberRef::Leaf { .. }))
+        .filter(|e| matches!(e, Expr::Member(m) if !m.dim().eq_ignore_ascii_case("Measures")))
         .count();
-    let meas_count = members
-        .iter()
-        .filter(|m| matches!(m, MemberRef::Measure(_)))
-        .count();
-    cube_count == 1 && meas_count == 1 && members.len() == 2
+    measures == 1 && members == 1
 }
 
 // ---- complete mdx parse ----
@@ -707,18 +724,6 @@ pub struct ParsedMdx {
     pub axis_specs: Vec<crate::mdx::frontend::AxisSpec>,
 }
 
-/// The outer SELECT clause (between the first SELECT and FROM), used by the
-/// axis scanners. Subquery SELECTs live inside FROM (...) and are excluded.
-fn outer_select_clause(input: &str) -> &str {
-    let upper = input.to_uppercase();
-    let select_pos = upper.find("SELECT").unwrap_or(0);
-    let from_pos = upper[select_pos..]
-        .find("FROM")
-        .map(|i| select_pos + i)
-        .unwrap_or(input.len());
-    &input[select_pos..from_pos]
-}
-
 /// Bracket contents (`[X]` -> `X`) in order, up to `max`.
 pub(crate) fn bracket_tokens(text: &str, max: usize) -> Vec<String> {
     let mut out = Vec::new();
@@ -733,109 +738,8 @@ pub(crate) fn bracket_tokens(text: &str, max: usize) -> Vec<String> {
     out
 }
 
-/// Explicit level-set sources on the axes: `[Dim].[Hier].[Level].Members`.
-/// Returns `(dim, level)` pairs in clause order, deduplicated. Bare
-/// `[X].Members` and `[X].[Y].[(All)].Members` are not level sets.
-/// `.AllMembers` (the Excel 2016 shape) is treated as the same level set.
-fn parse_axis_level_members(input: &str) -> Vec<(String, String)> {
-    let clause = outer_select_clause(input).replace(".AllMembers", ".Members");
-    let clause = clause.as_str();
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut pos = 0;
-    while let Some(i) = clause[pos..].find(".Members") {
-        let abs = pos + i;
-        // Walk backwards over the `.`-separated bracket chain.
-        let mut rest = &clause[..abs];
-        let mut segs: Vec<String> = Vec::new();
-        while segs.len() < 4 && rest.ends_with(']') {
-            let close = rest.len() - 1;
-            let Some(open) = rest[..close].rfind('[') else {
-                break;
-            };
-            segs.push(rest[open + 1..close].to_string());
-            let before = &rest[..open];
-            if let Some(stripped) = before.strip_suffix('.') {
-                rest = stripped;
-            } else {
-                break;
-            }
-        }
-        segs.reverse();
-        if segs.len() == 3
-            && segs[0] != "Measures"
-            && !segs[2].eq_ignore_ascii_case("all")
-            && !segs[2].eq_ignore_ascii_case("(all)")
-        {
-            let pair = (segs[0].clone(), segs[2].clone());
-            if !out.contains(&pair) {
-                out.push(pair);
-            }
-        }
-        pos = abs + 1;
-    }
-    out
-}
-
-/// A `DrilldownLevel(...)` call on an axis.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DrilldownTarget {
-    pub dim: String,
-    /// Hierarchy name from the set argument (`[D].[H].[All]`). A hierarchy that
-    /// names a level — the key attribute hierarchy `[Date].[Full Date]` — drills
-    /// into that level rather than the top one (plan 048).
-    pub hierarchy: Option<String>,
-    /// Level-expression argument (`DrilldownLevel(set, [D].[H].[Level])`).
-    pub level: Option<String>,
-    /// Numeric index argument (`DrilldownLevel(set, , N)`).
-    pub index: Option<usize>,
-}
-
-/// Split top-level comma-separated arguments, respecting `()`/`{}`/`[]` nesting.
-pub(crate) fn split_top_level_args(text: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut depth = 0i32;
-    let mut cur = String::new();
-    for ch in text.chars() {
-        match ch {
-            '(' | '{' | '[' => {
-                depth += 1;
-                cur.push(ch);
-            }
-            ')' | '}' | ']' => {
-                depth -= 1;
-                cur.push(ch);
-            }
-            ',' if depth == 0 => {
-                args.push(cur.trim().to_string());
-                cur.clear();
-            }
-            _ => cur.push(ch),
-        }
-    }
-    args.push(cur.trim().to_string());
-    args
-}
-
-/// Byte index of the `)` matching the `(` at `open`, if balanced.
-pub(crate) fn matching_paren(text: &str, open: usize) -> Option<usize> {
-    let mut depth = 0i32;
-    for (i, ch) in text[open..].char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(open + i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// `[D].[H].[L].&[k1]&[k2]` → `(dim, level, "k1|k2")` (compound keys join
-/// with `|`, the engine's path separator). Used by the range planner.
+/// `[Dim].[Hier].[Level].&[key]` → `(dim, level, key)`. Used by the plan and
+/// the renderer to read a level-qualified member out of a set expression.
 pub(crate) fn parse_level_member(uname: &str) -> Option<(String, String, String)> {
     let toks = bracket_tokens(uname, 8);
     if toks.len() < 4 {
@@ -847,59 +751,94 @@ pub(crate) fn parse_level_member(uname: &str) -> Option<(String, String, String)
 /// `DrilldownLevel(...)` targets on the axes: the dimension, plus an explicit
 /// level expression or numeric index when present. Without either, the call
 /// drills to the top level below `(All)` (Excel's whole-hierarchy drag).
-fn parse_drilldown_targets(input: &str) -> Vec<DrilldownTarget> {
-    let clause = outer_select_clause(input);
-    let upper = clause.to_uppercase();
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrilldownTarget {
+    pub dim: String,
+    pub hierarchy: Option<String>,
+    pub level: Option<String>,
+    pub index: Option<usize>,
+}
+
+/// `DrilldownLevel(<set>, [level], [index])` targets on the axes, from the
+/// AST. Without a level/index they drill to the top level below `(All)` — the
+/// whole-hierarchy drag (plan 049, phase 2).
+fn parse_drilldown_targets(sel: &crate::mdx::ast::Select) -> Vec<DrilldownTarget> {
+    use crate::mdx::ast::Expr;
     let mut out: Vec<DrilldownTarget> = Vec::new();
-    let mut pos = 0;
-    while let Some(i) = upper[pos..].find("DRILLDOWNLEVEL") {
-        let after_name = pos + i + "DRILLDOWNLEVEL".len();
-        let Some(rel) = clause[after_name..].find('(') else {
-            break;
-        };
-        let open = after_name + rel;
-        let Some(close) = matching_paren(clause, open) else {
-            break;
-        };
-        let args = split_top_level_args(&clause[open + 1..close]);
-        let toks = args
-            .first()
-            .map(|a| bracket_tokens(a, 3))
-            .unwrap_or_default();
-        let from_all = toks.len() == 3
-            && (toks[2].eq_ignore_ascii_case("all") || toks[2].eq_ignore_ascii_case("(all)"));
-        if toks.len() >= 2 && toks[0] != "Measures" {
-            let dim = toks[0].clone();
-            let hierarchy = toks.get(1).cloned();
-            let level = args.get(1).filter(|a| !a.is_empty()).and_then(|a| {
-                let lv = bracket_tokens(a, 3);
-                (lv.len() == 3).then(|| lv[2].clone())
+    let mut axes: Vec<&crate::mdx::ast::Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
+    for axis in axes {
+        for expr in &axis.exprs {
+            let mut found: Vec<&Expr> = Vec::new();
+            crate::mdx::frontend::walk_expr(expr, &mut |e| {
+                if let Expr::Call { name, .. } = e
+                    && name.eq_ignore_ascii_case("DrilldownLevel")
+                {
+                    found.push(e);
+                }
             });
-            let index = args.get(2).and_then(|a| a.trim().parse::<usize>().ok());
-            // Only a drill from `(All)` (hierarchy drag) or an explicitly
-            // named level/index is a level target.
-            if (from_all || level.is_some() || index.is_some())
-                && !out.iter().any(|t: &DrilldownTarget| t.dim == dim)
-            {
-                out.push(DrilldownTarget {
-                    dim,
-                    hierarchy,
-                    level,
-                    index,
+            for call in found {
+                let Expr::Call { args, .. } = call else {
+                    continue;
+                };
+                // The drilled member: `{ [Dim].[Hier].[(All)] }` or a plain
+                // member reference; the level/index are the optional args.
+                let Some(m) = args.first().and_then(first_member) else {
+                    continue;
+                };
+                let dim = m.dim().to_string();
+                let hierarchy = m.hierarchy().map(str::to_string);
+                let from_all = m.level().is_some_and(|l| {
+                    l.eq_ignore_ascii_case("all") || l.eq_ignore_ascii_case("(all)")
                 });
+                if dim.is_empty() || dim.eq_ignore_ascii_case("Measures") {
+                    continue;
+                }
+                // `DrilldownLevel(<set>, <level>, <index>)`: the parser drops
+                // empty arguments, so a numeric second argument is the index
+                // (Excel's `DrilldownLevel(<set>,,1)`).
+                let number = |e: Option<&Expr>| match e {
+                    Some(Expr::Number(n)) => n.parse::<usize>().ok(),
+                    _ => None,
+                };
+                let (level, index) = match args.get(1) {
+                    Some(Expr::Member(m)) => (m.level().map(str::to_string), number(args.get(2))),
+                    Some(Expr::Number(_)) => (None, number(args.get(1))),
+                    _ => (None, None),
+                };
+                if (from_all || level.is_some() || index.is_some())
+                    && !out.iter().any(|t: &DrilldownTarget| t.dim == dim)
+                {
+                    out.push(DrilldownTarget {
+                        dim,
+                        hierarchy,
+                        level,
+                        index,
+                    });
+                }
             }
         }
-        pos = close;
     }
     out
+}
+
+/// The first member reference anywhere under `expr`.
+fn first_member(expr: &crate::mdx::ast::Expr) -> Option<crate::mdx::ast::MemberRef> {
+    let mut found = None;
+    crate::mdx::frontend::walk_expr(expr, &mut |e| {
+        if found.is_none()
+            && let crate::mdx::ast::Expr::Member(m) = e
+        {
+            found = Some(m.clone());
+        }
+    });
+    found
 }
 
 pub fn parse_mdx(input: &str) -> ParsedMdx {
     let up = input.to_uppercase();
 
     // Find `FROM [` boundary generically (case-insensitive).
-    let before_from = up.find("FROM [").map(|i| &input[..i]).unwrap_or(input);
-
     // Extract cube name from `FROM [cubeName]`.
     let cube_name: Option<String> = up.find("FROM [").and_then(|start| {
         let after_from = &input[start + "FROM [".len()..];
@@ -928,6 +867,63 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
             crate::mdx::frontend::set_probe_expr(sel),
         ),
         Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
+    };
+
+    // The `cChildren`/`FilteredMembers` bodies are quoted MDX: the AST gives
+    // the string, the detectors below read it.
+    let cchildren_body = match &frontend {
+        Ok(sel) => crate::mdx::frontend::with_body_text(sel, "cChildren").unwrap_or(""),
+        Err(_) => "",
+    };
+    let filtered_body = match &frontend {
+        Ok(sel) => crate::mdx::frontend::with_body_text(sel, "FilteredMembers").unwrap_or(""),
+        Err(_) => "",
+    };
+    let calculated_members_pat = match &frontend {
+        Ok(sel) => detect_calculated_members_pat(sel, cchildren_body),
+        Err(_) => CalculatedMembersPat::None,
+    };
+    let calculated_counts = match &frontend {
+        Ok(sel) => parse_calculated_count(sel).into_iter().collect(),
+        Err(_) => Vec::new(),
+    };
+
+    // Classification flags, all AST questions (plan 049, phase 2).
+    let (
+        has_crossjoin,
+        has_drilldown,
+        has_dot_members,
+        has_dot_children,
+        has_with_member_cchildren,
+        has_drilldown_member,
+        has_where_all_measure,
+        main_dim,
+        drilldown_targets,
+    ) = match &frontend {
+        Ok(sel) => (
+            crate::mdx::frontend::mentions_call(sel, "CrossJoin"),
+            crate::mdx::frontend::mentions_call(sel, "DrilldownLevel"),
+            crate::mdx::frontend::mentions_members(sel),
+            crate::mdx::frontend::mentions_children(sel),
+            crate::mdx::frontend::with_body(sel, "cChildren").is_some(),
+            crate::mdx::frontend::mentions_call(sel, "DrilldownMember"),
+            is_slicer_all_measure(sel),
+            crate::mdx::frontend::first_axis_dimension(sel)
+                .map(DimRef::Cube)
+                .unwrap_or(DimRef::Measures),
+            parse_drilldown_targets(sel),
+        ),
+        Err(_) => (
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            DimRef::Measures,
+            Vec::new(),
+        ),
     };
 
     // Parse excluded members from DrilldownMember if present.
@@ -988,21 +984,21 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         cell_props: parse_cell_properties(input),
         has_rows: axis_presence.1,
         has_cols: axis_presence.0,
-        has_crossjoin: has_crossjoin(input),
-        has_drilldown: has_drilldown(input),
-        has_dot_members: has_dot_members(input),
-        has_dot_children: has_dot_children(input),
-        has_with_member_cchildren: has_with_member_cchildren(input),
-        has_where_all_measure: is_slicer_all_measure(input),
-        has_drilldown_member: has_drilldown_member(input),
+        has_crossjoin,
+        has_drilldown,
+        has_dot_members,
+        has_dot_children,
+        has_with_member_cchildren,
+        has_where_all_measure,
+        has_drilldown_member,
         has_measures: mentions_measure_derived,
         where_members,
         subquery_members,
         select_members,
         select_tuples,
-        main_dim: detect_axis_dimension(before_from),
-        cchildren_target: detect_cchildren_target(input),
-        calculated_members_pat: detect_calculated_members_pat(input),
+        main_dim,
+        cchildren_target: detect_cchildren_target(filtered_body),
+        calculated_members_pat,
         selected_measure,
         selected_measures: select_measures,
         cube_name,
@@ -1011,12 +1007,12 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         drilldown_member_hierarchy,
         axis_set_op,
         axis_set_expr,
-        calculated_counts: parse_calculated_count(input).into_iter().collect(),
+        calculated_counts,
         axis_level_members,
         axis_member_ranges,
         where_member_ranges,
         parse_error,
-        drilldown_targets: parse_drilldown_targets(before_from),
+        drilldown_targets,
         axis_specs: match &frontend {
             Ok(sel) => crate::mdx::frontend::axis_specs(sel),
             Err(_) => Vec::new(),
@@ -1310,36 +1306,42 @@ mod set_expr_tests {
     #[test]
     fn parses_all_members_level() {
         let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Calendar].[Quarter].AllMembers} ON ROWS FROM [Sales]";
+        let sel = crate::mdx::frontend::parse_select(mdx).expect("parse");
         assert_eq!(
-            parse_axis_level_members(mdx),
+            crate::mdx::frontend::axis_level_members(&sel),
             vec![("Date".to_string(), "Quarter".to_string())]
         );
+    }
+
+    fn drilldown_targets(mdx: &str) -> Vec<DrilldownTarget> {
+        let sel = crate::mdx::frontend::parse_select(mdx).expect("parse statement");
+        parse_drilldown_targets(&sel)
     }
 
     #[test]
     fn parses_drilldown_level_arguments() {
         let level_expr = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]}, [Date].[Calendar].[Quarter])}) ON COLUMNS FROM [Sales]";
-        let t = parse_drilldown_targets(level_expr);
+        let t = drilldown_targets(level_expr);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].dim, "Date");
         assert_eq!(t[0].level.as_deref(), Some("Quarter"));
         assert_eq!(t[0].index, None);
 
         let index = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,1)}) ON COLUMNS FROM [Sales]";
-        let t = parse_drilldown_targets(index);
+        let t = drilldown_targets(index);
         assert_eq!(t[0].index, Some(1));
         assert_eq!(t[0].level, None);
 
         // Plain hierarchy drag: no level or index argument.
         let plain = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales]";
-        let t = parse_drilldown_targets(plain);
+        let t = drilldown_targets(plain);
         assert_eq!((t[0].level.clone(), t[0].index), (None, None));
     }
 
     #[test]
     fn parses_calculated_count() {
         let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
-        let cc = parse_calculated_count(mdx).expect("calculated count");
+        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")).expect("calculated count");
         assert_eq!(cc.member_name, "XL_SD");
         assert_eq!(
             cc.set,
@@ -1353,7 +1355,7 @@ mod set_expr_tests {
     #[test]
     fn parses_calculated_count_over_explicit_list() {
         let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Calendar].[Year].&[2020],[Date].[Calendar].[Year].&[2021]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
-        let cc = parse_calculated_count(mdx).expect("calculated count");
+        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")).expect("calculated count");
         assert_eq!(
             cc.set,
             SetExpr::MemberList {
@@ -1368,6 +1370,6 @@ mod set_expr_tests {
     #[test]
     fn calculated_count_ignores_non_count_bodies() {
         let mdx = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Channel].[Channel].currentmember.children).count' Set FilteredMembers As '{[Channel].[Channel].&[Wholesale]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Channel].[Channel].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Sales]";
-        assert_eq!(parse_calculated_count(mdx), None);
+        assert_eq!(parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")), None);
     }
 }

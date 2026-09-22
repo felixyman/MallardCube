@@ -660,6 +660,161 @@ fn collect_dims(expr: &Expr, out: &mut Vec<String>) {
     }
 }
 
+// ---- AST traversal helpers (plan 049, phase 2) -------------------------
+//
+// The classification flags and the semantic scanners used to read the MDX
+// text. Every question they ask ("is there a CrossJoin?", "which dimension is
+// on the axis?", "what is the DrilldownMember target set?") is answerable from
+// the AST, which already handled the same syntax for the extractors above.
+// These helpers replace the text scans.
+
+/// Visit an expression and everything under it, depth-first.
+pub fn walk_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Expr)) {
+    f(e);
+    match e {
+        Expr::Range(a, b) => {
+            walk_expr(a, f);
+            walk_expr(b, f);
+        }
+        Expr::Tuple(items) | Expr::Set(items) => {
+            for item in items {
+                walk_expr(item, f);
+            }
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                walk_expr(arg, f);
+            }
+        }
+        Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk_expr(inner, f),
+        Expr::Binary { lhs, rhs, .. } => {
+            walk_expr(lhs, f);
+            walk_expr(rhs, f);
+        }
+        _ => {}
+    }
+}
+
+/// Visit every expression in the statement: the axes in ordinal order, the
+/// slicer, a subselect (recursively) and the `WITH` bodies.
+pub fn for_each_expr<'a>(sel: &'a Select, f: &mut impl FnMut(&'a Expr)) {
+    let walk = |e: &'a Expr, f: &mut dyn FnMut(&'a Expr)| walk_expr(e, &mut |x| f(x));
+    let mut axes: Vec<&Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
+    for axis in axes {
+        for e in &axis.exprs {
+            walk(e, f);
+        }
+    }
+    if let Some(w) = &sel.where_clause {
+        walk(w, f);
+    }
+    if let Some(sub) = &sel.subquery {
+        for_each_expr(sub, f);
+    }
+    for (_, body) in sel.with_sets.iter().chain(sel.with_members.iter()) {
+        walk(body, f);
+    }
+}
+
+/// Does the statement mention a call to `name` (case-insensitive)?
+pub fn mentions_call(sel: &Select, name: &str) -> bool {
+    let mut found = false;
+    for_each_expr(sel, &mut |e| {
+        if let Expr::Call { name: n, .. } = e
+            && n.eq_ignore_ascii_case(name)
+        {
+            found = true;
+        }
+    });
+    found
+}
+
+/// The first call to `name` (case-insensitive) in statement order.
+pub fn find_call<'a>(sel: &'a Select, name: &str) -> Option<&'a Expr> {
+    let mut found: Option<&Expr> = None;
+    for_each_expr(sel, &mut |e| {
+        if found.is_none()
+            && let Expr::Call { name: n, .. } = e
+            && n.eq_ignore_ascii_case(name)
+        {
+            found = Some(e);
+        }
+    });
+    found
+}
+
+/// Any `<expr>.Members` / `.AllMembers`?
+pub fn mentions_members(sel: &Select) -> bool {
+    let mut found = false;
+    for_each_expr(sel, &mut |e| {
+        if matches!(e, Expr::Members(_)) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Any `<expr>.Children`?
+pub fn mentions_children(sel: &Select) -> bool {
+    let mut found = false;
+    for_each_expr(sel, &mut |e| {
+        if matches!(e, Expr::Children(_)) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// The first cube dimension on the axes (skipping `[Measures]`), in axis order.
+pub fn first_axis_dimension(sel: &Select) -> Option<String> {
+    let mut axes: Vec<&Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
+    for axis in axes {
+        for e in &axis.exprs {
+            let mut dim: Option<String> = None;
+            walk_expr(e, &mut |x| {
+                if dim.is_none()
+                    && let Expr::Member(m) = x
+                    && !m.dim().is_empty()
+                    && !m.dim().eq_ignore_ascii_case("Measures")
+                {
+                    dim = Some(m.dim().to_string());
+                }
+            });
+            if dim.is_some() {
+                return dim;
+            }
+        }
+    }
+    None
+}
+
+/// The `WITH` body whose declared name matches `needle` (case-insensitive
+/// substring), if any.
+pub fn with_body<'a>(sel: &'a Select, needle: &str) -> Option<&'a Expr> {
+    let needle = needle.to_lowercase();
+    sel.with_members
+        .iter()
+        .chain(sel.with_sets.iter())
+        .find(|(name, _)| name.to_lowercase().contains(&needle))
+        .map(|(_, body)| body)
+}
+
+/// The body of a `WITH` member/set as text: quoted bodies are string literals
+/// in the AST (`AS 'COUNT(…)'`), and only the inner text can say what they do.
+pub fn with_body_text<'a>(sel: &'a Select, needle: &str) -> Option<&'a str> {
+    match with_body(sel, needle)? {
+        Expr::Str(text) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+/// Does a member reference name this dimension (case-insensitive)?
+pub fn member_is_dim(e: &Expr, dim: &str) -> bool {
+    matches!(e, Expr::Member(m) if m.dim().eq_ignore_ascii_case(dim))
+}
+
 /// Level sets on the axes: `<member with a level>.Members` → `(dim, level)`.
 pub fn axis_level_members(sel: &Select) -> Vec<(String, String)> {
     let mut out = Vec::new();
