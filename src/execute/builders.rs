@@ -24,6 +24,13 @@ pub use crate::execute::runtime::get_execute_cellset_response_with_backend_and_c
 /// statement is fine. Shared by the production and test entry points so both
 /// fault identically (plan 046).
 pub fn unsupported_fault(mdx: &str) -> Option<String> {
+    if let Some(kind) = crate::mdx_semantic::unsupported_ddl(mdx) {
+        return Some(crate::response::fault_response(&format!(
+            "unsupported statement: this proxy is a read-only adapter — {kind} \
+             are defined upstream (sqlmesh + DuckDB marts) and reloaded, not \
+             created through Excel"
+        )));
+    }
     crate::mdx_parser::unsupported_features(mdx)
         .map(|reason| crate::response::fault_response(&reason))
 }

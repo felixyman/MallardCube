@@ -31,6 +31,30 @@ pub fn is_refresh_cube(statement: &str) -> bool {
         && matches!(words.next(), Some(w) if w.eq_ignore_ascii_case("CUBE"))
 }
 
+/// DDL the proxy deliberately does not implement, with the human name of the
+/// feature. Definitions live upstream (sqlmesh + DuckDB marts), so a
+/// session-only calculated member or named set would be silently absent from
+/// later queries — fault with an actionable message instead of a parser error.
+/// `REFRESH CUBE` is handled separately as a no-op (the data is live).
+pub fn unsupported_ddl(statement: &str) -> Option<&'static str> {
+    let upper = statement.trim_start().to_uppercase();
+    let mut words = upper.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some("CREATE"), Some("MEMBER")) | (Some("DROP"), Some("MEMBER")) => {
+            Some("calculated members")
+        }
+        (Some("CREATE"), Some("CELL")) | (Some("DROP"), Some("CELL")) => Some("cell calculations"),
+        // `CREATE SET` / `CREATE SESSION SET` / `DROP SET`.
+        (Some("CREATE"), Some("SET")) | (Some("DROP"), Some("SET")) => Some("named sets"),
+        (Some("CREATE"), Some("SESSION")) if upper.contains(" SET ") => Some("named sets"),
+        (Some("CREATE"), Some("SESSION")) if upper.contains(" MEMBER ") => {
+            Some("calculated members")
+        }
+        (Some("ALTER"), Some("CUBE")) => Some("cube alterations"),
+        _ => None,
+    }
+}
+
 pub fn is_mdx_select(mdx: &str) -> bool {
     let trimmed = mdx.trim_start();
     let upper = trimmed.to_uppercase();

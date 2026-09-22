@@ -3108,6 +3108,38 @@ mod tests {
     }
 
     #[test]
+    fn calculated_member_ddl_faults_with_an_actionable_message() {
+        with_project3(|| {
+            // Excel's OLAP Tools can send CREATE/DROP DDL. The proxy is a
+            // read-only adapter, so the fault must name the reason instead of
+            // leaking a parser error (plan 048).
+            for (mdx, kind) in [
+                (
+                    "CREATE MEMBER [Sales].[Measures].[Test Calc] AS 1",
+                    "calculated members",
+                ),
+                (
+                    "DROP MEMBER [Sales].[Measures].[Test Calc]",
+                    "calculated members",
+                ),
+                (
+                    "CREATE SET [Sales].[Test Set] AS {[Category].[Category].&[Books]}",
+                    "named sets",
+                ),
+                ("CREATE SESSION SET [Sales].[Test Set] AS {}", "named sets"),
+                ("DROP SET [Sales].[Test Set]", "named sets"),
+                ("ALTER CUBE [Sales] COMPILE", "cube alterations"),
+            ] {
+                let xml = crate::execute_builders::get_execute_cellset_response(mdx);
+                assert!(xml.contains("faultstring"), "{mdx} → {xml}");
+                assert!(xml.contains("read-only adapter"), "{mdx} → {xml}");
+                assert!(xml.contains(kind), "{mdx} → {xml}");
+                assert!(!xml.contains("expected `SELECT`"), "{mdx} → {xml}");
+            }
+        });
+    }
+
+    #[test]
     fn time_intelligence_revenue_ytd_plan_has_date_dim_filter() {
         with_project3(|| {
             use crate::engine::plan::plan_from_semantic_with_model;
