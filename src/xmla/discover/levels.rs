@@ -94,7 +94,9 @@ pub fn get_levels_response() -> String {
     for (i, d) in model.dimensions.iter().enumerate() {
         let base_guid = 30 + i as u32 * 2;
 
-        // (All) level
+        // (All) level. A flat dimension exposes a single attribute hierarchy
+        // (origin 2); a date role's user hierarchy is origin 1.
+        let all_origin = if d.levels.is_empty() { 2 } else { 1 };
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -114,10 +116,11 @@ pub fn get_levels_response() -> String {
             <LEVEL_ORDERING_PROPERTY>{all_name}</LEVEL_ORDERING_PROPERTY>
             <LEVEL_DBTYPE>3</LEVEL_DBTYPE>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <LEVEL_ORIGIN>{all_origin}</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
+            all_origin = all_origin,
             dim_u = xml_escape(&d.dimension_unique_name()),
             hier_u = xml_escape(&d.hierarchy_unique_name()),
             all_name = xml_escape(&d.all_level_name),
@@ -196,7 +199,7 @@ pub fn get_levels_response() -> String {
             <LEVEL_DBTYPE>{ldbt}</LEVEL_DBTYPE>
             <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{leaf_name}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
-            <LEVEL_ORIGIN>1</LEVEL_ORIGIN>
+            <LEVEL_ORIGIN>2</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
@@ -244,7 +247,6 @@ pub fn get_levels_response() -> String {
             <LEVEL_IS_VISIBLE>true</LEVEL_IS_VISIBLE>
             <LEVEL_ORDERING_PROPERTY>{all_name}</LEVEL_ORDERING_PROPERTY>
             <LEVEL_DBTYPE>{all_dbtype}</LEVEL_DBTYPE>
-            <LEVEL_ATTRIBUTE_HIERARCHY_NAME>{all_name}</LEVEL_ATTRIBUTE_HIERARCHY_NAME>
             <LEVEL_KEY_CARDINALITY>1</LEVEL_KEY_CARDINALITY>
             <LEVEL_ORIGIN>2</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>

@@ -271,7 +271,7 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
     out
 }
 
-fn system_property_rows() -> String {
+fn system_property_rows(restrictions: &Restrictions) -> String {
     const PROPS: &[(&str, u8)] = &[
         ("VALUE", 0),
         ("FORMAT_STRING", 2),
@@ -292,6 +292,9 @@ fn system_property_rows() -> String {
     let cube = &project.config.cube;
     let mut out = String::new();
     for (name, content) in PROPS {
+        if !property_requested(restrictions, name) {
+            continue;
+        }
         out.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -385,31 +388,44 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
     out
 }
 
+/// `MDSCHEMA_PROPERTIES` as the tabular reference answers it (measured against
+/// a processed SSAS 2025 tabular model, plan 048):
+///
+/// * `PROPERTY_TYPE=1` (member properties): the reference has none — every
+///   property it exposes is `PROPERTY_TYPE=5`. Excel reads an empty answer as
+///   "this field has no member properties" and shows *(No Properties
+///   Retrieved)*; answering with the hierarchy's own rows instead made it
+///   create `memberPropertyField` cache fields (`…KEY0`, `…MEMBER_VALUE`) and
+///   ask for those in every pivot MDX.
+/// * `PROPERTY_TYPE=2` (cell properties): only the provider-level list, i.e.
+///   when the request names no cube or hierarchy. A cube-scoped cell-property
+///   request answers empty.
+/// * `PROPERTY_TYPE=5`: the hierarchy's `KEY0` / `NAME` / `MEMBER_VALUE` rows.
+/// * No type but a cube or hierarchy: those rows, never the cell properties.
 pub fn get_mdschema_properties_response(
     property_type: Option<i32>,
     restrictions: &Restrictions,
 ) -> String {
-    let hierarchy_restricted =
-        restrictions.hierarchy_unique_name.is_some() || restrictions.level_unique_name.is_some();
+    let cube_scoped = restrictions.cube_name.is_some()
+        || restrictions.dimension_unique_name.is_some()
+        || restrictions.hierarchy_unique_name.is_some()
+        || restrictions.level_unique_name.is_some();
     let rows = match property_type {
+        // Member properties: the reference has no type-1 rows to report.
+        Some(1) | Some(3) | Some(4) => String::new(),
+        Some(2) if !cube_scoped => system_property_rows(restrictions),
+        Some(2) => String::new(),
         // Member properties: the reference answers with the hierarchy's own
         // rows (KEY0 / NAME / MEMBER_VALUE), never a standard member-property
         // list. That list made Excel request 38 properties in its pivot MDX
         // where the reference is asked for two.
-        Some(1) => hierarchy_property_rows(restrictions),
-        Some(2) => system_property_rows(),
-        // Member properties: the reference answers with the hierarchy's own
-        // rows (KEY0 / NAME / MEMBER_VALUE). Returning member-value rows alone
-        // made Excel ask for KEY0/MEMBER_VALUE in its pivot MDX where the
-        // reference is asked for PARENT_UNIQUE_NAME/HIERARCHY_UNIQUE_NAME
-        // (found by diffing Excel's requests to a mirror tabular model).
         Some(5) => hierarchy_property_rows(restrictions),
         // A request that names one hierarchy gets only that hierarchy's rows;
         // mixing the cell properties in is what Excel rejects (plan 048).
-        _ if hierarchy_restricted => hierarchy_property_rows(restrictions),
+        _ if cube_scoped => hierarchy_property_rows(restrictions),
         _ => format!(
             "{}\n{}",
-            system_property_rows(),
+            system_property_rows(restrictions),
             member_value_rows(restrictions)
         ),
     };
@@ -553,7 +569,7 @@ mod tests {
                 hierarchy_unique_name: Some("[Date].[Full Date]".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(1), &restrictions);
+            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
             assert!(
                 resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
@@ -574,6 +590,78 @@ mod tests {
             );
             let row = member_value_row(&resp, "[Date].[Full Date].[Full Date]");
             assert!(row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{row}");
+        });
+    }
+
+    #[test]
+    fn member_property_requests_answer_empty_like_the_reference() {
+        // The tabular reference exposes no PROPERTY_TYPE=1 rows at all; Excel
+        // reads the empty answer as "(No Properties Retrieved)" and keeps its
+        // pivot cache free of member-property fields. Answering with the
+        // hierarchy rows made it write `…KEY0` / `…MEMBER_VALUE` cache fields
+        // and request those in every pivot MDX (plan 048).
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let restrictions = Restrictions {
+                cube_name: Some("Sales".into()),
+                hierarchy_unique_name: Some("[Category].[Category]".into()),
+                ..Restrictions::default()
+            };
+            for property_type in [1, 3, 4] {
+                let resp =
+                    super::get_mdschema_properties_response(Some(property_type), &restrictions);
+                assert!(
+                    !resp.contains("<row>"),
+                    "PROPERTY_TYPE={property_type} must answer empty: {resp}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn cell_properties_only_answer_a_provider_level_request() {
+        // Excel probes PROPERTY_TYPE=2 without a cube before it knows the
+        // catalog; the reference answers with the 12 cell properties. Naming a
+        // cube (or hierarchy) answers empty, as the reference does.
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let resp = super::get_mdschema_properties_response(Some(2), &Restrictions::default());
+            for name in ["VALUE", "FORMAT_STRING", "FONT_FLAGS", "UPDATEABLE"] {
+                assert!(
+                    resp.contains(&format!("<PROPERTY_NAME>{name}</PROPERTY_NAME>")),
+                    "{name} missing: {resp}"
+                );
+            }
+            assert_eq!(
+                resp.matches("<PROPERTY_TYPE>2</PROPERTY_TYPE>").count(),
+                12,
+                "{resp}"
+            );
+
+            let scoped = Restrictions {
+                cube_name: Some("Sales".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(Some(2), &scoped);
+            assert!(
+                !resp.contains("<row>"),
+                "cube-scoped cell properties: {resp}"
+            );
+
+            // A named cell property still filters the provider-level list.
+            let named = Restrictions {
+                property_name: Some("FORMAT_STRING".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(Some(2), &named);
+            assert!(
+                resp.contains("<PROPERTY_NAME>FORMAT_STRING</PROPERTY_NAME>"),
+                "{resp}"
+            );
+            assert!(
+                !resp.contains("<PROPERTY_NAME>VALUE</PROPERTY_NAME>"),
+                "{resp}"
+            );
         });
     }
 }

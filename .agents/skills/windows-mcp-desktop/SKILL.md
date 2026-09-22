@@ -217,12 +217,28 @@ few bytes into the payload; the output is UTF-16.
   text is *not committed* until the **calendar picker** sets a value, and OK
   stays **disabled** until then — so an OK click silently does nothing.
   Symptom: `Cancel` closes the dialog, `OK` does not.
-- Recipe that works: click the calendar button → click a day (or `Today`) in
-  the picker → the field shows the picked date → click `OK`.
+- Recipe that works: click the date field, **type an ISO date** (`2020-01-16`)
+  and click `OK` — verified 2026-09-22, the pivot filtered to that day. OK is
+  *disabled only while the field is empty*; the earlier "OK stays disabled"
+  trap was an empty field, not a commit requirement. The calendar button →
+  click a day (or `Today`) → `OK` works too.
 - Keyboard: typing reaches the focused RichEdit and `Shift+Tab` moves focus
   (the combo responds to `Down`), but `Tab` from the RichEdit is swallowed and
   `Enter`/`Space` do not press the buttons — use the mouse for OK/Cancel.
 - The dialog blocks COM: querying a pivot while it is open returns nulls.
+
+## Reading what Excel decided (member properties, cache fields)
+
+- The pivot cache definition is the ground truth: `SaveAs(path, 51)`, unzip,
+  read `xl/pivotCache/pivotCacheDefinition1.xml`.
+  - A field with member properties shows extra `cacheField`s carrying
+    `memberPropertyField="1"` (e.g. `[Category].[Category].[Category]KEY0`) plus
+    `mappingCount="1"` on the member field; a clean field has neither.
+  - `cacheHierarchy/@memberValueDatatype` is the date-filter gate (7 = date).
+- `Show Properties in Report ▸` in the row-label context menu lists what the
+  cache holds; the reference shows `(No Properties Retrieved)` and three
+  disabled items. Check it with: right-click a member cell → `Move` to the menu
+  item → screenshot the submenu (no click needed).
 
 ## Safety
 

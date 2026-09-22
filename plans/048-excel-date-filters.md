@@ -341,6 +341,56 @@ Still different: Excel asks the proxy for
 `PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` — even though both advertise the
 same member properties. Next step: save both pivots and diff the
 `pivotCacheDefinition` to see where the field's property set comes from.
+*Root-caused and fixed in session 9.*
+
+## Findings (session 9 — the member-property quirk, root-caused and fixed)
+
+The session-8 difference was Excel's, not ours, to explain: the proxy's pivot
+cache carried two extra `memberPropertyField` cache fields per hierarchy
+(`…KEY0`, `…MEMBER_VALUE`, plus `mappingCount="1"` on the member field) and
+**Show Properties in Report** listed `KEY0` / `MEMBER_VALUE`, where the mirror
+and the reference show *(No Properties Retrieved)*.
+
+Chain of evidence:
+
+1. Saved both pivots as `.xlsx` and diffed
+   `xl/pivotCache/pivotCacheDefinition1.xml`: the proxy had
+   `cacheField name="[Category].[Category].[Category]KEY0"` (and
+   `…MEMBER_VALUE`) with `memberPropertyField="1"`; the mirror had one plain
+   field. The `cacheHierarchy` entries were identical (`memberValueDatatype`
+   130 both, same `fieldsUsage`).
+2. The trace of a fresh pivot (`XMLA_TRACE=1`) showed Excel asking the proxy
+   `MDSCHEMA_PROPERTIES <CUBE_NAME>Sales</CUBE_NAME>
+   <HIERARCHY_UNIQUE_NAME>[Category].[Category]</HIERARCHY_UNIQUE_NAME>
+   <PROPERTY_TYPE>1</PROPERTY_TYPE>` — *member properties* — and then asking
+   for `KEY0,MEMBER_VALUE` in the pivot MDX.
+3. Measured the reference's answer with ADOMD (`GetSchemaDataSet` plus an
+   `AdomdRestrictionCollection`; the DMV filters client-side and cannot show
+   this): the mirror returns **0 rows** for `PROPERTY_TYPE=1` (it has no type-1
+   rows at all — all 39 are `PROPERTY_TYPE=5`), 5 rows for `PROPERTY_TYPE=5`,
+   and the 12 cell properties only for `PROPERTY_TYPE=2` **without** a cube
+   restriction (cube-scoped → empty).
+
+`get_mdschema_properties_response` mapped `Some(1)` to the hierarchy rows, and
+that non-empty answer is what made Excel believe the field had member
+properties. It now follows the measured reference semantics: `1/3/4` → empty,
+`2` → the provider-level cell list only, `5` → the hierarchy rows, cube-scoped
+with no type → the hierarchy rows.
+
+Verified live after the fix:
+
+- the fresh cache has a single plain field per hierarchy (same shape as the
+  mirror's) and `memberValueDatatype="7"` on `[Date].[Full Date]` survives;
+- **Show Properties in Report** shows `(No Properties Retrieved)` for the date
+  field, as the mirror does;
+- the pivot MDX is back to `DIMENSION PROPERTIES PARENT_UNIQUE_NAME`;
+- Date Filters still open and filter (`equals 2020-01-16` collapsed the pivot to
+  that day) with the same subquery MDX as before.
+
+Also fixed from the same diff: flat dimensions' `(All)` and leaf levels
+reported `LEVEL_ORIGIN=1`; they are attribute hierarchies, so they now report
+`2` like the reference, and the key hierarchy's `(All)` level no longer writes
+`LEVEL_ATTRIBUTE_HIERARCHY_NAME=(All)` (the reference leaves it empty).
 
 ## Changes
 
@@ -380,6 +430,13 @@ same member properties. Next step: save both pivots and diff the
     `hierarchy_for_view` rewrite the axis into the attribute hierarchy's
     namespace and prepend its `(All)`.
   - `src/execute/render.rs`: applies the view in `build_drilldown`.
+- Session 9 (member-property quirk):
+  - `src/xmla/discover/mdschema_properties.rs`: `PROPERTY_TYPE` restriction
+    semantics match the reference (`1/3/4` empty; `2` provider-level only;
+    cube-scoped → hierarchy rows); cell properties honour `PROPERTY_NAME`.
+  - `src/xmla/discover/levels.rs`: flat dimensions report `LEVEL_ORIGIN=2`
+    (attribute hierarchy) for `(All)` and the leaf; the key hierarchy's `(All)`
+    level no longer carries `LEVEL_ATTRIBUTE_HIERARCHY_NAME`.
 
 ## Next
 
@@ -510,6 +567,12 @@ same member properties. Next step: save both pivots and diff the
    all sibling years kept, verified live). The date-role `MEMBER_VALUE`
    `DATA_TYPE` (7) is preserved for the Date Filters work.
 6. Optional: `--auth-key` on windows-mcp + an `Authorization` header.
+7. **Explain the extra member-property cache fields / menu difference** —
+   *fixed* (session 9): the proxy answered Excel's `PROPERTY_TYPE=1` request
+   with its `PROPERTY_TYPE=5` rows, so Excel stored `…KEY0` / `…MEMBER_VALUE`
+   cache fields and listed them under **Show Properties in Report**. With the
+   empty reference answer the cache, the menu and the pivot MDX property list
+   all match the mirror.
 
 ## Harness notes
 

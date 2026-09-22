@@ -136,6 +136,27 @@ $rs = $conn.Execute('SELECT * FROM $SYSTEM.MDSCHEMA_PROPERTIES')   # single quot
 Use single-quoted strings — `"$SYSTEM..."` interpolates to nothing in PowerShell.
 Read columns defensively (`try { $rs.Fields.Item('DATA_TYPE').Value } catch {}`).
 
+**DMVs are not Discover requests.** A `SELECT * FROM $SYSTEM.MDSCHEMA_PROPERTIES`
+returns every row and filters client-side, so it cannot show what the engine
+answers to a *restricted* request. To reproduce Excel's requests exactly, use
+ADOMD with an `AdomdRestrictionCollection` (this is how the `PROPERTY_TYPE`
+semantics were measured):
+
+```powershell
+Add-Type -Path "C:\Program Files\Microsoft.NET\ADOMD.NET\170\Microsoft.AnalysisServices.AdomdClient.dll"
+$conn = New-Object Microsoft.AnalysisServices.AdomdClient.AdomdConnection("Data Source=localhost;Initial Catalog=MallardDemo")
+$conn.Open()
+$rc = New-Object Microsoft.AnalysisServices.AdomdClient.AdomdRestrictionCollection
+$rc.Add('CUBE_NAME', 'Model')
+$rc.Add('HIERARCHY_UNIQUE_NAME', '[Category].[Category]')
+$rc.Add('PROPERTY_TYPE', 1)          # integer, as Excel sends it
+$ds = $conn.GetSchemaDataSet('MDSCHEMA_PROPERTIES', $rc)   # -> row count 0
+```
+
+The relay at `http://127.0.0.1:8090/OLAP/msmdpump.dll` answers `Discover` with
+an empty rowset (it only forwards `Execute`), so use ADOMD for metadata
+questions.
+
 ## Connect Excel to the reference model
 
 ```powershell
@@ -206,6 +227,22 @@ $xml = Get-Content "probe_x\xl\pivotCache\pivotCacheDefinition1.xml" -Raw
   `NAME` rows carry the same key type as `MEMBER_VALUE` (`(All)` KEY0=3, NAME=130;
   int levels 20; date 7; string 130), and member-value rows are sorted by
   hierarchy with `[Measures]` last.
+- **`MDSCHEMA_PROPERTIES` honours the `PROPERTY_TYPE` restriction, and the
+  reference has no `PROPERTY_TYPE=1` rows at all** (measured 2026-09-22 on the
+  mirror tabular model, via `GetSchemaDataSet` with an
+  `AdomdRestrictionCollection`). Excel sends
+  `<CUBE_NAME>…</CUBE_NAME><HIERARCHY_UNIQUE_NAME>…</HIERARCHY_UNIQUE_NAME><PROPERTY_TYPE>1</PROPERTY_TYPE>`
+  while it builds pivot cache fields; the reference answers **empty**, which
+  Excel reads as `(No Properties Retrieved)`. Answering with the hierarchy's
+  own `PROPERTY_TYPE=5` rows instead makes Excel write `memberPropertyField="1"`
+  cache fields (`…KEY0`, `…MEMBER_VALUE`) and ask for them in every pivot MDX.
+  Full measured semantics: `PROPERTY_TYPE=1/3/4` → empty; `2` → the 12 cell
+  properties **only when the request names no cube or hierarchy** (cube-scoped
+  → empty); `5` → the hierarchy rows; no type + cube/hierarchy → hierarchy
+  rows; no type + no cube → 12 cell properties + the hierarchy rows.
+  Restriction-free queries (`GetSchemaDataSet('MDSCHEMA_PROPERTIES', $null)`)
+  are *not* the same as Excel's Discover requests — always compare with the
+  same restrictions.
 - **The attribute hierarchy's axis members** are `(All)` first, then
   `[DateDim].[FullDate].&[2024-01-15T00:00:00]` with `LName
   =[DateDim].[FullDate].[FullDate]`, `LNum=1` and
