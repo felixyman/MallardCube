@@ -3149,6 +3149,45 @@ mod tests {
     // it reads, corrupting its hierarchy walk — this crashed Excel on
     // "Expand to Month" and "Expand to Full Date". The reference emits it only
     // when asked (plan 048).
+    // Excel's Label Filters, captured live from "Filter → Label Filters →
+    // begins with B": a subquery predicate over the member caption, with
+    // Left/Right/InStr for begins-with / ends-with / contains (plan 048).
+    #[test]
+    fn excel_label_filters_lower_to_caption_predicates() {
+        with_project3(|| {
+            let captions = |condition: &str| {
+                let mdx = format!(
+                    "SELECT NON EMPTY Hierarchize({{DrilldownLevel({{[Category].[Category].[All]}},,,INCLUDE_CALC_MEMBERS)}}) \
+                     ON COLUMNS FROM (SELECT Filter([Category].[Category].[Category].AllMembers, ({condition})) \
+                     ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"
+                );
+                let xml = get_execute_statement_response(&mdx);
+                assert!(!xml.contains("faultstring"), "{condition} → {xml}");
+                axis0_member_infos(&xml)
+                    .into_iter()
+                    .map(|(caption, _, _, _)| caption)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                captions(r#"Left([Category].[Category].CurrentMember.member_caption,1)="B""#),
+                vec!["Baby", "Beauty", "Books"]
+            );
+            // Excel sends a leading start position for contains.
+            let contains =
+                captions(r#"InStr(1,[Category].[Category].CurrentMember.member_caption,"oo")>0"#);
+            assert!(
+                !contains.is_empty() && contains.iter().all(|c| c.contains("oo")),
+                "{contains:?}"
+            );
+            let ends =
+                captions(r#"Right([Category].[Category].CurrentMember.member_caption,1)="s""#);
+            assert!(
+                !ends.is_empty() && ends.iter().all(|c| c.ends_with('s')),
+                "{ends:?}"
+            );
+        });
+    }
+
     // Excel's Date Filters arrive as a subquery predicate:
     // `Filter(<hierarchy>.Levels(n).AllMembers, CurrentMember.MemberValue <op>
     // CDate("YYYY-MM-DD"))`. It lowers to an absolute window on the date role's

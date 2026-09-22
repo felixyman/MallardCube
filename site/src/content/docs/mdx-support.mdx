@@ -89,7 +89,7 @@ startup; see `parent_child` in the [Model reference](./model/).
 | Multi-parent expand ("Expand Entire Field") | Works |
 | Set functions (`TopCount`, `Order`, `Filter`) | Works |
 | Value filters, Top/Bottom N, value sorting | Works |
-| Label filters (`Filter` over member captions/names) | Not lowered — faults with an actionable message instead of returning unfiltered members |
+| Excel **Label Filters** (begins with / ends with / contains / equals / …) | Works — lowered to caption predicates |
 | Excel **Date Filters** (equals / before / after / …) | Works — lowered to a date window on the key attribute hierarchy |
 | Batched `CUBEVALUE` with different slicers | Works |
 | DRILLTHROUGH | Works |

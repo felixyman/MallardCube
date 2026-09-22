@@ -96,6 +96,23 @@ pub enum DateWindow {
     },
 }
 
+/// Excel's Label Filters, reduced to the comparisons the proxy lowers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LabelFilter {
+    Eq(String),
+    Ne(String),
+    BeginsWith(String),
+    DoesNotBeginWith(String),
+    EndsWith(String),
+    DoesNotEndWith(String),
+    Contains(String),
+    DoesNotContain(String),
+    Gt(String),
+    Ge(String),
+    Lt(String),
+    Le(String),
+}
+
 /// Comparison operators in filter predicates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {

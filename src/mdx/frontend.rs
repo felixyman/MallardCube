@@ -1374,6 +1374,154 @@ pub fn date_value_filters(sel: &Select) -> Vec<(String, CmpOp, String)> {
     out
 }
 
+/// The dimension a caption reference belongs to
+/// (`[Category].[Category].CurrentMember.member_caption`).
+pub(crate) fn caption_dim(e: &Expr) -> Option<String> {
+    e.as_member().and_then(|m| {
+        m.parts
+            .iter()
+            .any(|p| {
+                p.eq_ignore_ascii_case("member_caption") || p.eq_ignore_ascii_case("member_name")
+            })
+            .then(|| m.parts.first().cloned().unwrap_or_default())
+    })
+}
+
+/// Reduce Excel's label-filter condition to a `LabelFilter`. The forms Excel
+/// sends: a caption comparison (`caption = "x"`), `Left(caption, n) = "x"` for
+/// "begins with", `Right(caption, n) = "x"` for "ends with", and
+/// `InStr(caption, "x") > 0` / `= 0` for "contains" / "does not contain".
+pub(crate) fn label_filter_condition(
+    lhs: &Expr,
+    op: CmpOp,
+    rhs: &Expr,
+) -> Option<crate::mdx::ast::LabelFilter> {
+    use crate::mdx::ast::LabelFilter;
+    fn text(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Str(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    if caption_dim(lhs).is_some() {
+        let s = text(rhs)?;
+        return Some(match op {
+            CmpOp::Eq => LabelFilter::Eq(s),
+            CmpOp::Ne => LabelFilter::Ne(s),
+            CmpOp::Gt => LabelFilter::Gt(s),
+            CmpOp::Ge => LabelFilter::Ge(s),
+            CmpOp::Lt => LabelFilter::Lt(s),
+            CmpOp::Le => LabelFilter::Le(s),
+        });
+    }
+    let Expr::Call { name, args } = lhs else {
+        return None;
+    };
+    match name.to_uppercase().as_str() {
+        // `Left(caption, n) = "B"` / `Right(caption, n) = "B"` compare to text.
+        "LEFT" | "RIGHT" => {
+            let s = text(rhs)?;
+            match (name.to_uppercase().as_str(), op) {
+                ("LEFT", CmpOp::Eq) => Some(LabelFilter::BeginsWith(s)),
+                ("LEFT", CmpOp::Ne) => Some(LabelFilter::DoesNotBeginWith(s)),
+                ("RIGHT", CmpOp::Eq) => Some(LabelFilter::EndsWith(s)),
+                ("RIGHT", CmpOp::Ne) => Some(LabelFilter::DoesNotEndWith(s)),
+                _ => None,
+            }
+        }
+        // `InStr([start,] caption, "B") > 0` — Excel sends the start position
+        // (`InStr(1, caption, "oo")`), so take the string argument.
+        "INSTR" => {
+            let s = args.iter().find_map(|a| match a {
+                Expr::Str(s) => Some(s.clone()),
+                _ => None,
+            })?;
+            let n = match rhs {
+                Expr::Number(n) => n.as_str(),
+                _ => return None,
+            };
+            match (op, n) {
+                (CmpOp::Gt, "0") => Some(LabelFilter::Contains(s)),
+                (CmpOp::Eq, "0") => Some(LabelFilter::DoesNotContain(s)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Excel's Label Filters:
+/// `Filter(<level>.AllMembers, (<hierarchy>.CurrentMember.member_caption <cmp>
+/// "text"))`, or the `Left`/`Right`/`InStr` forms it builds for
+/// "begins with" / "ends with" / "contains". Returns `(dimension, filter)`.
+pub fn label_filters(sel: &Select) -> Vec<(String, crate::mdx::ast::LabelFilter)> {
+    use crate::mdx::ast::LabelFilter;
+
+    fn walk(e: &Expr, out: &mut Vec<(String, LabelFilter)>) {
+        match e {
+            Expr::Call { name, args } if name.eq_ignore_ascii_case("Filter") => {
+                let cond = args.iter().find_map(|a| match a {
+                    Expr::Tuple(items) => {
+                        items.first().filter(|c| matches!(c, Expr::Binary { .. }))
+                    }
+                    Expr::Binary { .. } => Some(a),
+                    _ => None,
+                });
+                if let Some(Expr::Binary { op, lhs, rhs }) = cond
+                    && let Some(filter) = label_filter_condition(lhs, *op, rhs)
+                    // The caption reference sits in the call's arguments
+                    // (`InStr(1, caption, "oo")` puts it second), or is the
+                    // left-hand side for a direct caption comparison.
+                    && let Some(dim) = match lhs.as_ref() {
+                        Expr::Call { args, .. } => args.iter().find_map(caption_dim),
+                        other => caption_dim(other),
+                    }
+                {
+                    out.push((dim, filter));
+                }
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let sets = named_sets(sel);
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(&expand_named_sets(e, &sets), &mut out);
+        }
+    }
+    if let Some(sub) = &sel.subquery {
+        for axis in &sub.axes {
+            for e in &axis.exprs {
+                walk(&expand_named_sets(e, &sets), &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// `Filter(set, <condition>)` calls the proxy does not lower. Label filters
 /// (`Filter(set, InStr(<caption>, …) > 0)`, caption/name comparisons) would
 /// otherwise be dropped silently — the axis came back unfiltered while Excel
@@ -1407,6 +1555,13 @@ pub fn unsupported_filter_count(sel: &Select) -> usize {
                         _ => None,
                     });
                     let lowered = match condition {
+                        // Excel's Label Filters (`Left(caption,1)="B"`, …)
+                        // lower to caption predicates on the dimension column.
+                        Some(Expr::Binary { op, lhs, rhs })
+                            if label_filter_condition(lhs, *op, rhs).is_some() =>
+                        {
+                            true
+                        }
                         // `Member_Value`/`MemberValue` comparisons lower to
                         // date windows: relative (`DateAdd`) or absolute
                         // (`CDate`, Excel's Date Filters).

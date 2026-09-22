@@ -1091,12 +1091,6 @@ mod tests {
                 "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Calendar].[Date].Members, DateAdd(\"d\", -30, VBA![Date]()) <= 1)",
                 "date arithmetic",
             ),
-            (
-                // A label filter: previously dropped silently, returning the
-                // unfiltered set while Excel showed the filter as applied.
-                "SELECT NON EMPTY Hierarchize({Filter({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}, InStr([Category].[Category].CurrentMember.MEMBER_CAPTION, \"Bo\") > 0)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
-                "label filters",
-            ),
         ] {
             let reason = unsupported_features(mdx).unwrap_or_else(|| panic!("not detected: {mdx}"));
             assert!(reason.contains(needle), "{mdx} → {reason}");
@@ -1113,6 +1107,8 @@ mod tests {
             "SELECT {HEAD([Date].[Calendar].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
             "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
+            // Excel's Label Filters lower to caption predicates.
+            "SELECT NON EMPTY Hierarchize({Filter({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}, InStr([Category].[Category].CurrentMember.MEMBER_CAPTION, \"Bo\") > 0)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
             "SELECT {HEAD({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {HEAD(YTD([Date].[Calendar].[Year].&[2024]),1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "SELECT {YTD([Date].[Calendar].[Month].&[2024]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",

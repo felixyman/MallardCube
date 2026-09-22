@@ -120,10 +120,9 @@ pub fn plan_key(plan: &QueryPlan) -> String {
 }
 
 fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
-    if filters
-        .iter()
-        .all(|f| f.members.is_empty() && f.range.is_none() && f.date_window.is_none())
-    {
+    if filters.iter().all(|f| {
+        f.members.is_empty() && f.range.is_none() && f.date_window.is_none() && f.label.is_none()
+    }) {
         return String::new();
     }
 
@@ -134,8 +133,19 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
 
     let parts: Vec<String> = ordered
         .iter()
-        .filter(|(f, _)| !f.members.is_empty() || f.range.is_some() || f.date_window.is_some())
+        .filter(|(f, _)| {
+            !f.members.is_empty()
+                || f.range.is_some()
+                || f.date_window.is_some()
+                || f.label.is_some()
+        })
         .map(|(f, dk)| {
+            // Label filters change the member set, so they must change the key
+            // too (the result cache would otherwise serve one filter's members
+            // for another).
+            if let Some(l) = &f.label {
+                return format!("{dk}=label:{l:?}");
+            }
             // Ranges and date windows must change the key too, or the result
             // cache serves one probe's response for another (and vice versa).
             if let Some(w) = &f.date_window {
@@ -204,6 +214,7 @@ mod tests {
             time_flag: None,
             range: Some(("2022".into(), "2024".into())),
             date_window: None,
+            label: None,
         };
         let plain = TypedDimensionFilter {
             dimension: "Date".into(),
@@ -212,6 +223,7 @@ mod tests {
             time_flag: None,
             range: None,
             date_window: None,
+            label: None,
         };
         assert_ne!(
             filter_suffix(std::slice::from_ref(&ranged)),
@@ -234,6 +246,7 @@ mod tests {
                 amount: -30,
                 unit: "day".into(),
             }),
+            label: None,
         };
         let plain = TypedDimensionFilter {
             dimension: "Date".into(),
@@ -242,6 +255,7 @@ mod tests {
             time_flag: None,
             range: None,
             date_window: None,
+            label: None,
         };
         assert_ne!(
             filter_suffix(std::slice::from_ref(&windowed)),
@@ -273,6 +287,7 @@ mod tests {
                 members: vec!["North".into()],
                 range: None,
                 date_window: None,
+                label: None,
             }],
         };
         assert_eq!(
@@ -311,6 +326,7 @@ mod tests {
                     members: vec!["North".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -319,6 +335,7 @@ mod tests {
                     members: vec!["Category B".into(), "Category A".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
             ],
         };
@@ -341,6 +358,7 @@ mod tests {
                     members: vec!["North".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -349,6 +367,7 @@ mod tests {
                     members: vec!["Category A".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
             ],
         };
@@ -362,6 +381,7 @@ mod tests {
                     members: vec!["Category A".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
                 TypedDimensionFilter {
                     dimension: "Region".into(),
@@ -370,10 +390,40 @@ mod tests {
                     members: vec!["North".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
             ],
         };
         assert_eq!(plan_key(&a), plan_key(&b));
+    }
+
+    #[test]
+    fn label_filters_change_the_plan_key() {
+        // Regression: the label filter was missing from the key, so the result
+        // cache served one filter's members for another (plan 048).
+        use crate::mdx::ast::LabelFilter;
+        let plan = |label: Option<LabelFilter>| QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Category".into()],
+            filters: vec![TypedDimensionFilter {
+                dimension: "Category".into(),
+                members: vec![],
+                level: None,
+                time_flag: None,
+                range: None,
+                date_window: None,
+                label,
+            }],
+            group_levels: vec![Some(0)],
+            set_op: None,
+        };
+        let begins = plan_key(&plan(Some(LabelFilter::BeginsWith("B".into()))));
+        let contains = plan_key(&plan(Some(LabelFilter::Contains("oo".into()))));
+        let none = plan_key(&plan(None));
+        assert_ne!(begins, contains);
+        assert_ne!(begins, none);
+        assert_ne!(contains, none);
+        assert!(begins.contains("label:BeginsWith"), "{begins}");
     }
 
     #[test]

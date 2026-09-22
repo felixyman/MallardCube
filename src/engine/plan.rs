@@ -41,6 +41,8 @@ pub struct TypedDimensionFilter {
     pub range: Option<(String, String)>,
     /// Period-to-date window on a date role's full-date column.
     pub date_window: Option<crate::mdx::semantic::DateWindow>,
+    /// Excel Label Filter on the member caption.
+    pub label: Option<crate::mdx::semantic::LabelFilter>,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +172,7 @@ pub(crate) fn typed_filters(source: &[DimensionFilter]) -> Vec<TypedDimensionFil
             time_flag: None,
             range: f.range.clone(),
             date_window: f.date_window.clone(),
+            label: f.label.clone(),
         })
         .collect()
 }
@@ -192,6 +195,7 @@ pub(crate) fn filters_with_time_flag(
             time_flag: Some(flag.clone()),
             range: None,
             date_window: None,
+            label: None,
         });
     }
     result

@@ -89,7 +89,12 @@ pub struct DimensionFilter {
     pub range: Option<(String, String)>,
     /// Period-to-date window on a date role's full-date column (`YTD(m)`).
     pub date_window: Option<DateWindow>,
+    /// Label filter on the member caption, as Excel's "Label Filters" send it
+    /// (`Left(<hierarchy>.CurrentMember.member_caption, 1) = "B"`).
+    pub label: Option<LabelFilter>,
 }
+
+pub use crate::mdx::ast::LabelFilter;
 
 pub use crate::mdx::ast::DateWindow;
 
@@ -118,6 +123,7 @@ fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
                     level: level.clone(),
                     range: None,
                     date_window: None,
+                    label: None,
                 });
             }
         }
@@ -412,6 +418,7 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
                     level: level.map(|s| s.to_string()),
                     range: None,
                     date_window: None,
+                    label: None,
                 });
             }
         };
@@ -922,6 +929,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             level: Some(level_name),
             range: None,
             date_window: None,
+            label: None,
         });
         // Route to the single-dimension drilldown renderer,
         // not the DrilldownMemberProbe 2-dimension path.
@@ -931,6 +939,25 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     }
 
     let mut filters = filters_from_parsed(&parsed);
+
+    // Excel's Label Filters arrive the same way:
+    // `Filter(<level>.AllMembers, (<hierarchy>.CurrentMember.member_caption …))`
+    // with `Left`/`Right`/`InStr` for begins-with / ends-with / contains.
+    let has_label_filter = mdx.contains("member_caption") || mdx.contains("InStr(");
+    if has_label_filter && let Ok(sel) = crate::mdx::frontend::parse_select(mdx) {
+        for (dim_name, label) in crate::mdx::frontend::label_filters(&sel) {
+            if let Some(d) = crate::proxy_project::project().model.dim_def_opt(&dim_name) {
+                filters.push(DimensionFilter {
+                    dimension: d.id.clone(),
+                    members: vec![],
+                    level: None,
+                    range: None,
+                    date_window: None,
+                    label: Some(label),
+                });
+            }
+        }
+    }
 
     // Excel's Date Filters arrive as a subquery predicate
     // (`Filter(<hierarchy>.Levels(n).AllMembers, CurrentMember.MemberValue <op>
@@ -947,6 +974,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                     level: d.levels.last().map(|l| l.name.clone()),
                     range: None,
                     date_window: Some(DateWindow::Absolute { op, date }),
+                    label: None,
                 });
             }
         }
@@ -958,6 +986,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             level: Some(level_name.clone()),
             range: Some((from_key.clone(), to_key.clone())),
             date_window: None,
+            label: None,
         });
     }
     for (dim_name, level_name, from_key, to_key) in &parsed.where_member_ranges {
@@ -967,6 +996,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             level: Some(level_name.clone()),
             range: Some((from_key.clone(), to_key.clone())),
             date_window: None,
+            label: None,
         });
     }
     for (dim_name, level_name, window) in time_windows {
@@ -976,6 +1006,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             level: Some(level_name),
             range: None,
             date_window: Some(window),
+            label: None,
         });
     }
     filters.extend(extra_filters);
@@ -1052,6 +1083,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                             level: Some(level),
                             range: Some((from_key, to_key)),
                             date_window: None,
+                            label: None,
                         });
                     }
                     break;

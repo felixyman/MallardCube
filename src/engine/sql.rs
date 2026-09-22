@@ -777,6 +777,56 @@ fn sql_where_with_cols(
             }
             continue;
         }
+        // Excel's Label Filters: compare the member caption with SQL string
+        // ops. A dimension backed by its own table is scoped through the
+        // relationship; a flat dimension is filtered on the fact column.
+        if let Some(label) = &f.label
+            && let Some(d) = model.dim_def_opt(&f.dimension)
+        {
+            use crate::mdx::ast::LabelFilter;
+            let col = d
+                .levels
+                .last()
+                .map(|l| l.column.clone())
+                .unwrap_or_else(|| d.physical_field.clone());
+            let rel = model.rel_for_dimension(&f.dimension);
+            let col_ref = match &rel {
+                Some(r) => r.dim_column.clone(),
+                None => format!("f.{col}"),
+            };
+            let colv = format!("CAST({col_ref} AS VARCHAR)");
+            let esc = |s: &str| s.replace('\'', "''");
+            let n = |s: &str| s.chars().count();
+            let pred = match label {
+                LabelFilter::Eq(s) => format!("{colv} = '{}'", esc(s)),
+                LabelFilter::Ne(s) => format!("{colv} <> '{}'", esc(s)),
+                LabelFilter::Gt(s) => format!("{colv} > '{}'", esc(s)),
+                LabelFilter::Ge(s) => format!("{colv} >= '{}'", esc(s)),
+                LabelFilter::Lt(s) => format!("{colv} < '{}'", esc(s)),
+                LabelFilter::Le(s) => format!("{colv} <= '{}'", esc(s)),
+                LabelFilter::BeginsWith(s) => {
+                    format!("LEFT({colv}, {}) = '{}'", n(s), esc(s))
+                }
+                LabelFilter::DoesNotBeginWith(s) => {
+                    format!("LEFT({colv}, {}) <> '{}'", n(s), esc(s))
+                }
+                LabelFilter::EndsWith(s) => format!("RIGHT({colv}, {}) = '{}'", n(s), esc(s)),
+                LabelFilter::DoesNotEndWith(s) => {
+                    format!("RIGHT({colv}, {}) <> '{}'", n(s), esc(s))
+                }
+                LabelFilter::Contains(s) => format!("INSTR({colv}, '{}') > 0", esc(s)),
+                LabelFilter::DoesNotContain(s) => format!("INSTR({colv}, '{}') = 0", esc(s)),
+            };
+            match rel {
+                Some(r) => parts.push(format!(
+                    "f.{} IN (SELECT {} FROM {} WHERE {pred})",
+                    r.fact_column, r.dim_column, r.dim_table
+                )),
+                None => parts.push(pred),
+            }
+            continue;
+        }
+
         // Level-qualified filter (e.g. [Date].[Calendar].[Year].&[2024], or a
         // compound [Date].[Calendar].[Quarter].&[2026]&[4]): filter the hierarchy
         // level's column via a subquery on the relationship's dim table. A
@@ -1166,6 +1216,7 @@ mod tests {
                 members: vec!["North".into()],
                 range: None,
                 date_window: None,
+                label: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -1219,6 +1270,7 @@ mod tests {
                 members: vec!["North".into()],
                 range: None,
                 date_window: None,
+                label: None,
             }],
         };
         let sql = sql_for_query_plan(&default_model(), &plan);
@@ -1250,6 +1302,7 @@ mod tests {
                     members: vec!["North".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
                 TypedDimensionFilter {
                     dimension: "ProductCategory".into(),
@@ -1258,6 +1311,7 @@ mod tests {
                     members: vec!["Category A".into(), "Category B".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 },
             ],
         };
@@ -1346,6 +1400,7 @@ mod tests {
                     members: vec!["Widget".into()],
                     range: None,
                     date_window: None,
+                    label: None,
                 }],
             },
         );
@@ -1647,6 +1702,7 @@ mod tests {
                 time_flag: None,
                 range: None,
                 date_window: None,
+                label: None,
             }],
             group_levels: vec![Some(1)],
             set_op: None,
@@ -1793,6 +1849,7 @@ mod tests {
                 time_flag: Some("ytd_flag".into()),
                 range: None,
                 date_window: None,
+                label: None,
             }],
         };
         let sql = sql_for_query_plan(model, &plan);

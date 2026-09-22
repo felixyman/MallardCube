@@ -386,6 +386,8 @@ For detailed documentation:
 - PivotTable execution: filtering, drilldown, crossjoin, collapse
 - Multi-level date hierarchies (Year→Quarter→Month→Date expand/collapse, including one-step
   "Expand to Month" / "Expand to Full Date")
+- Excel **Label Filters** (begins with / ends with / contains / equals / …) — lowered to
+  caption predicates on the dimension column, flat or relationship-backed
 - Excel **Date Filters** — Excel sends
   `Filter(<key attribute>.Levels(1).AllMembers, CurrentMember.MemberValue <op> CDate("…"))`
   in a subquery; the proxy lowers it to a date window on the role's full-date column
@@ -407,7 +409,6 @@ For detailed documentation:
 
 **Partial:**
 - Fallback SQL for composite DAX — 6 mechanical patterns, labelled **bridge code**: the conversion report lists a suggested upstream artifact per measure, and `qualify --strict` fails while bridge code remains
-- **Label filters** (`Filter(set, InStr(caption, …) > 0)`) are not lowered: they fault with an actionable message rather than returning the unfiltered set. Value filters, Top/Bottom N, and value sorting work
 - SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
 
 **Not yet:**

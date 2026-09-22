@@ -296,6 +296,30 @@ Verified live: with the filter applied the pivot shows exactly `2026-09-22` and
 its revenue; `=`, `<`, `<=`, `>` and `<>` all return the expected member counts
 against the demo model.
 
+## Findings (session 7 — Label Filters)
+
+Same subquery shape as Date Filters, over the caption instead of the member
+value. Captured live from "Filter → Label Filters → begins with B":
+
+```
+FROM (SELECT Filter([Category].[Category].[Category].AllMembers,
+                    (Left([Category].[Category].CurrentMember.member_caption,1)="B"))
+      ON COLUMNS FROM [Sales])
+```
+
+- `Left(caption, n) = "x"` / `Right(caption, n) = "x"` / `InStr(caption, "x") > 0`
+  and their negations, plus direct caption comparisons (`=`, `<>`, `<`, …).
+- Lowered to SQL string ops on the dimension's column — through the
+  relationship when the dimension has its own table, directly on the fact
+  column for flat dimensions.
+- The **plan key** now includes the label filter: without it the result cache
+  served one filter's members for another (the same class of bug as the missing
+  set op).
+
+Verified live: the pivot shows exactly the matching categories
+(`Baby, Beauty, Books` for begins-with B); contains/ends-with/equals/does-not
+all return the expected sets through the cache.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
