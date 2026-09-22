@@ -119,6 +119,17 @@ recipe (all on the VM):
 4. Connect Excel through the plain-XML relay
    (`http://127.0.0.1:8090/OLAP/msmdpump.dll`, catalog `MallardDemo`).
 
+**Capture what Excel sends to the reference** with the logging relay on the VM:
+`python C:\Users\Public\Documents\parity\relay.py` listens on `127.0.0.1:8095`
+and forwards to the pump on `127.0.0.1:8090`, writing `NNNN_req.xml` /
+`NNNN_resp.xml` under `C:\Users\Public\Documents\relay\`. Connect Excel to
+`http://127.0.0.1:8095/OLAP/msmdpump.dll` and the exact MDX (including the
+`DrilldownMember(CrossJoin(...))` shape Excel uses for two row fields) is in the
+log. Compare engines on the **raw cellset XML** (`AdomdCommand.ExecuteXmlReader`
+for the reference, the HTTP response for the proxy): ADOMD's reader flattens
+rows, and the reference writes unformatted doubles in `<Value>` where the proxy
+writes plain integers — compare numerically, and compare axis member counts.
+
 Verified: `Revenue` totals 521586767 on both engines, and the pivot renders the
 same 20 categories. Diffing Excel's requests showed the proxy's cell-property
 advertisement was short (no `LANGUAGE`/`FONT_FLAGS`), which made Excel ask for
