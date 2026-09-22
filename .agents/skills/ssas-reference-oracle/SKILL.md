@@ -92,6 +92,39 @@ A deployed reference model already exists: **`MallardRef`** (DateDim 2557 dates,
 FactSales 6 rows, a `Calendar` user hierarchy Year→Quarter→Month→FullDate, a
 `Revenue` measure).
 
+## Mirror model: the proxy's model as a real tabular model
+
+`MallardDemo` is a tabular model that mirrors the proxy's demo surface, so the
+same Excel gesture can be run against both and the requests diffed. Build
+recipe (all on the VM):
+
+1. Extract the proxy's demo DuckDB (`/tmp/mallardcube-demo-<pid>-0.duckdb`,
+   newest) and `COPY` `sales_fact` + `date_dim` to CSV; gzip and fetch them to
+   the VM (serve them on the Linux host's port 8080 while the proxy is stopped,
+   then restart the proxy).
+2. Load into `SSASModels` with tables named exactly like the Excel-visible
+   dimensions: `Sales` (fact), `Category`, `Territory`, `Channel`, `Segment`,
+   `[Date]` (`date_key`, `[Full Date]`, `Year`, `Quarter`, `Month`) — plus
+   distinct-value tables for the flat dimensions.
+3. Deploy TMSL `createOrReplace` (see the recipe above) with:
+   - a `Calendar` user hierarchy on `Date`: Year → Quarter → Month → Full Date;
+   - helper columns (`Year`/`Quarter`/`Month`/`date_key`/fact keys) `isHidden`,
+     which keeps them out of Excel's field list while still usable as levels
+     and relationship keys;
+   - measures `Revenue`, `Units`, `Revenue YTD/QTD/MTD` (`TOTAL*TD`),
+     `Revenue Prior Year` (`SAMEPERIODLASTYEAR`), `formatString` `#,##0.00`;
+   - the `Date` table `dataCategory: "Time"` for time intelligence.
+   Watch out: tabular names are case-insensitive, so a fact column `revenue`
+   collides with the measure `Revenue` — name the column `revenue_amt`.
+4. Connect Excel through the plain-XML relay
+   (`http://127.0.0.1:8090/OLAP/msmdpump.dll`, catalog `MallardDemo`).
+
+Verified: `Revenue` totals 521586767 on both engines, and the pivot renders the
+same 20 categories. Diffing Excel's requests showed the proxy's cell-property
+advertisement was short (no `LANGUAGE`/`FONT_FLAGS`), which made Excel ask for
+four cell properties where the mirror is asked for six — a reminder that Excel
+adapts its request to `MDSCHEMA_PROPERTIES`.
+
 ## Query the metadata rowsets (DMVs)
 
 ```powershell

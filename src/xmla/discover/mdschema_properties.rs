@@ -201,7 +201,14 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
             } else {
                 2
             };
-            for name in ["KEY0", "MEMBER_VALUE"] {
+            // The reference emits KEY0, then NAME on the (All) level, then
+            // MEMBER_VALUE; Excel reads these positionally.
+            let mut names: Vec<&str> = vec!["KEY0"];
+            if is_all_level(d, &level) {
+                names.push("NAME");
+            }
+            names.push("MEMBER_VALUE");
+            for name in names {
                 if !property_requested(restrictions, name) {
                     continue;
                 }
@@ -211,12 +218,12 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
                 // `(All)` level reports I4 for KEY0 but WSTR for MEMBER_VALUE,
                 // as the reference does.
                 let is_all = is_all_level(d, &level);
-                let data_type = if name == "MEMBER_VALUE" && is_all {
-                    data_type
-                } else if is_all {
-                    DBTYPE_I4
-                } else {
-                    data_type
+                let data_type = match name {
+                    // NAME is the caption: always a string.
+                    "NAME" => DBTYPE_WSTR,
+                    "MEMBER_VALUE" if is_all => data_type,
+                    _ if is_all => DBTYPE_I4,
+                    _ => data_type,
                 };
                 out.push_str(&member_property_row(
                     catalog,
@@ -225,18 +232,6 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
                     name,
                     5,
                     Some(data_type),
-                    origin,
-                ));
-                out.push('\n');
-            }
-            if is_all_level(d, &level) && property_requested(restrictions, "NAME") {
-                out.push_str(&member_property_row(
-                    catalog,
-                    cube,
-                    &coords,
-                    "NAME",
-                    5,
-                    Some(DBTYPE_WSTR),
                     origin,
                 ));
                 out.push('\n');
@@ -279,13 +274,17 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
 fn system_property_rows() -> String {
     const PROPS: &[(&str, u8)] = &[
         ("VALUE", 0),
-        ("FORMATTED_VALUE", 1),
         ("FORMAT_STRING", 2),
-        ("FORE_COLOR", 2),
         ("BACK_COLOR", 2),
+        ("FORE_COLOR", 2),
         ("FONT_NAME", 2),
         ("FONT_SIZE", 2),
+        ("FONT_FLAGS", 2),
+        ("LANGUAGE", 2),
         ("CELL_ORDINAL", 0),
+        ("FORMATTED_VALUE", 1),
+        ("ACTION_TYPE", 2),
+        ("UPDATEABLE", 2),
     ];
 
     let project = proxy_project::project();
@@ -399,7 +398,12 @@ pub fn get_mdschema_properties_response(
         // where the reference is asked for two.
         Some(1) => hierarchy_property_rows(restrictions),
         Some(2) => system_property_rows(),
-        Some(5) => member_value_rows(restrictions),
+        // Member properties: the reference answers with the hierarchy's own
+        // rows (KEY0 / NAME / MEMBER_VALUE). Returning member-value rows alone
+        // made Excel ask for KEY0/MEMBER_VALUE in its pivot MDX where the
+        // reference is asked for PARENT_UNIQUE_NAME/HIERARCHY_UNIQUE_NAME
+        // (found by diffing Excel's requests to a mirror tabular model).
+        Some(5) => hierarchy_property_rows(restrictions),
         // A request that names one hierarchy gets only that hierarchy's rows;
         // mixing the cell properties in is what Excel rejects (plan 048).
         _ if hierarchy_restricted => hierarchy_property_rows(restrictions),
@@ -482,6 +486,45 @@ mod tests {
             let year_key = row_for(&resp, "[Date].[Calendar].[Year]", "KEY0");
             assert!(year_key.contains("<DATA_TYPE>20</DATA_TYPE>"), "{year_key}");
             assert!(all_row.contains("<DATA_TYPE>130</DATA_TYPE>"), "{all_row}");
+        });
+    }
+
+    // Excel sends `PROPERTY_TYPE=5` with no `PROPERTY_NAME` when it wants a
+    // hierarchy's member properties; the tabular reference answers with
+    // KEY0 / NAME / MEMBER_VALUE. Returning member-value rows alone made Excel
+    // ask for KEY0/MEMBER_VALUE in its pivot MDX where the reference is asked
+    // for PARENT_UNIQUE_NAME/HIERARCHY_UNIQUE_NAME (found by diffing Excel's
+    // requests to a mirror tabular model).
+    #[test]
+    fn member_property_type_returns_the_hierarchy_rows() {
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Category].[Category]".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
+            for name in ["KEY0", "NAME", "MEMBER_VALUE"] {
+                assert!(
+                    resp.contains(&format!("<PROPERTY_NAME>{name}</PROPERTY_NAME>")),
+                    "{name} missing: {resp}"
+                );
+            }
+            // Naming one property still returns just that property.
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Category].[Category]".into()),
+                property_name: Some("MEMBER_VALUE".into()),
+                ..Restrictions::default()
+            };
+            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
+            assert!(
+                resp.contains("<PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>"),
+                "{resp}"
+            );
+            assert!(
+                !resp.contains("<PROPERTY_NAME>KEY0</PROPERTY_NAME>"),
+                "a named property must be the only one returned: {resp}"
+            );
         });
     }
 

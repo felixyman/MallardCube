@@ -320,6 +320,28 @@ Verified live: the pivot shows exactly the matching categories
 (`Baby, Beauty, Books` for begins-with B); contains/ends-with/equals/does-not
 all return the expected sets through the cache.
 
+## Findings (session 8 — a mirror tabular model for parity)
+
+`MallardDemo` now mirrors the proxy's demo model as a real tabular model
+(same tables/hierarchy/measures, same 20k rows, `Revenue` identical to the
+digit). Diffing Excel's requests to both surfaced two real gaps, both fixed:
+
+- `MDSCHEMA_PROPERTIES` with `PROPERTY_TYPE=5` (what Excel always sends)
+  returned member-value rows only; the reference and the mirror return
+  `KEY0`, `NAME` (on `(All)`) and `MEMBER_VALUE`, in that order. Rows are now
+  emitted in the reference's order regardless of the request's shape.
+- The cell-property advertisement was missing `FONT_FLAGS`, `LANGUAGE`,
+  `ACTION_TYPE` and `UPDATEABLE`, so Excel asked the proxy for four cell
+  properties where the mirror is asked for six. The list now matches; Excel's
+  next request confirmed it (`CELL PROPERTIES VALUE, FORMAT_STRING, LANGUAGE,
+  BACK_COLOR, FORE_COLOR, FONT_FLAGS`).
+
+Still different: Excel asks the proxy for
+`DIMENSION PROPERTIES PARENT_UNIQUE_NAME,KEY0,MEMBER_VALUE` and the mirror for
+`PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` — even though both advertise the
+same member properties. Next step: save both pivots and diff the
+`pivotCacheDefinition` to see where the field's property set comes from.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
