@@ -23,6 +23,11 @@ const CUBE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
 
 pub fn get_cubes_response() -> String {
     let project = proxy_project::project();
+    // PREFERRED_QUERY_PATTERNS matches the tabular reference: 0x01
+    // (DrillDownMember-style asymmetric axes) | 0x02 (implicit measures).
+    // Excel takes a different metadata path when this is 0 — it never asks for
+    // the key attribute's MEMBER_VALUE type, so the pivot cache gets no
+    // `memberValueDatatype` and Date Filters stay hidden (plan 048).
     let rows = format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -43,7 +48,7 @@ pub fn get_cubes_response() -> String {
             <CUBE_CAPTION>{cube}</CUBE_CAPTION>
             <BASE_CUBE_NAME>{cube}</BASE_CUBE_NAME>
             <CUBE_SOURCE>1</CUBE_SOURCE>
-            <PREFERRED_QUERY_PATTERNS>0</PREFERRED_QUERY_PATTERNS>
+            <PREFERRED_QUERY_PATTERNS>3</PREFERRED_QUERY_PATTERNS>
           </row>"#,
         catalog = project.config.catalog,
         cube = project.config.cube,

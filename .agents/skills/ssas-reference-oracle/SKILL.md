@@ -154,6 +154,34 @@ $xml = Get-Content "probe_x\xl\pivotCache\pivotCacheDefinition1.xml" -Raw
   `MEMBER_VALUE` DATA_TYPE=7, and emit `MEMBER_VALUE` rows for all levels
   (`(All)`=130, period levels=int, date level=7). See plan 048.
 
+**Three more rules that gate the same feature (2026-09-22):**
+
+- **`DISCOVER_SCHEMA_ROWSETS` must honour the `SchemaName` restriction.** Excel
+  asks for one rowset's entry to learn its restrictions; answering with the
+  whole list makes it miss `HIERARCHY_VISIBILITY` and take an older metadata
+  path. The reference answers with exactly one row.
+- **`MDSCHEMA_CUBES.PREFERRED_QUERY_PATTERNS=3`** (tabular) gates whether Excel
+  ever asks for the key attribute's `MEMBER_VALUE` at all. With `0` its trace
+  shows only `PROPERTY_TYPE=2` cell-property requests and the pivot cache gets
+  no `memberValueDatatype`.
+- **Excel reads `MDSCHEMA_PROPERTIES` rows positionally against the schema.**
+  Emit the elements in the reference's order — `… LEVEL_UNIQUE_NAME,
+  PROPERTY_TYPE, PROPERTY_NAME, PROPERTY_CAPTION, DATA_TYPE, PROPERTY_ORIGIN,
+  PROPERTY_IS_VISIBLE` — and use the reference's column list in the schema.
+  A `PROPERTY_NAME`-before-`PROPERTY_TYPE` order made Excel read `5` as
+  `DATA_TYPE` and stamp `memberValueDatatype="5"` on every hierarchy. `KEY0` and
+  `NAME` rows carry the same key type as `MEMBER_VALUE` (`(All)` KEY0=3, NAME=130;
+  int levels 20; date 7; string 130), and member-value rows are sorted by
+  hierarchy with `[Measures]` last.
+- **The attribute hierarchy's axis members** are `(All)` first, then
+  `[DateDim].[FullDate].&[2024-01-15T00:00:00]` with `LName
+  =[DateDim].[FullDate].[FullDate]`, `LNum=1` and
+  `PARENT_UNIQUE_NAME=[DateDim].[FullDate].[All]`. Excel places axis members by
+  the field's hierarchy and level numbers: rendering the dates in the *user*
+  hierarchy's namespace (level 4) leaves the field empty, and dropping the
+  hierarchy name from `DrilldownLevel({[DateDim].[FullDate].[All]})` makes it
+  list the user hierarchy's years instead.
+
 ## Caveat: tabular ≠ multidimensional
 
 This instance is **tabular**. Multidimensional SSAS date filters key off the

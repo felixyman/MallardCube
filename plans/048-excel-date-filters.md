@@ -140,6 +140,62 @@ connects to it, so every metadata question can be answered by comparison
     (`LEVEL_CARDINALITY`, `HIERARCHY_CARDINALITY`) were tried as 0 ("unknown",
     like the reference) and made no difference; reverted to the real values.
 
+## Findings (session 4 — Date Filters close-out)
+
+**Date Filters are exposed.** A fresh pivot on the key attribute hierarchy
+(`[Date].[Full Date]`) against the proxy renders the dates and its Filter menu
+offers **Date Filters...** — the same item the tabular reference offers on its
+`[DateDim].[FullDate]` field — and the `Date Filter` dialog (equals / is before /
+is after / … + calendar) opens. Four gates had to fall, in order:
+
+1. **`DISCOVER_SCHEMA_ROWSETS` ignored the `SchemaName` restriction.** Excel
+   asks for one rowset's entry to learn its restrictions; we answered with all
+   63 rows, so Excel never learned we support `HIERARCHY_VISIBILITY` and took an
+   older metadata path. It now returns just the requested rowset (verified
+   against the reference: 1 row, same restriction list).
+2. **`PREFERRED_QUERY_PATTERNS` was 0** (reference: 3 = `DrillDownMember` axes +
+   implicit measures). With 0, Excel never asked for the key attribute's
+   `MEMBER_VALUE` at all — the trace showed only `PROPERTY_TYPE=2` cell-property
+   requests. With 3, Excel follows the reference's exact sequence:
+   `DISCOVER_SCHEMA_ROWSETS(SchemaName=MDSCHEMA_HIERARCHIES)` →
+   `MDSCHEMA_HIERARCHIES(HIERARCHY_VISIBILITY=3)` →
+   `MDSCHEMA_PROPERTIES(PROPERTY_NAME=MEMBER_VALUE, PROPERTY_TYPE=5,
+   PROPERTY_VISIBILITY=3)`.
+3. **`MDSCHEMA_PROPERTIES` rows were in the wrong element order.** Excel reads
+   the rowset positionally against the schema: our rows put `PROPERTY_NAME`
+   before `PROPERTY_TYPE`, so it read `PROPERTY_TYPE`'s value (`5`) as
+   `DATA_TYPE` and stamped `memberValueDatatype="5"` on *every* cache hierarchy.
+   Rows now follow the reference's schema order (`… LEVEL_UNIQUE_NAME,
+   PROPERTY_TYPE, PROPERTY_NAME, PROPERTY_CAPTION, DATA_TYPE, PROPERTY_ORIGIN,
+   PROPERTY_IS_VISIBLE`), the schema carries the reference's full column list,
+   `KEY0`/`NAME` carry the level's key type (`(All)`=3, int=20, date=7,
+   string=130), and member-value rows are sorted by hierarchy with `[Measures]`
+   last. The pivot cache then reads exactly like the reference's:
+   `[Date].[Full Date] memberValueDatatype=7 time=1 attribute=1`, flat dims 130,
+   user hierarchy and measures unmarked. (Excel writes the marking on the
+   `REFRESH CUBE` path — the context-menu Refresh — and the workbook now saves
+   normally too; the old "Document not saved" failure is gone.)
+4. **The key attribute hierarchy did not execute as its own hierarchy.** Excel
+   drags the field and sends
+   `DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)`; the
+   parser dropped the hierarchy part of the member reference, so the drill
+   started at the *user* hierarchy's top level and the field rendered years
+   (2020, 2021, …). `DrilldownTarget` now carries the hierarchy, a hierarchy
+   that names a level selects that level, and the axis renders in the attribute
+   hierarchy's own single-level namespace — `(All)` first, then
+   `[Date].[Full Date].&[2020-01-01]` members with `LNum=1` and
+   `PARENT_UNIQUE_NAME=[Date].[Full Date].[All]` — matching the reference's
+   `[DateDim].[FullDate]` member shape. Excel places axis members by the field's
+   hierarchy and level numbers; the user hierarchy's namespace (level 4) left
+   the field empty.
+
+Verified live (Book31): rows `2020-01-01 …`, Filter → Date Filters… →
+`Date Filter (Full Date)`. The reference shows the same menu on the same field.
+**Remaining:** applying a filter through that dialog is blocked by a VM input
+quirk (the dialog accepts the first `SendKeys` burst after `SetForegroundWindow`
+and ignores windows-mcp clicks afterwards), so Excel's date-filter MDX has not
+been captured; the proxy's handling of it is unverified.
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
@@ -164,23 +220,39 @@ connects to it, so every metadata question can be answered by comparison
   key hierarchy's unique name does not collide).
 - Tests/corpus/docs: `[Date].[Date].<level>` references renamed to
   `[Date].[Calendar].<level>`.
+- Session 4 (Date Filters close-out):
+  - `src/xmla/schema_rowsets.rs`: `get_schemas_response` honours the
+    `SchemaName` restriction (one rowset's entry, as the reference does).
+  - `src/xmla/discover/cubes.rs`: `PREFERRED_QUERY_PATTERNS=3` (tabular).
+  - `src/xmla/discover/mdschema_properties.rs`: reference element order + full
+    column list; `KEY0`/`NAME` carry the level's key type; member-value rows
+    sorted by hierarchy with `[Measures]` last and typed `WSTR`.
+  - `src/mdx/parser.rs`: `DrilldownTarget` carries the hierarchy name.
+  - `src/mdx/semantic.rs`: a hierarchy that names a level selects that level and
+    renders flat; `SemanticQuery::key_hierarchy_view`.
+  - `src/execute/axis_members.rs`: `apply_key_hierarchy_view` /
+    `hierarchy_for_view` rewrite the axis into the attribute hierarchy's
+    namespace and prepend its `(All)`.
+  - `src/execute/render.rs`: applies the view in `build_drilldown`.
 
 ## Next
 
-1. **Make Excel type the date field.** The one remaining gate: with the field in
-   a pivot, Excel must write `memberValueDatatype="7"` for `[Date].[Date]` (the
-   reference does). Everything else in the date hierarchy's metadata now matches
-   the reference; the remaining differences are `DIMENSION_MASTER_NAME` vs
-   `DIMENSION_MASTER_UNIQUE_NAME`, `INSTANCE_SELECTION` (0 here, empty there),
-   non-empty GUIDs, and the empty `LEVEL_MASTER_UNIQUE_NAME` / SQL column-name
-   fields we do not emit. Work the list down and watch the cache.
-2. **Work around the save failure** to read that cache: Excel refuses to save a
-   workbook whose pivot contains the date field ("Document not saved"), so the
-   cache definition can only be read for pivots without it. `SaveCopyAs` writes
-   ODF (unusable). Try saving through a different path/format, or infer the flag
-   from the Filter menu instead.
+1. **Make Excel type the date field** — *done* (session 4). The cache reads
+   `memberValueDatatype="7"` for `[Date].[Full Date]`, and the field renders the
+   dates with a Date Filters menu. Remaining metadata deltas noted earlier
+   (`DIMENSION_MASTER_NAME` vs `DIMENSION_MASTER_UNIQUE_NAME`,
+   `INSTANCE_SELECTION`, empty GUIDs, empty `LEVEL_MASTER_UNIQUE_NAME` / SQL
+   column-name fields) were not needed for it.
+2. **Work around the save failure** — *moot*: with the metadata fixed the
+   workbook saves normally, so `SaveAs(path, 51)` + reading
+   `xl/pivotCache/pivotCacheDefinition1.xml` works.
 3. **Then**: Date Filters → capture the MDX they emit (`xmla-trace.jsonl`) and
-   check it against the plan 046 date-window lowering.
+   check it against the plan 046 date-window lowering. **Open**: the menu and
+   dialog are verified, but the dialog's OK could not be activated from the VM
+   harness (input quirk, see session 4), so the emitted MDX is still uncaptured.
+   Next attempt: drive the dialog with a single `SendKeys` burst after
+   `SetForegroundWindow` (`{TAB}`/`{ENTER}`/`%o`) instead of windows-mcp clicks,
+   or run the same gesture against the reference pump and diff.
 4. **`DrilldownMember` drops the un-expanded members** — *fixed* (commits
    `647fe81`, `6a47054`). The query
    `CrossJoin(Hierarchize({DrilldownLevel({[Channel].[Channel].[All]})}),

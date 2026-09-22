@@ -764,6 +764,10 @@ fn parse_axis_level_members(input: &str) -> Vec<(String, String)> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrilldownTarget {
     pub dim: String,
+    /// Hierarchy name from the set argument (`[D].[H].[All]`). A hierarchy that
+    /// names a level — the key attribute hierarchy `[Date].[Full Date]` — drills
+    /// into that level rather than the top one (plan 048).
+    pub hierarchy: Option<String>,
     /// Level-expression argument (`DrilldownLevel(set, [D].[H].[Level])`).
     pub level: Option<String>,
     /// Numeric index argument (`DrilldownLevel(set, , N)`).
@@ -850,6 +854,7 @@ fn parse_drilldown_targets(input: &str) -> Vec<DrilldownTarget> {
             && (toks[2].eq_ignore_ascii_case("all") || toks[2].eq_ignore_ascii_case("(all)"));
         if toks.len() >= 2 && toks[0] != "Measures" {
             let dim = toks[0].clone();
+            let hierarchy = toks.get(1).cloned();
             let level = args.get(1).filter(|a| !a.is_empty()).and_then(|a| {
                 let lv = bracket_tokens(a, 3);
                 (lv.len() == 3).then(|| lv[2].clone())
@@ -860,7 +865,12 @@ fn parse_drilldown_targets(input: &str) -> Vec<DrilldownTarget> {
             if (from_all || level.is_some() || index.is_some())
                 && !out.iter().any(|t: &DrilldownTarget| t.dim == dim)
             {
-                out.push(DrilldownTarget { dim, level, index });
+                out.push(DrilldownTarget {
+                    dim,
+                    hierarchy,
+                    level,
+                    index,
+                });
             }
         }
         pos = close;

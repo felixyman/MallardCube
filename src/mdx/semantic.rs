@@ -547,6 +547,11 @@ pub struct SemanticQuery {
     /// True when the axis is an explicit level set
     /// (`[Dim].[Hier].[Level].Members`) rather than a drilldown.
     pub level_drag: bool,
+    /// Set when the axis hierarchy reference names the key attribute hierarchy
+    /// (`[Date].[Full Date]`). The axis renders in that hierarchy's own
+    /// single-level namespace — (All) + the date members — as the tabular
+    /// reference does (plan 048).
+    pub key_hierarchy_view: Option<String>,
     /// Measure/member names parsed from strtomember() probe (CUBEVALUE metadata query).
     pub metadata_probe_targets: Vec<String>,
     /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
@@ -697,6 +702,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             measures: vec![],
             drilldown_levels: vec![],
             level_drag: false,
+            key_hierarchy_view: None,
             metadata_probe_targets: targets,
             metadata_probe_properties: props,
             member_only_unames: vec![],
@@ -752,6 +758,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
 
     let mut kind = kind;
     let mut level_drag = false;
+    let mut key_hierarchy_view: Option<String> = None;
 
     // A slicer/measure+member-tuple query has no real axis dimension: any
     // dimension referenced in the select tuple must land in the SlicerAxis
@@ -833,15 +840,33 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         if def.levels.is_empty() {
             continue;
         }
+        // A hierarchy reference that names a level is the key attribute
+        // hierarchy (`[Date].[Full Date]`): a single-level hierarchy in the
+        // tabular shape. Drilling it from `(All)` lists exactly that level's
+        // members — the reference's
+        // `DrilldownLevel({[DateDim].[FullDate].[All]})` returns the dates,
+        // never the user hierarchy's years (plan 048).
+        let hierarchy_level = target
+            .hierarchy
+            .as_ref()
+            .and_then(|name| def.levels.iter().position(|l| l.name == *name));
         let level = target
             .level
             .as_ref()
             .and_then(|name| def.levels.iter().position(|l| l.name == *name))
+            .or(hierarchy_level)
             .or(target.index)
             .unwrap_or(0)
             .min(def.levels.len() - 1);
         if drilldown_levels[i].is_none() {
             drilldown_levels[i] = Some(level);
+            if hierarchy_level.is_some() {
+                // Single-level hierarchy: serve it flat, like a level drag.
+                level_drag = true;
+                if def.key_hierarchy_name() == target.hierarchy.as_deref() {
+                    key_hierarchy_view = def.key_hierarchy_unique_name();
+                }
+            }
         }
     }
 
@@ -1025,6 +1050,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         measures: parsed.selected_measures.clone(),
         drilldown_levels,
         level_drag,
+        key_hierarchy_view,
         metadata_probe_targets: vec![],
         metadata_probe_properties: vec![],
         member_only_unames,
@@ -1116,6 +1142,30 @@ mod tests {
             assert_eq!(q.axis_dimensions, vec!["Date"]);
             assert_eq!(q.drilldown_levels, vec![Some(1)], "Quarter is level 1");
             assert!(q.level_drag);
+        });
+    }
+
+    #[test]
+    fn key_attribute_hierarchy_drill_is_a_single_level_hierarchy_view() {
+        // Excel drags the key attribute hierarchy as a field; the drill must
+        // list the dates in that hierarchy's own namespace, never the user
+        // hierarchy's years (plan 048).
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        crate::project::project::with_test_project(p, || {
+            let mdx = "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])";
+            let q = semantic_query_from_mdx(mdx);
+            assert_eq!(q.axis_dimensions, vec!["Date"]);
+            assert_eq!(q.drilldown_levels, vec![Some(3)], "the full-date level");
+            assert!(q.level_drag, "a single-level hierarchy renders flat");
+            assert_eq!(q.key_hierarchy_view.as_deref(), Some("[Date].[Full Date]"));
+            // The user hierarchy keeps its own behaviour.
+            let q = semantic_query_from_mdx(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+            );
+            assert_eq!(q.drilldown_levels, vec![Some(0)]);
+            assert!(!q.level_drag);
+            assert!(q.key_hierarchy_view.is_none());
         });
     }
 

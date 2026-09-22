@@ -600,6 +600,42 @@ const SCHEMA_ROWSET_DATA: &str = r#"          <row>
           </row>
 "#;
 
-pub fn get_schemas_response() -> String {
-    discover_rowset_envelope(UUID_TYPE, SCHEMA_ROW_FIELDS, SCHEMA_ROWSET_DATA)
+pub fn get_schemas_response(schema_name: Option<&str>) -> String {
+    // The `SchemaName` restriction returns a single rowset's entry. Excel uses
+    // it to learn one rowset's restrictions; answering with the full list made
+    // it miss `HIERARCHY_VISIBILITY` and skip the visibility-filtered queries
+    // (plan 048).
+    let data = match schema_name {
+        Some(name) => SCHEMA_ROWSET_DATA
+            .split("</row>")
+            .filter(|chunk| chunk.contains(&format!("<SchemaName>{name}</SchemaName>")))
+            .map(|chunk| format!("{chunk}</row>"))
+            .collect::<String>(),
+        None => SCHEMA_ROWSET_DATA.to_string(),
+    };
+    discover_rowset_envelope(UUID_TYPE, SCHEMA_ROW_FIELDS, &data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_name_restriction_returns_one_rowset() {
+        // Excel asks for a single rowset's entry to learn its restrictions;
+        // answering with the full list made it miss HIERARCHY_VISIBILITY and
+        // skip the visibility-filtered queries (plan 048).
+        let resp = get_schemas_response(Some("MDSCHEMA_HIERARCHIES"));
+        assert_eq!(resp.matches("<row>").count(), 1, "{resp}");
+        assert!(
+            resp.contains("<SchemaName>MDSCHEMA_HIERARCHIES</SchemaName>"),
+            "{resp}"
+        );
+        assert!(resp.contains("<Name>HIERARCHY_VISIBILITY</Name>"), "{resp}");
+        let all = get_schemas_response(None);
+        assert!(
+            all.matches("<row>").count() > 10,
+            "unrestricted keeps the full list"
+        );
+    }
 }

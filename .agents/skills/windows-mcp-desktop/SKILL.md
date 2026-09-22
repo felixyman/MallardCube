@@ -205,6 +205,30 @@ few bytes into the payload; the output is UTF-16.
 - `SaveAs(path, 51)` for an unzip-able xlsx; `SaveCopyAs` follows the default
   format (it wrote an ODF file with an .xlsx name here).
 
+## Excel date-filter dialog (session 4)
+
+- The **Filter → Date Filters...** item appears for a field whose key attribute
+  is date-typed (see the reference oracle skill). It opens a `Date Filter
+  (<field>)` dialog: a condition combo (`equals`, `does not equal`, `is before`,
+  `is before or equal to`, `is after`, …), a date field with a calendar button,
+  a `Whole Days` checkbox, OK/Cancel.
+- **windows-mcp clicks do not reach that dialog** (hover highlights, click does
+  nothing), and neither does the `Shortcut` tool except `escape` (which closes
+  the calendar or the dialog). Keys sent through the **PowerShell tool** do
+  reach it, but only after re-asserting the foreground window and in a single
+  burst:
+  ```powershell
+  # find the dialog handle (EnumWindows on title '*Date Filter*'),
+  # then SetForegroundWindow($dlg) and
+  Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.SendKeys]::SendWait("{TAB}")   # or "%o" / "{ENTER}"
+  ```
+  A second burst after the first was ignored here, and the calendar popup
+  swallows subsequent keys — close it with `escape` first.
+- The combo's dropdown and the calendar render in the dialog's own popup window,
+  so screenshot before choosing; the dialog blocks COM (a pivot query issued
+  while it is open returns nulls).
+
 ## Safety
 
 The endpoint is **unauthenticated on the LAN** and has full system access

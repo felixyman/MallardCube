@@ -450,6 +450,27 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         }
     }
 
+    // The key attribute hierarchy renders as its own single-level hierarchy:
+    // (All) plus the date members. Excel places axis members by the field's
+    // hierarchy and level numbers, so the user hierarchy's namespace
+    // (`[Date].[Calendar].[Full Date]`, level 4) left the field empty (plan 048).
+    let key_view = query.key_hierarchy_view.as_deref().filter(|v| {
+        crate::proxy_project::project()
+            .model
+            .dim_def_opt(dim)
+            .and_then(|d| d.key_hierarchy_unique_name())
+            .as_deref()
+            == Some(*v)
+    });
+    if key_view.is_some()
+        && let Some(def) = crate::proxy_project::project().model.dim_def_opt(dim)
+    {
+        crate::axis_members::apply_key_hierarchy_view(&mut members, def, &query.dim_props, backend);
+        // The (All) root is an ancestor: it carries the branch total and the
+        // drilled-down display flag.
+        num_ancestors = 1;
+    }
+
     // Emit DISPLAY_INFO per the OLE DB for OLAP "Axis Rowsets" definition: the
     // low 16 bits are the number of children of the member, and the high word
     // holds two flags — DRILLED_DOWN (0x10000, a child of this member appears
@@ -498,7 +519,11 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
 
     render_response(
         vec![
-            member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
+            member_list_axis(
+                "Axis0",
+                crate::axis_members::hierarchy_for_view(dim, &query.dim_props, key_view),
+                members,
+            ),
             full_slicer_axis_with_backend(query, backend),
         ],
         cells,

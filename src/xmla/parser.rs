@@ -13,6 +13,12 @@ pub struct Restrictions {
     pub hierarchy_unique_name: Option<String>,
     pub level_unique_name: Option<String>,
     pub property_name: Option<String>,
+    /// `DISCOVER_SCHEMA_ROWSETS` restriction (`SchemaName`, no underscore).
+    /// Excel asks for one rowset's entry to learn its restrictions; answering
+    /// with the whole list makes it miss `HIERARCHY_VISIBILITY` and skip the
+    /// visibility-filtered queries that lead to the key attribute's
+    /// `MEMBER_VALUE` type (plan 048).
+    pub schema_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +26,10 @@ pub enum XmlaRequest {
     DiscoverProperties {
         property_names: Vec<String>,
     },
-    DiscoverSchemaRowsets,
+    DiscoverSchemaRowsets {
+        /// `SchemaName` restriction: return only this rowset's entry.
+        schema_name: Option<String>,
+    },
     DiscoverLiterals,
     DbSchemaCatalogs,
     MdschemaCubes,
@@ -121,6 +130,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                                 restrictions.level_unique_name = Some(text.clone())
                             }
                             b"PROPERTY_NAME" => restrictions.property_name = Some(text.clone()),
+                            b"SchemaName" => restrictions.schema_name = Some(text.clone()),
                             _ => {}
                         }
                     }
@@ -170,7 +180,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 property_names: requested_properties,
             };
         }
-        "DISCOVER_SCHEMA_ROWSETS" => return XmlaRequest::DiscoverSchemaRowsets,
+        "DISCOVER_SCHEMA_ROWSETS" => {
+            return XmlaRequest::DiscoverSchemaRowsets {
+                schema_name: restrictions.schema_name.clone(),
+            };
+        }
         "DISCOVER_LITERALS" => return XmlaRequest::DiscoverLiterals,
         "DBSCHEMA_CATALOGS" => return XmlaRequest::DbSchemaCatalogs,
         "MDSCHEMA_CUBES" => return XmlaRequest::MdschemaCubes,

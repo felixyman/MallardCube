@@ -1502,6 +1502,42 @@ mod tests {
         });
     }
 
+    // The key attribute hierarchy is a single-level hierarchy in the tabular
+    // shape. Excel drags it as a field and drills it from `(All)`: the axis must
+    // list the dates in that hierarchy's own namespace — never the user
+    // hierarchy's years (plan 048).
+    #[test]
+    fn key_attribute_hierarchy_drill_lists_dates_in_its_own_namespace() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(
+                xml.contains("<HierarchyInfo name=\"[Date].[Full Date]\">"),
+                "the axis is the attribute hierarchy"
+            );
+            let infos = axis0_member_infos(&xml);
+            let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
+            assert_eq!(
+                unames.first().copied(),
+                Some("[Date].[Full Date].[All]"),
+                "(All) root first: {unames:?}"
+            );
+            assert!(
+                unames
+                    .iter()
+                    .any(|u| u.starts_with("[Date].[Full Date].&amp;[")),
+                "date members in the attribute hierarchy namespace: {unames:?}"
+            );
+            assert!(
+                !unames.iter().any(|u| u.contains("[Year]")
+                    || u.contains("[Quarter]")
+                    || u.contains("[Month]")),
+                "no user-hierarchy levels: {unames:?}"
+            );
+        });
+    }
+
     // Whole-field "Expand to Month": the axis must include years and quarters
     // (the months' parents), or Excel's hierarchy walk has dangling parents.
     #[test]

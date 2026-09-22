@@ -8,12 +8,15 @@ use crate::xmla::parser::Restrictions;
 // on a field whose MEMBER_VALUE DATA_TYPE is a date type (7 = DBTYPE_DATE, the
 // value the OOXML `memberValueDatatype` note names); the other levels keep
 // their key types (plan 048).
-const DBTYPE_R8: i32 = 5;
 const DBTYPE_I4: i32 = 3;
+const DBTYPE_UI8: i32 = 20;
 const DBTYPE_DATE: i32 = 7;
 const DBTYPE_WSTR: i32 = 130;
 
-/// MEMBER_VALUE data type for one level: the level's key type.
+/// MEMBER_VALUE / KEY0 data type for one level: the level's key type. The
+/// tabular reference reports integer keys as `DBTYPE_UI8` (20) and the date
+/// leaf as `DBTYPE_DATE` (7); Excel copies the key attribute's type into the
+/// pivot cache's `memberValueDatatype` (plan 048).
 fn level_member_value_type(d: &DimensionDef, level: &LevelDef) -> i32 {
     if !d.is_date_role {
         return DBTYPE_WSTR;
@@ -22,7 +25,7 @@ fn level_member_value_type(d: &DimensionDef, level: &LevelDef) -> i32 {
     if Some(level.level_number) == deepest {
         DBTYPE_DATE
     } else {
-        DBTYPE_I4
+        DBTYPE_UI8
     }
 }
 
@@ -77,13 +80,22 @@ const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="C
                 <xsd:element sql:field="HIERARCHY_UNIQUE_NAME" name="HIERARCHY_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="LEVEL_UNIQUE_NAME" name="LEVEL_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="MEMBER_UNIQUE_NAME" name="MEMBER_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_TYPE" name="PROPERTY_TYPE" type="xsd:short" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_NAME" name="PROPERTY_NAME" type="xsd:string"/>
                 <xsd:element sql:field="PROPERTY_CAPTION" name="PROPERTY_CAPTION" type="xsd:string" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_DESCRIPTION" name="PROPERTY_DESCRIPTION" type="xsd:string" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_TYPE" name="PROPERTY_TYPE" type="xsd:short" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_CONTENT_TYPE" name="PROPERTY_CONTENT_TYPE" type="xsd:short" minOccurs="0"/>
                 <xsd:element sql:field="DATA_TYPE" name="DATA_TYPE" type="xsd:unsignedShort" minOccurs="0"/>
+                <xsd:element sql:field="CHARACTER_MAXIMUM_LENGTH" name="CHARACTER_MAXIMUM_LENGTH" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="CHARACTER_OCTET_LENGTH" name="CHARACTER_OCTET_LENGTH" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="NUMERIC_PRECISION" name="NUMERIC_PRECISION" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="NUMERIC_SCALE" name="NUMERIC_SCALE" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="DESCRIPTION" name="DESCRIPTION" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_CONTENT_TYPE" name="PROPERTY_CONTENT_TYPE" type="xsd:short" minOccurs="0"/>
+                <xsd:element sql:field="SQL_COLUMN_NAME" name="SQL_COLUMN_NAME" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="LANGUAGE" name="LANGUAGE" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_ORIGIN" name="PROPERTY_ORIGIN" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_ATTRIBUTE_HIERARCHY_NAME" name="PROPERTY_ATTRIBUTE_HIERARCHY_NAME" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_CARDINALITY" name="PROPERTY_CARDINALITY" type="xsd:unsignedInt" minOccurs="0"/>
+                <xsd:element sql:field="MIME_TYPE" name="MIME_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_IS_VISIBLE" name="PROPERTY_IS_VISIBLE" type="xsd:boolean" minOccurs="0"/>"#;
 
 /// Dimension/hierarchy/level coordinates a member-property row is emitted for.
@@ -114,10 +126,9 @@ fn member_property_row(
             <DIMENSION_UNIQUE_NAME>{dim}</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_UNIQUE_NAME>{hier}</HIERARCHY_UNIQUE_NAME>
             <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
-            <PROPERTY_NAME>{prop_name}</PROPERTY_NAME>
-            <PROPERTY_CAPTION>{prop_name}</PROPERTY_CAPTION>
             <PROPERTY_TYPE>{property_type}</PROPERTY_TYPE>
-            <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>{data_type_xml}
+            <PROPERTY_NAME>{prop_name}</PROPERTY_NAME>
+            <PROPERTY_CAPTION>{prop_name}</PROPERTY_CAPTION>{data_type_xml}
             <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
             <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>"#,
@@ -194,20 +205,39 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
                 if !property_requested(restrictions, name) {
                     continue;
                 }
+                // KEY0 carries the level's key type too — that is where Excel
+                // reads the key attribute's type from when it writes
+                // `memberValueDatatype` into the pivot cache (plan 048). The
+                // `(All)` level reports I4 for KEY0 but WSTR for MEMBER_VALUE,
+                // as the reference does.
+                let is_all = is_all_level(d, &level);
+                let data_type = if name == "MEMBER_VALUE" && is_all {
+                    data_type
+                } else if is_all {
+                    DBTYPE_I4
+                } else {
+                    data_type
+                };
                 out.push_str(&member_property_row(
                     catalog,
                     cube,
                     &coords,
                     name,
                     5,
-                    (name == "MEMBER_VALUE").then_some(data_type),
+                    Some(data_type),
                     origin,
                 ));
                 out.push('\n');
             }
             if is_all_level(d, &level) && property_requested(restrictions, "NAME") {
                 out.push_str(&member_property_row(
-                    catalog, cube, &coords, "NAME", 5, None, origin,
+                    catalog,
+                    cube,
+                    &coords,
+                    "NAME",
+                    5,
+                    Some(DBTYPE_WSTR),
+                    origin,
                 ));
                 out.push('\n');
             }
@@ -236,7 +266,7 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
                 &measures_coords,
                 name,
                 5,
-                (name == "MEMBER_VALUE").then_some(DBTYPE_R8),
+                (name == "MEMBER_VALUE").then_some(DBTYPE_WSTR),
                 2,
             ));
             out.push('\n');
@@ -268,9 +298,9 @@ fn system_property_rows() -> String {
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
+            <PROPERTY_TYPE>2</PROPERTY_TYPE>
             <PROPERTY_NAME>{}</PROPERTY_NAME>
             <PROPERTY_CAPTION>{}</PROPERTY_CAPTION>
-            <PROPERTY_TYPE>2</PROPERTY_TYPE>
             <PROPERTY_CONTENT_TYPE>{}</PROPERTY_CONTENT_TYPE>
           </row>
 "#,
@@ -287,9 +317,45 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
     let cube = &project.config.cube;
     let mut out = String::new();
 
-    // [Measures] MEMBER_VALUE row (special case). Excel's cache build expects
-    // this row to be present; removing it made the key-attribute marking in
-    // the pivot cache definition disappear (plan 048).
+    // The reference lists member-value rows sorted by hierarchy and Excel's
+    // cache marking (memberValueDatatype) follows that order; emitting
+    // [Measures] first made every hierarchy inherit its type (plan 048).
+    let mut targets: Vec<(String, String, String, i32, u32)> = Vec::new();
+    for d in &model.dimensions {
+        let dim = d.dimension_unique_name();
+        for (hier, level, data_type) in member_value_targets(d) {
+            if !matches_restrictions(restrictions, &dim, &hier, &level) {
+                continue;
+            }
+            let origin = if !d.levels.is_empty() && hier == d.hierarchy_unique_name() {
+                1
+            } else {
+                2
+            };
+            targets.push((hier, level, dim.clone(), data_type, origin));
+        }
+    }
+    targets.sort_by(|a, b| a.0.cmp(&b.0));
+    for (hier, level, dim, data_type, origin) in targets {
+        out.push_str(&format!(
+            r#"          <row>
+            <CATALOG_NAME>{catalog}</CATALOG_NAME>
+            <CUBE_NAME>{cube}</CUBE_NAME>
+            <DIMENSION_UNIQUE_NAME>{dim}</DIMENSION_UNIQUE_NAME>
+            <HIERARCHY_UNIQUE_NAME>{hier}</HIERARCHY_UNIQUE_NAME>
+            <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
+            <PROPERTY_TYPE>5</PROPERTY_TYPE>
+            <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
+            <PROPERTY_CAPTION>MEMBER_VALUE</PROPERTY_CAPTION>
+            <DATA_TYPE>{data_type}</DATA_TYPE>
+            <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
+            <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
+          </row>
+"#,
+        ));
+    }
+
+    // [Measures] last, as the reference does, and typed WSTR there.
     if property_requested(restrictions, "MEMBER_VALUE")
         && matches_restrictions(
             restrictions,
@@ -305,48 +371,16 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
             <HIERARCHY_UNIQUE_NAME>[Measures]</HIERARCHY_UNIQUE_NAME>
             <LEVEL_UNIQUE_NAME>[Measures].[MeasuresLevel]</LEVEL_UNIQUE_NAME>
+            <PROPERTY_TYPE>5</PROPERTY_TYPE>
             <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
             <PROPERTY_CAPTION>MEMBER_VALUE</PROPERTY_CAPTION>
-            <PROPERTY_TYPE>5</PROPERTY_TYPE>
-            <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>
             <DATA_TYPE>{data_type}</DATA_TYPE>
             <PROPERTY_ORIGIN>2</PROPERTY_ORIGIN>
             <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
           </row>
 "#,
-            data_type = DBTYPE_R8,
+            data_type = DBTYPE_WSTR,
         ));
-    }
-
-    for d in &model.dimensions {
-        let dim = &d.dimension_unique_name();
-        for (hier, level, data_type) in member_value_targets(d) {
-            if !matches_restrictions(restrictions, dim, &hier, &level) {
-                continue;
-            }
-            let origin = if !d.levels.is_empty() && hier == d.hierarchy_unique_name() {
-                1
-            } else {
-                2
-            };
-            out.push_str(&format!(
-                r#"          <row>
-            <CATALOG_NAME>{catalog}</CATALOG_NAME>
-            <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>{dim}</DIMENSION_UNIQUE_NAME>
-            <HIERARCHY_UNIQUE_NAME>{hier}</HIERARCHY_UNIQUE_NAME>
-            <LEVEL_UNIQUE_NAME>{level}</LEVEL_UNIQUE_NAME>
-            <PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>
-            <PROPERTY_CAPTION>MEMBER_VALUE</PROPERTY_CAPTION>
-            <PROPERTY_TYPE>5</PROPERTY_TYPE>
-            <PROPERTY_CONTENT_TYPE>0</PROPERTY_CONTENT_TYPE>
-            <DATA_TYPE>{data_type}</DATA_TYPE>
-            <PROPERTY_ORIGIN>{origin}</PROPERTY_ORIGIN>
-            <PROPERTY_IS_VISIBLE>true</PROPERTY_IS_VISIBLE>
-          </row>
-"#,
-            ));
-        }
     }
 
     out
@@ -441,6 +475,13 @@ mod tests {
                 row_for(&resp, "[Date].[Calendar].[Year]", "NAME").is_empty(),
                 "NAME should only be on the (All) level"
             );
+            // KEY0 carries the level's key type — Excel reads the key
+            // attribute's type from here for the cache's memberValueDatatype.
+            let date_key = row_for(&resp, "[Date].[Calendar].[Full Date]", "KEY0");
+            assert!(date_key.contains("<DATA_TYPE>7</DATA_TYPE>"), "{date_key}");
+            let year_key = row_for(&resp, "[Date].[Calendar].[Year]", "KEY0");
+            assert!(year_key.contains("<DATA_TYPE>20</DATA_TYPE>"), "{year_key}");
+            assert!(all_row.contains("<DATA_TYPE>130</DATA_TYPE>"), "{all_row}");
         });
     }
 

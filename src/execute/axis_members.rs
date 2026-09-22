@@ -586,6 +586,87 @@ pub(crate) fn hierarchy_for(dim: &str, requested: &[String]) -> cellset::Hierarc
     }
 }
 
+/// `hierarchy_for` with the key attribute hierarchy's name when the axis is a
+/// key-attribute-hierarchy query (see `apply_key_hierarchy_view`).
+pub(crate) fn hierarchy_for_view(
+    dim: &str,
+    requested: &[String],
+    view: Option<&str>,
+) -> cellset::HierarchyConfig {
+    let mut cfg = hierarchy_for(dim, requested);
+    if let Some(v) = view {
+        cfg.name = v.to_string();
+        for (_, name, _) in cfg.dim_prop_decls.iter_mut() {
+            // Declarations are `<hierarchy>.[TAG]`; swap the hierarchy prefix.
+            if let Some(idx) = name.find(".[") {
+                *name = format!("{v}{}", &name[idx..]);
+            }
+        }
+    }
+    cfg
+}
+
+/// Rewrite flat key-attribute-hierarchy members into that hierarchy's own
+/// namespace and prepend its `(All)` root. Tabular SSAS exposes the full-date
+/// level as a single-level hierarchy beside the user hierarchy; Excel places
+/// axis members by the field's hierarchy and level numbers, so rendering the
+/// dates as `[Date].[Calendar].[Full Date]` (level 4) leaves the field empty
+/// (plan 048).
+pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
+    members: &mut Vec<cellset::MemberConfig>,
+    dim: &crate::engine::model::DimensionDef,
+    requested: &[String],
+    backend: &B,
+) {
+    let (Some(view), Some(level)) = (dim.key_hierarchy_unique_name(), dim.key_level()) else {
+        return;
+    };
+    let level_uname = dim.key_level_unique_name().unwrap_or_default();
+    let all_uname = format!("{view}.[All]");
+    let user_level_prefix = format!("{}.[{}]", dim.hierarchy_unique_name(), level.name);
+    for m in members.iter_mut() {
+        m.hierarchy = view.clone();
+        m.u_name = m.u_name.replace(&user_level_prefix, &view);
+        m.l_name = level_uname.clone();
+        m.l_num = 1;
+        for (tag, value) in m.dim_props.iter_mut() {
+            match tag.as_str() {
+                "HIERARCHY_UNIQUE_NAME" => *value = view.clone(),
+                "PARENT_UNIQUE_NAME" => *value = all_uname.clone(),
+                "PARENT_LEVEL" => *value = "0".into(),
+                "MEMBER_UNIQUE_NAME" => *value = m.u_name.clone(),
+                _ => {}
+            }
+        }
+    }
+    members.insert(0, key_hierarchy_all_member(dim, requested, backend));
+}
+
+fn key_hierarchy_all_member<B: QueryBackend + ?Sized>(
+    dim: &crate::engine::model::DimensionDef,
+    requested: &[String],
+    backend: &B,
+) -> cellset::MemberConfig {
+    let view = dim.key_hierarchy_unique_name().unwrap_or_default();
+    let cc = dim.key_level().map(|l| l.cardinality).unwrap_or(0);
+    let mut props = dim_props_all(dim, requested, backend);
+    for (tag, value) in props.iter_mut() {
+        if tag == "HIERARCHY_UNIQUE_NAME" {
+            *value = view.clone();
+        }
+    }
+    cellset::MemberConfig {
+        hierarchy: view.clone(),
+        u_name: format!("{view}.[All]"),
+        caption: "All".into(),
+        l_name: dim.key_all_level_unique_name().unwrap_or_default(),
+        l_num: 0,
+        display_info: cc.min(65535),
+        children_cardinality: cc,
+        dim_props: props,
+    }
+}
+
 pub(crate) fn leaf_members_from(
     dim: &str,
     names: &[String],

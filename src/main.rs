@@ -831,8 +831,8 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::DiscoverSchemaRowsets => {
-            let resp = schema_rowsets::get_schemas_response();
+        XmlaRequest::DiscoverSchemaRowsets { schema_name } => {
+            let resp = schema_rowsets::get_schemas_response(schema_name.as_deref());
             mallardcube::xmla_trace::trace_request(
                 "DiscoverSchemaRowsets",
                 body,
