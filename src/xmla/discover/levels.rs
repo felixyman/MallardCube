@@ -1,4 +1,5 @@
 use crate::proxy_project;
+use crate::xmla::parser::Restrictions;
 use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
 
 // OLE DB DBTYPE values (oledb.h / mdstypes.h).
@@ -59,12 +60,18 @@ const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALO
                 <xsd:element sql:field="LEVEL_ORIGIN" name="LEVEL_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_levels_response() -> String {
+pub fn get_levels_response(restrictions: &Restrictions) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let mut rows = String::new();
 
     // MeasuresLevel (special case, not in model)
+    if super::coordinates_match(
+        restrictions,
+        "[Measures]",
+        Some("[Measures]"),
+        Some("[Measures].[MeasuresLevel]"),
+    ) {
     rows.push_str(&format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -90,6 +97,7 @@ pub fn get_levels_response() -> String {
         catalog = project.config.catalog,
         cube = project.config.cube,
     ));
+    }
 
     for (i, d) in model.dimensions.iter().enumerate() {
         let base_guid = 30 + i as u32 * 2;
@@ -97,6 +105,12 @@ pub fn get_levels_response() -> String {
         // (All) level. A flat dimension exposes a single attribute hierarchy
         // (origin 2); a date role's user hierarchy is origin 1.
         let all_origin = if d.levels.is_empty() { 2 } else { 1 };
+        if super::coordinates_match(
+            restrictions,
+            &d.dimension_unique_name(),
+            Some(&d.hierarchy_unique_name()),
+            Some(&d.all_level_unique_name()),
+        ) {
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -129,6 +143,7 @@ pub fn get_levels_response() -> String {
             catalog = project.config.catalog,
             cube = project.config.cube,
         ));
+        }
 
         if !d.levels.is_empty() {
             // Levels of the user hierarchy: LEVEL_ORIGIN 1 (MS-SSAS bitmask:
@@ -141,6 +156,14 @@ pub fn get_levels_response() -> String {
                 let level_num = level.level_number + 1; // (All) is 0, first level is 1
                 let level_unique = format!("{}.[{}]", d.hierarchy_unique_name(), level.name);
                 let level_dbt = level_db_type(d, level);
+                if !super::coordinates_match(
+                    restrictions,
+                    &d.dimension_unique_name(),
+                    Some(&d.hierarchy_unique_name()),
+                    Some(&level_unique),
+                ) {
+                    continue;
+                }
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -179,6 +202,12 @@ pub fn get_levels_response() -> String {
             }
         } else {
             // Leaf level (single-level hierarchy, current behavior)
+            if super::coordinates_match(
+                restrictions,
+                &d.dimension_unique_name(),
+                Some(&d.hierarchy_unique_name()),
+                Some(&d.leaf_level_unique_name()),
+            ) {
             rows.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -217,6 +246,7 @@ pub fn get_levels_response() -> String {
                 catalog = project.config.catalog,
                 cube = project.config.cube,
             ));
+            }
         }
 
         // The key attribute hierarchy of a date role: (All) + the full-date
@@ -228,7 +258,14 @@ pub fn get_levels_response() -> String {
         if let (Some(key_name), Some(level)) = (d.key_hierarchy_name(), d.key_level()) {
             let key_hier_u = format!("[{}].[{}]", d.caption, key_name);
             let level_unique = format!("{key_hier_u}.[{}]", level.name);
+            let key_all_unique = format!("{key_hier_u}.[{}]", d.all_level_name);
             let cardinality = level.cardinality.max(1);
+            if super::coordinates_match(
+                restrictions,
+                &d.dimension_unique_name(),
+                Some(&key_hier_u),
+                Some(&key_all_unique),
+            ) {
             rows.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -251,7 +288,24 @@ pub fn get_levels_response() -> String {
             <LEVEL_ORIGIN>2</LEVEL_ORIGIN>
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
-          <row>
+"#,
+                all_name = xml_escape(&d.all_level_name),
+                dim_u = xml_escape(&d.dimension_unique_name()),
+                hier_u = xml_escape(&key_hier_u),
+                guid_all = base_guid + 8,
+                all_dbtype = DBTYPE_I4,
+                catalog = project.config.catalog,
+                cube = project.config.cube,
+            ));
+            }
+            if super::coordinates_match(
+                restrictions,
+                &d.dimension_unique_name(),
+                Some(&key_hier_u),
+                Some(&level_unique),
+            ) {
+            rows.push_str(&format!(
+                r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
@@ -274,19 +328,17 @@ pub fn get_levels_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-                all_name = xml_escape(&d.all_level_name),
                 lname = xml_escape(&level.name),
                 lunique = xml_escape(&level_unique),
                 cardinality = cardinality,
                 level_dbtype = DBTYPE_DATE,
-                all_dbtype = DBTYPE_I4,
-                guid_all = base_guid + 8,
                 guid_level = base_guid + 9,
                 dim_u = xml_escape(&d.dimension_unique_name()),
                 hier_u = xml_escape(&key_hier_u),
                 catalog = project.config.catalog,
                 cube = project.config.cube,
             ));
+            }
         }
     }
 
@@ -297,12 +349,13 @@ pub fn get_levels_response() -> String {
 mod tests {
     use crate::project::project::ProxyProject;
     use crate::project::project::with_test_project;
+    use crate::xmla::parser::Restrictions;
 
     #[test]
     fn date_dim_has_five_levels() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_levels_response();
+            let resp = super::get_levels_response(&Restrictions::default());
             let date_section = &resp[resp.find("[Date]").unwrap_or(0)..];
             let year = date_section.contains("<LEVEL_NAME>Year</LEVEL_NAME>");
             let quarter = date_section.contains("<LEVEL_NAME>Quarter</LEVEL_NAME>");
@@ -395,7 +448,7 @@ mod tests {
     fn single_dim_has_two_levels() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_levels_response();
+            let resp = super::get_levels_response(&Restrictions::default());
             let cat_section = resp
                 .split("<DIMENSION_UNIQUE_NAME>[Category]")
                 .collect::<Vec<_>>();

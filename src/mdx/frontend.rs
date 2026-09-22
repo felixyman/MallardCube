@@ -526,6 +526,110 @@ pub fn axis_dimension_ids(sel: &Select) -> Vec<String> {
     out
 }
 
+/// One requested axis: the dimensions in order plus the measures cross-joined
+/// on it. Excel cross-joins the Values area with the field on the same edge
+/// (`CrossJoin(<hierarchy>, {[Measures].[Revenue],[Measures].[Units]})`), so the
+/// response has to keep them on that axis — splitting them onto separate axes
+/// breaks every layout with a field in Columns or measures in Rows (plan 049).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AxisSpec {
+    /// `ON COLUMNS` = 0, `ON ROWS` = 1.
+    pub ordinal: u32,
+    /// Dimension ids on this axis, in member order.
+    pub dims: Vec<String>,
+    /// Measures on this axis, in member order.
+    pub measures: Vec<String>,
+    /// The same members in the order they appear in the axis tuples, so a
+    /// cross-joined measure lands on the side the statement put it.
+    pub slots: Vec<AxisSlot>,
+}
+
+/// A member slot of an axis: a dimension or the measures set.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AxisSlot {
+    Dim(String),
+    Measure(String),
+}
+
+impl AxisSpec {
+    /// Does this axis carry both a dimension and the measures (a cross-join)?
+    pub fn has_both(&self) -> bool {
+        !self.dims.is_empty() && !self.measures.is_empty()
+    }
+
+    /// Are the measures the first member of the axis tuples?
+    pub fn measures_first(&self) -> bool {
+        matches!(self.slots.first(), Some(AxisSlot::Measure(_)))
+    }
+}
+
+/// The requested axes, in ordinal order, with their dimensions and measures.
+pub fn axis_specs(sel: &Select) -> Vec<AxisSpec> {
+    let mut axes: Vec<&Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
+    let mut out: Vec<AxisSpec> = Vec::new();
+    for axis in axes {
+        let mut spec = AxisSpec {
+            ordinal: axis.ordinal,
+            ..AxisSpec::default()
+        };
+        for expr in &axis.exprs {
+            collect_slots(expr, &mut spec);
+        }
+        out.push(spec);
+    }
+    out
+}
+
+/// Collect an axis expression's dimension and measure members in tuple order.
+fn collect_slots(expr: &Expr, spec: &mut AxisSpec) {
+    match expr {
+        Expr::Measure(name) => {
+            if !spec.measures.iter().any(|m| m == name) {
+                spec.measures.push(name.clone());
+                spec.slots.push(AxisSlot::Measure(name.clone()));
+            }
+        }
+        Expr::Member(m) => {
+            let dim = m.dim();
+            if dim.eq_ignore_ascii_case("Measures") {
+                // `[Measures].[X]` written as a plain member reference.
+                if let Some(name) = m.parts.get(1)
+                    && !spec.measures.iter().any(|n| n == name)
+                {
+                    spec.measures.push(name.clone());
+                    spec.slots.push(AxisSlot::Measure(name.clone()));
+                }
+            } else if !dim.is_empty() && !spec.dims.iter().any(|d| d == dim) {
+                spec.dims.push(dim.to_string());
+                spec.slots.push(AxisSlot::Dim(dim.to_string()));
+            }
+        }
+        Expr::Range(a, b) => {
+            collect_slots(a, spec);
+            collect_slots(b, spec);
+        }
+        Expr::Set(items) | Expr::Tuple(items) => {
+            for item in items {
+                collect_slots(item, spec);
+            }
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_slots(arg, spec);
+            }
+        }
+        Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => {
+            collect_slots(inner, spec)
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_slots(lhs, spec);
+            collect_slots(rhs, spec);
+        }
+        _ => {}
+    }
+}
+
 fn collect_dims(expr: &Expr, out: &mut Vec<String>) {
     match expr {
         Expr::Member(m) => {

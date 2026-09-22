@@ -563,6 +563,10 @@ pub struct SemanticQuery {
     pub cchildren_leaf_name: Option<String>,
     pub row_dimension: Option<String>,
     pub axis_dimensions: Vec<String>,
+    /// The requested axes with their dimensions and measures, in ordinal order
+    /// (plan 049). `axis_dimensions` is the flattened view; this keeps which
+    /// edge a dimension (and the measures) belongs to.
+    pub axis_specs: Vec<crate::mdx::frontend::AxisSpec>,
     pub slicers: Vec<SlicerSelection>,
     pub excluded_members: Vec<ExcludedMember>,
     pub drilldown_member_hierarchy: Option<String>,
@@ -725,6 +729,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             cchildren_leaf_name: None,
             row_dimension: None,
             axis_dimensions: vec![],
+            axis_specs: vec![],
             slicers: vec![],
             excluded_members: vec![],
             drilldown_member_hierarchy: None,
@@ -1111,6 +1116,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .find(|id| project.model.dim_def_opt(id).is_some())
             .cloned(),
         axis_dimensions: axis_dims,
+        axis_specs: parsed.axis_specs.clone(),
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parsed
             .excluded_members

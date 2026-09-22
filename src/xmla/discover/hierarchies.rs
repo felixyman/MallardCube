@@ -1,5 +1,6 @@
 use crate::proxy_project;
 use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
+use crate::xmla::parser::Restrictions;
 
 const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
@@ -29,12 +30,13 @@ const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="STRUCTURE_TYPE" name="STRUCTURE_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_hierarchies_response() -> String {
+pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let mut rows = String::new();
 
     // Measures hierarchy (special case, not in model)
+    if super::coordinates_match(restrictions, "[Measures]", Some("[Measures]"), None) {
     rows.push_str(&format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -63,6 +65,7 @@ pub fn get_hierarchies_response() -> String {
         catalog = project.config.catalog,
         cube = project.config.cube,
     ));
+    }
 
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
@@ -125,18 +128,26 @@ pub fn get_hierarchies_response() -> String {
         // The user hierarchy of a leveled dimension; the single attribute
         // hierarchy of a flat one.
         let user_origin = if !d.levels.is_empty() { 1 } else { 2 };
-        rows.push_str(&hier_row(
-            guid_base,
+        let user_hier = format!("[{}].[{}]", d.caption, d.hierarchy_name);
+        if super::coordinates_match(
+            restrictions,
             &d.dimension_unique_name(),
-            &d.caption,
-            &d.hierarchy_name,
-            dim_type,
-            user_origin,
-            d.cardinality_hint,
-            1,
-            &d.all_member_unique_name(),
-            d.visible,
-        ));
+            Some(&user_hier),
+            None,
+        ) {
+            rows.push_str(&hier_row(
+                guid_base,
+                &d.dimension_unique_name(),
+                &d.caption,
+                &d.hierarchy_name,
+                dim_type,
+                user_origin,
+                d.cardinality_hint,
+                1,
+                &d.all_member_unique_name(),
+                d.visible,
+            ));
+        }
 
         // A date role's full-date level is exposed as the dimension's key
         // attribute hierarchy beside the user hierarchy (SSAS shape). Excel
@@ -149,6 +160,13 @@ pub fn get_hierarchies_response() -> String {
         // Excel wrote `memberValueDatatype="5"` (a double fallback) instead of
         // the date type 7 the level advertises.
         if let (Some(name), Some(level)) = (d.key_hierarchy_name(), d.key_level()) {
+            let key_hier = format!("[{}].[{}]", d.caption, name);
+            if super::coordinates_match(
+                restrictions,
+                &d.dimension_unique_name(),
+                Some(&key_hier),
+                None,
+            ) {
             rows.push_str(&hier_row(
                 guid_base + 1,
                 &d.dimension_unique_name(),
@@ -161,6 +179,7 @@ pub fn get_hierarchies_response() -> String {
                 &format!("[{}].[{}].[All]", d.caption, name),
                 d.visible,
             ));
+            }
         }
     }
 
@@ -171,6 +190,7 @@ pub fn get_hierarchies_response() -> String {
 mod tests {
     use crate::project::project::ProxyProject;
     use crate::project::project::with_test_project;
+    use crate::xmla::parser::Restrictions;
 
     #[test]
     fn date_dim_exposes_key_attribute_hierarchy() {
@@ -181,7 +201,7 @@ mod tests {
         // its Date Filters (plan 048).
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_hierarchies_response();
+            let resp = super::get_hierarchies_response(&Restrictions::default());
             assert!(
                 resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Calendar]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
@@ -215,7 +235,7 @@ mod tests {
     fn regular_dim_has_default_origin() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_hierarchies_response();
+            let resp = super::get_hierarchies_response(&Restrictions::default());
             // Category hierarchy should have HIERARCHY_ORIGIN=2, DIMENSION_TYPE=3
             assert!(
                 resp.contains("<HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>"),

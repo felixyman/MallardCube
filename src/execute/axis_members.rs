@@ -474,16 +474,6 @@ pub(crate) fn empty_slicer_axis() -> cellset::AxisConfig {
     }
 }
 
-pub(crate) fn measures_axis_for_query(query: &SemanticQuery) -> cellset::AxisConfig {
-    cellset::AxisConfig {
-        name: "Axis0".into(),
-        hierarchies: vec![measures_hierarchy()],
-        tuples: vec![cellset::TupleConfig {
-            members: vec![measures_total_member_for_query(query)],
-        }],
-    }
-}
-
 pub(crate) fn measures_hierarchy() -> cellset::HierarchyConfig {
     cellset::HierarchyConfig {
         name: MEASURES_HIER.into(),

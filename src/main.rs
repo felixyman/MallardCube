@@ -870,15 +870,15 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaHierarchies => {
+        XmlaRequest::MdschemaHierarchies { restrictions } => {
             println!("📥 Hierarchies");
-            let resp = hierarchies::get_hierarchies_response();
+            let resp = hierarchies::get_hierarchies_response(restrictions);
             mallardcube::xmla_trace::trace_request("MdschemaHierarchies", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaLevels => {
+        XmlaRequest::MdschemaLevels { restrictions } => {
             println!("📥 Levels");
-            let resp = levels::get_levels_response();
+            let resp = levels::get_levels_response(restrictions);
             mallardcube::xmla_trace::trace_request("MdschemaLevels", body, &resp, None, None);
             resp
         }

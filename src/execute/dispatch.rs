@@ -715,29 +715,36 @@ mod tests {
         });
     }
 
+    /// The reference shape for `DrilldownMember(CrossJoin({All, members},
+    /// {(child.All)}), {-{excluded}}, child)`: the root `(All, All)` tuple, then
+    /// per parent its own `(parent, All)` aggregate followed by the children —
+    /// a collapsed parent keeps only its aggregate (plan 049).
     fn collapse_first_dimension(sql: &str, excluded: &str) -> (Vec<Vec<String>>, Vec<f64>) {
         let rows = Backend::test_fixture().query_pairs(sql);
         let mut tuples = Vec::new();
         let mut values = Vec::new();
-        let mut i = 0;
+        let grand_total: f64 = rows.iter().map(|(_, _, v)| *v).sum();
+        tuples.push(vec!["All".to_string(), "All".to_string()]);
+        values.push(grand_total);
 
+        let mut i = 0;
         while i < rows.len() {
-            let (first, second, value) = &rows[i];
-            if first == excluded {
-                let mut total = *value;
+            let parent = rows[i].0.clone();
+            let start = i;
+            let mut total = 0.0;
+            while i < rows.len() && rows[i].0 == parent {
+                total += rows[i].2;
                 i += 1;
-                while i < rows.len() && rows[i].0 == *first {
-                    total += rows[i].2;
-                    i += 1;
-                }
-                tuples.push(vec![first.clone(), "All".to_string()]);
-                values.push(total);
+            }
+            tuples.push(vec![parent.clone(), "All".to_string()]);
+            values.push(total);
+            if parent == excluded {
                 continue;
             }
-
-            tuples.push(vec![first.clone(), second.clone()]);
-            values.push(*value);
-            i += 1;
+            for (_, second, value) in &rows[start..i] {
+                tuples.push(vec![parent.clone(), second.clone()]);
+                values.push(*value);
+            }
         }
 
         (tuples, values)
@@ -1909,7 +1916,10 @@ mod tests {
             let xml = get_execute_statement_response(
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Calendar].[Quarter].Members ON ROWS FROM [Sales]",
             );
-            let infos = axis0_member_infos(&xml);
+            // The measures sit on Axis0 (the edge the statement asked for), so
+            // the quarter members are Axis1 (plan 049).
+            assert_eq!(axis0_member_infos(&xml).len(), 1, "measures axis");
+            let infos = axis_member_infos(&xml, "Axis1");
             let quarters = data_quarter_keys();
             assert_eq!(
                 infos.len(),
@@ -1945,7 +1955,8 @@ mod tests {
             let xml = get_execute_statement_response(
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, [Date].[Calendar].[Month].Members ON ROWS FROM [Sales]",
             );
-            let infos = axis0_member_infos(&xml);
+            assert_eq!(axis0_member_infos(&xml).len(), 1, "measures axis");
+            let infos = axis_member_infos(&xml, "Axis1");
             assert_eq!(
                 infos.len(),
                 data_month_keys().len(),
@@ -3552,6 +3563,86 @@ mod tests {
         });
     }
 
+    // Plan 049: Excel cross-joins the Values area with whatever field sits on
+    // the same edge. The response must keep both on that axis — splitting the
+    // measures onto their own axis broke every layout with a field in Columns
+    // or measures in Rows.
+    #[test]
+    fn crossjoined_measures_stay_on_the_requested_axis() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue],[Measures].[Units]}) ON COLUMNS FROM [Sales]",
+            );
+            let tuples = axis_tuple_captions(&xml, "Axis0");
+            assert_eq!(tuples.len(), (data_year_keys().len() + 1) * 2, "years × measures");
+            assert_eq!(tuples[0], vec!["All", "Revenue"]);
+            assert_eq!(tuples[1], vec!["All", "Units"]);
+            assert_eq!(tuples[2], vec!["2020", "Revenue"]);
+            assert_eq!(cell_values(&xml).len(), tuples.len());
+            assert!(
+                !xml.contains(r#"<AxisInfo name="Axis1">"#),
+                "no separate measures axis: {xml}"
+            );
+        });
+    }
+
+    // Plan 049: a field in Columns with another in Rows is a cross-tab — one
+    // cellset axis per requested edge, each with its (All) member first, and
+    // cells ordered row-major with the first axis varying fastest.
+    #[test]
+    fn two_axis_cross_tab_keeps_one_axis_per_edge() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON COLUMNS, NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS FROM [Sales]",
+            );
+            let cols = axis_tuple_captions(&xml, "Axis0");
+            let rows = axis_tuple_captions(&xml, "Axis1");
+            assert_eq!(cols.len(), data_year_keys().len() + 1, "All + years");
+            assert_eq!(rows.len(), 21, "All + 20 categories");
+            assert_eq!(cols[0], vec!["All", "Revenue"]);
+            assert_eq!(rows[0], vec!["All"]);
+            assert_eq!(rows[1], vec!["Automotive"]);
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), cols.len() * rows.len());
+            assert_eq!(values[0], 521_586_767.0, "All × All = grand total");
+            assert_eq!(values[1], 77_866_061.0, "2020 × All = year total");
+        });
+    }
+
+    // Plan 049: `DrilldownMember(CrossJoin(...))` — two fields in Rows —
+    // returns the whole input set: the root tuple, then for every parent its
+    // own `(parent, All)` aggregate followed by its children with data.
+    #[test]
+    fn nested_rows_drilldown_returns_parents_and_totals() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY {[Measures].[Revenue]} ON COLUMNS, NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) ON ROWS FROM [Sales]",
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0").len(), 1, "measures axis");
+            let rows = axis_tuple_captions(&xml, "Axis1");
+            assert_eq!(rows[0], vec!["All", "All"]);
+            assert_eq!(rows[1], vec!["Automotive", "All"]);
+            assert_eq!(rows[2], vec!["Automotive", "Retail"]);
+            assert_eq!(rows[3], vec!["Baby", "All"]);
+            let values = cell_values(&xml);
+            assert_eq!(values[0], 521_586_767.0, "root = grand total");
+            assert_eq!(values[1], 25_102_648.0, "Automotive total");
+            assert_eq!(values[2], 25_102_648.0, "Automotive's only channel");
+        });
+    }
+
+    // Plan 049: the measures axis sits at the ordinal the statement asked for.
+    #[test]
+    fn measures_axis_keeps_its_ordinal() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY {[Measures].[Revenue]} ON COLUMNS, NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) ON ROWS FROM [Sales]",
+            );
+            assert_eq!(axis_tuple_captions(&xml, "Axis0"), vec![vec!["Revenue"]]);
+            assert!(axis_tuple_captions(&xml, "Axis1").len() > 1, "rows on Axis1");
+        });
+    }
+
     // Regression: a PivotTable with multiple measures in Values and a dimension
     // on Rows cross-joins them; the proxy must return N measures × M rows cells,
     // ordered row-major (columns = measures, rows = dimension members).
@@ -3562,19 +3653,24 @@ mod tests {
                 "SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue],[Measures].[Units]} ON COLUMNS FROM [Sales]",
             );
             let values = cell_values(&xml);
-            assert_eq!(values.len(), 40, "20 categories × 2 measures");
-            let revenue: f64 = values.iter().step_by(2).sum();
-            let units: f64 = values.iter().skip(1).step_by(2).sum();
+            // `<hierarchy>.Members` includes the (All) member, as the reference
+            // returns it: 21 rows (All + 20 categories) × 2 measures (plan 049).
+            assert_eq!(values.len(), 42, "21 rows × 2 measures");
+            assert_eq!(values[0], 521_586_767.0, "All revenue");
+            assert_eq!(values[1], 4_931_640.0, "All units");
+            assert_eq!(values[2], 25_102_648.0, "first category = Automotive revenue");
+            assert!(
+                values[3] < 1_000_000.0,
+                "Automotive units (small): {}",
+                values[3]
+            );
+            let revenue: f64 = values.iter().skip(2).step_by(2).sum();
+            let units: f64 = values.iter().skip(3).step_by(2).sum();
             assert!(
                 (revenue - 521_586_767.0).abs() < 1.0,
-                "revenue column: {revenue}"
+                "category revenue sums to the total: {revenue}"
             );
-            assert!((units - 4_931_640.0).abs() < 1.0, "units column: {units}");
-            assert_eq!(values[0], 25_102_648.0, "first cell = Automotive revenue");
-            assert!(
-                values[1] < 1_000_000.0,
-                "second cell = Automotive units (small)"
-            );
+            assert!((units - 4_931_640.0).abs() < 1.0, "category units: {units}");
         });
     }
 

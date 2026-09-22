@@ -2,8 +2,9 @@ use crate::axis_members::{
     all_member_for_with_backend, cchildren_member, count_cell, dims_only_slicer_axis_with_backend,
     empty_member_list_axis, filter_dim_props, full_slicer_axis_with_backend, hierarchy_for,
     leaf_member_for, leaf_member_for_level, leaf_members_from, measurement_cell_for,
-    measurement_cell_for_query, measures_axis_for_query, measures_hierarchy, measures_member,
-    measures_total_member, member_list_axis, render_response, row_dim, single_member_axis,
+    measurement_cell_for_query, measures_hierarchy, measures_member, measures_total_member,
+    measures_total_member_for_query, member_list_axis, render_response, row_dim,
+    single_member_axis,
 };
 use crate::backend::QueryBackend;
 use crate::cellset;
@@ -32,6 +33,168 @@ pub(crate) fn ordered_pair(
         crate::cellset::TupleConfig {
             members: vec![m0, m1],
         }
+    }
+}
+
+/// The requested axis that cross-joins dimensions with measures, if any.
+///
+/// Excel writes `CrossJoin(<hierarchy>, {[Measures].…})` whenever a field and
+/// the Values area sit on the same edge (a field in Columns, or measures in
+/// Rows). The response has to keep both on that axis; the historical split
+/// (measures on Axis0, dimensions on Axis1) is only correct when the statement
+/// really does put them on different axes (plan 049).
+fn measure_dim_axis(query: &SemanticQuery) -> Option<&crate::mdx::frontend::AxisSpec> {
+    query.axis_specs.iter().find(|s| s.has_both())
+}
+
+/// The historical layout: measures alone on their own axis, the dimension on
+/// its own axis. `measure_axis` is the ordinal the measures were requested on.
+fn split_measure_axes(
+    measure_axis: u32,
+    measure_members: Vec<cellset::MemberConfig>,
+    dim_axis: u32,
+    dim_hierarchies: Vec<cellset::HierarchyConfig>,
+    dim_tuples: Vec<cellset::TupleConfig>,
+    slicer: cellset::AxisConfig,
+) -> Vec<cellset::AxisConfig> {
+    let measures = cellset::AxisConfig {
+        name: format!("Axis{measure_axis}"),
+        hierarchies: vec![measures_hierarchy()],
+        tuples: dim_tuples_measures(measure_members),
+    };
+    let dims = cellset::AxisConfig {
+        name: format!("Axis{dim_axis}"),
+        hierarchies: dim_hierarchies,
+        tuples: dim_tuples,
+    };
+    let (mut axes, second) = if measure_axis <= dim_axis {
+        (vec![measures], dims)
+    } else {
+        (vec![dims], measures)
+    };
+    axes.push(second);
+    axes.push(slicer);
+    axes
+}
+
+fn dim_tuples_measures(members: Vec<cellset::MemberConfig>) -> Vec<cellset::TupleConfig> {
+    members
+        .into_iter()
+        .map(|member| cellset::TupleConfig {
+            members: vec![member],
+        })
+        .collect()
+}
+
+/// Merge the measures onto the dimensions' axis: one tuple per dimension tuple
+/// per measure, members in the order the statement wrote them. The cells keep
+/// their order (dimension tuple slowest, measure fastest), which is exactly
+/// what the callers already produce.
+fn merge_measures_into_tuples(
+    dim_tuples: Vec<cellset::TupleConfig>,
+    measure_members: &[cellset::MemberConfig],
+    measures_first: bool,
+) -> Vec<cellset::TupleConfig> {
+    let mut out = Vec::with_capacity(dim_tuples.len() * measure_members.len());
+    for t in &dim_tuples {
+        for m in measure_members {
+            let mut members = Vec::with_capacity(t.members.len() + 1);
+            if measures_first {
+                members.push(m.clone());
+                members.extend(t.members.iter().cloned());
+            } else {
+                members.extend(t.members.iter().cloned());
+                members.push(m.clone());
+            }
+            out.push(cellset::TupleConfig { members });
+        }
+    }
+    out
+}
+
+/// One axis carrying the dimensions and the measures, as requested.
+fn merged_measure_axis(
+    ordinal: u32,
+    measures_first: bool,
+    dim_hierarchies: Vec<cellset::HierarchyConfig>,
+    dim_tuples: Vec<cellset::TupleConfig>,
+    measure_members: &[cellset::MemberConfig],
+) -> cellset::AxisConfig {
+    let tuples = merge_measures_into_tuples(dim_tuples, measure_members, measures_first);
+    let mut hierarchies = Vec::new();
+    if measures_first {
+        hierarchies.push(measures_hierarchy());
+    }
+    hierarchies.extend(dim_hierarchies);
+    if !measures_first {
+        hierarchies.push(measures_hierarchy());
+    }
+    cellset::AxisConfig {
+        name: format!("Axis{ordinal}"),
+        hierarchies,
+        tuples,
+    }
+}
+
+/// Finish a dimension axis: when the statement cross-joined the measures onto
+/// the same axis (`CrossJoin(<hierarchy>, {[Measures].…})`, what Excel writes
+/// for a field in Columns), the measure member joins every tuple and the slicer
+/// drops it; otherwise the measure keeps its place on the slicer (plan 049).
+fn finish_dim_axis<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    backend: &B,
+    axis: cellset::AxisConfig,
+) -> Vec<cellset::AxisConfig> {
+    let dim_spec = query.axis_specs.iter().find(|s| !s.dims.is_empty());
+    let measure_spec = query
+        .axis_specs
+        .iter()
+        .find(|s| !s.measures.is_empty() && s.measures.len() == 1);
+    let measure_member = measure_spec.map(|spec| {
+        let project = crate::proxy_project::project();
+        let name = spec.measures[0].as_str();
+        match project.model.lookup_measure(name) {
+            Some(m) => measures_member(&m.measure_unique_name(), &m.display_name),
+            None => measures_total_member_for_query(query),
+        }
+    });
+    match (dim_spec, measure_spec, measure_member) {
+        // Measures and dimensions on the same edge: one axis, one member per
+        // dimension tuple plus the measure member (plan 049).
+        (Some(ds), Some(ms), Some(member)) if ds.ordinal == ms.ordinal => {
+            let merged = merged_measure_axis(
+                ds.ordinal,
+                ms.measures_first(),
+                axis.hierarchies,
+                axis.tuples,
+                &[member],
+            );
+            vec![merged, dims_only_slicer_axis_with_backend(query, backend)]
+        }
+        // Measures on their own edge (`{[Measures].…} ON COLUMNS`, the
+        // dimensions on the other): one axis per requested ordinal.
+        (Some(ds), Some(ms), Some(member)) => {
+            let dim_axis = cellset::AxisConfig {
+                name: format!("Axis{}", ds.ordinal),
+                hierarchies: axis.hierarchies,
+                tuples: axis.tuples,
+            };
+            let measure_axis = cellset::AxisConfig {
+                name: format!("Axis{}", ms.ordinal),
+                hierarchies: vec![measures_hierarchy()],
+                tuples: vec![cellset::TupleConfig {
+                    members: vec![member],
+                }],
+            };
+            let mut axes = if ds.ordinal <= ms.ordinal {
+                vec![dim_axis, measure_axis]
+            } else {
+                vec![measure_axis, dim_axis]
+            };
+            axes.push(dims_only_slicer_axis_with_backend(query, backend));
+            axes
+        }
+        _ => vec![axis, full_slicer_axis_with_backend(query, backend)],
     }
 }
 
@@ -154,6 +317,232 @@ fn build_tuple_set<B: QueryBackend + ?Sized>(
         cells,
         &query.cell_props,
     )
+}
+
+/// Render a cross-tab: the statement put dimensions on two different axes (a
+/// field in Columns and another in Rows — Excel's shape for a two-axis pivot).
+///
+/// The plan already returns the (dim0, dim1) cross-tab, so this splits it back
+/// into one cellset axis per requested edge: each dimension contributes its
+/// `(All)` member first (Excel's Grand Total) followed by its members, the
+/// measures join the axis they were written on, and the cells are ordered
+/// row-major with the first axis varying fastest, as SSAS returns them.
+/// Without this the renderers collapsed both dimensions and the measures onto
+/// one axis (plan 049).
+fn build_cross_tab<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let project = crate::proxy_project::project();
+    let specs: Vec<&crate::mdx::frontend::AxisSpec> = query
+        .axis_specs
+        .iter()
+        .filter(|s| !s.dims.is_empty())
+        .collect();
+    if specs.len() < 2 {
+        return empty_cellset(query, backend);
+    }
+    let (spec0, spec1) = (specs[0], specs[1]);
+    let d0 = spec0.dims[0].clone();
+    let d1 = spec1.dims[0].clone();
+
+    // Data: one entry per (dim0, dim1) pair; `Vec<f64>` holds one value per
+    // measure (a single entry when the measure came from the slicer).
+    let rows: Vec<(String, String, Vec<f64>)> = match result {
+        QueryResult::Pairs(pairs) => pairs.iter().map(|(a, b, v)| (a.clone(), b.clone(), vec![*v])).collect(),
+        QueryResult::MultiGrouped2(pairs) => pairs.clone(),
+        _ => return empty_cellset(query, backend),
+    };
+    let mut rows = rows;
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    // Measure members: the ones the statement put on an axis, else the slicer's.
+    let measure_names: Vec<String> = specs
+        .iter()
+        .flat_map(|s| s.measures.iter().cloned())
+        .collect();
+    let measure_members: Vec<cellset::MemberConfig> = if measure_names.is_empty() {
+        vec![measures_total_member_for_query(query)]
+    } else {
+        measure_names
+            .iter()
+            .filter_map(|name| project.model.lookup_measure(name))
+            .map(|m| measures_member(&m.measure_unique_name(), &m.display_name))
+            .collect()
+    };
+    let n_measures = measure_members.len().max(1);
+
+    let mut dim0_values: Vec<String> = Vec::new();
+    let mut dim1_values: Vec<String> = Vec::new();
+    for (a, b, _) in &rows {
+        if !dim0_values.iter().any(|v| v == a) {
+            dim0_values.push(a.clone());
+        }
+        if !dim1_values.iter().any(|v| v == b) {
+            dim1_values.push(b.clone());
+        }
+    }
+
+    let member_for = |dim: &str, value: &str| -> cellset::MemberConfig {
+        leaf_members_from(
+            dim,
+            std::slice::from_ref(&value.to_string()),
+            &query.dim_props,
+            query.drilldown_level(),
+            None,
+        )
+        .remove(0)
+    };
+    let all_for =
+        |dim: &str| -> cellset::MemberConfig { all_member_for_with_backend(dim, &query.dim_props, backend) };
+
+    // Axis 0: (All) + every dim0 member, with the measures when they belong here.
+    let mut axis0_members = vec![all_for(&d0)];
+    axis0_members.extend(dim0_values.iter().map(|v| member_for(&d0, v)));
+    let axis1_members = {
+        let mut m = vec![all_for(&d1)];
+        m.extend(dim1_values.iter().map(|v| member_for(&d1, v)));
+        m
+    };
+
+    let value_at = |a: &str, b: &str, mi: usize| -> f64 {
+        rows.iter()
+            .find(|(ra, rb, _)| ra == a && rb == b)
+            .and_then(|(_, _, values)| values.get(mi).copied())
+            .unwrap_or(0.0)
+    };
+    // (All, b) sums over dim0, (a, All) sums over dim1, (All, All) is the total.
+    let cell_value = |a: Option<&str>, b: Option<&str>, mi: usize| -> f64 {
+        match (a, b) {
+            (Some(a), Some(b)) => value_at(a, b, mi),
+            (Some(a), None) => rows
+                .iter()
+                .filter(|(ra, _, _)| ra == a)
+                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
+                .sum(),
+            (None, Some(b)) => rows
+                .iter()
+                .filter(|(_, rb, _)| rb == b)
+                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
+                .sum(),
+            (None, None) => rows
+                .iter()
+                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
+                .sum(),
+        }
+    };
+
+    // Tuples per axis: dimension member (and measure, when cross-joined).
+    let axis0_tuples = build_axis_tuples(&axis0_members, spec0, &measure_members, n_measures);
+    let axis1_tuples = build_axis_tuples(&axis1_members, spec1, &measure_members, n_measures);
+
+    // Cells, row-major with axis0 fastest.
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+    for (row_idx, _) in axis1_members.iter().enumerate() {
+        for (col_idx, _) in axis0_members.iter().enumerate() {
+            let a = (col_idx > 0).then(|| dim0_values[col_idx - 1].as_str());
+            let b = (row_idx > 0).then(|| dim1_values[row_idx - 1].as_str());
+            for (mi, measure_id) in measure_ids_for(query, &specs, &measure_members)
+                .into_iter()
+                .enumerate()
+            {
+                let value = cell_value(a, b, mi);
+                cells.push(measurement_cell_for(ordinal, value, &measure_id));
+                ordinal += 1;
+            }
+        }
+    }
+
+    let hierarchies0 = axis_hierarchies(&d0, spec0, &query.dim_props);
+    let hierarchies1 = axis_hierarchies(&d1, spec1, &query.dim_props);
+    let axis0 = cellset::AxisConfig {
+        name: format!("Axis{}", spec0.ordinal),
+        hierarchies: hierarchies0,
+        tuples: axis0_tuples,
+    };
+    let axis1 = cellset::AxisConfig {
+        name: format!("Axis{}", spec1.ordinal),
+        hierarchies: hierarchies1,
+        tuples: axis1_tuples,
+    };
+    let (mut axes, second) = if spec0.ordinal <= spec1.ordinal {
+        (vec![axis0], axis1)
+    } else {
+        (vec![axis1], axis0)
+    };
+    axes.push(second);
+    axes.push(full_slicer_axis_with_backend(query, backend));
+    render_response(axes, cells, &query.cell_props)
+}
+
+/// The measure ids a cross-tab cell carries, in axis order.
+fn measure_ids_for(
+    query: &SemanticQuery,
+    specs: &[&crate::mdx::frontend::AxisSpec],
+    measure_members: &[cellset::MemberConfig],
+) -> Vec<String> {
+    let project = crate::proxy_project::project();
+    let mut ids: Vec<String> = specs
+        .iter()
+        .flat_map(|s| s.measures.iter())
+        .filter_map(|name| project.model.lookup_measure(name).map(|m| m.id.clone()))
+        .collect();
+    if ids.is_empty() {
+        ids.push(crate::axis_members::measure_id_for_query(query));
+    }
+    let _ = measure_members;
+    ids
+}
+
+/// The hierarchies of one cross-tab axis: its dimension, plus the measures when
+/// the statement cross-joined them onto this edge.
+fn axis_hierarchies(
+    dim: &str,
+    spec: &crate::mdx::frontend::AxisSpec,
+    dim_props: &[String],
+) -> Vec<cellset::HierarchyConfig> {
+    let mut hierarchies = Vec::new();
+    if spec.measures_first() {
+        hierarchies.push(measures_hierarchy());
+    }
+    hierarchies.push(hierarchy_for(dim, dim_props));
+    if !spec.measures.is_empty() && !spec.measures_first() {
+        hierarchies.push(measures_hierarchy());
+    }
+    hierarchies
+}
+
+/// Cross-product of the axis members and the measure members (dimension member
+/// slowest, measure fastest — the order the reference uses).
+fn build_axis_tuples(
+    dim_members: &[cellset::MemberConfig],
+    spec: &crate::mdx::frontend::AxisSpec,
+    measure_members: &[cellset::MemberConfig],
+    n_measures: usize,
+) -> Vec<cellset::TupleConfig> {
+    let mut tuples = Vec::new();
+    for member in dim_members {
+        if spec.measures.is_empty() {
+            tuples.push(cellset::TupleConfig {
+                members: vec![member.clone()],
+            });
+            continue;
+        }
+        for m in measure_members.iter().take(n_measures) {
+            let mut members = Vec::new();
+            if spec.measures_first() {
+                members.push(m.clone());
+                members.push(member.clone());
+            } else {
+                members.push(member.clone());
+                members.push(m.clone());
+            }
+            tuples.push(cellset::TupleConfig { members });
+        }
+    }
+    tuples
 }
 
 pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
@@ -286,14 +675,8 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
             members.push(member);
         }
         apply_member_display_info(&mut members);
-        return render_response(
-            vec![
-                member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members),
-                full_slicer_axis_with_backend(query, backend),
-            ],
-            cells,
-            &query.cell_props,
-        );
+        let axis = member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members);
+        return render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props);
     }
 
     // Prepend the full ancestor chain so every member's parent is either on the
@@ -412,14 +795,8 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
             ms.push(m);
         }
         apply_member_display_info(&mut ms);
-        return render_response(
-            vec![
-                member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), ms),
-                full_slicer_axis_with_backend(query, backend),
-            ],
-            cs,
-            &query.cell_props,
-        );
+        let axis = member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), ms);
+        return render_response(finish_dim_axis(query, backend, axis), cs, &query.cell_props);
     }
 
     // Legacy chain prepend for shapes the prefix path doesn't cover.
@@ -517,18 +894,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         ));
     }
 
-    render_response(
-        vec![
-            member_list_axis(
-                "Axis0",
-                crate::axis_members::hierarchy_for_view(dim, &query.dim_props, key_view),
-                members,
-            ),
-            full_slicer_axis_with_backend(query, backend),
-        ],
-        cells,
-        &query.cell_props,
-    )
+    let axis = member_list_axis(
+        "Axis0",
+        crate::axis_members::hierarchy_for_view(dim, &query.dim_props, key_view),
+        members,
+    );
+    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
 }
 
 /// Fill in `PARENT_UNIQUE_NAME` for members whose label is a compound path
@@ -1835,11 +2206,7 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
         tuples,
     };
 
-    render_response(
-        vec![axis, full_slicer_axis_with_backend(query, backend)],
-        cells,
-        &query.cell_props,
-    )
+    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
 }
 
 pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
@@ -1891,41 +2258,61 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
     let mut tuples: Vec<crate::cellset::TupleConfig> = Vec::new();
     let mut cells = Vec::new();
     let mut ordinal = 0u32;
-    let mut seen_d0_col: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut seen_d1_col: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for (first, second, value) in &all_data {
-        if excluded_d0.contains(first.as_str()) {
-            if !seen_d0_col.contains(first) {
-                seen_d0_col.insert(first.clone());
-                let total = col_d0_totals.get(first).copied().unwrap_or(0.0);
-                let m0 = leaf_member_for(d0, first, &query.dim_props);
-                let m1 = all_member_for_with_backend(d1, &query.dim_props, backend);
-                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-                cells.push(measurement_cell_for_query(query, ordinal, total));
-                ordinal += 1;
-            }
-            continue;
-        }
+    // The reference returns the whole `DrilldownLevel({All})` input set: the
+    // root tuple first (Excel's Grand Total), then for every parent its own
+    // `(parent, child.All)` aggregate followed by the children with data.
+    // Emitting only the leaf pairs left Excel with no parent rows and no
+    // totals (plan 049).
+    let grand_total: f64 = all_data.iter().map(|(_, _, v)| *v).sum();
+    let root = ordered_pair(
+        dims,
+        d0,
+        all_member_for_with_backend(d0, &query.dim_props, backend),
+        d1,
+        all_member_for_with_backend(d1, &query.dim_props, backend),
+    );
+    tuples.push(root);
+    cells.push(measurement_cell_for_query(query, ordinal, grand_total));
+    ordinal += 1;
 
-        if excluded_d1.contains(second.as_str()) {
-            if !seen_d1_col.contains(second) {
-                seen_d1_col.insert(second.clone());
-                let total = col_d1_totals.get(second).copied().unwrap_or(0.0);
-                let m0 = all_member_for_with_backend(d0, &query.dim_props, backend);
-                let m1 = leaf_member_for(d1, second, &query.dim_props);
-                tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-                cells.push(measurement_cell_for_query(query, ordinal, total));
-                ordinal += 1;
-            }
-            continue;
+    let mut i = 0usize;
+    while i < all_data.len() {
+        let parent = all_data[i].0.clone();
+        let start = i;
+        while i < all_data.len() && all_data[i].0 == parent {
+            i += 1;
         }
-
-        let m0 = leaf_member_for(d0, first, &query.dim_props);
-        let m1 = leaf_member_for(d1, second, &query.dim_props);
+        let group = &all_data[start..i];
+        let collapsed = excluded_d0.contains(parent.as_str());
+        let parent_total: f64 = group.iter().map(|(_, _, v)| *v).sum();
+        let m0 = leaf_member_for(d0, &parent, &query.dim_props);
+        let m1 = all_member_for_with_backend(d1, &query.dim_props, backend);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
-        cells.push(measurement_cell_for_query(query, ordinal, *value));
+        cells.push(measurement_cell_for_query(query, ordinal, parent_total));
         ordinal += 1;
+        if collapsed {
+            continue;
+        }
+        for (_, second, value) in group {
+            if excluded_d1.contains(second.as_str()) {
+                if seen_d1_col.insert(second.clone()) {
+                    let total = col_d1_totals.get(second).copied().unwrap_or(0.0);
+                    let m0 = all_member_for_with_backend(d0, &query.dim_props, backend);
+                    let m1 = leaf_member_for(d1, second, &query.dim_props);
+                    tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+                    cells.push(measurement_cell_for_query(query, ordinal, total));
+                    ordinal += 1;
+                }
+                continue;
+            }
+            let m0 = leaf_member_for(d0, &parent, &query.dim_props);
+            let m1 = leaf_member_for(d1, second, &query.dim_props);
+            tuples.push(ordered_pair(dims, d0, m0, d1, m1));
+            cells.push(measurement_cell_for_query(query, ordinal, *value));
+            ordinal += 1;
+        }
     }
 
     apply_axis_display_info(&mut tuples);
@@ -1936,11 +2323,7 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
         tuples,
     };
 
-    render_response(
-        vec![axis, full_slicer_axis_with_backend(query, backend)],
-        cells,
-        &query.cell_props,
-    )
+    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
 }
 
 pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
@@ -1965,15 +2348,31 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
         cells.push(measurement_cell_for_query(query, i as u32, *value));
     }
 
-    render_response(
-        vec![
-            measures_axis_for_query(query),
-            member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
+    let dim_hierarchy = hierarchy_for(dim, &query.dim_props);
+    let dim_tuples = dim_tuples_measures(axis1_members);
+    let measure_members = vec![measures_total_member_for_query(query)];
+    let axes = match measure_dim_axis(query) {
+        Some(spec) => vec![
+            merged_measure_axis(
+                spec.ordinal,
+                spec.measures_first(),
+                vec![dim_hierarchy],
+                dim_tuples,
+                &measure_members,
+            ),
             full_slicer_axis_with_backend(query, backend),
         ],
-        cells,
-        &query.cell_props,
-    )
+        None => split_measure_axes(
+            0,
+            measure_members,
+            1,
+            vec![dim_hierarchy],
+            dim_tuples,
+            full_slicer_axis_with_backend(query, backend),
+        ),
+    };
+
+    render_response(axes, cells, &query.cell_props)
 }
 
 /// Render a multi-measure × dimension cross-join (several measures on Axis0,
@@ -2000,7 +2399,7 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
         }
     }
 
-    let axis1_members = leaf_members_from(
+    let mut axis1_members = leaf_members_from(
         dim,
         &merged.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         &query.dim_props,
@@ -2008,28 +2407,58 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
         None,
     );
 
-    let n_measures = measure_ids.len();
     let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+    // `DrilldownLevel({All})` returns the (All) member first — Excel's Grand
+    // Total column/row. Summing the groups is exact for the additive measures
+    // the proxy serves (plan 049).
+    if !query.level_drag {
+        let all = all_member_for_with_backend(dim, &query.dim_props, backend);
+        for (mi, measure_id) in measure_ids.iter().enumerate() {
+            let total: f64 = merged
+                .iter()
+                .map(|(_, values)| values.get(mi).copied().unwrap_or(0.0))
+                .sum();
+            cells.push(measurement_cell_for(ordinal, total, measure_id));
+            ordinal += 1;
+        }
+        axis1_members.insert(0, all);
+    }
     // SSAS CellOrdinal is row-major: `row * num_columns + column`. Here the
     // columns are the measures (Axis0) and the rows are the dimension members
     // (Axis1), so cells interleave measure values per group.
-    for (ci, (_label, values)) in merged.iter().enumerate() {
+    for (_label, values) in merged.iter() {
         for (mi, measure_id) in measure_ids.iter().enumerate() {
             let value = values.get(mi).copied().unwrap_or(0.0);
-            let ordinal = (ci * n_measures + mi) as u32;
             cells.push(measurement_cell_for(ordinal, value, measure_id));
+            ordinal += 1;
         }
     }
 
-    render_response(
-        vec![
-            member_list_axis("Axis0", measures_hierarchy(), measure_members),
-            member_list_axis("Axis1", hierarchy_for(dim, &query.dim_props), axis1_members),
+    let dim_hierarchy = hierarchy_for(dim, &query.dim_props);
+    let dim_tuples = dim_tuples_measures(axis1_members);
+    let axes = match measure_dim_axis(query) {
+        Some(spec) => vec![
+            merged_measure_axis(
+                spec.ordinal,
+                spec.measures_first(),
+                vec![dim_hierarchy],
+                dim_tuples,
+                &measure_members,
+            ),
             dims_only_slicer_axis_with_backend(query, backend),
         ],
-        cells,
-        &query.cell_props,
-    )
+        None => split_measure_axes(
+            0,
+            measure_members,
+            1,
+            vec![dim_hierarchy],
+            dim_tuples,
+            dims_only_slicer_axis_with_backend(query, backend),
+        ),
+    };
+
+    render_response(axes, cells, &query.cell_props)
 }
 
 /// Render a multi-measure × two-dimension cross-join (measures on Axis0, a
@@ -2081,21 +2510,28 @@ fn build_multi_measure_crossjoin<B: QueryBackend + ?Sized>(
         }
     }
 
-    let axis1 = crate::cellset::AxisConfig {
-        name: "Axis1".into(),
-        hierarchies,
-        tuples,
-    };
-
-    render_response(
-        vec![
-            member_list_axis("Axis0", measures_hierarchy(), measure_members),
-            axis1,
+    let axes = match measure_dim_axis(query) {
+        Some(spec) => vec![
+            merged_measure_axis(
+                spec.ordinal,
+                spec.measures_first(),
+                hierarchies,
+                tuples,
+                &measure_members,
+            ),
             dims_only_slicer_axis_with_backend(query, backend),
         ],
-        cells,
-        &query.cell_props,
-    )
+        None => split_measure_axes(
+            0,
+            measure_members,
+            1,
+            hierarchies,
+            tuples,
+            dims_only_slicer_axis_with_backend(query, backend),
+        ),
+    };
+
+    render_response(axes, cells, &query.cell_props)
 }
 
 pub(crate) fn build_slicer_all_and_measure<B: QueryBackend + ?Sized>(
@@ -2301,6 +2737,15 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         )
     {
         return empty_cellset(query, backend);
+    }
+    // A cross-tab (dimensions on two different axes) needs one axis per edge.
+    let dim_axes = query
+        .axis_specs
+        .iter()
+        .filter(|s| !s.dims.is_empty())
+        .count();
+    if dim_axes >= 2 {
+        return build_cross_tab(query, result, backend);
     }
     if matches!(result, QueryResult::MultiGrouped(_)) {
         return build_multi_measure_by_category(query, result, backend);

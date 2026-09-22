@@ -36,8 +36,12 @@ pub enum XmlaRequest {
     DbschemaTables,
     MdschemaDimensions,
     MdschemaMeasures,
-    MdschemaHierarchies,
-    MdschemaLevels,
+    MdschemaHierarchies {
+        restrictions: Restrictions,
+    },
+    MdschemaLevels {
+        restrictions: Restrictions,
+    },
     MdschemaProperties {
         property_type: Option<i32>,
         restrictions: Restrictions,
@@ -191,8 +195,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "DBSCHEMA_TABLES" => return XmlaRequest::DbschemaTables,
         "MDSCHEMA_DIMENSIONS" => return XmlaRequest::MdschemaDimensions,
         "MDSCHEMA_MEASURES" => return XmlaRequest::MdschemaMeasures,
-        "MDSCHEMA_HIERARCHIES" => return XmlaRequest::MdschemaHierarchies,
-        "MDSCHEMA_LEVELS" => return XmlaRequest::MdschemaLevels,
+        "MDSCHEMA_HIERARCHIES" => {
+            return XmlaRequest::MdschemaHierarchies {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "MDSCHEMA_LEVELS" => {
+            return XmlaRequest::MdschemaLevels {
+                restrictions: restrictions.clone(),
+            };
+        }
         "MDSCHEMA_PROPERTIES" => {
             return XmlaRequest::MdschemaProperties {
                 property_type,
@@ -287,6 +299,11 @@ mod tests {
     #[test]
     fn discover_without_restrictions_parses() {
         let xml = r#"<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>MDSCHEMA_LEVELS</RequestType><Restrictions/><Properties/></Discover></Body></Envelope>"#;
-        assert_eq!(parse_xmla(xml), XmlaRequest::MdschemaLevels);
+        assert_eq!(
+            parse_xmla(xml),
+            XmlaRequest::MdschemaLevels {
+                restrictions: Restrictions::default()
+            }
+        );
     }
 }

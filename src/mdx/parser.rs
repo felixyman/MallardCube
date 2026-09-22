@@ -701,6 +701,10 @@ pub struct ParsedMdx {
     /// expression/index). Without a level they drill to the top level below
     /// `(All)` — the whole-hierarchy drag.
     pub drilldown_targets: Vec<DrilldownTarget>,
+    /// Requested axes with their dimensions and measures, in ordinal order
+    /// (plan 049). `axis_dimension_ids` flattens the axes; this keeps which
+    /// edge each dimension and the measures belong to.
+    pub axis_specs: Vec<crate::mdx::frontend::AxisSpec>,
 }
 
 /// The outer SELECT clause (between the first SELECT and FROM), used by the
@@ -1013,6 +1017,10 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         where_member_ranges,
         parse_error,
         drilldown_targets: parse_drilldown_targets(before_from),
+        axis_specs: match &frontend {
+            Ok(sel) => crate::mdx::frontend::axis_specs(sel),
+            Err(_) => Vec::new(),
+        },
     }
 }
 
