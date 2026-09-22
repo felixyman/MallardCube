@@ -995,10 +995,16 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
                         .any(|a| matches!(a, Expr::Str(s) if s.eq_ignore_ascii_case("DESC"))),
                 }),
                 "FILTER" => match args.get(1) {
-                    Some(Expr::Binary { op, rhs, .. }) => Some(AxisSetOp::Filter {
-                        op: to_pcmp(*op),
-                        value: num(rhs)?,
-                    }),
+                    // A value filter compares a *measure* against a number;
+                    // anything else (caption/name tests, function calls) is a
+                    // label filter, which the semantic layer does not lower and
+                    // `unsupported_filter_count` faults on.
+                    Some(Expr::Binary { lhs, op, rhs }) if matches!(**lhs, Expr::Measure(_)) => {
+                        Some(AxisSetOp::Filter {
+                            op: to_pcmp(*op),
+                            value: num(rhs)?,
+                        })
+                    }
                     _ => None,
                 },
                 _ => args.iter().find_map(walk),
@@ -1266,6 +1272,72 @@ pub fn member_property_filter_count(sel: &Select) -> usize {
         {
             walk(&e, &mut out);
         }
+    }
+    out
+}
+
+/// `Filter(set, <condition>)` calls the proxy does not lower. Label filters
+/// (`Filter(set, InStr(<caption>, …) > 0)`, caption/name comparisons) would
+/// otherwise be dropped silently — the axis came back unfiltered while Excel
+/// showed the filter as applied (plan 048). `Member_Value`/`Member_Key`
+/// comparisons lower to date windows; measure-vs-number comparisons lower to
+/// SQL value filters.
+pub fn unsupported_filter_count(sel: &Select) -> usize {
+    fn is_member_property(e: &Expr) -> bool {
+        e.as_member().is_some_and(|m| {
+            m.parts.iter().any(|p| {
+                p.eq_ignore_ascii_case("Member_Value") || p.eq_ignore_ascii_case("Member_Key")
+            })
+        })
+    }
+    fn walk(e: &Expr, out: &mut usize) {
+        match e {
+            Expr::Call { name, args } => {
+                if name.eq_ignore_ascii_case("Filter") {
+                    let lowered = match args.get(1) {
+                        Some(Expr::Binary { lhs, .. }) if is_member_property(lhs) => true,
+                        Some(Expr::Binary { lhs, rhs, .. }) => {
+                            matches!(**lhs, Expr::Measure(_)) && matches!(**rhs, Expr::Number(_))
+                        }
+                        _ => false,
+                    };
+                    if !lowered {
+                        *out += 1;
+                    }
+                }
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for i in items {
+                    walk(i, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Members(inner) | Expr::Children(inner) | Expr::Exclude(inner) => walk(inner, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let sets = named_sets(sel);
+    let mut out = 0;
+    for axis in &sel.axes {
+        for e in &axis.exprs {
+            walk(&expand_named_sets(e, &sets), &mut out);
+        }
+    }
+    if let Some(w) = &sel.where_clause {
+        walk(&expand_named_sets(w, &sets), &mut out);
+    }
+    if let Some(sub) = &sel.subquery {
+        out += unsupported_filter_count(sub);
     }
     out
 }

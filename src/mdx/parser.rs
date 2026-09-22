@@ -64,6 +64,16 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
+    // Label filters (`Filter(set, InStr(caption, …) > 0)`) are not lowered;
+    // faulting beats returning the unfiltered set while Excel shows the filter
+    // as applied (plan 048).
+    if fe::unsupported_filter_count(&sel) > 0 {
+        return Some(
+            "label filters (`Filter` over member captions/names) are not supported yet — \
+             use Keep Only Selected Items or a value filter"
+                .into(),
+        );
+    }
     // Member ranges inside a quoted calculated-member body (`COUNT({a : b})`)
     // are not handled yet; axis and slicer ranges are.
     if fe::bodies_contain_range(&sel) {
@@ -1031,6 +1041,11 @@ mod tests {
         }
         assert!(!statements.is_empty(), "the corpus should not be empty");
         for mdx in &statements {
+            // The corpus is captured traffic, not only MDX: DRILLTHROUGH and
+            // DAX statements have their own paths and their own tests.
+            if !crate::mdx_semantic::is_mdx_select(mdx) {
+                continue;
+            }
             let parsed = parse_mdx(mdx);
             assert!(
                 parsed.parse_error.is_none(),
@@ -1073,6 +1088,12 @@ mod tests {
             (
                 "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Date].[Calendar].[Date].Members, DateAdd(\"d\", -30, VBA![Date]()) <= 1)",
                 "date arithmetic",
+            ),
+            (
+                // A label filter: previously dropped silently, returning the
+                // unfiltered set while Excel showed the filter as applied.
+                "SELECT NON EMPTY Hierarchize({Filter({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}, InStr([Category].[Category].CurrentMember.MEMBER_CAPTION, \"Bo\") > 0)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+                "label filters",
             ),
         ] {
             let reason = unsupported_features(mdx).unwrap_or_else(|| panic!("not detected: {mdx}"));

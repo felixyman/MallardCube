@@ -4,6 +4,20 @@
 /// Two plans that would produce the same SQL should produce
 /// the same key. Key format is human-readable and deterministic.
 use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
+use crate::mdx_parser::AxisSetOp;
+
+/// Axis set operations change the row set (and the ordering), so they must be
+/// part of the plan key: without them a cached `TopCount` answer is served for
+/// a `BottomCount` / `Order` / `Filter` query on the same dimension (plan 048).
+fn set_op_suffix(op: &Option<AxisSetOp>) -> String {
+    match op {
+        None => String::new(),
+        Some(AxisSetOp::TopCount { n, desc }) => format!("|setop=topcount:{n}:{desc}"),
+        Some(AxisSetOp::TopPercent { p }) => format!("|setop=toppercent:{p}"),
+        Some(AxisSetOp::Order { desc }) => format!("|setop=order:{desc}"),
+        Some(AxisSetOp::Filter { op, value }) => format!("|setop=filter:{op:?}:{value}"),
+    }
+}
 
 /// Return a stable string key for a QueryPlan.
 /// Two plans that differ only in filter order produce the same key.
@@ -19,13 +33,14 @@ pub fn plan_key(plan: &QueryPlan) -> String {
             group_by,
             filters,
             group_levels,
-            ..
+            set_op,
         } => {
             format!(
-                "groupby|measure={}|dims={}|levels={:?}",
+                "groupby|measure={}|dims={}|levels={:?}{}",
                 measure,
                 group_by.join(","),
-                group_levels
+                group_levels,
+                set_op_suffix(set_op)
             ) + &filter_suffix(filters)
         }
 
@@ -173,6 +188,7 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::mdx_parser::CmpOp;
 
     // Plan 047: a range filter must change the plan key, or the result cache
     // serves a range probe's response for a plain probe.
@@ -363,6 +379,38 @@ mod tests {
             dimension: "ProductCategory".into(),
         };
         assert_eq!(plan_key(&plan), "count|dim=ProductCategory");
+    }
+
+    #[test]
+    fn set_ops_change_the_plan_key() {
+        // Regression: the set op was missing from the key, so a cached
+        // TopCount answer was served for BottomCount/Order/Filter queries on
+        // the same dimension (plan 048).
+        let group_by = |set_op: Option<AxisSetOp>| QueryPlan::GroupBy {
+            measure: "Revenue".into(),
+            group_by: vec!["Category".into()],
+            filters: vec![],
+            group_levels: vec![Some(0)],
+            set_op,
+        };
+        let top3 = plan_key(&group_by(Some(AxisSetOp::TopCount { n: 3, desc: true })));
+        let bottom2 = plan_key(&group_by(Some(AxisSetOp::TopCount { n: 2, desc: false })));
+        let order = plan_key(&group_by(Some(AxisSetOp::Order { desc: true })));
+        let filter = plan_key(&group_by(Some(AxisSetOp::Filter {
+            op: CmpOp::Gt,
+            value: 1000.0,
+        })));
+        let plain = plan_key(&group_by(None));
+        let keys = [&top3, &bottom2, &order, &filter, &plain];
+        for (i, a) in keys.iter().enumerate() {
+            for b in keys.iter().skip(i + 1) {
+                assert_ne!(a, b, "set ops must be distinguishable");
+            }
+        }
+        assert!(top3.contains("setop=topcount:3:true"), "{top3}");
+        assert!(bottom2.contains("setop=topcount:2:false"), "{bottom2}");
+        assert!(order.contains("setop=order:true"), "{order}");
+        assert!(filter.contains("setop=filter:Gt:1000"), "{filter}");
     }
 
     #[test]

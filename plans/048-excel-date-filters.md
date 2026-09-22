@@ -196,6 +196,38 @@ quirk (the dialog accepts the first `SendKeys` burst after `SetForegroundWindow`
 and ignores windows-mcp clicks afterwards), so Excel's date-filter MDX has not
 been captured; the proxy's handling of it is unverified.
 
+## Findings (session 4 — filters, sorting, top-N)
+
+Excel's *value* idioms already lower correctly: `TopCount`/`BottomCount`,
+`Order(…, DESC|ASC)`, and `Filter(set, [Measures].[X] > n)`. Two defects fell
+out of exercising them:
+
+1. **The plan key omitted the axis set op.** `plan_key` keyed `GroupBy` plans by
+   measure/dims/levels/filters only, so the result cache served a `TopCount`
+   answer for a `BottomCount`/`Order`/`Filter` query on the same dimension —
+   `BottomCount(…, 2)` returned the cached top-3 members. The key now carries
+   `setop=…` (`src/engine/normalize.rs`).
+2. **Label filters were silently applied as value filters.** `axis_set_op`
+   accepted *any* `Filter(set, <binary>)` with a numeric right-hand side, so
+   `Filter(set, InStr(caption, "Bo") > 0)` became "measure > 0" and the axis came
+   back unfiltered while Excel showed the filter as applied. A value filter now
+   requires a **measure** on the left (`[Measures].[X] op n`), and any other
+   `Filter` condition faults with an actionable message (`label filters … are
+   not supported yet — use Keep Only Selected Items or a value filter`).
+
+Excel's exact *label*-filter MDX is still uncaptured: the same modal-dialog
+input limit that blocks the Date Filter dialog blocks Label/Value Filter and
+Top 10 dialogs, and `PivotField.PivotFilters.Add2` refuses OLAP pivots
+("Value does not fall within the expected range") — also confirmed for the
+reference. The guard above makes the outcome loud rather than silently wrong.
+Sorting (A→Z / Z→A) is client-side for OLAP and sends no query.
+
+`scripts/bench-workload.jsonl` gained the two captured statements from this
+session: the drill-through Excel sends on a value double-click
+(`DRILLTHROUGH MAXROWS 1000 SELECT … WHERE (([Measures].[Revenue],[Date].[Full
+Date].&[2020-01-01]))`) and the key-attribute-hierarchy field drill. The corpus
+test now skips non-MDX statements (DRILLTHROUGH/DAX have their own paths).
+
 ## Changes
 
 - `src/mdx/semantic.rs`: `is_refresh_cube`.
