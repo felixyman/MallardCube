@@ -3648,6 +3648,35 @@ mod tests {
         });
     }
 
+    // Plan 049, phase 3: a field in Columns with two nested in Rows groups by
+    // three dimensions. The reference returns the nested Rows structure (41
+    // tuples) crossed with the Columns field × the measures.
+    #[test]
+    fn oracle_three_dimension_layout_matches_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue],[Measures].[Units]}) ON COLUMNS, NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) ON ROWS FROM [Sales]",
+            );
+            let mut expected_cols = vec!["All/Revenue".to_string(), "All/Units".to_string()];
+            for year in data_year_keys() {
+                expected_cols.push(format!("{year}/Revenue"));
+                expected_cols.push(format!("{year}/Units"));
+            }
+            assert_eq!(axis_signature(&xml, "Axis0"), expected_cols.join(","));
+            assert_eq!(axis_signature(&xml, "Axis1"), NESTED_ROWS_TUPLES);
+            let values = cell_values(&xml);
+            assert_eq!(
+                values.len(),
+                expected_cols.len() * 41,
+                "columns × nested rows"
+            );
+            // Axis 0 varies fastest: (All/Revenue, All/All) first.
+            assert_eq!(values[0], 521_586_767.0, "All revenue");
+            assert_eq!(values[1], 4_931_640.0, "All units");
+            assert_eq!(values[2], 77_866_061.0, "first year revenue");
+        });
+    }
+
     #[test]
     fn oracle_year_by_category_cross_tab_keeps_the_all_column() {
         with_project3(|| {

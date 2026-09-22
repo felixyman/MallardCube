@@ -155,6 +155,10 @@ pub enum QueryResult {
     /// Two-dimensional: one entry per (dim0, dim1) pair; `Vec<f64>` is one
     /// value per measure, in order.
     MultiGrouped2(Vec<(String, String, Vec<f64>)>),
+    /// N-dimensional (three or more grouping dimensions, the multi-axis
+    /// layouts): one entry per key vector; `Vec<f64>` is one value per measure,
+    /// in order (plan 049, phase 3).
+    MultiGroupedN(Vec<(Vec<String>, Vec<f64>)>),
     Empty,
 }
 
@@ -661,7 +665,15 @@ pub fn execute_plan_sql_with_backend<B: QueryBackend + ?Sized>(
         QueryPlan::GroupBy {
             group_by, set_op, ..
         } => {
-            if group_by.len() >= 2 {
+            if group_by.len() >= 3 {
+                QueryResult::MultiGroupedN(
+                    backend
+                        .query_grouped_n(sql, group_by.len())
+                        .into_iter()
+                        .map(|(keys, value)| (keys, vec![value]))
+                        .collect(),
+                )
+            } else if group_by.len() == 2 {
                 QueryResult::Pairs(backend.query_pairs(sql))
             } else {
                 let mut rows = backend.query_grouped_1d(sql);
@@ -731,8 +743,58 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         group_levels,
     } = plan
     {
+        // N-dimensional cross-join (three or more grouping dimensions): the
+        // multi-axis layouts group by every dimension on every edge.
+        if group_by.len() >= 3 {
+            let mut per_measure: Vec<Vec<(Vec<String>, f64)>> = Vec::with_capacity(measures.len());
+            for measure in measures {
+                let per_measure_plan = QueryPlan::GroupBy {
+                    measure: measure.clone(),
+                    group_by: group_by.clone(),
+                    filters: filters_with_time_flag(model, measure, filters),
+                    group_levels: group_levels.clone(),
+                    set_op: None,
+                };
+                match execute_plan_with_backend_and_context(
+                    &per_measure_plan,
+                    model,
+                    backend,
+                    user,
+                    config,
+                ) {
+                    QueryResult::MultiGroupedN(rows) => per_measure
+                        .push(rows.into_iter().map(|(keys, v)| (keys, v[0])).collect()),
+                    _ => per_measure.push(Vec::new()),
+                }
+            }
+
+            let mut order: Vec<Vec<String>> = Vec::new();
+            let mut columns: Vec<std::collections::HashMap<Vec<String>, f64>> =
+                vec![std::collections::HashMap::new(); measures.len()];
+            for (mi, rows) in per_measure.iter().enumerate() {
+                for (keys, value) in rows {
+                    if !order.contains(keys) {
+                        order.push(keys.clone());
+                    }
+                    columns[mi].insert(keys.clone(), *value);
+                }
+            }
+            order.sort();
+            let merged: Vec<(Vec<String>, Vec<f64>)> = order
+                .iter()
+                .map(|keys| {
+                    let vals = columns
+                        .iter()
+                        .map(|col| col.get(keys).copied().unwrap_or(0.0))
+                        .collect();
+                    (keys.clone(), vals)
+                })
+                .collect();
+            return QueryResult::MultiGroupedN(merged);
+        }
+
         // Two-dimensional cross-join: N measures × (dim0, dim1) pairs.
-        if group_by.len() >= 2 {
+        if group_by.len() == 2 {
             let mut per_measure: Vec<Vec<(String, String, f64)>> =
                 Vec::with_capacity(measures.len());
             for measure in measures {
@@ -919,7 +981,15 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
         QueryPlan::GroupBy {
             group_by, set_op, ..
         } => {
-            if group_by.len() >= 2 {
+            if group_by.len() >= 3 {
+                QueryResult::MultiGroupedN(
+                    backend
+                        .query_grouped_n(&sql, group_by.len())
+                        .into_iter()
+                        .map(|(keys, value)| (keys, vec![value]))
+                        .collect(),
+                )
+            } else if group_by.len() == 2 {
                 let pairs = backend.query_pairs(&sql);
                 QueryResult::Pairs(pairs)
             } else {

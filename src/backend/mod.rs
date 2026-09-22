@@ -68,6 +68,22 @@ pub trait QueryBackend {
     fn query_scalar(&self, sql: &str) -> f64;
     fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)>;
     fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)>;
+    /// N dimension keys plus one value per row. The multi-axis layouts group
+    /// by every dimension on every edge, so two-key `query_pairs` cannot carry
+    /// the result (plan 049, phase 3). The default reads `query_rows`.
+    fn query_grouped_n(&self, sql: &str, dims: usize) -> Vec<(Vec<String>, f64)> {
+        self.query_rows(sql)
+            .into_iter()
+            .filter_map(|mut row| {
+                if row.len() <= dims {
+                    return None;
+                }
+                let value = row[dims].parse::<f64>().ok()?;
+                row.truncate(dims);
+                Some((row, value))
+            })
+            .collect()
+    }
     fn query_count(&self, sql: &str) -> u32;
     fn query_strings(&self, sql: &str) -> Vec<String>;
     fn query_rows(&self, sql: &str) -> Vec<Vec<String>>;
@@ -383,6 +399,10 @@ impl QueryBackend for Backend {
         Backend::query_pairs(self, sql)
     }
 
+    fn query_grouped_n(&self, sql: &str, dims: usize) -> Vec<(Vec<String>, f64)> {
+        Backend::query_grouped_n(self, sql, dims)
+    }
+
     fn query_count(&self, sql: &str) -> u32 {
         Backend::query_count(self, sql)
     }
@@ -620,6 +640,30 @@ impl Backend {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("query_pairs: query failed: {e}");
+                return Vec::new();
+            }
+        };
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    /// N dimension keys + one value per row (plan 049, phase 3).
+    pub fn query_grouped_n(&self, sql: &str, dims: usize) -> Vec<(Vec<String>, f64)> {
+        let conn = self.lock_conn();
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            eprintln!("query_grouped_n: prepare failed: {sql}");
+            return Vec::new();
+        };
+        let rows = match stmt.query_map([], |row| {
+            let mut keys = Vec::with_capacity(dims);
+            for i in 0..dims {
+                keys.push(row.get::<_, String>(i)?);
+            }
+            let value = value_to_f64(&row.get::<_, duckdb::types::Value>(dims)?).unwrap_or(0.0);
+            Ok((keys, value))
+        }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("query_grouped_n: query failed: {e}");
                 return Vec::new();
             }
         };

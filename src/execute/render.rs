@@ -319,6 +319,263 @@ fn build_tuple_set<B: QueryBackend + ?Sized>(
     )
 }
 
+/// Render a pivot whose statement groups by three or more dimensions spread
+/// over two edges — a field in Columns with two nested in Rows, the shape
+/// Excel sends for that layout.
+///
+/// The plan groups by every axis dimension, so a cell is keyed by the full
+/// coordinate. This builds one cellset axis per requested edge: `(All)` first,
+/// nested parents before their children on a drilled edge, the measures joined
+/// where the statement wrote them, and each cell looked up by its coordinate
+/// (sparse, like the reference). Plan 049, phase 3.
+fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let project = crate::proxy_project::project();
+    let specs: Vec<&crate::mdx::frontend::AxisSpec> = query
+        .axis_specs
+        .iter()
+        .filter(|s| !s.dims.is_empty())
+        .collect();
+    if specs.len() != 2 {
+        return empty_cellset(query, backend);
+    }
+    let (spec0, spec1) = (specs[0], specs[1]);
+
+    let data = match result {
+        QueryResult::MultiGroupedN(rows) => rows,
+        _ => return empty_cellset(query, backend),
+    };
+    // Keys follow `axis_dimensions` (axis 0's dimensions, then axis 1's).
+    let key_index = |axis: usize, pos: usize| -> usize {
+        let before: usize = specs.iter().take(axis).map(|s| s.dims.len()).sum();
+        before + pos
+    };
+
+    let measure_names: Vec<String> = specs
+        .iter()
+        .flat_map(|s| s.measures.iter().cloned())
+        .collect();
+    let measure_members: Vec<cellset::MemberConfig> = if measure_names.is_empty() {
+        vec![measures_total_member_for_query(query)]
+    } else {
+        measure_names
+            .iter()
+            .filter_map(|name| project.model.lookup_measure(name))
+            .map(|m| measures_member(&m.measure_unique_name(), &m.display_name))
+            .collect()
+    };
+    let n_measures = measure_members.len().max(1);
+
+    let distinct = |idx: usize| -> Vec<String> {
+        let mut values: Vec<String> = Vec::new();
+        for (keys, _) in data {
+            if let Some(k) = keys.get(idx)
+                && !values.iter().any(|v| v == k)
+            {
+                values.push(k.clone());
+            }
+        }
+        values.sort();
+        values
+    };
+    // The value for a coordinate: `None` marks an `(All)` slot, which
+    // aggregates the matching rows (the measures the proxy serves are additive).
+    let value_for = |coord: &[Option<&str>], mi: usize| -> Option<f64> {
+        let mut sum = 0.0;
+        let mut found = false;
+        for (keys, values) in data {
+            let matches = keys.iter().zip(coord.iter()).all(|(key, want)| match want {
+                Some(w) => key == w,
+                None => true,
+            });
+            if matches {
+                found = true;
+                sum += values.get(mi).copied().unwrap_or(0.0);
+            }
+        }
+        found.then_some(sum)
+    };
+
+    // ---- axis 0: one dimension (plus the measures when cross-joined) --------
+    let d0 = spec0.dims[0].clone();
+    let dim0_values = distinct(key_index(0, 0));
+    let mut axis0_coords: Vec<Vec<Option<String>>> = Vec::new();
+    axis0_coords.push(vec![None]);
+    for v in &dim0_values {
+        axis0_coords.push(vec![Some(v.clone())]);
+    }
+
+    // ---- axis 1: one or two dimensions -------------------------------------
+    // Two dimensions: a drilled edge nests parents before their children, a
+    // plain cross-join is the full product (both as the reference returns).
+    let d1 = spec1.dims[0].clone();
+    let nested = spec1.dims.len() >= 2 && query.drilldown_member_hierarchy.is_some();
+    let mut axis1_coords: Vec<Vec<Option<String>>> = Vec::new();
+    if spec1.dims.len() >= 2 {
+        let d2 = spec1.dims[1].clone();
+        let parents = distinct(key_index(1, 0));
+        let children = distinct(key_index(1, 1));
+        let excluded: std::collections::HashSet<&str> = query
+            .excluded_members
+            .iter()
+            .filter(|e| e.dimension == d2 || e.dimension == d1)
+            .map(|e| e.key.as_str())
+            .collect();
+        if nested {
+            axis1_coords.push(vec![None, None]);
+            for parent in &parents {
+                axis1_coords.push(vec![Some(parent.clone()), None]);
+                if excluded.contains(parent.as_str()) {
+                    continue;
+                }
+                for child in &children {
+                    let has_data = data.iter().any(|(keys, _)| {
+                        keys.get(key_index(1, 0)) == Some(parent)
+                            && keys.get(key_index(1, 1)) == Some(child)
+                    });
+                    if has_data {
+                        axis1_coords.push(vec![Some(parent.clone()), Some(child.clone())]);
+                    }
+                }
+            }
+        } else {
+            for parent in std::iter::once(None).chain(parents.iter().map(|p| Some(p.clone()))) {
+                for child in std::iter::once(None).chain(children.iter().map(|c| Some(c.clone()))) {
+                    axis1_coords.push(vec![parent.clone(), child.clone()]);
+                }
+            }
+        }
+    } else {
+        axis1_coords.push(vec![None]);
+        for v in distinct(key_index(1, 0)) {
+            axis1_coords.push(vec![Some(v)]);
+        }
+    }
+
+    // ---- tuples ------------------------------------------------------------
+    let mut axis0_tuples = Vec::new();
+    for coord in &axis0_coords {
+        if spec0.measures.is_empty() {
+            axis0_tuples.push(cellset::TupleConfig {
+                members: vec![member_or_all(&d0, coord[0].as_deref(), &query.dim_props, backend)],
+            });
+        } else {
+            for m in measure_members.iter().take(n_measures) {
+                axis0_tuples.push(cellset::TupleConfig {
+                    members: vec![
+                        member_or_all(&d0, coord[0].as_deref(), &query.dim_props, backend),
+                        m.clone(),
+                    ],
+                });
+            }
+        }
+    }
+    let mut axis1_tuples = Vec::new();
+    for coord in &axis1_coords {
+        let mut members = vec![member_or_all(
+            &d1,
+            coord[0].as_deref(),
+            &query.dim_props,
+            backend,
+        )];
+        if spec1.dims.len() >= 2 {
+            members.push(member_or_all(
+                &spec1.dims[1],
+                coord[1].as_deref(),
+                &query.dim_props,
+                backend,
+            ));
+        }
+        if !spec1.measures.is_empty() {
+            for m in measure_members.iter().take(n_measures) {
+                let mut with_measure = members.clone();
+                with_measure.push(m.clone());
+                axis1_tuples.push(cellset::TupleConfig {
+                    members: with_measure,
+                });
+            }
+        } else {
+            axis1_tuples.push(cellset::TupleConfig { members });
+        }
+    }
+    apply_axis_display_info(&mut axis1_tuples);
+
+    // ---- cells (row-major, axis 0 fastest; sparse) -------------------------
+    let measure_ids: Vec<String> = {
+        let mut ids: Vec<String> = specs
+            .iter()
+            .flat_map(|s| s.measures.iter())
+            .filter_map(|name| project.model.lookup_measure(name).map(|m| m.id.clone()))
+            .collect();
+        if ids.is_empty() {
+            ids.push(crate::axis_members::measure_id_for_query(query));
+        }
+        ids
+    };
+    let mut cells = Vec::new();
+    let mut ordinal = 0u32;
+    for row in &axis1_coords {
+        for col in &axis0_coords {
+            for (mi, measure_id) in measure_ids.iter().enumerate() {
+                let mut coord: Vec<Option<&str>> = vec![col[0].as_deref()];
+                coord.extend(row.iter().map(|v| v.as_deref()));
+                if let Some(value) = value_for(&coord, mi) {
+                    cells.push(measurement_cell_for(ordinal, value, measure_id));
+                }
+                ordinal += 1;
+            }
+        }
+    }
+
+    let axis0 = cellset::AxisConfig {
+        name: format!("Axis{}", spec0.ordinal),
+        hierarchies: axis_hierarchies(&d0, spec0, &query.dim_props),
+        tuples: axis0_tuples,
+    };
+    let axis1 = cellset::AxisConfig {
+        name: format!("Axis{}", spec1.ordinal),
+        hierarchies: {
+            let mut h = axis_hierarchies(&d1, spec1, &query.dim_props);
+            if spec1.dims.len() >= 2 {
+                let extra = hierarchy_for(&spec1.dims[1], &query.dim_props);
+                // Keep the measures hierarchy last when present.
+                if spec1.measures.is_empty() {
+                    h.push(extra);
+                } else {
+                    let pos = h.len().saturating_sub(1);
+                    h.insert(pos, extra);
+                }
+            }
+            h
+        },
+        tuples: axis1_tuples,
+    };
+    let (mut axes, second) = if spec0.ordinal <= spec1.ordinal {
+        (vec![axis0], axis1)
+    } else {
+        (vec![axis1], axis0)
+    };
+    axes.push(second);
+    axes.push(full_slicer_axis_with_backend(query, backend));
+    render_response(axes, cells, &query.cell_props)
+}
+
+/// The member for a coordinate slot: the `(All)` member when the slot is empty.
+fn member_or_all<B: QueryBackend + ?Sized>(
+    dim: &str,
+    value: Option<&str>,
+    dim_props: &[String],
+    backend: &B,
+) -> cellset::MemberConfig {
+    match value {
+        Some(v) => leaf_members_from(dim, &[v.to_string()], dim_props, None, None).remove(0),
+        None => all_member_for_with_backend(dim, dim_props, backend),
+    }
+}
+
 /// Render a cross-tab: the statement put dimensions on two different axes (a
 /// field in Columns and another in Rows — Excel's shape for a two-axis pivot).
 ///
@@ -2741,6 +2998,11 @@ pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
         )
     {
         return empty_cellset(query, backend);
+    }
+    // Three or more grouping dimensions (a field in Columns with two nested in
+    // Rows): the N-key result needs the multi-dimension renderer.
+    if matches!(result, QueryResult::MultiGroupedN(_)) {
+        return build_multi_dim_pivot(query, result, backend);
     }
     // A cross-tab (dimensions on two different axes) needs one axis per edge.
     let dim_axes = query
