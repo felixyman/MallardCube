@@ -666,10 +666,14 @@ mod tests {
         values
     }
 
+    /// Raw-SQL groups plus the `(All)` member the reference returns first for a
+    /// `DrilldownLevel({All})` axis (Excel's Grand Total).
     fn query_grouped(sql: &str) -> (Vec<String>, Vec<f64>) {
         let rows = Backend::test_fixture().query_grouped_1d(sql);
-        let captions = rows.iter().map(|(name, _)| name.clone()).collect();
-        let values = rows.iter().map(|(_, value)| *value).collect();
+        let mut captions: Vec<String> = vec!["All".to_string()];
+        let mut values: Vec<f64> = vec![rows.iter().map(|(_, value)| *value).sum()];
+        captions.extend(rows.iter().map(|(name, _)| name.clone()));
+        values.extend(rows.iter().map(|(_, value)| *value));
         (captions, values)
     }
 
@@ -3181,19 +3185,24 @@ mod tests {
             };
             assert_eq!(
                 captions(r#"Left([Category].[Category].CurrentMember.member_caption,1)="B""#),
-                vec!["Baby", "Beauty", "Books"]
+                // The reference keeps (All) first on a filtered axis.
+                vec!["All", "Baby", "Beauty", "Books"]
             );
             // Excel sends a leading start position for contains.
             let contains =
                 captions(r#"InStr(1,[Category].[Category].CurrentMember.member_caption,"oo")>0"#);
             assert!(
-                !contains.is_empty() && contains.iter().all(|c| c.contains("oo")),
+                contains.len() > 1
+                    && contains[0] == "All"
+                    && contains[1..].iter().all(|c| c.contains("oo")),
                 "{contains:?}"
             );
             let ends =
                 captions(r#"Right([Category].[Category].CurrentMember.member_caption,1)="s""#);
             assert!(
-                !ends.is_empty() && ends.iter().all(|c| c.ends_with('s')),
+                ends.len() > 1
+                    && ends[0] == "All"
+                    && ends[1..].iter().all(|c| c.ends_with('s')),
                 "{ends:?}"
             );
         });

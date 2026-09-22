@@ -73,28 +73,34 @@ fn member_value_targets(d: &DimensionDef) -> Vec<(String, String, i32)> {
     out
 }
 
-const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
+// The MDSCHEMA_PROPERTIES row schema, byte-for-byte the reference's: every
+// field is optional and the numeric types match. Excel validates the rows
+// against it, and rows that omit a field the schema marks required are
+// rejected outright — which aborted its whole metadata sweep and left the
+// pivot cache without measure fields, so a measure could not be placed in
+// Values at all (plan 049 regression).
+const PROPERTIES_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="SCHEMA_NAME" name="SCHEMA_NAME" type="xsd:string" minOccurs="0"/>
-                <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string"/>
-                <xsd:element sql:field="DIMENSION_UNIQUE_NAME" name="DIMENSION_UNIQUE_NAME" type="xsd:string"/>
+                <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string" minOccurs="0"/>
+                <xsd:element sql:field="DIMENSION_UNIQUE_NAME" name="DIMENSION_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="HIERARCHY_UNIQUE_NAME" name="HIERARCHY_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="LEVEL_UNIQUE_NAME" name="LEVEL_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="MEMBER_UNIQUE_NAME" name="MEMBER_UNIQUE_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_TYPE" name="PROPERTY_TYPE" type="xsd:short" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_NAME" name="PROPERTY_NAME" type="xsd:string"/>
+                <xsd:element sql:field="PROPERTY_NAME" name="PROPERTY_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_CAPTION" name="PROPERTY_CAPTION" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="DATA_TYPE" name="DATA_TYPE" type="xsd:unsignedShort" minOccurs="0"/>
-                <xsd:element sql:field="CHARACTER_MAXIMUM_LENGTH" name="CHARACTER_MAXIMUM_LENGTH" type="xsd:int" minOccurs="0"/>
-                <xsd:element sql:field="CHARACTER_OCTET_LENGTH" name="CHARACTER_OCTET_LENGTH" type="xsd:int" minOccurs="0"/>
-                <xsd:element sql:field="NUMERIC_PRECISION" name="NUMERIC_PRECISION" type="xsd:int" minOccurs="0"/>
-                <xsd:element sql:field="NUMERIC_SCALE" name="NUMERIC_SCALE" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="CHARACTER_MAXIMUM_LENGTH" name="CHARACTER_MAXIMUM_LENGTH" type="xsd:unsignedInt" minOccurs="0"/>
+                <xsd:element sql:field="CHARACTER_OCTET_LENGTH" name="CHARACTER_OCTET_LENGTH" type="xsd:unsignedInt" minOccurs="0"/>
+                <xsd:element sql:field="NUMERIC_PRECISION" name="NUMERIC_PRECISION" type="xsd:unsignedShort" minOccurs="0"/>
+                <xsd:element sql:field="NUMERIC_SCALE" name="NUMERIC_SCALE" type="xsd:short" minOccurs="0"/>
                 <xsd:element sql:field="DESCRIPTION" name="DESCRIPTION" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_CONTENT_TYPE" name="PROPERTY_CONTENT_TYPE" type="xsd:short" minOccurs="0"/>
                 <xsd:element sql:field="SQL_COLUMN_NAME" name="SQL_COLUMN_NAME" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="LANGUAGE" name="LANGUAGE" type="xsd:unsignedShort" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_ORIGIN" name="PROPERTY_ORIGIN" type="xsd:int" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_ORIGIN" name="PROPERTY_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_ATTRIBUTE_HIERARCHY_NAME" name="PROPERTY_ATTRIBUTE_HIERARCHY_NAME" type="xsd:string" minOccurs="0"/>
-                <xsd:element sql:field="PROPERTY_CARDINALITY" name="PROPERTY_CARDINALITY" type="xsd:unsignedInt" minOccurs="0"/>
+                <xsd:element sql:field="PROPERTY_CARDINALITY" name="PROPERTY_CARDINALITY" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="MIME_TYPE" name="MIME_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="PROPERTY_IS_VISIBLE" name="PROPERTY_IS_VISIBLE" type="xsd:boolean" minOccurs="0"/>"#;
 
@@ -271,42 +277,42 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
     out
 }
 
+/// The cell-property advertisement, exactly as the reference sends it: one row
+/// per property with `PROPERTY_TYPE`, `PROPERTY_NAME`, `PROPERTY_CAPTION` and
+/// `DATA_TYPE` — in that order, and with the reference's DBTYPEs. Excel reads
+/// these positionally; our earlier rows carried `CATALOG_NAME`/`CUBE_NAME`/
+/// `DIMENSION_UNIQUE_NAME` and a `PROPERTY_CONTENT_TYPE` the reference does not
+/// have, and with the full property list that made Excel refuse to place a
+/// measure in Values at all (found by bisecting plan 049's regression).
 fn system_property_rows(restrictions: &Restrictions) -> String {
-    const PROPS: &[(&str, u8)] = &[
-        ("VALUE", 0),
-        ("FORMAT_STRING", 2),
-        ("BACK_COLOR", 2),
-        ("FORE_COLOR", 2),
-        ("FONT_NAME", 2),
-        ("FONT_SIZE", 2),
-        ("FONT_FLAGS", 2),
-        ("LANGUAGE", 2),
-        ("CELL_ORDINAL", 0),
-        ("FORMATTED_VALUE", 1),
-        ("ACTION_TYPE", 2),
-        ("UPDATEABLE", 2),
+    const PROPS: &[(&str, i32)] = &[
+        ("VALUE", 12),
+        ("FORMAT_STRING", 130),
+        ("BACK_COLOR", 19),
+        ("FORE_COLOR", 19),
+        ("FONT_NAME", 130),
+        ("FONT_SIZE", 18),
+        ("FONT_FLAGS", 3),
+        ("LANGUAGE", 19),
+        ("CELL_ORDINAL", 19),
+        ("FORMATTED_VALUE", 130),
+        ("ACTION_TYPE", 19),
+        ("UPDATEABLE", 19),
     ];
 
-    let project = proxy_project::project();
-    let catalog = &project.config.catalog;
-    let cube = &project.config.cube;
     let mut out = String::new();
-    for (name, content) in PROPS {
+    for (name, data_type) in PROPS {
         if !property_requested(restrictions, name) {
             continue;
         }
         out.push_str(&format!(
             r#"          <row>
-            <CATALOG_NAME>{catalog}</CATALOG_NAME>
-            <CUBE_NAME>{cube}</CUBE_NAME>
-            <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
             <PROPERTY_TYPE>2</PROPERTY_TYPE>
-            <PROPERTY_NAME>{}</PROPERTY_NAME>
-            <PROPERTY_CAPTION>{}</PROPERTY_CAPTION>
-            <PROPERTY_CONTENT_TYPE>{}</PROPERTY_CONTENT_TYPE>
+            <PROPERTY_NAME>{name}</PROPERTY_NAME>
+            <PROPERTY_CAPTION>{name}</PROPERTY_CAPTION>
+            <DATA_TYPE>{data_type}</DATA_TYPE>
           </row>
 "#,
-            name, name, content,
         ));
     }
     out

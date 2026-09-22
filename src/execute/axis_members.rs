@@ -446,8 +446,14 @@ pub(crate) fn render_response(
         include_value: true,
         include_fmt_value: includes_prop(cell_props, "FORMATTED_VALUE"),
         include_format_string: includes_prop(cell_props, "FORMAT_STRING"),
+        // Excel asks for the cell properties we advertise in MDSCHEMA_PROPERTIES;
+        // a requested property that CellInfo does not declare makes it reject
+        // the whole cellset — which silently reverted "add to Values"
+        // (plan 049 regression).
+        include_language: includes_prop(cell_props, "LANGUAGE"),
         include_back_color: includes_prop(cell_props, "BACK_COLOR"),
         include_fore_color: includes_prop(cell_props, "FORE_COLOR"),
+        include_font_flags: includes_prop(cell_props, "FONT_FLAGS"),
         include_cell_ordinal: includes_prop(cell_props, "CELL_ORDINAL"),
     };
     cellset::render_cellset(&resp)

@@ -147,12 +147,44 @@ Remaining candidates (phase 4, only if a gesture forces it): fold
 shape-matching left, and retire the per-shape renderers behind one
 coordinate-keyed renderer.
 
+## Regression: "add to Values" broke in `b508cf9` (fixed)
+
+Symptom: Excel could not add a measure to Values on a fresh pivot against the
+proxy (`CubeFields(...).Orientation = 4` → `0x800A03EC`, silently reverted in
+the UI), while the same workbook worked against the mirror.
+
+Bisected to `b508cf9` (the cell-property advertisement). Two independent
+metadata faults, both only visible once the list grew past eight properties:
+
+- **Our MDSCHEMA_PROPERTIES row schema declared fields required that the rows
+  omit.** The reference marks every field `minOccurs="0"`; ours had
+  `CATALOG_NAME`/`CUBE_NAME`/`DIMENSION_UNIQUE_NAME`/`PROPERTY_NAME` required
+  and several numeric types wrong (`PROPERTY_ORIGIN` int vs unsignedShort,
+  `PROPERTY_CARDINALITY` unsignedInt vs string, …). Excel validates rows
+  against that schema, rejected the rowset and aborted its metadata sweep
+  before MDSCHEMA_MEASURES — so the pivot cache got no measure fields. The
+  schema is now byte-for-byte the reference's.
+- **The cellset did not declare the cell properties it advertises.** With
+  `FONT_FLAGS`/`LANGUAGE` advertised, Excel asks for them in `CELL PROPERTIES`;
+  our `CellInfo` lacked `<FontFlags/>`/`<Language/>`, so Excel rejected the
+  cellset and silently reverted the field change. `render_cellset` now
+  declares them (names and types as the reference does) whenever they are
+  requested, and the cell-property rows match the reference's exactly
+  (`PROPERTY_TYPE`, `PROPERTY_NAME`, `PROPERTY_CAPTION`, `DATA_TYPE`).
+
+Also fixed in the same pass: the top-level `(All)` member on a plain
+`DrilldownLevel({All})` axis (Excel's Grand Total row), verified against the
+mirror (`All` + members, grand total 521,586,767). Set-op axes
+(TopCount/Order/Filter) still omit it: summing the returned subset is not the
+grand total, so that needs the plan to carry the real total.
+
 ## Still open
 
-- **Top-level `(All)` member on single-axis pivots**: the reference returns
-  `All` + members for `DrilldownLevel({All})`; the proxy omits it. Excel
-  tolerates it today (it renders the Grand Total from the cells), and adding it
-  broke six capture-based tests, so it was left as is.
+- **Set-op axes and the `(All)` member** (see above): the reference keeps
+  `(All)` on `TopCount`/`Order`/`Filter` axes too, with the grand total.
+- **Slicer axis hierarchy list**: the reference lists the axis dimensions'
+  other hierarchies (e.g. `[Date].[Full Date]` beside `[Date].[Calendar]`);
+  the proxy lists only the query's non-axis dimensions. Invisible in Excel.
 - **Slicer axis hierarchy list**: the reference includes the axis dimensions'
   other hierarchies (e.g. `[Date].[Full Date]` beside `[Date].[Calendar]`);
   the proxy lists only the query's non-axis dimensions (plan 048 note).

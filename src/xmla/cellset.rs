@@ -69,8 +69,10 @@ pub struct CellsetResponse {
     pub include_value: bool,
     pub include_fmt_value: bool,
     pub include_format_string: bool,
+    pub include_language: bool,
     pub include_back_color: bool,
     pub include_fore_color: bool,
+    pub include_font_flags: bool,
     pub include_cell_ordinal: bool,
 }
 
@@ -336,6 +338,10 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
         olap_info
             .push_str("              <FormatString name=\"FORMAT_STRING\" type=\"xsd:string\"/>\n");
     }
+    if r.include_language {
+        olap_info
+            .push_str("              <Language name=\"LANGUAGE\" type=\"xsd:unsignedInt\"/>\n");
+    }
     if r.include_back_color {
         olap_info
             .push_str("              <BackColor name=\"BACK_COLOR\" type=\"xsd:unsignedInt\"/>\n");
@@ -343,6 +349,9 @@ pub fn render_cellset(r: &CellsetResponse) -> String {
     if r.include_fore_color {
         olap_info
             .push_str("              <ForeColor name=\"FORE_COLOR\" type=\"xsd:unsignedInt\"/>\n");
+    }
+    if r.include_font_flags {
+        olap_info.push_str("              <FontFlags name=\"FONT_FLAGS\" type=\"xsd:int\"/>\n");
     }
     if r.include_cell_ordinal {
         olap_info.push_str(

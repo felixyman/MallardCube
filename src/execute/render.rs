@@ -1088,6 +1088,27 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         }
     }
 
+    // A top-level drag (`DrilldownLevel({All})`) returns the (All) member
+    // first, as the reference does; Excel reads it as the Grand Total row or
+    // column. The key-hierarchy view adds its own (All) below.
+    if matches!(query.drilldown_level(), None | Some(0))
+        && !query.level_drag
+        // A set-op axis (TopCount/Order/Filter) returns a subset, so summing
+        // its members is not the grand total; those axes keep the reference's
+        // `(All)` only once the plan can supply the real total (plan 049 note).
+        && query.axis_set_op.is_none()
+        && query.key_hierarchy_view.is_none()
+        && members
+            .first()
+            .is_none_or(|m| !m.u_name.ends_with(".[All]") && !m.u_name.ends_with(".[(All)]"))
+    {
+        members.insert(
+            0,
+            all_member_for_with_backend(dim, &query.dim_props, backend),
+        );
+        num_ancestors += 1;
+    }
+
     // The key attribute hierarchy renders as its own single-level hierarchy:
     // (All) plus the date members. Excel places axis members by the field's
     // hierarchy and level numbers, so the user hierarchy's namespace
