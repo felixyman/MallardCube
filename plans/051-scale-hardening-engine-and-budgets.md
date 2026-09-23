@@ -208,6 +208,29 @@ Still open in this section:
    grand-total/wholesale/Automotive cell values). Excel renders the gesture —
    two fields in Columns, one in Rows — with Grand Total 521,586,767.
 
+   **VM sweep 2026-09-23 (after the shape/descriptor work).** `sweep3` (11
+   Excel-built layouts): the proxy's report is byte-identical to the pre-change
+   baseline, and differs from the mirror on the same 6 lines as before (two
+   filter cases and one COM error text). `sweep2` (13 layouts): exactly one
+   structural change — the two-fields-in-Columns layout went 23x9 -> **24x30,
+   which is what the mirror returns**, so the descriptor work repaired a real
+   Excel layout rather than only the synthetic probe; the other four differing
+   lines are date-anchored value drift (the demo data regenerates daily).
+   `totals_off` still matches the old mirror (102x8) while the new mirror run
+   says 42x8 — a sweep-side flake (client-side subtotal state), not a proxy
+   change.
+
+   Pre-existing gaps the sweep reproduced (neither is a regression):
+   - a value filter delivered as
+     `FROM (SELECT Filter(<members>, <condition>) ON COLUMNS ...)` is **ignored**
+     — the trace holds the request and our unfiltered response while the mirror
+     returns only the qualifying members;
+   - the sweep's COM-driven Top-N never reaches the proxy (0 `TopCount` requests
+     in 1,148 traced ones) while the mirror filters; capturing the mirror's
+     request needs the relay in the sweep path;
+   - a Units number format difference in `data2` ("232 966,0" vs the mirror's
+     "232 966").
+
    **Corpus matrix expanded 2026-09-23** (the arrangement space, not just each
    shape in isolation). Mirror-captured and pinned with oracle tests: measures
    cross-joined on **Rows** (21 `(Category, Revenue)` tuples, measure second,
