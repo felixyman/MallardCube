@@ -278,7 +278,9 @@ cargo test --lib
 | `MALLARDCUBE_DB` | DuckDB file for AutoModel detection (overrides `PROXY_CONFIG`) |
 | `MALLARDCUBE_FACT` | Fact table override for AutoModel |
 | `MALLARDCUBE_POOL_SIZE` | Pooled read-only DuckDB connections (default: CPU count, capped 32) |
-| `MALLARDCUBE_MEMORY_LIMIT` | Engine memory ceiling (`4GiB`, `4GB`, `4294967296B`, `80%`); default is 70% of the container's cgroup limit, else the engine default |
+| `MALLARDCUBE_MEMORY_LIMIT` | Engine memory ceiling (`4GiB`, `4GB`, `4294967296B`, `80%`); default is 70% of the container's cgroup limit divided between the query slots, else the engine default |
+| `MALLARDCUBE_MAX_CONCURRENT_QUERIES` | Requests allowed to run engine queries at once (default: CPU count / 4, at least 1). Bounds concurrency and, with it, the memory the per-slot ceiling adds up to |
+| `MALLARDCUBE_QUERY_TIMEOUT_S` | Per-request engine timeout in seconds (default 300; `0` disables). On expiry the query is interrupted and the client gets a SOAP fault |
 | `MALLARDCUBE_TEMP_DIR` | Spill directory for large sorts/aggregations (created if missing); default is the engine's |
 | `MALLARDCUBE_THREADS` | Engine thread count; default is all cores |
 | `MALLARDCUBE_AGG_CACHE` | Aggregation sidecar path; enables rollups for SUM measures |

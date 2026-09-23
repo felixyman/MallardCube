@@ -97,6 +97,10 @@ impl StatusInfo {
                     .unwrap_or("default"),
                 "threads": threads.map(|s| s.value),
                 "threads_source": threads.map(|s| s.source.as_str()).unwrap_or("default"),
+                "max_concurrent_queries": self.engine.query_slots(),
+                "max_concurrent_queries_source": self.engine.max_concurrent_queries.source.as_str(),
+                "query_timeout_s": self.engine.query_timeout.value,
+                "query_timeout_s_source": self.engine.query_timeout.source.as_str(),
             }
         })
         .to_string()
@@ -161,6 +165,14 @@ mod tests {
                 }),
                 temp_directory: None,
                 threads: None,
+                max_concurrent_queries: Setting {
+                    value: 4,
+                    source: SettingSource::Default,
+                },
+                query_timeout: Setting {
+                    value: Some(300),
+                    source: SettingSource::Default,
+                },
             },
         };
         let json = info.to_json();
@@ -175,6 +187,9 @@ mod tests {
             "\"temp_directory\":null",
             "\"threads\":null",
             "\"threads_source\":\"default\"",
+            "\"max_concurrent_queries\":4",
+            "\"query_timeout_s\":300",
+            "\"query_timeout_s_source\":\"default\"",
         ] {
             assert!(json.contains(needle), "missing {needle} in {json}");
         }

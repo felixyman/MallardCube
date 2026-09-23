@@ -13,20 +13,23 @@
 //!    warning rather than failing startup.
 //! 2. the container's cgroup limit (`memory.max` on v2,
 //!    `memory/memory.limit_in_bytes` on v1), capped at
-//!    [`CGROUP_MEMORY_FRACTION`] of the pod limit.
+//!    [`CGROUP_MEMORY_FRACTION`] of the pod limit **and divided between the
+//!    query slots** — the semaphore is what makes that division a bound, so
+//!    `slots × limit ≤ fraction × pod limit`.
 //! 3. nothing — the engine's own default (a share of host RAM).
 //!
-//! `temp_directory` and `threads` are environment-only; their defaults stay
-//! with the engine. Settings are resolved once per process (the pool calls
-//! [`effective`]) and reported by `GET /status`, including where each value
-//! came from.
+//! `temp_directory`, `threads`, `max_concurrent_queries`, and `query_timeout`
+//! are environment-only. Settings are resolved once per process (the pool
+//! calls [`effective`]) and reported by `GET /status`, including where each
+//! value came from.
 //!
-//! Note: until plan 051-A lands the shared-engine change, each pooled DuckDB
-//! connection is its own instance, so the ceiling is per connection rather
-//! than process-wide. The shared engine is what makes it a hard bound.
+//! Note: DuckDB's Rust binding does not expose a shared `Database`, so each
+//! pooled connection is still its own engine instance. The query-slot
+//! semaphore plus the divided ceiling is the bounded substitute (plan 051-A).
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// Where an effective setting came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +38,7 @@ pub enum SettingSource {
     Env,
     /// The container's cgroup memory limit.
     Cgroup,
-    /// The engine's built-in default.
+    /// The built-in default.
     Default,
 }
 
@@ -79,38 +82,118 @@ impl MemoryLimit {
 /// result cache — which live outside DuckDB's budget.
 const CGROUP_MEMORY_FRACTION: f64 = 0.7;
 
+/// Default number of heavy-query slots per core.
+const QUERY_SLOTS_PER_CORE: usize = 4;
+
+/// Default request timeout. No request should be able to hang forever; `0`
+/// disables the limit for anyone running deliberately long batches.
+const DEFAULT_QUERY_TIMEOUT_S: u64 = 300;
+
 /// cgroup v1 reports "unlimited" as the page-aligned i64 maximum.
 const CGROUP_V1_UNLIMITED: u64 = 0x7FFF_FFFF_FFFF_F000;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EngineSettings {
     pub memory_limit: Option<Setting<MemoryLimit>>,
     pub temp_directory: Option<Setting<PathBuf>>,
     pub threads: Option<Setting<usize>>,
+    /// How many requests may run engine queries at once. Bounds concurrency
+    /// *and* the memory each one may use.
+    pub max_concurrent_queries: Setting<usize>,
+    /// Per-request engine timeout; `None` = no limit.
+    pub query_timeout: Setting<Option<u64>>,
 }
 
 impl EngineSettings {
     /// Resolve from the process environment and the container's cgroup.
     pub fn resolve() -> Self {
-        Self::resolve_from(&env_var, read_cgroup_limit())
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        Self::resolve_from(&env_var, read_cgroup_limit(), parallelism)
     }
 
-    /// Pure resolution, for tests.
-    pub fn resolve_from(env: &dyn Fn(&str) -> Option<String>, cgroup_bytes: Option<u64>) -> Self {
-        let memory_limit = resolve_memory_limit(env, cgroup_bytes);
+    /// Pure resolution, for tests (`parallelism` stands in for the CPU count).
+    pub fn resolve_from(
+        env: &dyn Fn(&str) -> Option<String>,
+        cgroup_bytes: Option<u64>,
+        parallelism: usize,
+    ) -> Self {
+        let max_concurrent_queries = resolve_query_slots(env, parallelism);
+        let memory_limit = resolve_memory_limit(env, cgroup_bytes, max_concurrent_queries.value);
         let temp_directory = resolve_temp_directory(env);
         let threads = resolve_threads(env);
+        let query_timeout = resolve_query_timeout(env);
         Self {
             memory_limit,
             temp_directory,
             threads,
+            max_concurrent_queries,
+            query_timeout,
         }
+    }
+
+    /// Requests allowed to run engine queries at once.
+    pub fn query_slots(&self) -> usize {
+        self.max_concurrent_queries.value
+    }
+
+    /// Per-request engine timeout, if one is configured.
+    pub fn timeout(&self) -> Option<Duration> {
+        self.query_timeout.value.map(Duration::from_secs)
+    }
+}
+
+fn resolve_query_slots(env: &dyn Fn(&str) -> Option<String>, parallelism: usize) -> Setting<usize> {
+    if let Some(raw) = env("MALLARDCUBE_MAX_CONCURRENT_QUERIES") {
+        match raw.parse::<usize>() {
+            Ok(n) if n >= 1 => {
+                return Setting {
+                    value: n,
+                    source: SettingSource::Env,
+                };
+            }
+            _ => eprintln!(
+                "⚠️  MALLARDCUBE_MAX_CONCURRENT_QUERIES={raw:?} is not a positive integer — ignoring it"
+            ),
+        }
+    }
+    Setting {
+        value: (parallelism / QUERY_SLOTS_PER_CORE).max(1),
+        source: SettingSource::Default,
+    }
+}
+
+fn resolve_query_timeout(env: &dyn Fn(&str) -> Option<String>) -> Setting<Option<u64>> {
+    if let Some(raw) = env("MALLARDCUBE_QUERY_TIMEOUT_S") {
+        match raw.parse::<u64>() {
+            Ok(0) => {
+                return Setting {
+                    value: None,
+                    source: SettingSource::Env,
+                };
+            }
+            Ok(secs) => {
+                return Setting {
+                    value: Some(secs),
+                    source: SettingSource::Env,
+                };
+            }
+            Err(_) => eprintln!(
+                "⚠️  MALLARDCUBE_QUERY_TIMEOUT_S={raw:?} is not a number of seconds — ignoring it"
+            ),
+        }
+    }
+    Setting {
+        value: Some(DEFAULT_QUERY_TIMEOUT_S),
+        source: SettingSource::Default,
     }
 }
 
 fn resolve_memory_limit(
     env: &dyn Fn(&str) -> Option<String>,
     cgroup_bytes: Option<u64>,
+    slots: usize,
 ) -> Option<Setting<MemoryLimit>> {
     if let Some(text) = env("MALLARDCUBE_MEMORY_LIMIT") {
         if engine_accepts_memory(&text) {
@@ -128,11 +211,11 @@ fn resolve_memory_limit(
         );
     }
     if let Some(bytes) = cgroup_bytes.filter(|b| *b > 0) {
-        let capped = (bytes as f64 * CGROUP_MEMORY_FRACTION) as u64;
+        let per_slot = (bytes as f64 * CGROUP_MEMORY_FRACTION / slots.max(1) as f64) as u64;
         return Some(Setting {
             value: MemoryLimit {
-                text: format!("{capped}B"),
-                bytes: Some(capped),
+                text: format!("{per_slot}B"),
+                bytes: Some(per_slot),
             },
             source: SettingSource::Cgroup,
         });
@@ -277,6 +360,16 @@ pub fn current() -> Option<&'static EngineSettings> {
     CURRENT.get()
 }
 
+/// Configured per-request engine timeout (used by the request handler).
+pub fn timeout() -> Option<Duration> {
+    current().and_then(|s| s.timeout())
+}
+
+/// Configured heavy-query slots (used to size the request semaphore).
+pub fn query_slots() -> usize {
+    current().map(|s| s.query_slots()).unwrap_or(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,14 +386,19 @@ mod tests {
     const GIB: u64 = 1 << 30;
 
     #[test]
-    fn container_limit_is_a_fraction_of_the_cgroup_value() {
-        let settings = EngineSettings::resolve_from(&env_from(&[]), Some(4 * GIB));
+    fn container_limit_is_divided_between_the_query_slots() {
+        // 16 cores → 4 slots; 4 GiB pod → 70% of it, quartered.
+        let settings = EngineSettings::resolve_from(&env_from(&[]), Some(4 * GIB), 16);
+        assert_eq!(settings.query_slots(), 4);
         let limit = settings
             .memory_limit
             .expect("cgroup limit yields a setting");
         assert_eq!(limit.source, SettingSource::Cgroup);
         let bytes = limit.value.bytes.expect("derived limits carry bytes");
-        assert_eq!(bytes, (4.0 * GIB as f64 * CGROUP_MEMORY_FRACTION) as u64);
+        assert_eq!(
+            bytes,
+            (4.0 * GIB as f64 * CGROUP_MEMORY_FRACTION / 4.0) as u64
+        );
         // The engine parses the byte-suffixed form (plain integers are rejected).
         assert!(limit.value.text.ends_with('B'));
         assert_eq!(parse_bytes(&limit.value.text), Some(bytes));
@@ -309,7 +407,7 @@ mod tests {
     #[test]
     fn env_overrides_the_cgroup_and_keeps_the_user_text() {
         let env = env_from(&[("MALLARDCUBE_MEMORY_LIMIT", "8GiB")]);
-        let settings = EngineSettings::resolve_from(&env, Some(2 * GIB));
+        let settings = EngineSettings::resolve_from(&env, Some(2 * GIB), 16);
         let limit = settings.memory_limit.expect("env limit");
         assert_eq!(limit.source, SettingSource::Env);
         assert_eq!(limit.value.text, "8GiB", "engine-ready text passes through");
@@ -323,7 +421,7 @@ mod tests {
             ("MALLARDCUBE_MEMORY_LIMIT", "lots"),
             ("MALLARDCUBE_THREADS", "many"),
         ]);
-        let settings = EngineSettings::resolve_from(&env, Some(4 * GIB));
+        let settings = EngineSettings::resolve_from(&env, Some(4 * GIB), 16);
         assert_eq!(
             settings.memory_limit.map(|s| s.source),
             Some(SettingSource::Cgroup),
@@ -331,12 +429,60 @@ mod tests {
         );
         assert!(settings.threads.is_none(), "a bad thread count is ignored");
 
-        let bare = EngineSettings::resolve_from(&env_from(&[]), None);
+        let bare = EngineSettings::resolve_from(&env_from(&[]), None, 16);
         assert!(
             bare.memory_limit.is_none(),
             "no cgroup, no override: engine default"
         );
-        assert_eq!(bare.memory_limit.as_ref().map(|s| s.source), None);
+    }
+
+    #[test]
+    fn query_slots_default_to_a_quarter_of_the_cores() {
+        let slots =
+            |cores: usize| EngineSettings::resolve_from(&env_from(&[]), None, cores).query_slots();
+        assert_eq!(slots(16), 4);
+        assert_eq!(slots(8), 2);
+        assert_eq!(slots(4), 1);
+        assert_eq!(slots(1), 1, "at least one slot");
+
+        let env = env_from(&[("MALLARDCUBE_MAX_CONCURRENT_QUERIES", "2")]);
+        let settings = EngineSettings::resolve_from(&env, Some(4 * GIB), 16);
+        assert_eq!(settings.query_slots(), 2);
+        assert_eq!(settings.max_concurrent_queries.source, SettingSource::Env);
+        // The memory division follows the override, not the core count.
+        assert_eq!(
+            settings.memory_limit.unwrap().value.bytes,
+            Some((4.0 * GIB as f64 * CGROUP_MEMORY_FRACTION / 2.0) as u64)
+        );
+
+        let bad = env_from(&[("MALLARDCUBE_MAX_CONCURRENT_QUERIES", "0")]);
+        assert_eq!(
+            EngineSettings::resolve_from(&bad, None, 16).query_slots(),
+            4,
+            "zero is not a valid slot count"
+        );
+    }
+
+    #[test]
+    fn query_timeout_defaults_to_five_minutes_and_zero_disables_it() {
+        let default = EngineSettings::resolve_from(&env_from(&[]), None, 16);
+        assert_eq!(default.timeout(), Some(Duration::from_secs(300)));
+        assert_eq!(default.query_timeout.source, SettingSource::Default);
+
+        let disabled = EngineSettings::resolve_from(
+            &env_from(&[("MALLARDCUBE_QUERY_TIMEOUT_S", "0")]),
+            None,
+            16,
+        );
+        assert_eq!(disabled.timeout(), None);
+        assert_eq!(disabled.query_timeout.source, SettingSource::Env);
+
+        let custom = EngineSettings::resolve_from(
+            &env_from(&[("MALLARDCUBE_QUERY_TIMEOUT_S", "45")]),
+            None,
+            16,
+        );
+        assert_eq!(custom.timeout(), Some(Duration::from_secs(45)));
     }
 
     #[test]
@@ -355,7 +501,7 @@ mod tests {
     #[test]
     fn percent_values_keep_the_raw_text() {
         let env = env_from(&[("MALLARDCUBE_MEMORY_LIMIT", "80%")]);
-        let limit = EngineSettings::resolve_from(&env, Some(4 * GIB))
+        let limit = EngineSettings::resolve_from(&env, Some(4 * GIB), 16)
             .memory_limit
             .expect("percent is a valid engine value");
         assert_eq!(limit.source, SettingSource::Env);
@@ -385,7 +531,7 @@ mod tests {
             ("MALLARDCUBE_THREADS", "4"),
             ("MALLARDCUBE_TEMP_DIR", dir.to_str().unwrap()),
         ]);
-        let settings = EngineSettings::resolve_from(&env, None);
+        let settings = EngineSettings::resolve_from(&env, None, 16);
         let threads = settings.threads.expect("threads");
         assert_eq!(threads.value, 4);
         assert_eq!(threads.source, SettingSource::Env);
@@ -394,7 +540,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp.value);
 
         assert!(
-            EngineSettings::resolve_from(&env_from(&[("MALLARDCUBE_THREADS", "0")]), None)
+            EngineSettings::resolve_from(&env_from(&[("MALLARDCUBE_THREADS", "0")]), None, 16)
                 .threads
                 .is_none(),
             "zero threads is not a valid override"

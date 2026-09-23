@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 
 pub struct Backend {
     conn: Mutex<Connection>,
+    /// Engine-side cancellation handle (plan 051-B): the request handler
+    /// interrupts this connection when a query outlives its timeout.
+    interrupt: Arc<duckdb::InterruptHandle>,
 }
 
 /// A fixed set of pre-opened, read-only DuckDB connections shared across
@@ -178,8 +181,10 @@ impl BackendPool {
                     crate::engine::aggregate::AGG_ALIAS
                 ))?;
             }
+            let interrupt = conn.interrupt_handle();
             backends.push(Arc::new(Backend {
                 conn: Mutex::new(conn),
+                interrupt,
             }));
         }
         Ok(BackendPool {
@@ -480,6 +485,13 @@ fn value_to_f64(v: &duckdb::types::Value) -> Option<f64> {
 }
 
 impl Backend {
+    /// Cancel whatever query is running on this connection. DuckDB aborts the
+    /// query at its next interruption point; the caller sees a query error
+    /// (plan 051-B request timeouts).
+    pub fn interrupt(&self) {
+        self.interrupt.interrupt();
+    }
+
     /// Lock the connection, recovering from a poisoned mutex.
     ///
     /// Request handling catches panics so the server survives (`main.rs`). If a
@@ -495,16 +507,20 @@ impl Backend {
     /// Open a file-based DuckDB database. No seeding — the user owns the schema.
     pub fn open(path: &Path) -> Result<Self, duckdb::Error> {
         let conn = Connection::open(path)?;
+        let interrupt = conn.interrupt_handle();
         Ok(Backend {
             conn: Mutex::new(conn),
+            interrupt,
         })
     }
 
     pub fn create_demo_file(path: &Path) -> Result<Self, duckdb::Error> {
         let conn = Connection::open(path)?;
         Self::seed_demo_connection(&conn)?;
+        let interrupt = conn.interrupt_handle();
         Ok(Backend {
             conn: Mutex::new(conn),
+            interrupt,
         })
     }
 
@@ -1110,6 +1126,14 @@ mod tests {
                 value: 3,
                 source: SettingSource::Env,
             }),
+            max_concurrent_queries: Setting {
+                value: 1,
+                source: SettingSource::Default,
+            },
+            query_timeout: Setting {
+                value: None,
+                source: SettingSource::Default,
+            },
         };
         let path = temp_db_path("engine-settings");
         {
@@ -1269,8 +1293,11 @@ mod tests {
     /// poisoned lock would turn that one failure into permanent SOAP faults.
     #[test]
     fn poisoned_connection_lock_recovers() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        let interrupt = conn.interrupt_handle();
         let backend = Backend {
-            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+            conn: std::sync::Mutex::new(conn),
+            interrupt,
         };
         backend.execute_ddl("CREATE TABLE sales_fact (i INT); INSERT INTO sales_fact VALUES (1);");
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1324,8 +1351,11 @@ mod tests {
 
     #[test]
     fn query_methods_do_not_panic_on_bad_sql() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        let interrupt = conn.interrupt_handle();
         let backend = Backend {
-            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+            conn: std::sync::Mutex::new(conn),
+            interrupt,
         };
         // Malformed SQL / missing tables must degrade to empty/default, not panic.
         assert!(
@@ -1341,8 +1371,11 @@ mod tests {
 
     #[test]
     fn date_dim_seed_has_all_period_flags() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        let interrupt = conn.interrupt_handle();
         let db = Backend {
-            conn: std::sync::Mutex::new(duckdb::Connection::open_in_memory().unwrap()),
+            conn: std::sync::Mutex::new(conn),
+            interrupt,
         };
         let sql = include_str!("../../data/seed_date_dim.sql");
         db.execute_ddl(sql);

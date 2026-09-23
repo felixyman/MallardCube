@@ -57,19 +57,36 @@ engine in the same slot must not change the pool's contract — plan 054.)
   per-connection instances but divide the ceiling by the pool size and set the
   spill directory on each, and record why in this plan.
 
-*Increment 1 (2026-09-23): the settings surface and the `/status` block landed;
-the pool still opens one DuckDB instance per connection, so the memory ceiling
-is per connection. The shared-`Database` change is the next increment.*
+*Increment 1 (2026-09-23): the settings surface and the `/status` block landed.
+The shared-`Database` change turned out to be **unavailable**: duckdb-rs
+1.10503.1 exposes no `Database` type or `open_from`, so multiple connections
+cannot share one engine instance. The substitute now implemented is the
+plan 051-B semaphore plus a ceiling divided by the slot count — that is what
+makes the bound real. Revisit only if the binding grows a shared-handle API.*
 
 ### B. Backpressure and budgets
 
+*Increment 1 landed 2026-09-23 (semaphore + timeout + memory division).*
+
 - A global `tokio::sync::Semaphore` sized by
-  `MALLARDCUBE_MAX_CONCURRENT_QUERIES` (default: pool size), acquired in the
-  blocking execution path (`main.rs:732` uses `spawn_blocking`), with the
-  queue wait recorded in `Timings`. Metadata/Discover requests that are served
-  from dictionaries take no permit.
-- `MALLARDCUBE_QUERY_TIMEOUT_S`: a watchdog thread calls `Connection::interrupt()`
-  (DuckDB has no statement timeout) and the handler returns an XMLA fault.
+  `MALLARDCUBE_MAX_CONCURRENT_QUERIES` (default: cores / 4, at least 1) is
+  acquired by **every** XMLA request and held for its duration, so the bound is
+  exact: slots × per-connection ceiling ≤ budget. A request that waited more
+  than 50 ms logs it. Measured at 50M rows, concurrency 8: p90 1933 → 1312 ms,
+  p99 3020 → 2043 ms, max 3219 → 2336 ms, throughput slightly up, discover
+  957 → 1382 req/s; p50 +55 ms (requests queue instead of oversubscribing).
+- `MALLARDCUBE_QUERY_TIMEOUT_S` (default 300, `0` disables): the handler wraps
+  the blocking worker in `tokio::time::timeout` and, on expiry, calls the
+  connection's `InterruptHandle` — the same checkout the worker is running on —
+  then answers `Query exceeded the N second timeout and was cancelled`.
+  Verified on the 200k-member fixture: a 1.2 s request answers a fault at
+  1.01 s, and the connection serves the next request normally.
+- The memory ceiling's cgroup default is divided by the slot count, which is
+  what makes it a real bound (see 054-C); DuckDB's Rust binding exposes no
+  shared `Database`, so the per-slot division is the substitute for one
+  process-wide engine.
+- Still open in this section: the response budgets (max members / cells /
+  bytes) and the result cache's byte accounting.
 - Response budgets, checked before and during rendering:
   `MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE`, `MAX_CELLS`, `MAX_RESPONSE_BYTES`.
   On breach: a SOAP fault naming the limit (the shape Excel renders as a data

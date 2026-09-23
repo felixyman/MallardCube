@@ -24,6 +24,10 @@ struct AppState {
     /// Catalog/cube/data-freshness facts for `GET /status`; the data stamp is
     /// updated on reload.
     status: std::sync::RwLock<mallardcube::status::StatusInfo>,
+    /// Heavy-query slots (plan 051-B): every XMLA request holds one permit for
+    /// its duration, which bounds engine concurrency — and with it, the memory
+    /// the divided engine ceiling can actually add up to.
+    query_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// Snapshot the current backend source (cheap `Arc` clone). A poisoned lock
@@ -462,9 +466,18 @@ async fn run_server() {
                 limit.source.as_str()
             );
         }
+        let query_slots = mallardcube::engine::settings::query_slots();
+        println!(
+            "🚦 Query slots: {query_slots} concurrent request(s); timeout: {}",
+            match mallardcube::engine::settings::timeout() {
+                Some(t) => format!("{}s", t.as_secs()),
+                None => "off".to_string(),
+            }
+        );
         std::sync::Arc::new(AppState {
             backend_source: std::sync::RwLock::new(std::sync::Arc::new(backend_source)),
             status: std::sync::RwLock::new(status),
+            query_slots: Arc::new(tokio::sync::Semaphore::new(query_slots)),
         })
     };
 
@@ -609,6 +622,17 @@ fn build_user_context(headers: &HeaderMap, config: &ProxyConfig) -> UserContext 
 
 // ---- HTTP helpers ----
 
+/// SOAP fault body for request-level failures (panic, timeout, shutdown).
+fn fault_body(message: &str) -> String {
+    format!(
+        "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+         <soap:Body><soap:Fault><faultcode>XMLAnalysisError</faultcode>\
+         <faultstring>{}</faultstring></soap:Fault></soap:Body>\
+         </soap:Envelope>",
+        mallardcube::response::xml_escape(message)
+    )
+}
+
 fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -732,12 +756,34 @@ async fn handle_xmla(
         println!("🔍 Execute body:\n{}", body);
     }
 
+    // Wait for a query slot before starting the clock: queueing is cheap and
+    // bounded, running everything at once is what the slot count prevents.
+    let waited = std::time::Instant::now();
+    let permit = match state.query_slots.clone().acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::OK,
+                headers,
+                fault_body("Server is shutting down"),
+            );
+        }
+    };
+    if waited.elapsed() > std::time::Duration::from_millis(50) {
+        println!("⏳ waited {:?} for a query slot", waited.elapsed());
+    }
+    // One checkout for the whole request: the worker runs on it and the
+    // timeout path interrupts the same connection.
+    let request_backend = current_source(&state).checkout();
+    let interrupt_target = request_backend.clone();
+
     let request_for_worker = request.clone();
     let body_for_worker = body.clone();
     let user_ctx = user_context.clone();
     let cfg = config.clone();
-    let backend_source = current_source(&state);
-    let response_body = tokio::task::spawn_blocking(move || {
+    let task = tokio::task::spawn_blocking(move || {
+        // The permit is held for the whole request (released on return).
+        let _permit = permit;
         mallardcube::xmla_trace::mark_request_start();
         let session_id = body_for_worker.find("SessionId=\"").and_then(|start| {
             let after = start + 11;
@@ -746,7 +792,7 @@ async fn handle_xmla(
                 .map(|end| body_for_worker[after..after + end].to_string())
         });
         mallardcube::response::set_session_id(session_id);
-        let backend = backend_source.checkout();
+        let backend = request_backend;
         // A panic in request handling must not take the whole server down:
         // log it (see install_panic_diagnostics) and answer with a SOAP fault
         // so the client sees an error instead of a dead connection.
@@ -774,18 +820,41 @@ async fn handle_xmla(
                     None,
                     None,
                 );
-                format!(
-                    "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\
-                     <soap:Body><soap:Fault><faultcode>XMLAnalysisError</faultcode>\
-                     <faultstring>Internal error: {}</faultstring></soap:Fault></soap:Body>\
-                     </soap:Envelope>",
-                    mallardcube::response::xml_escape(&msg)
-                )
+                fault_body(&format!("Internal error: {msg}"))
             }
         }
-    })
-    .await
-    .expect("XMLA worker task panicked");
+    });
+    let response_body = match mallardcube::engine::settings::timeout() {
+        None => task.await.expect("XMLA worker task panicked"),
+        Some(timeout) => match tokio::time::timeout(timeout, task).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(join_err)) => {
+                eprintln!("!!! XMLA worker task failed: {join_err}");
+                fault_body(&format!("Internal error: {join_err}"))
+            }
+            Err(_elapsed) => {
+                // Abort the engine query on the connection the worker holds;
+                // DuckDB stops at its next interruption point and the worker
+                // task unwinds into a fault of its own, which we drop.
+                interrupt_target.interrupt();
+                eprintln!(
+                    "!!! query exceeded the {}s timeout; interrupted",
+                    timeout.as_secs()
+                );
+                mallardcube::xmla_trace::trace_request(
+                    "QueryTimeout",
+                    &body,
+                    "query cancelled",
+                    None,
+                    None,
+                );
+                fault_body(&format!(
+                    "Query exceeded the {} second timeout and was cancelled",
+                    timeout.as_secs()
+                ))
+            }
+        },
+    };
 
     if body.contains("MDSCHEMA_MEMBERS") {
         println!(
