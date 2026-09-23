@@ -240,6 +240,51 @@ fn apply_set_op(rows: &mut Vec<(String, f64)>, op: &Option<AxisSetOp>) {
     }
 }
 
+/// Apply a set op to the **outer** key column of a two-dimension result: the op
+/// ranks or filters the outer members by their totals over the inner dimension,
+/// and the survivors keep every one of their rows. Excel's subselect filters
+/// arrive this way for a nested pivot (`Filter(categories, Revenue >= n)`), and
+/// the reference keeps the surviving categories with all their channels — the
+/// previous code dropped the op entirely on multi-dimension results (plan 051).
+fn apply_set_op_pairs(rows: &mut Vec<(String, String, f64)>, op: &Option<AxisSetOp>) {
+    if op.is_none() {
+        return;
+    }
+    let mut totals: Vec<(String, f64)> = Vec::new();
+    for (outer, _, value) in rows.iter() {
+        match totals.iter_mut().find(|(key, _)| key == outer) {
+            Some((_, total)) => *total += *value,
+            None => totals.push((outer.clone(), *value)),
+        }
+    }
+    apply_set_op(&mut totals, op);
+    let keep: std::collections::HashSet<&str> = totals.iter().map(|(k, _)| k.as_str()).collect();
+    rows.retain(|(outer, _, _)| keep.contains(outer.as_str()));
+}
+
+/// The same for three or more dimensions: the outer key is the first element of
+/// each row's key vector, ranked by the first measure's total.
+fn apply_set_op_grouped_n(rows: &mut Vec<(Vec<String>, Vec<f64>)>, op: &Option<AxisSetOp>) {
+    if op.is_none() {
+        return;
+    }
+    let mut totals: Vec<(String, f64)> = Vec::new();
+    for (keys, values) in rows.iter() {
+        let Some(outer) = keys.first() else { continue };
+        let value = values.first().copied().unwrap_or(0.0);
+        match totals.iter_mut().find(|(key, _)| key == outer) {
+            Some((_, total)) => *total += value,
+            None => totals.push((outer.clone(), value)),
+        }
+    }
+    apply_set_op(&mut totals, op);
+    let keep: std::collections::HashSet<&str> = totals.iter().map(|(k, _)| k.as_str()).collect();
+    rows.retain(|(keys, _)| {
+        keys.first()
+            .is_some_and(|outer| keep.contains(outer.as_str()))
+    });
+}
+
 fn sort_by_value(rows: &mut [(String, f64)], desc: bool) {
     rows.sort_by(|a, b| {
         if desc {
@@ -991,15 +1036,16 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
             group_by, set_op, ..
         } => {
             if group_by.len() >= 3 {
-                QueryResult::MultiGroupedN(
-                    backend
-                        .query_grouped_n(&sql, group_by.len())
-                        .into_iter()
-                        .map(|(keys, value)| (keys, vec![value]))
-                        .collect(),
-                )
+                let mut rows: Vec<(Vec<String>, Vec<f64>)> = backend
+                    .query_grouped_n(&sql, group_by.len())
+                    .into_iter()
+                    .map(|(keys, value)| (keys, vec![value]))
+                    .collect();
+                apply_set_op_grouped_n(&mut rows, set_op);
+                QueryResult::MultiGroupedN(rows)
             } else if group_by.len() == 2 {
-                let pairs = backend.query_pairs(&sql);
+                let mut pairs = backend.query_pairs(&sql);
+                apply_set_op_pairs(&mut pairs, set_op);
                 QueryResult::Pairs(pairs)
             } else {
                 let mut rows = backend.query_grouped_1d(&sql);

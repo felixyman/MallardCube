@@ -3734,6 +3734,54 @@ mod tests {
     // three dimensions. The reference returns the nested Rows structure (41
     // tuples) crossed with the Columns field × the measures.
     #[test]
+    /// Excel's value filter on a nested pivot arrives as a subselect —
+    /// `FROM (SELECT Filter(<categories>, ([Measures].[Revenue] >= n)) ON COLUMNS ...)`
+    /// (captured from the VM sweep, 2026-09-23). The reference keeps the
+    /// categories whose total passes, with all of their channels; the
+    /// multi-dimension plan path used to drop the op entirely and return every
+    /// category.
+    #[test]
+    fn oracle_subselect_value_filter_keeps_only_qualifying_members() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT Filter(Hierarchize([Category].[Category].[Category].AllMembers), ([Measures].[Revenue]>=26000000)) ON COLUMNS FROM [Sales]) CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            let captions = axis_tuple_captions(&xml, "Axis0");
+            let shown: std::collections::BTreeSet<String> = captions
+                .iter()
+                .filter_map(|tuple| tuple.first().cloned())
+                .filter(|name| name != "All")
+                .collect();
+            // The fixture's own SQL decides who passes: the filter is per
+            // category over all channels, exactly what the subselect asks.
+            let expected = demo_count(
+                "SELECT COUNT(*) FROM (SELECT category FROM sales_fact \
+                 GROUP BY category HAVING SUM(revenue) >= 26000000)",
+            ) as usize;
+            assert!(
+                expected > 0 && expected < 20,
+                "the filter is selective: {expected}"
+            );
+            assert_eq!(shown.len(), expected, "the surviving categories: {shown:?}");
+            assert!(
+                shown.contains("Clothing"),
+                "a qualifying category is present: {shown:?}"
+            );
+            assert!(
+                !shown.contains("Automotive"),
+                "Automotive (25.1M) must be filtered out: {shown:?}"
+            );
+            // The survivor keeps its own total on the (All) channel row.
+            let values = cell_values(&xml);
+            let clothing =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE category = 'Clothing'");
+            assert!(
+                values.contains(&clothing),
+                "the surviving category keeps its total"
+            );
+        });
+    }
+
     /// Mirror-measured (2026-09-23): measures cross-joined on the Rows edge stay
     /// there — 21 `(Category, Revenue)` tuples with the measure second, the
     /// columns edge unchanged at 5 Channel tuples, and the grid of cells.

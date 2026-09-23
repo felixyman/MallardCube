@@ -222,9 +222,11 @@ Still open in this section:
 
    Pre-existing gaps the sweep reproduced (neither is a regression):
    - a value filter delivered as
-     `FROM (SELECT Filter(<members>, <condition>) ON COLUMNS ...)` is **ignored**
-     — the trace holds the request and our unfiltered response while the mirror
-     returns only the qualifying members;
+     `FROM (SELECT Filter(<members>, <condition>) ON COLUMNS ...)` was
+     **ignored** — fixed 2026-09-23: the multi-dimension plan paths dropped
+     `set_op` entirely, and now rank/filter the outer key column by its totals
+     over the inner dimensions. Sweep3's `nested_value_filter` case went from a
+     42x2 grid to 24x2, byte-identical to the mirror's line;
    - the sweep's COM-driven Top-N never reaches the proxy (0 `TopCount` requests
      in 1,148 traced ones) while the mirror filters; capturing the mirror's
      request needs the relay in the sweep path;
