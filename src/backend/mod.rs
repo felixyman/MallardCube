@@ -1,3 +1,4 @@
+use crate::engine::settings::EngineSettings;
 use duckdb::{AccessMode, Config, Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -57,8 +58,30 @@ pub fn pool_size() -> usize {
         })
 }
 
-fn open_read_only(path: &Path) -> Result<Connection, duckdb::Error> {
-    let config = Config::default().access_mode(AccessMode::ReadOnly)?;
+fn open_read_only(path: &Path, settings: &EngineSettings) -> Result<Connection, duckdb::Error> {
+    match open_with_settings(path, settings) {
+        Ok(conn) => Ok(conn),
+        Err(e) => {
+            // A rejected setting must not take the server down: retry with the
+            // engine's own defaults and say so.
+            eprintln!("⚠️  engine settings rejected ({e}); opening with engine defaults");
+            let config = Config::default().access_mode(AccessMode::ReadOnly)?;
+            Connection::open_with_flags(path, config)
+        }
+    }
+}
+
+fn open_with_settings(path: &Path, settings: &EngineSettings) -> Result<Connection, duckdb::Error> {
+    let mut config = Config::default().access_mode(AccessMode::ReadOnly)?;
+    if let Some(limit) = &settings.memory_limit {
+        config = config.max_memory(&limit.value.text)?;
+    }
+    if let Some(threads) = &settings.threads {
+        config = config.threads(threads.value as i64)?;
+    }
+    if let Some(dir) = &settings.temp_directory {
+        config = config.with("temp_directory", dir.value.display().to_string())?;
+    }
     Connection::open_with_flags(path, config)
 }
 
@@ -135,9 +158,14 @@ impl BackendSource {
 impl BackendPool {
     fn open(path: &Path) -> Result<Self, duckdb::Error> {
         let size = pool_size();
+        // Resolved once per process (plan 051-A / 054-C), then reported by
+        // /status. Until the shared-engine change lands, each pooled
+        // connection is its own DuckDB instance and the ceiling applies per
+        // connection rather than process-wide.
+        let settings = crate::engine::settings::effective();
         let mut backends = Vec::with_capacity(size);
         for _ in 0..size {
-            let conn = open_read_only(path)?;
+            let conn = open_read_only(path, &settings)?;
             // Aggregation sidecar: attached read-only so rollup queries share the
             // pooled connection. Only attach when routing was actually enabled
             // (build succeeded and MALLARDCUBE_AGG_CACHE is set); a failed build
@@ -1061,6 +1089,44 @@ mod tests {
             !std::sync::Arc::ptr_eq(&third, &first),
             "a cloned source must continue the rotation (shared counter)"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn engine_settings_reach_the_duckdb_connection() {
+        // The crate's config path (not `SET` after connect) is what the pool
+        // uses, so prove the values land on a real connection.
+        use crate::engine::settings::{EngineSettings, MemoryLimit, Setting, SettingSource};
+        let settings = EngineSettings {
+            memory_limit: Some(Setting {
+                value: MemoryLimit {
+                    text: "3221225472B".into(),
+                    bytes: Some(3 << 30),
+                },
+                source: SettingSource::Env,
+            }),
+            temp_directory: None,
+            threads: Some(Setting {
+                value: 3,
+                source: SettingSource::Env,
+            }),
+        };
+        let path = temp_db_path("engine-settings");
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t (i INT);").unwrap();
+        }
+        let conn =
+            super::open_with_settings(&path, &settings).expect("read-only conn with settings");
+        let (limit, threads): (String, i64) = conn
+            .query_row(
+                "SELECT current_setting('memory_limit'), current_setting('threads')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(limit, "3.0 GiB", "max_memory applied: {limit}");
+        assert_eq!(threads, 3, "threads applied");
         let _ = std::fs::remove_file(&path);
     }
 

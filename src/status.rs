@@ -9,6 +9,7 @@
 //! configured.
 
 use crate::engine::model::UserContext;
+use crate::engine::settings::EngineSettings;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,10 +65,15 @@ pub struct StatusInfo {
     pub started_at_unix: u64,
     pub data: DataStamp,
     pub result_cache: bool,
+    /// Engine settings in force and where each came from (plan 051-A/054-C).
+    pub engine: EngineSettings,
 }
 
 impl StatusInfo {
     pub fn to_json(&self) -> String {
+        let memory_limit = self.engine.memory_limit.as_ref();
+        let temp_directory = self.engine.temp_directory.as_ref();
+        let threads = self.engine.threads.as_ref();
         serde_json::json!({
             "catalog": self.catalog,
             "cube": self.cube,
@@ -79,6 +85,18 @@ impl StatusInfo {
                 "size_bytes": self.data.size_bytes,
                 "mtime_unix": self.data.mtime_unix,
                 "loaded_at_unix": self.data.loaded_at_unix,
+            },
+            "engine": {
+                "memory_limit": memory_limit.map(|s| s.value.display()),
+                "memory_limit_source": memory_limit
+                    .map(|s| s.source.as_str())
+                    .unwrap_or("default"),
+                "temp_directory": temp_directory.map(|s| s.value.display().to_string()),
+                "temp_directory_source": temp_directory
+                    .map(|s| s.source.as_str())
+                    .unwrap_or("default"),
+                "threads": threads.map(|s| s.value),
+                "threads_source": threads.map(|s| s.source.as_str()).unwrap_or("default"),
             }
         })
         .to_string()
@@ -120,6 +138,7 @@ mod tests {
 
     #[test]
     fn status_json_has_freshness_fields() {
+        use crate::engine::settings::{MemoryLimit, Setting, SettingSource};
         let info = StatusInfo {
             catalog: "SALES_ANALYTICS".into(),
             cube: "Sales".into(),
@@ -132,6 +151,17 @@ mod tests {
                 loaded_at_unix: 3,
             },
             result_cache: true,
+            engine: EngineSettings {
+                memory_limit: Some(Setting {
+                    value: MemoryLimit {
+                        text: "3006477107B".into(),
+                        bytes: Some(3_006_477_107),
+                    },
+                    source: SettingSource::Cgroup,
+                }),
+                temp_directory: None,
+                threads: None,
+            },
         };
         let json = info.to_json();
         for needle in [
@@ -140,6 +170,11 @@ mod tests {
             "\"mtime_unix\":2",
             "\"loaded_at_unix\":3",
             "\"result_cache\":true",
+            "\"memory_limit\":\"2.8 GiB\"",
+            "\"memory_limit_source\":\"cgroup\"",
+            "\"temp_directory\":null",
+            "\"threads\":null",
+            "\"threads_source\":\"default\"",
         ] {
             assert!(json.contains(needle), "missing {needle} in {json}");
         }

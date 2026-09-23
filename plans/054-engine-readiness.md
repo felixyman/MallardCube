@@ -96,14 +96,22 @@ instead of baking DuckDB's knobs into the product:
 | query timeout | watchdog + `Connection::interrupt()` | `max_execution_time` |
 
 - The **default memory ceiling is cgroup-aware**: read
-  `/sys/fs/cgroup/memory.max` (v2) or `memory.limit_in_bytes` (v1) first, then
-  the host's RAM, then the built-in default. On Kubernetes the pod limit is the
-  truth; "70% of host RAM" is wrong there.
-- `MALLARDCUBE_*` environment variables remain as overrides on top of the
-  computed defaults.
+  `/sys/fs/cgroup/memory.max` (v2) or `memory/memory.limit_in_bytes` (v1) and
+  use 70% of it. On Kubernetes the pod limit is the truth; "a share of host
+  RAM" is wrong there. When no cgroup limit is set, **leave the engine's own
+  default alone** rather than recompute one from host RAM — DuckDB already
+  derives its default that way, and setting a lower number would be a silent
+  regression outside containers.
+- `MALLARDCUBE_*` environment variables are overrides on top of the computed
+  defaults.
 - `/status` reports the effective values and where each came from
-  (`cgroup | host | env | default`), so "why did it OOM at 8 GiB?" is
-  answerable from the pod itself.
+  (`cgroup | env | default`), so "why did it OOM at 8 GiB?" is answerable from
+  the pod itself.
+
+*Implemented 2026-09-23 in `src/engine/settings.rs` (first increment of 051-A):
+resolution ladder, cgroup parsing, `/status` block, and an integration test that
+the values reach a real DuckDB connection. Until the shared-engine change lands,
+the ceiling applies per pooled connection rather than process-wide.*
 
 ### D. Protocol-overhead gate (the "can XML generation keep up?" number)
 

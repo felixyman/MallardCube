@@ -38,10 +38,14 @@ from it: one buffer pool, one catalog, one temp directory, one place to set
 limits. (DuckDB is the only engine today; the shape matters because a remote
 engine in the same slot must not change the pool's contract — plan 054.)
 
-- Limits come from the **engine settings surface (plan 054-C)**: a
-  cgroup-aware memory ceiling (not "70% of host RAM" — on Kubernetes the pod
-  limit is the truth), a spill directory, and `preserve_insertion_order=false`.
-  `MALLARDCUBE_*` environment variables override the computed defaults.
+- Limits come from the **engine settings surface (plan 054-C, landed
+  2026-09-23 in `src/engine/settings.rs`)**: a cgroup-aware memory ceiling (not
+  a share of host RAM — on Kubernetes the pod limit is the truth), a spill
+  directory, and the thread count. `MALLARDCUBE_*` environment variables
+  override the computed defaults and `/status` reports the effective values.
+- `preserve_insertion_order=false` is **not** switched on yet: it can change
+  result order where the SQL has no `ORDER BY`, so it lands with the oracle
+  corpus and a bench run that prove the Excel-visible shapes are unchanged.
 - `threads`: keep the engine default (all cores) but make the pool size and the
   query semaphore (below) the concurrency control; document the trade-off.
 - The aggregation sidecar `ATTACH` becomes instance-wide (attach once, not per
@@ -52,6 +56,10 @@ engine in the same slot must not change the pool's contract — plan 054.)
 - Fallback if a shared `Database` fights the read-only/RLS test suite: keep the
   per-connection instances but divide the ceiling by the pool size and set the
   spill directory on each, and record why in this plan.
+
+*Increment 1 (2026-09-23): the settings surface and the `/status` block landed;
+the pool still opens one DuckDB instance per connection, so the memory ceiling
+is per connection. The shared-`Database` change is the next increment.*
 
 ### B. Backpressure and budgets
 

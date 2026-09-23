@@ -449,11 +449,19 @@ async fn run_server() {
             started_at_unix: mallardcube::status::now_unix(),
             data: mallardcube::status::DataStamp::capture(backend_source.path()),
             result_cache: mallardcube::execute::cache::enabled(),
+            engine: mallardcube::engine::settings::effective(),
         };
         println!(
             "📅 Data stamp: {} ({} bytes, modified {} unix)",
             status.data.path, status.data.size_bytes, status.data.mtime_unix
         );
+        if let Some(limit) = &status.engine.memory_limit {
+            println!(
+                "🧠 Engine memory limit: {} (source: {})",
+                limit.value.display(),
+                limit.source.as_str()
+            );
+        }
         std::sync::Arc::new(AppState {
             backend_source: std::sync::RwLock::new(std::sync::Arc::new(backend_source)),
             status: std::sync::RwLock::new(status),
