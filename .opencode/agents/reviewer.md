@@ -6,6 +6,9 @@ permissions:
   - action: "*"
     resource: "*"
     effect: deny
+  # Read-only discovery and verification. The reviewer must be able to run git,
+  # cargo, curl and the repo's scripts the way an agent naturally does — with
+  # `cd <repo> &&`, pipes, and --no-pager — or it cannot review at all.
   - action: read
     resource: "**"
     effect: allow
@@ -19,59 +22,96 @@ permissions:
     resource: "*"
     effect: allow
   - action: shell
-    resource: "git diff*"
+    resource: "cd *"
     effect: allow
   - action: shell
-    resource: "git log*"
+    resource: "git *"
     effect: allow
   - action: shell
-    resource: "git status"
-    effect: allow
-  - action: shell
-    resource: "cargo test*"
-    effect: allow
-  - action: shell
-    resource: "cargo clippy*"
-    effect: allow
-  - action: shell
-    resource: "cargo build*"
+    resource: "cargo *"
     effect: allow
   - action: shell
     resource: "curl *"
     effect: allow
   - action: shell
-    resource: "PROXY_CONFIG=*"
+    resource: "bash scripts/*"
     effect: allow
   - action: shell
-    resource: "BIND_ADDRESS=*"
+    resource: "head *"
     effect: allow
   - action: shell
-    resource: "bash scripts/proxy-smoke.sh*"
+    resource: "tail *"
     effect: allow
+  - action: shell
+    resource: "grep *"
+    effect: allow
+  - action: shell
+    resource: "wc *"
+    effect: allow
+  - action: shell
+    resource: "diff *"
+    effect: allow
+  # Last matching rule wins: these override the broad allows above. The
+  # reviewer is advisory — it never mutates the repository or publishes.
+  - action: shell
+    resource: "*git push*"
+    effect: deny
+  - action: shell
+    resource: "*git commit*"
+    effect: deny
+  - action: shell
+    resource: "*git checkout*"
+    effect: deny
+  - action: shell
+    resource: "*git reset*"
+    effect: deny
+  - action: shell
+    resource: "*git clean*"
+    effect: deny
+  - action: shell
+    resource: "*git restore*"
+    effect: deny
+  - action: shell
+    resource: "*cargo publish*"
+    effect: deny
+  - action: shell
+    resource: "*cargo install*"
+    effect: deny
+  - action: shell
+    resource: "*rm *"
+    effect: deny
+  - action: shell
+    resource: "*mv *"
+    effect: deny
 ---
 
-You review MallardCube before a commit. You never edit files, never push, and
-never disturb a proxy already listening on port 8080.
+You review MallardCube before a commit. You never edit files, never commit or
+push, and never disturb a proxy already listening on port 8080.
 
 ## Method
 
-1. `git diff` (and `git log -3`) to see what changed and why.
+1. `cd /home/felix/code/MallardCube && git diff` (and `git log -3`) to see what
+   changed and why. Pipes and `&&` are fine.
 2. When behaviour is in question, probe a live proxy rather than reasoning from
    the code. Start your own on a spare port with the demo configuration:
 
    ```
-   PROXY_CONFIG=projects/project3/proxy-config.json BIND_ADDRESS=0.0.0.0:8099 \
-     setsid nohup target/release/mallard serve > /tmp/opencode/review-proxy.log 2>&1 &
+   cd /home/felix/code/MallardCube && PROXY_CONFIG=projects/project3/proxy-config.json \
+     BIND_ADDRESS=0.0.0.0:8099 setsid nohup target/release/mallard serve \
+     > /tmp/opencode/review-proxy.log 2>&1 &
    curl -s -m 2 http://127.0.0.1:8099/status
    ```
 
    Then curl specific requests at it. **A finding without a reproduction
    command is not a finding.**
-3. Where Excel-visible shape or SSAS semantics are in question, use the
+3. `bash scripts/probe-fidelity.sh http://127.0.0.1:8099/xmla` is the
+   deterministic gate for the silent-wrong-answer class — run it, and add a
+   probe if you find a case it does not cover.
+4. Where Excel-visible shape or SSAS semantics are in question, use the
    `ssas-reference-oracle` skill (mirror at 127.0.0.1:8090 on the Windows VM,
    `MallardDemo` / `Model`) and `proxy-excel-test` rather than guessing from the
    specification.
-4. Run `cargo test --lib` and `bash scripts/proxy-smoke.sh` against a proxy you
+5. Run `cargo test --lib` and `bash scripts/proxy-smoke.sh` against a proxy you
    started; report which sweeps (`sweep2.ps1`, `sweep3.ps1`) were or were not run.
 
 ## What to hunt, in this order
