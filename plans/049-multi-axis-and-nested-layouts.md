@@ -178,6 +178,40 @@ mirror (`All` + members, grand total 521,586,767). Set-op axes
 (TopCount/Order/Filter) still omit it: summing the returned subset is not the
 grand total, so that needs the plan to carry the real total.
 
+## UI pass: the gestures COM cannot drive (2026-09-23)
+
+Walking the menus in Excel found two real gaps behind the COM "filter object
+created but nothing happens" symptom, both now fixed:
+
+- **Top/Bottom N** (`7983b81`): Excel wraps the set in a subselect —
+  `FROM (SELECT Generate(<set> AS [XL_Filter_Set_0], TopCount(Filter(Except(
+  DrilldownLevel(<set>.Current AS [XL_Filter_HelperSet_0], …), …),
+  Not IsEmpty(<measure>)), n, <measure>)) ON COLUMNS …)`. The proxy faulted on
+  the `Filter(...)` as an unsupported label filter (the `Not IsEmpty` predicate
+  was not recognised) and Excel silently showed everything. The predicate is
+  now treated as a "has data" test, the subselect's `TopCount` reaches the plan
+  as `AxisSetOp::TopCountFilter` (keeps the top n *in the outer axis's order*,
+  which is what the reference returns), and the proxy answers Excel's exact MDX
+  member-for-member like the mirror: `All, Furniture, Garden, Health, Jewelry,
+  Shoes` with `(All)` = 137,116,126.
+- **Value Filters** (`708b840`): the condition arrives parenthesised —
+  `Filter(<set>, ([Measures].[Revenue]>26000000))` — which the parser models as
+  a one-item tuple, so the set-op extractor never saw the comparison. Verified
+  against the mirror: same twelve members in the same order, and Excel renders
+  them with the subset total.
+
+Verified at parity with the mirror rather than fixed:
+
+- **Page/report filter**: the dropdown lists only `(All)` against the proxy —
+  and against the mirror too (Excel asks `{AddCalculatedMembers({[Territory].
+  [Territory].[(All)].Members})}`, which both engines answer with one member).
+- **Drill-through on a cross-tab**: Excel's nested-tuple statement
+  (`DRILLTHROUGH MAXROWS 1000 … WHERE ((([Measures].[Revenue],
+  [Category].[Category].&[Automotive]),[Channel].[Channel].&[Direct]))`) is
+  lowered correctly; the empty sheet for that cell just reflects the demo
+  pairing each category with a single channel (Automotive → Retail returns
+  957 rows).
+
 ## Still open
 
 - **Set-op axes and the `(All)` member** (see above): the reference keeps
