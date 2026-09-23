@@ -1095,11 +1095,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaMembers {
-            member_unique_name,
-            tree_op,
-            restrictions,
-        } => {
+        XmlaRequest::MdschemaMembers { .. } => {
             // Handled by `route_request`, which streams the rowset.
             unreachable!("MDSCHEMA_MEMBERS is routed by route_request")
         }

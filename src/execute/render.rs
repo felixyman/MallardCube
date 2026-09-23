@@ -348,10 +348,18 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
         QueryResult::MultiGroupedN(rows) => rows,
         _ => return empty_cellset(query, backend),
     };
-    // Keys follow `axis_dimensions` (axis 0's dimensions, then axis 1's).
-    let key_index = |axis: usize, pos: usize| -> usize {
-        let before: usize = specs.iter().take(axis).map(|s| s.dims.len()).sum();
-        before + pos
+    // Key columns follow `query.axis_dimensions`, which the plan mirrors
+    // positionally. Resolve each dimension's column **by name**: the previous
+    // arithmetic assumed the specs' dim order matched the plan's, which only
+    // holds when the statement lists COLUMNS before ROWS. With `... ON ROWS,
+    // CrossJoin(A, B) ON COLUMNS` the plan's columns follow the statement, so
+    // every axis got the other edge's values — dimension names with foreign
+    // member keys, and most cells missing (plan 051, mirror-measured).
+    let key_of =
+        |dim: &str| -> Option<usize> { query.axis_dimensions.iter().position(|d| d == dim) };
+    // The value of a dimension in a plan row, or None for a missing column.
+    let value_of = |keys: &[String], dim: &str| -> Option<String> {
+        key_of(dim).and_then(|i| keys.get(i)).cloned()
     };
 
     let measure_names: Vec<String> = specs
@@ -424,134 +432,111 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
         found.then_some(sum)
     };
 
-    // ---- axis 0: one dimension (plus the measures when cross-joined) --------
-    let d0 = spec0.dims[0].clone();
-    let dim0_values = distinct(key_index(0, 0));
-    let mut axis0_coords: Vec<Vec<Option<String>>> = Vec::new();
-    axis0_coords.push(vec![None]);
-    for v in &dim0_values {
-        axis0_coords.push(vec![Some(v.clone())]);
-    }
-
-    // ---- axis 1: one or two dimensions -------------------------------------
-    // Two dimensions: a drilled edge nests parents before their children, a
-    // plain cross-join is the full product (both as the reference returns).
-    let d1 = spec1.dims[0].clone();
-    let nested = spec1.dims.len() >= 2 && query.drilldown_member_hierarchy.is_some();
-    let mut axis1_coords: Vec<Vec<Option<String>>> = Vec::new();
-    if spec1.dims.len() >= 2 {
-        let d2 = spec1.dims[1].clone();
-        let parents = distinct(key_index(1, 0));
-        let children = distinct(key_index(1, 1));
+    // ---- edges -------------------------------------------------------------
+    // Each edge contributes its coordinates: one dimension gives (All) +
+    // members; a cross-joined pair gives the product with (All) first on each
+    // side and the inner member varying fastest (mirror-measured 2026-09-23);
+    // a drilled pair nests parents before their children instead. Both edges
+    // are built the same way — the old code hardcoded "axis 0 is one
+    // dimension", which silently dropped the second dimension of a
+    // cross-joined COLUMNS edge.
+    let edge_coords = |dims: &[String], nested: bool| -> Vec<Vec<Option<String>>> {
+        let values: Vec<Vec<String>> = dims
+            .iter()
+            .map(|dim| key_of(dim).map(distinct).unwrap_or_default())
+            .collect();
+        let mut coords: Vec<Vec<Option<String>>> = Vec::new();
+        if dims.len() < 2 {
+            coords.push(vec![None]);
+            if let Some(first) = values.first() {
+                for value in first {
+                    coords.push(vec![Some(value.clone())]);
+                }
+            }
+            return coords;
+        }
         let excluded: std::collections::HashSet<&str> = query
             .excluded_members
             .iter()
-            .filter(|e| e.dimension == d2 || e.dimension == d1)
+            .filter(|e| e.dimension == dims[0] || e.dimension == dims[1])
             .map(|e| e.key.as_str())
             .collect();
         if nested {
-            axis1_coords.push(vec![None, None]);
-            for parent in &parents {
-                axis1_coords.push(vec![Some(parent.clone()), None]);
+            coords.push(vec![None, None]);
+            for parent in &values[0] {
+                coords.push(vec![Some(parent.clone()), None]);
                 if excluded.contains(parent.as_str()) {
                     continue;
                 }
-                for child in &children {
+                for child in &values[1] {
                     let has_data = data.iter().any(|(keys, _)| {
-                        keys.get(key_index(1, 0)) == Some(parent)
-                            && keys.get(key_index(1, 1)) == Some(child)
+                        value_of(keys, &dims[0]).as_ref() == Some(parent)
+                            && value_of(keys, &dims[1]).as_ref() == Some(child)
                     });
                     if has_data {
-                        axis1_coords.push(vec![Some(parent.clone()), Some(child.clone())]);
+                        coords.push(vec![Some(parent.clone()), Some(child.clone())]);
                     }
                 }
             }
         } else {
-            for parent in std::iter::once(None).chain(parents.iter().map(|p| Some(p.clone()))) {
-                for child in std::iter::once(None).chain(children.iter().map(|c| Some(c.clone()))) {
-                    axis1_coords.push(vec![parent.clone(), child.clone()]);
+            for parent in std::iter::once(None).chain(values[0].iter().map(|v| Some(v.clone()))) {
+                for child in std::iter::once(None).chain(values[1].iter().map(|v| Some(v.clone())))
+                {
+                    coords.push(vec![parent.clone(), child.clone()]);
                 }
             }
         }
-    } else {
-        axis1_coords.push(vec![None]);
-        for v in distinct(key_index(1, 0)) {
-            axis1_coords.push(vec![Some(v)]);
-        }
-    }
+        coords
+    };
+    let nested_edges = query.drilldown_member_hierarchy.is_some();
+    let axis0_coords = edge_coords(&spec0.dims, nested_edges && spec0.dims.len() >= 2);
+    let axis1_coords = edge_coords(&spec1.dims, nested_edges && spec1.dims.len() >= 2);
 
     // ---- tuples ------------------------------------------------------------
-    let mut axis0_tuples = Vec::new();
-    for coord in &axis0_coords {
-        if spec0.measures.is_empty() {
-            axis0_tuples.push(cellset::TupleConfig {
-                members: vec![member_or_all(
-                    &d0,
-                    coord[0].as_deref(),
-                    &query.dim_props,
-                    backend,
-                )],
-            });
-        } else {
-            for m in measure_members.iter().take(n_measures) {
-                axis0_tuples.push(cellset::TupleConfig {
-                    members: vec![
-                        member_or_all(&d0, coord[0].as_deref(), &query.dim_props, backend),
-                        m.clone(),
-                    ],
-                });
+    // One member per dimension of the edge, in edge order, plus the measures
+    // when the statement cross-joined them onto that edge.
+    let edge_tuples = |spec: &crate::mdx::frontend::AxisSpec,
+                       coords: &[Vec<Option<String>>]|
+     -> Vec<cellset::TupleConfig> {
+        let mut tuples = Vec::new();
+        for coord in coords {
+            let members: Vec<cellset::MemberConfig> = spec
+                .dims
+                .iter()
+                .zip(coord.iter())
+                .map(|(dim, value)| member_or_all(dim, value.as_deref(), &query.dim_props, backend))
+                .collect();
+            if spec.measures.is_empty() {
+                tuples.push(cellset::TupleConfig { members });
+            } else {
+                for m in measure_members.iter().take(n_measures) {
+                    let mut with_measure = members.clone();
+                    if spec.measures_first() {
+                        with_measure.insert(0, m.clone());
+                    } else {
+                        with_measure.push(m.clone());
+                    }
+                    tuples.push(cellset::TupleConfig {
+                        members: with_measure,
+                    });
+                }
             }
         }
-    }
-    let mut axis1_tuples = Vec::new();
-    for coord in &axis1_coords {
-        let mut members = vec![member_or_all(
-            &d1,
-            coord[0].as_deref(),
-            &query.dim_props,
-            backend,
-        )];
-        if spec1.dims.len() >= 2 {
-            members.push(member_or_all(
-                &spec1.dims[1],
-                coord[1].as_deref(),
-                &query.dim_props,
-                backend,
-            ));
-        }
-        if !spec1.measures.is_empty() {
-            for m in measure_members.iter().take(n_measures) {
-                let mut with_measure = members.clone();
-                with_measure.push(m.clone());
-                axis1_tuples.push(cellset::TupleConfig {
-                    members: with_measure,
-                });
-            }
-        } else {
-            axis1_tuples.push(cellset::TupleConfig { members });
-        }
-    }
-    apply_axis_display_info(&mut axis1_tuples);
-
-    // ---- cells (row-major, axis 0 fastest; sparse) -------------------------
-    let measure_ids: Vec<String> = {
-        let mut ids: Vec<String> = specs
-            .iter()
-            .flat_map(|s| s.measures.iter())
-            .filter_map(|name| project.model.lookup_measure(name).map(|m| m.id.clone()))
-            .collect();
-        if ids.is_empty() {
-            ids.push(crate::axis_members::measure_id_for_query(query));
-        }
-        ids
+        tuples
     };
-    let mut cells = Vec::new();
+    let axis0_tuples = edge_tuples(spec0, &axis0_coords);
+    let axis1_tuples = edge_tuples(spec1, &axis1_coords);
+
+    // Cells, row-major with axis0 fastest. `measure_ids_for` is resolved once:
+    // it allocated a Vec per cell in the first version.
+    let measure_ids = measure_ids_for(query, &specs, &measure_members);
+    let cells_capacity = axis1_coords.len() * axis0_coords.len() * measure_ids.len();
+    let mut cells = Vec::with_capacity(cells_capacity.min(1_000_000));
     let mut ordinal = 0u32;
     for row in &axis1_coords {
         for col in &axis0_coords {
+            let coord = cell_coord(&query.axis_dimensions, spec0, spec1, col, row);
             for (mi, measure_id) in measure_ids.iter().enumerate() {
-                let mut coord: Vec<Option<&str>> = vec![col[0].as_deref()];
-                coord.extend(row.iter().map(|v| v.as_deref()));
                 if let Some(value) = value_for(&coord, mi) {
                     cells.push(measurement_cell_for(ordinal, value, measure_id));
                 }
@@ -560,27 +545,32 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
         }
     }
 
+    // Every dimension of the edge appears in its hierarchy list, in edge order,
+    // with the measures where the statement put them.
+    let edge_hierarchies =
+        |spec: &crate::mdx::frontend::AxisSpec| -> Vec<cellset::HierarchyConfig> {
+            let mut hierarchies = Vec::new();
+            if spec.measures_first() {
+                hierarchies.push(measures_hierarchy());
+            }
+            for dim in &spec.dims {
+                hierarchies.push(hierarchy_for(dim, &query.dim_props));
+            }
+            if !spec.measures.is_empty() && !spec.measures_first() {
+                hierarchies.push(measures_hierarchy());
+            }
+            hierarchies
+        };
+    let hierarchies0 = edge_hierarchies(spec0);
+    let hierarchies1 = edge_hierarchies(spec1);
     let axis0 = cellset::AxisConfig {
         name: format!("Axis{}", spec0.ordinal),
-        hierarchies: axis_hierarchies(&d0, spec0, &query.dim_props),
+        hierarchies: hierarchies0,
         tuples: axis0_tuples,
     };
     let axis1 = cellset::AxisConfig {
         name: format!("Axis{}", spec1.ordinal),
-        hierarchies: {
-            let mut h = axis_hierarchies(&d1, spec1, &query.dim_props);
-            if spec1.dims.len() >= 2 {
-                let extra = hierarchy_for(&spec1.dims[1], &query.dim_props);
-                // Keep the measures hierarchy last when present.
-                if spec1.measures.is_empty() {
-                    h.push(extra);
-                } else {
-                    let pos = h.len().saturating_sub(1);
-                    h.insert(pos, extra);
-                }
-            }
-            h
-        },
+        hierarchies: hierarchies1,
         tuples: axis1_tuples,
     };
     let (mut axes, second) = if spec0.ordinal <= spec1.ordinal {
@@ -593,7 +583,6 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     render_response(axes, cells, &query.cell_props)
 }
 
-/// The member for a coordinate slot: the `(All)` member when the slot is empty.
 fn member_or_all<B: QueryBackend + ?Sized>(
     dim: &str,
     value: Option<&str>,
@@ -789,6 +778,37 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
     axes.push(second);
     axes.push(full_slicer_axis_with_backend(query, backend));
     render_response(axes, cells, &query.cell_props)
+}
+
+/// A cell's coordinate in the plan's key order: each dimension of each edge
+/// contributes its slot's value (`None` = the `(All)` member). The old code
+/// assumed one dimension per edge and a fixed column order, which cross-wired
+/// the dimensions whenever the statement listed ROWS before COLUMNS (plan 051).
+fn cell_coord<'a>(
+    dims: &[String],
+    spec0: &crate::mdx::frontend::AxisSpec,
+    spec1: &crate::mdx::frontend::AxisSpec,
+    axis0: &'a [Option<String>],
+    axis1: &'a [Option<String>],
+) -> Vec<Option<&'a str>> {
+    dims.iter()
+        .map(|dim| {
+            spec0
+                .dims
+                .iter()
+                .position(|d| d == dim)
+                .and_then(|pos| axis0.get(pos))
+                .or_else(|| {
+                    spec1
+                        .dims
+                        .iter()
+                        .position(|d| d == dim)
+                        .and_then(|pos| axis1.get(pos))
+                })
+                .map(|value| value.as_deref())
+                .unwrap_or(None)
+        })
+        .collect()
 }
 
 /// The measure ids a cross-tab cell carries, in axis order.

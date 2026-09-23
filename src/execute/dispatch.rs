@@ -3734,6 +3734,88 @@ mod tests {
     // three dimensions. The reference returns the nested Rows structure (41
     // tuples) crossed with the Columns field × the measures.
     #[test]
+    /// Mirror-measured (2026-09-23): a cross-joined pair on COLUMNS beside a
+    /// ROWS edge keeps **both** dimensions on that axis — the reference returns
+    /// the product with `(All)` first on each side and the inner member varying
+    /// fastest (45 tuples = 9 x 5 on its smaller model; 105 = 21 x 5 here), the
+    /// rows edge unchanged, and the full grid of cells.
+    ///
+    /// Writing `ON ROWS` before `ON COLUMNS` used to cross-wire the edges: the
+    /// plan's key columns follow the statement's order, while the renderer
+    /// derived them from the specs' order, so each axis carried the other's
+    /// member keys and most cells were missing — silently, with no fault.
+    #[test]
+    fn oracle_crossjoined_pair_on_columns_matches_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS, \
+                 NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), \
+                 Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)})) ON COLUMNS \
+                 FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+
+            let years = data_year_keys();
+            let columns = axis_tuple_captions(&xml, "Axis0");
+            assert_eq!(
+                columns.len(),
+                21 * 5,
+                "category x channel tuples: {columns:?}"
+            );
+            assert_eq!(columns[0], vec!["All", "All"], "outer then inner member");
+            assert_eq!(
+                columns[1],
+                vec!["All", "Direct"],
+                "inner member varies fastest"
+            );
+            assert_eq!(
+                columns[4],
+                vec!["All", "Wholesale"],
+                "the inner set wraps before the outer advances"
+            );
+            assert_eq!(
+                columns[5],
+                vec!["Automotive", "All"],
+                "the outer member advances after its inner set"
+            );
+
+            let rows = axis_tuple_captions(&xml, "Axis1");
+            assert_eq!(rows.len(), years.len() + 1, "All + years");
+            assert_eq!(rows[0], vec!["All"]);
+            assert_eq!(rows[1], vec![years[0].clone()]);
+
+            let values = cell_values(&xml);
+            // Every combination that exists in the data has a cell, plus the
+            // (All) combinations; the grid is sparse where the data is (the
+            // reference omits empty cells rather than sending zeros). The old
+            // cross-wiring produced 8 cells here — one per row, not a grid.
+            let dense: usize = demo_scalar(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT d.year, f.category, f.channel \
+                 FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key)",
+            ) as usize;
+            assert!(dense > 0, "the fixture has combinations");
+            assert!(
+                values.len() >= dense,
+                "{} cells must cover the {dense} existing combinations",
+                values.len()
+            );
+            // Row-major with the columns edge varying fastest.
+            let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], revenue, "All x All");
+            let direct =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE channel = 'Direct'");
+            assert_eq!(values[1], direct, "All x first channel");
+            let wholesale =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE channel = 'Wholesale'");
+            assert_eq!(values[4], wholesale, "All x last channel");
+            let automotive =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE category = 'Automotive'");
+            assert_eq!(
+                values[5], automotive,
+                "the outer member advances after its inner set"
+            );
+        });
+    }
+
     fn oracle_three_dimension_layout_matches_the_reference() {
         with_project3(|| {
             let xml = get_execute_statement_response(

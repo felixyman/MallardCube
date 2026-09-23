@@ -195,13 +195,29 @@ Still open in this section:
    Full Date variant of the same shape is worse still: 4,019 of ~0.5 M cells
    and 10.9 s of rendering (the wildcard lookups below).
 
-   What is pinned today: the corpus covers `CrossJoin(A, B) ON COLUMNS`
-   *without* a rows edge, and
-   `oracle_three_dimension_layout_matches_the_reference` covers the mirrored
-   arrangement (nested pair on Rows, singleton on Columns). Fixing this means
-   correcting the axis placement against the mirror shape above — tuple order,
-   which `(All)` combinations survive `NON EMPTY`, cell ordinals — and adding
-   an oracle test, by the plan 049 method.
+   **Fixed 2026-09-23.** Root cause: the plan's group-by columns follow
+   `query.axis_dimensions` (statement appearance order), while the renderer
+   derived key positions from the *specs'* order — the two agree only when the
+   statement lists COLUMNS first. Key columns are now resolved **by dimension
+   name**, both edges build their coordinates and tuples the same way
+   (`edge_coords`/`edge_tuples`, no more "axis 0 is one dimension"), cell
+   coordinates are assembled in the plan's key order (`cell_coord`), and
+   hierarchy lists follow the edge. `oracle_crossjoined_pair_on_columns_matches_the_reference`
+   pins the mirror's shape (105 tuples here, `(All)` first, inner member
+   fastest, rows unchanged, every existing combination present, and the
+   grand-total/wholesale/Automotive cell values). Excel renders the gesture —
+   two fields in Columns, one in Rows — with Grand Total 521,586,767.
+
+   **Design implication** (see plan 049's phase 4): this was a disagreement
+   between two representations of the same structure — a flat
+   `axis_dimensions` list for SQL and per-axis `AxisSpec`s for rendering —
+   with no invariant tying them together. One axis descriptor built from the
+   AST, carrying explicit key-column indices and consumed by both the emitter
+   and the renderer, removes the whole class; a length check at the
+   plan/execute boundary would have turned this silent wrongness into a loud
+   failure. The corpus also needs the *matrix* (fields x edge x nesting x
+   measures placement x **clause order**), not each shape in isolation — the
+   clause order was the untested axis that bit us.
 2. **Wildcard (All) lookups in the multi-dimension renderer** are still an
    O(rows) scan per cell, which is what makes a large multi-dimension layout
    slow even when the shape is right. The mask-rollup treatment applied to the
