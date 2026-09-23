@@ -1258,19 +1258,32 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
                         .iter()
                         .any(|a| matches!(a, Expr::Str(s) if s.eq_ignore_ascii_case("DESC"))),
                 }),
-                "FILTER" => match args.get(1) {
+                "FILTER" => {
                     // A value filter compares a *measure* against a number;
                     // anything else (caption/name tests, function calls) is a
                     // label filter, which the semantic layer does not lower and
                     // `unsupported_filter_count` faults on.
-                    Some(Expr::Binary { lhs, op, rhs }) if matches!(**lhs, Expr::Measure(_)) => {
-                        Some(AxisSetOp::Filter {
-                            op: to_pcmp(*op),
-                            value: num(rhs)?,
-                        })
+                    //
+                    // Excel wraps the condition in parentheses
+                    // (`Filter(set, ([Measures].[Revenue]>26000000))`), which
+                    // the parser models as a one-item tuple.
+                    let condition = args.iter().find_map(|a| match a {
+                        Expr::Tuple(items) => {
+                            items.first().filter(|c| matches!(c, Expr::Binary { .. }))
+                        }
+                        Expr::Binary { .. } => Some(a),
+                        _ => None,
+                    });
+                    match condition {
+                        Some(Expr::Binary { lhs, op, rhs }) if matches!(**lhs, Expr::Measure(_)) => {
+                            Some(AxisSetOp::Filter {
+                                op: to_pcmp(*op),
+                                value: num(rhs)?,
+                            })
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
+                }
                 _ => args.iter().find_map(walk),
             },
             Expr::Set(items) | Expr::Tuple(items) => items.iter().find_map(walk),

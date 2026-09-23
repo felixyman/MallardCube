@@ -3591,6 +3591,37 @@ mod tests {
 
     const NESTED_ROWS_TUPLES: &str = "All/All,Automotive/All,Automotive/Retail,Baby/All,Baby/Retail,Beauty/All,Beauty/Direct,Books/All,Books/Direct,Clothing/All,Clothing/Direct,Electronics/All,Electronics/Wholesale,Food/All,Food/Online,Furniture/All,Furniture/Retail,Garden/All,Garden/Online,Health/All,Health/Wholesale,Home/All,Home/Online,Jewelry/All,Jewelry/Direct,Music/All,Music/Direct,Office/All,Office/Retail,Outdoors/All,Outdoors/Retail,Pet Supplies/All,Pet Supplies/Wholesale,Shoes/All,Shoes/Online,Sports/All,Sports/Wholesale,Tools/All,Tools/Wholesale,Toys/All,Toys/Online";
 
+    // Excel's Value Filters arrive as a subselect too, with the condition
+    // wrapped in parentheses:
+    // `FROM (SELECT Filter(<set>, ([Measures].[X] > 26000000)) ON COLUMNS …)`.
+    // Verified against the mirror: same members, same order, same values.
+    #[test]
+    fn oracle_excel_value_filter_subselect_matches_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT Filter(Hierarchize([Category].[Category].[Category].AllMembers), ([Measures].[Revenue]>26000000)) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            let captions: Vec<String> = axis0_member_infos(&xml)
+                .into_iter()
+                .map(|(caption, _, _, _)| caption)
+                .collect();
+            assert_eq!(captions[0], "All", "the reference keeps (All) first");
+            assert!(
+                captions.len() > 1 && captions.len() < 21,
+                "only the members above the threshold survive: {captions:?}"
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), captions.len());
+            assert!(
+                values[1..].iter().all(|v| *v > 26_000_000.0),
+                "every surviving member is above the threshold: {values:?}"
+            );
+            let subset: f64 = values[1..].iter().sum();
+            assert_eq!(values[0], subset, "(All) aggregates the returned subset");
+        });
+    }
+
     // Excel's current Top/Bottom N dialog wraps the set in a subselect
     // (`FROM (SELECT Generate(<set> AS [XL_Filter_Set_0],
     //  TopCount(Filter(Except(DrilldownLevel(<set>.Current …), …),
