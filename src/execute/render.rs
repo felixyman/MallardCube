@@ -369,11 +369,16 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     };
     let n_measures = measure_members.len().max(1);
 
+    // Dedup through a set, not a linear scan of what we have already kept:
+    // with a few thousand distinct values over a few hundred thousand rows the
+    // scan was O(rows x distinct) — 12.7 s of a 14 s three-field pivot
+    // (plan 051-C cells).
     let distinct = |idx: usize| -> Vec<String> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut values: Vec<String> = Vec::new();
         for (keys, _) in data {
             if let Some(k) = keys.get(idx)
-                && !values.iter().any(|v| v == k)
+                && seen.insert(k.as_str())
             {
                 values.push(k.clone());
             }
@@ -383,7 +388,27 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     };
     // The value for a coordinate: `None` marks an `(All)` slot, which
     // aggregates the matching rows (the measures the proxy serves are additive).
+    // Exact coordinates resolve through a map built once; only the (All) slots
+    // (`None`) fall back to summing every matching row, and there are a
+    // handful of those. The first version scanned all rows per cell, which is
+    // O(cells x rows) — a three-field pivot would never have finished
+    // (plan 051-C cells). The separator cannot collide with dimension values.
+    let mut exact_by_coord: std::collections::HashMap<String, &[f64]> =
+        std::collections::HashMap::with_capacity(data.len());
+    for (keys, values) in data {
+        exact_by_coord.insert(keys.join("\u{1}"), values.as_slice());
+    }
     let value_for = |coord: &[Option<&str>], mi: usize| -> Option<f64> {
+        if coord.iter().all(|c| c.is_some()) {
+            let key = coord
+                .iter()
+                .map(|c| c.unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\u{1}");
+            return exact_by_coord
+                .get(&key)
+                .map(|values| values.get(mi).copied().unwrap_or(0.0));
+        }
         let mut sum = 0.0;
         let mut found = false;
         for (keys, values) in data {
@@ -676,29 +701,48 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
         m
     };
 
-    let value_at = |a: &str, b: &str, mi: usize| -> Option<f64> {
-        rows.iter()
-            .find(|(ra, rb, _)| ra == a && rb == b)
-            .and_then(|(_, _, values)| values.get(mi).copied())
-    };
+    // Lookup tables built once. The first version scanned every result row per
+    // cell (`rows.iter().find(..)` plus a per-cell `collect` for the totals),
+    // which is O(cells x rows): an 84k-cell cross-tab spent 12.7 s rendering
+    // (plan 051-C cells). Maps make the cell loop O(cells).
+    let measure_count = measure_ids_for(query, &specs, &measure_members).len();
+    let mut values_by_pair: std::collections::HashMap<(&str, &str), &[f64]> =
+        std::collections::HashMap::with_capacity(rows.len());
+    let mut total_a: std::collections::HashMap<&str, Vec<f64>> = std::collections::HashMap::new();
+    let mut total_b: std::collections::HashMap<&str, Vec<f64>> = std::collections::HashMap::new();
+    let mut grand_total = vec![0.0f64; measure_count];
+    for (ra, rb, values) in &rows {
+        values_by_pair.insert((ra.as_str(), rb.as_str()), values.as_slice());
+        for (mi, value) in values.iter().enumerate().take(measure_count) {
+            grand_total[mi] += *value;
+            let a_bucket = total_a.entry(ra.as_str()).or_default();
+            if a_bucket.len() < measure_count {
+                a_bucket.resize(measure_count, 0.0);
+            }
+            a_bucket[mi] += *value;
+            let b_bucket = total_b.entry(rb.as_str()).or_default();
+            if b_bucket.len() < measure_count {
+                b_bucket.resize(measure_count, 0.0);
+            }
+            b_bucket[mi] += *value;
+        }
+    }
     // (All, b) sums over dim0, (a, All) sums over dim1, (All, All) is the
     // total. `None` means the combination has no data: the reference omits
     // those cells (sparse cell data) instead of sending a zero, so Excel shows
     // a blank rather than 0.
     let cell_value = |a: Option<&str>, b: Option<&str>, mi: usize| -> Option<f64> {
-        let sum = |pred: &dyn Fn(&str, &str) -> bool| -> Option<f64> {
-            let values: Vec<f64> = rows
-                .iter()
-                .filter(|(ra, rb, _)| pred(ra, rb))
-                .map(|(_, _, v)| v.get(mi).copied().unwrap_or(0.0))
-                .collect();
-            (!values.is_empty()).then(|| values.iter().sum())
-        };
         match (a, b) {
-            (Some(a), Some(b)) => value_at(a, b, mi),
-            (Some(a), None) => sum(&|ra, _| ra == a),
-            (None, Some(b)) => sum(&|_, rb| rb == b),
-            (None, None) => sum(&|_, _| true),
+            (Some(a), Some(b)) => values_by_pair
+                .get(&(a, b))
+                .and_then(|values| values.get(mi).copied()),
+            (Some(a), None) => total_a
+                .get(a)
+                .map(|values| values.get(mi).copied().unwrap_or(0.0)),
+            (None, Some(b)) => total_b
+                .get(b)
+                .map(|values| values.get(mi).copied().unwrap_or(0.0)),
+            (None, None) => (!rows.is_empty()).then(|| grand_total[mi]),
         }
     };
 
@@ -706,19 +750,19 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
     let axis0_tuples = build_axis_tuples(&axis0_members, spec0, &measure_members, n_measures);
     let axis1_tuples = build_axis_tuples(&axis1_members, spec1, &measure_members, n_measures);
 
-    // Cells, row-major with axis0 fastest.
-    let mut cells = Vec::new();
+    // Cells, row-major with axis0 fastest. `measure_ids_for` is resolved once:
+    // it allocated a Vec per cell in the first version.
+    let measure_ids = measure_ids_for(query, &specs, &measure_members);
+    let cells_capacity = axis1_members.len() * axis0_members.len() * measure_ids.len();
+    let mut cells = Vec::with_capacity(cells_capacity.min(1_000_000));
     let mut ordinal = 0u32;
     for (row_idx, _) in axis1_members.iter().enumerate() {
         for (col_idx, _) in axis0_members.iter().enumerate() {
             let a = (col_idx > 0).then(|| dim0_values[col_idx - 1].as_str());
             let b = (row_idx > 0).then(|| dim1_values[row_idx - 1].as_str());
-            for (mi, measure_id) in measure_ids_for(query, &specs, &measure_members)
-                .into_iter()
-                .enumerate()
-            {
+            for (mi, measure_id) in measure_ids.iter().enumerate() {
                 if let Some(value) = cell_value(a, b, mi) {
-                    cells.push(measurement_cell_for(ordinal, value, &measure_id));
+                    cells.push(measurement_cell_for(ordinal, value, measure_id));
                 }
                 ordinal += 1;
             }

@@ -139,9 +139,60 @@ The body is byte-identical throughout (sha256 of the `<soap:Body>` part), the
 transfer uses `chunked` encoding, and Excel resolves `CUBESETCOUNT`/`CUBEVALUE`
 over it.
 
-Still open in this section: **cell data** (`execute/render.rs`) — plan 034's
-original scope, extended so cells and both axis member lists stream; the cell
-cap bounds it today.
+### C-cells. Cell rendering: measured, and the cliff was not the XML
+
+Before building XML streaming for cellsets (plan 034's original scope), a
+deliberately large pivot was measured on the wide fixture: Full Date (4,018
+rows) x Category (21 columns) = 84,399 cells, 16 MB of response.
+
+| | before | after |
+|---|---|---|
+| total | 13.51 s | **1.44 s** |
+| engine (`sql_execute_us`) | 0.78 s | 0.81 s |
+| render (`xml_render_us`) | 12.77 s | **0.59 s** |
+
+The render time was two O(cells x rows) loops, not XML copies:
+
+- `build_cross_tab` resolved each cell with `rows.iter().find(..)` and summed
+  every matching row (`collect::<Vec<f64>>()`) for each (All) cell, and called
+  `measure_ids_for` per cell. Now: one pass builds an exact-coordinate map plus
+  per-dimension and grand totals; the cell loop is O(cells). The oracle tests
+  caught a double-counted grand total in the first attempt.
+- `build_multi_dim_pivot`'s `distinct` deduplicated with a linear scan per row
+  (`values.iter().any(..)`), O(rows x distinct). Now a `HashSet`, and exact
+  coordinates resolve through a map built once.
+
+Memory was a red herring: the process peaked at 1.38 GB while the response was
+16 MB — but DuckDB alone peaks at 1.14 GB for the same group-by (measured with
+the CLI), so the engine's scan dominates and `memory_limit`/`temp_directory`
+(051-A/054-C) are the knobs, not XML streaming (which would save ~16-32 MB
+here). Excel renders the result correctly: a Category x Channel pivot against
+the demo model shows the Grand Total 521,586,767.
+
+Still open in this section:
+
+1. **A cross-joined pair on Columns alongside a Rows edge is unverified and
+   currently collapses.** With `ROWS = [Date].[Calendar].[Full Date]` and
+   `COLUMNS = CrossJoin([Category].[Category], [Channel].[Channel])` the
+   response came back with 4,019 cells (one per date row) instead of ~0.5 M:
+   `Axis1` held only the Channel members (5 tuples), Category was dropped from
+   the axis into the slicer, and the render still took 10.9 s. The values in
+   such a report are silently wrong — a channel total across all categories,
+   with no error. What is pinned today: the corpus covers `CrossJoin(A, B) ON
+   COLUMNS` *without* a rows edge, and
+   `oracle_three_dimension_layout_matches_the_reference` covers the mirrored
+   arrangement (nested pair on Rows, singleton on Columns). Next step: replay
+   this MDX against the mirror (`MallardDemo` has the same hierarchies) and
+   diff the cellset — tuple order, `(All)` combinations that survive
+   `NON EMPTY`, sparse cells — before touching the axis placement, then add an
+   oracle test. Expecting the same treatment as the rest of plan 049.
+2. **Wildcard (All) lookups in the multi-dimension renderer** are still an
+   O(rows) scan per cell, which is what makes a large multi-dimension layout
+   slow even when the shape is right. The mask-rollup treatment applied to the
+   exact coordinates would finish it.
+2. **Cell XML streaming** stays available but is not the current bottleneck:
+   with the loops fixed, the cell cap bounds the response and the engine
+   bounds the memory.
 
 Both must keep the XML byte-identical for the oracle tests; leave true
 DuckDB-cursor streaming out of scope.
