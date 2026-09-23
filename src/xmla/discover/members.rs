@@ -39,8 +39,10 @@ const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
 
 // ---- member row building ----
 
+/// One member of the rowset, held as data rather than pre-rendered XML: a wide
+/// hierarchy holds hundreds of thousands of these, and rendering at write time
+/// keeps a second copy of the payload out of memory (plan 051-C).
 struct MemberRow {
-    xml: String,
     #[allow(dead_code)] // read by tests only
     dimension_id: String,
     /// The `(dimension, hierarchy, level)` coordinates the request
@@ -50,6 +52,41 @@ struct MemberRow {
     level_unique_name: String,
     member_unique_name: String,
     parent_unique_name: Option<String>,
+    level_num: u32,
+    member_ordinal: u32,
+    member_name: String,
+    member_type: u32,
+    member_guid: String,
+    member_caption: String,
+    children_cardinality: u32,
+    parent_level: u32,
+    parent_count: u32,
+    member_key: String,
+}
+
+impl MemberRow {
+    /// Render this member's `<row>` element. Called at write time (per chunk
+    /// once streaming lands, per row today).
+    fn xml(&self) -> String {
+        xml_member_row(
+            proxy_project::project(),
+            &self.dimension_unique_name,
+            &self.hierarchy_unique_name,
+            &self.level_unique_name,
+            self.level_num,
+            self.member_ordinal,
+            &self.member_name,
+            &self.member_unique_name,
+            self.member_type,
+            &self.member_guid,
+            &self.member_caption,
+            self.children_cardinality,
+            self.parent_level,
+            self.parent_unique_name.as_deref(),
+            self.parent_count,
+            &self.member_key,
+        )
+    }
 }
 
 fn build_all_member_rows<B: QueryBackend + ?Sized>(
@@ -59,7 +96,6 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
     config: &ProxyConfig,
     restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
-    let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
         let dim_u = dim.dimension_unique_name();
@@ -100,30 +136,22 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
         };
         let guid = all_member_guid(&dim.id);
         rows.push(MemberRow {
-            xml: xml_member_row(
-                project,
-                &dim_u,
-                &hier_u,
-                &all_level_u,
-                0,
-                0,
-                "All",
-                &all_member_u,
-                2,
-                &guid,
-                "All",
-                cardinality,
-                0,
-                None,
-                0,
-                "All",
-            ),
             dimension_id: dim.id.clone(),
             dimension_unique_name: dim_u.clone(),
             hierarchy_unique_name: hier_u.clone(),
             level_unique_name: all_level_u.clone(),
             member_unique_name: all_member_u,
             parent_unique_name: None,
+            level_num: 0,
+            member_ordinal: 0,
+            member_name: "All".into(),
+            member_type: 2,
+            member_guid: guid,
+            member_caption: "All".into(),
+            children_cardinality: cardinality,
+            parent_level: 0,
+            parent_count: 0,
+            member_key: "All".into(),
         });
     }
     rows
@@ -136,7 +164,6 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
     config: &ProxyConfig,
     restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
-    let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
         // Leveled dimensions enumerate their full hierarchy instead (see
@@ -183,30 +210,22 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
             let leaf_member_u = format!("{}.&[{}]", hier_u, val);
             let member_guid = leaf_member_guid(&dim.id, val);
             rows.push(MemberRow {
-                xml: xml_member_row(
-                    project,
-                    &dim_u,
-                    &hier_u,
-                    &leaf_level_u,
-                    1,
-                    ordinal,
-                    val,
-                    &leaf_member_u,
-                    1,
-                    &member_guid,
-                    val,
-                    0,
-                    0,
-                    Some(&all_member_u),
-                    1,
-                    val,
-                ),
                 dimension_id: dim.id.clone(),
                 dimension_unique_name: dim_u.clone(),
                 hierarchy_unique_name: hier_u.clone(),
                 level_unique_name: leaf_level_u.clone(),
                 member_unique_name: leaf_member_u,
                 parent_unique_name: Some(all_member_u.clone()),
+                level_num: 1,
+                member_ordinal: ordinal,
+                member_name: val.clone(),
+                member_type: 1,
+                member_guid,
+                member_caption: val.clone(),
+                children_cardinality: 0,
+                parent_level: 0,
+                parent_count: 1,
+                member_key: val.clone(),
             });
         }
     }
@@ -226,7 +245,6 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
     config: &ProxyConfig,
     restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
-    let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
         if dim.levels.is_empty() {
@@ -315,35 +333,27 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                 let guid = Uuid::new_v5(&NAMESPACE, format!("level.{}.{key}", dim.id).as_bytes())
                     .to_string();
                 rows.push(MemberRow {
-                    xml: xml_member_row(
-                        project,
-                        &dim_u,
-                        &hier_u,
-                        &level_u,
-                        i as u32 + 1,
-                        ordinal,
-                        &name,
-                        &uname,
-                        1,
-                        &guid,
-                        &name,
-                        cc,
-                        parent_level,
-                        Some(&parent_u),
-                        1,
-                        // Compound members report the leaf key. The pipe-joined
-                        // key (e9b7ab6) breaks Excel's ability to add hierarchy
-                        // fields to a pivot built against the proxy (plan 048
-                        // bisect; verified by comparing MDSCHEMA_MEMBERS against
-                        // the last good commit).
-                        &name,
-                    ),
                     dimension_id: dim.id.clone(),
                     dimension_unique_name: dim_u.clone(),
                     hierarchy_unique_name: hier_u.clone(),
                     level_unique_name: level_u.clone(),
                     member_unique_name: uname,
                     parent_unique_name: Some(parent_u),
+                    level_num: i as u32 + 1,
+                    member_ordinal: ordinal,
+                    member_name: name.clone(),
+                    member_type: 1,
+                    member_guid: guid,
+                    member_caption: name.clone(),
+                    children_cardinality: cc,
+                    parent_level,
+                    parent_count: 1,
+                    // Compound members report the leaf key. The pipe-joined
+                    // key (e9b7ab6) breaks Excel's ability to add hierarchy
+                    // fields to a pivot built against the proxy (plan 048
+                    // bisect; verified by comparing MDSCHEMA_MEMBERS against
+                    // the last good commit).
+                    member_key: name.clone(),
                 });
                 ordinal += 1;
             }
@@ -626,13 +636,35 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
         return crate::xmla::response::fault_response(&message);
     }
 
-    let xml_rows: String = selected
-        .iter()
-        .map(|r| r.xml.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    crate::response::discover_rowset_envelope("", MEMBER_ROW_FIELDS, &xml_rows)
+    // Compose the whole response in one buffer (plan 051-C): a 200k-member
+    // hierarchy is ~240 MB of XML, and joining/wrapping it into fresh Strings
+    // costs that much again for every copy. True streaming (writing chunks to
+    // the socket) is the next step; this removes the intermediate copies.
+    let (soap_open, soap_close) = crate::response::soap_envelope_parts();
+    let (rowset_open, rowset_close) = crate::response::discover_rowset_parts("", MEMBER_ROW_FIELDS);
+    let capacity = soap_open.len()
+        + soap_close.len()
+        + rowset_open.len()
+        + rowset_close.len()
+        + selected.len() * 256
+        + selected
+            .iter()
+            .map(|r| r.member_name.len() + r.member_key.len() + 64)
+            .sum::<usize>();
+    let mut out = String::with_capacity(capacity);
+    out.push_str(&soap_open);
+    out.push_str(&rowset_open);
+    for (i, row) in selected.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&row.xml());
+    }
+    out.push('\n');
+    out.push_str(&rowset_close);
+    out.push('\n');
+    out.push_str(&soap_close);
+    out
 }
 
 #[cfg(test)]
@@ -709,7 +741,7 @@ mod tests {
         let rows = all_rows();
         for r in &rows {
             if r.member_unique_name.ends_with("[All]") {
-                assert!(r.xml.contains("<MEMBER_TYPE>2</MEMBER_TYPE>"));
+                assert!(r.xml().contains("<MEMBER_TYPE>2</MEMBER_TYPE>"));
                 assert!(r.parent_unique_name.is_none());
             }
         }
@@ -740,7 +772,7 @@ mod tests {
         let rows = all_rows();
         assert!(!rows.is_empty());
         for r in &rows {
-            let Some(guid) = extract_tag(&r.xml, "MEMBER_GUID") else {
+            let Some(guid) = extract_tag(&r.xml(), "MEMBER_GUID") else {
                 panic!("no MEMBER_GUID in row for {}", r.member_unique_name);
             };
             assert!(
@@ -791,7 +823,7 @@ mod tests {
             else {
                 continue;
             };
-            let cc: u32 = extract_tag(&row.xml, "CHILDREN_CARDINALITY")
+            let cc: u32 = extract_tag(&row.xml(), "CHILDREN_CARDINALITY")
                 .unwrap_or_default()
                 .parse()
                 .unwrap_or(0);
@@ -857,33 +889,39 @@ mod tests {
 
         // A year: level 1, parented by (All), four quarter children.
         let year = find_row(&rows, "[Date].[Calendar].[Year].&[2024]");
-        assert_eq!(extract_tag(&year.xml, "LEVEL_NUMBER").as_deref(), Some("1"));
         assert_eq!(
-            extract_tag(&year.xml, "PARENT_UNIQUE_NAME").as_deref(),
+            extract_tag(&year.xml(), "LEVEL_NUMBER").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            extract_tag(&year.xml(), "PARENT_UNIQUE_NAME").as_deref(),
             Some("[Date].[Calendar].[All]")
         );
-        assert_eq!(extract_tag(&year.xml, "PARENT_LEVEL").as_deref(), Some("0"));
         assert_eq!(
-            extract_tag(&year.xml, "CHILDREN_CARDINALITY").as_deref(),
+            extract_tag(&year.xml(), "PARENT_LEVEL").as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            extract_tag(&year.xml(), "CHILDREN_CARDINALITY").as_deref(),
             Some("4")
         );
 
         // A compound-key quarter: level 2, parented by its year.
         let quarter = find_row(&rows, "[Date].[Calendar].[Quarter].&[2024]&[2]");
         assert_eq!(
-            extract_tag(&quarter.xml, "LEVEL_NUMBER").as_deref(),
+            extract_tag(&quarter.xml(), "LEVEL_NUMBER").as_deref(),
             Some("2")
         );
         assert_eq!(
-            extract_tag(&quarter.xml, "PARENT_UNIQUE_NAME").as_deref(),
+            extract_tag(&quarter.xml(), "PARENT_UNIQUE_NAME").as_deref(),
             Some("[Date].[Calendar].[Year].&amp;[2024]")
         );
         assert_eq!(
-            extract_tag(&quarter.xml, "PARENT_LEVEL").as_deref(),
+            extract_tag(&quarter.xml(), "PARENT_LEVEL").as_deref(),
             Some("1")
         );
         assert_eq!(
-            extract_tag(&quarter.xml, "CHILDREN_CARDINALITY").as_deref(),
+            extract_tag(&quarter.xml(), "CHILDREN_CARDINALITY").as_deref(),
             Some("3")
         );
 

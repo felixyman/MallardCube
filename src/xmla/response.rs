@@ -9,23 +9,31 @@ pub fn set_session_id(sid: Option<String>) {
     CURRENT_SESSION_ID.with(|c| *c.borrow_mut() = sid);
 }
 
-pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
+/// The SOAP envelope split into its opening and closing halves, so a large
+/// inner payload can be written incrementally (plan 051-C).
+pub fn soap_envelope_parts() -> (String, String) {
     let session_id = CURRENT_SESSION_ID.with(|c| {
         c.borrow()
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().to_uppercase())
     });
-    format!(
+    let open = format!(
         r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Header>
     <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="{session_id}" />
   </soap:Header>
   <soap:Body>
-{}
-  </soap:Body>
-</soap:Envelope>"#,
-        inner_xml
-    )
+"#
+    );
+    let close = r#"  </soap:Body>
+</soap:Envelope>"#
+        .to_string();
+    (open, close)
+}
+
+pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
+    let (open, close) = soap_envelope_parts();
+    format!("{open}{inner_xml}\n{close}")
 }
 
 /// Escape text content for safe XML insertion.
@@ -73,8 +81,11 @@ pub fn empty_discover_response() -> String {
     wrap_in_soap_envelope(inner)
 }
 
-pub fn discover_rowset_envelope(extra_schema: &str, row_fields: &str, rows: &str) -> String {
-    let inner = format!(
+/// The rowset envelope split into `<rows>`-less halves: everything up to where
+/// the row elements start, and the closing tags. Callers that write rows
+/// incrementally (plan 051-C) avoid building a second full copy of the payload.
+pub fn discover_rowset_parts(extra_schema: &str, row_fields: &str) -> (String, String) {
+    let open = format!(
         r#"    <DiscoverResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
       <return>
         <root xmlns="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -89,10 +100,17 @@ pub fn discover_rowset_envelope(extra_schema: &str, row_fields: &str, rows: &str
               </xsd:sequence>
             </xsd:complexType>
           </xsd:schema>
-{rows}
-        </root>
-      </return>
-    </DiscoverResponse>"#,
+"#
     );
+    let close = r#"        </root>
+      </return>
+    </DiscoverResponse>"#
+        .to_string();
+    (open, close)
+}
+
+pub fn discover_rowset_envelope(extra_schema: &str, row_fields: &str, rows: &str) -> String {
+    let (open, close) = discover_rowset_parts(extra_schema, row_fields);
+    let inner = format!("{open}{rows}\n{close}");
     wrap_in_soap_envelope(&inner)
 }

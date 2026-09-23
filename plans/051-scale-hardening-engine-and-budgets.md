@@ -106,17 +106,29 @@ makes the bound real. Revisit only if the binding grows a shared-handle API.*
 
 ### C. Streaming responses
 
-Write cell data and member rows incrementally instead of accumulating one
-`String`: `axum::body::Body::from_stream` with a small fixed prefix (schema,
-axes, hierarchies) and a closing suffix. Two seams, land them separately:
+*Increment 1 landed 2026-09-23 (member rows, single-pass composition).*
 
-1. **Member rows** (`xmla/discover/members.rs` → `discover_rowset_envelope`):
-   the widest responses by far.
+Member rows are now held as **data** (no pre-rendered XML per row) and the
+response is composed in one pass through `soap_envelope_parts()` +
+`discover_rowset_parts()` — no joined payload, no second envelope copy.
+Measured on the 200k-member fixture, release build, same request, body
+byte-identical to before:
+
+| | pre-change | after |
+|---|---|---|
+| latency | 1.68 s | **1.02 s** |
+| peak RSS | 1,230 MB | **469 MB** |
+
+Still open in this section:
+
+1. **True streaming** — `axum::body::Body::from_stream` writing row chunks
+   straight to the socket; removes the last full copy (the ~240 MB response
+   buffer), which matters most as hierarchies approach the 1M-member cap.
 2. **Cell data** (`execute/render.rs`): plan 034's original scope, extended so
-   cells and both axis member lists stream.
+   cells and both axis member lists stream; member count and cell caps bound
+   it today.
 
-Both must keep the XML byte-identical for the oracle tests; stream from the
-materialized result vectors first (constant extra memory), and leave true
+Both must keep the XML byte-identical for the oracle tests; leave true
 DuckDB-cursor streaming out of scope.
 
 ### D. Build only what the restrictions ask for
