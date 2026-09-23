@@ -208,6 +208,20 @@ Still open in this section:
    grand-total/wholesale/Automotive cell values). Excel renders the gesture —
    two fields in Columns, one in Rows — with Grand Total 521,586,767.
 
+   **Corpus matrix expanded 2026-09-23** (the arrangement space, not just each
+   shape in isolation). Mirror-captured and pinned with oracle tests: measures
+   cross-joined on **Rows** (21 `(Category, Revenue)` tuples, measure second,
+   columns unchanged) and **two fields on both edges** (105 `(Category,
+   Channel)` row tuples, 8 `(Date, Revenue)` column tuples, grid of cells).
+   Clause order is covered by the differential test above. A third case came
+   out of the same sweep: a measure on an axis *and* in the slicer, which the
+   reference rejects — "The Measures hierarchy already appears in the Axis1
+   axis." — while the proxy rendered it silently; the check now lives in
+   `unsupported_features` (AST level) so both entry points fault identically.
+   Excel cannot drive the Values-on-Rows arrangement through COM (the field
+   refuses to move for OLAP pivots), so the mirror-measured oracle test is its
+   evidence.
+
    **Two cheap follow-ups landed 2026-09-23:** `axis_dimension_ids` now returns
    dimensions in axis order (COLUMNS first, then ROWS) rather than clause
    order, which removes the disagreement class by construction — it also fixed

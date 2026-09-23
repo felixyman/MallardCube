@@ -3734,6 +3734,95 @@ mod tests {
     // three dimensions. The reference returns the nested Rows structure (41
     // tuples) crossed with the Columns field × the measures.
     #[test]
+    /// Mirror-measured (2026-09-23): measures cross-joined on the Rows edge stay
+    /// there — 21 `(Category, Revenue)` tuples with the measure second, the
+    /// columns edge unchanged at 5 Channel tuples, and the grid of cells.
+    #[test]
+    fn oracle_measures_on_rows_match_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON ROWS, \
+                 NON EMPTY Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS \
+                 FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            let rows = axis_tuple_captions(&xml, "Axis1");
+            assert_eq!(rows.len(), 21, "All + categories");
+            assert_eq!(
+                rows[0],
+                vec!["All", "Revenue"],
+                "measure second, as written"
+            );
+            assert_eq!(rows[1], vec!["Automotive", "Revenue"]);
+            let cols = axis_tuple_captions(&xml, "Axis0");
+            assert_eq!(cols.len(), 5, "All + channels");
+            assert_eq!(cols[0], vec!["All"]);
+
+            let values = cell_values(&xml);
+            let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], revenue, "All x All");
+            let direct =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE channel = 'Direct'");
+            assert_eq!(values[1], direct, "All category x first channel");
+            let automotive =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE category = 'Automotive'");
+            assert_eq!(values[5], automotive, "first category x All channels");
+        });
+    }
+
+    /// Mirror-measured (2026-09-23): two fields on **both** edges, measures
+    /// cross-joined on one — 105 `(Category, Channel)` tuples on Rows, 8
+    /// `(Date, Revenue)` on Columns, and the grid of cells.
+    #[test]
+    fn oracle_two_fields_on_both_edges_match_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)})) ON ROWS, \
+                 NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON COLUMNS \
+                 FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            let rows = axis_tuple_captions(&xml, "Axis1");
+            assert_eq!(rows.len(), 21 * 5, "category x channel");
+            assert_eq!(rows[0], vec!["All", "All"]);
+            assert_eq!(rows[1], vec!["All", "Direct"], "inner member fastest");
+            let cols = axis_tuple_captions(&xml, "Axis0");
+            assert_eq!(cols.len(), data_year_keys().len() + 1, "All + years");
+            assert_eq!(cols[0], vec!["All", "Revenue"]);
+
+            let values = cell_values(&xml);
+            let dense: usize = demo_scalar(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT d.year, f.category, f.channel \
+                 FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key)",
+            ) as usize;
+            assert!(dense > 0, "the fixture has combinations");
+            assert!(
+                values.len() >= dense,
+                "{} cells must cover the {dense} existing combinations",
+                values.len()
+            );
+            let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], revenue, "All x All");
+        });
+    }
+
+    /// The reference rejects a measure that appears on an axis *and* in the
+    /// slicer (mirror-measured 2026-09-23: "The Measures hierarchy already
+    /// appears in the Axis1 axis."); the same statement without the slicer
+    /// measure renders. We used to render the invalid form silently.
+    #[test]
+    fn measure_on_axis_and_slicer_faults_like_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue]}) ON ROWS, \
+                 NON EMPTY Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS \
+                 FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            assert!(
+                xml.contains("The Measures hierarchy already appears in the Axis1 axis."),
+                "mirror message: {xml}"
+            );
+        });
+    }
+
     /// Clause order is not part of the query: `ON ROWS, ... ON COLUMNS` and
     /// `... ON COLUMNS, ... ON ROWS` describe the same cellset and must produce
     /// the same response. This was the untested axis of variation behind the

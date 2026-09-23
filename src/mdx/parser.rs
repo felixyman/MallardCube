@@ -36,6 +36,25 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
             "named sets (`WITH SET`) with an unparseable body are not supported yet".into(),
         );
     }
+    // A measure on an axis *and* in the slicer: the reference faults with
+    // "The Measures hierarchy already appears in the Axis1 axis."
+    // (mirror-measured 2026-09-23) while accepting the same statement without
+    // the slicer measure. Rendering it silently produced a cellset the
+    // reference refuses to produce.
+    let slicer_has_measure = fe::where_members(&sel)
+        .iter()
+        .any(|m| matches!(m, MemberRef::Measure(_)));
+    if slicer_has_measure
+        && let Some(spec) = fe::axis_specs(&sel)
+            .iter()
+            .find(|spec| !spec.measures.is_empty())
+    {
+        return Some(format!(
+            "The Measures hierarchy already appears in the Axis{} axis.",
+            spec.ordinal
+        ));
+    }
+
     // MDX time functions.
     // Most time-intelligence functions lower to date windows; the balance
     // functions (`ClosingPeriod`/`OpeningPeriod`) are not supported yet.
