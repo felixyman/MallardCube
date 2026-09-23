@@ -13,8 +13,12 @@ conversion-inventory.md
 skills-lock.json
 .slim/deepwork/
 
-# Local agent tooling (installed per-developer, not part of the project)
-.opencode/
+# Local agent tooling (installed per-developer, not part of the project).
+# The repo's own review agent is the exception: it travels with the project so
+# every session gets the same reviewer (plan 051).
+.opencode/*
+!.opencode/agents/
+!.opencode/agents/**
 opencode.json.backup
 .agents/skills/excel-mcp/
 
