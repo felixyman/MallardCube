@@ -171,21 +171,37 @@ the demo model shows the Grand Total 521,586,767.
 
 Still open in this section:
 
-1. **A cross-joined pair on Columns alongside a Rows edge is unverified and
-   currently collapses.** With `ROWS = [Date].[Calendar].[Full Date]` and
-   `COLUMNS = CrossJoin([Category].[Category], [Channel].[Channel])` the
-   response came back with 4,019 cells (one per date row) instead of ~0.5 M:
-   `Axis1` held only the Channel members (5 tuples), Category was dropped from
-   the axis into the slicer, and the render still took 10.9 s. The values in
-   such a report are silently wrong — a channel total across all categories,
-   with no error. What is pinned today: the corpus covers `CrossJoin(A, B) ON
-   COLUMNS` *without* a rows edge, and
+1. **A cross-joined pair on Columns is cross-wired (mirror-measured
+   2026-09-23).** Statement, run against both engines with the same model:
+
+   ```mdx
+   SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS,
+          NON EMPTY CrossJoin(
+            Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}),
+            Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)})) ON COLUMNS
+   FROM [Model|Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING
+   ```
+
+   | | mirror (SSAS 2025) | proxy |
+   |---|---|---|
+   | Axis0 (columns) | 45 tuples = 9 x 5, each `(Category, Channel)`, `(All)` first and the inner (Channel) member varying fastest | 8 tuples labelled `[Category]...` carrying **date keys** (`.&[2020]`, `.&[2021]`) |
+   | Axis1 (rows) | 8 tuples = Date (`All` + 7 years) | 5 tuples labelled `[Date].[Calendar]...` carrying **channel keys** (`.&[Direct]`, `.&[Online]`) |
+   | SlicerAxis | — | measures + Territory/Segment `(All)` |
+   | cells | 360 = 45 x 8 | 8 |
+
+   It is not a dropped dimension but a **dimension/value cross-wiring**: each
+   edge gets the other's count and keys, and most cells are missing. Nothing
+   errors, and a report built on it looks plausible while being wrong. The
+   Full Date variant of the same shape is worse still: 4,019 of ~0.5 M cells
+   and 10.9 s of rendering (the wildcard lookups below).
+
+   What is pinned today: the corpus covers `CrossJoin(A, B) ON COLUMNS`
+   *without* a rows edge, and
    `oracle_three_dimension_layout_matches_the_reference` covers the mirrored
-   arrangement (nested pair on Rows, singleton on Columns). Next step: replay
-   this MDX against the mirror (`MallardDemo` has the same hierarchies) and
-   diff the cellset — tuple order, `(All)` combinations that survive
-   `NON EMPTY`, sparse cells — before touching the axis placement, then add an
-   oracle test. Expecting the same treatment as the rest of plan 049.
+   arrangement (nested pair on Rows, singleton on Columns). Fixing this means
+   correcting the axis placement against the mirror shape above — tuple order,
+   which `(All)` combinations survive `NON EMPTY`, cell ordinals — and adding
+   an oracle test, by the plan 049 method.
 2. **Wildcard (All) lookups in the multi-dimension renderer** are still an
    O(rows) scan per cell, which is what makes a large multi-dimension layout
    slow even when the shape is right. The mask-rollup treatment applied to the
