@@ -355,19 +355,9 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     // CrossJoin(A, B) ON COLUMNS` the plan's columns follow the statement, so
     // every axis got the other edge's values — dimension names with foreign
     // member keys, and most cells missing (plan 051, mirror-measured).
-    let key_of = |dim: &str| -> Option<usize> {
-        let found = query.axis_dimensions.iter().position(|d| d == dim);
-        if found.is_none() {
-            // Internal invariant: every dimension on an axis has a key column.
-            // A miss used to mean silently missing cells (plan 051).
-            debug_assert!(false, "dimension {dim} missing from axis_dimensions");
-            eprintln!(
-                "!!! render: dimension {dim} has no key column in {:?}",
-                query.axis_dimensions
-            );
-        }
-        found
-    };
+    // Key columns come from the query shape — the same object the plan mirrors
+    // for its group-by columns (plan 051).
+    let key_of = |dim: &str| -> Option<usize> { query.shape.key_index(dim) };
     // The value of a dimension in a plan row, or None for a missing column.
     let value_of = |keys: &[String], dim: &str| -> Option<String> {
         key_of(dim).and_then(|i| keys.get(i)).cloned()
@@ -407,42 +397,6 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     };
     // The value for a coordinate: `None` marks an `(All)` slot, which
     // aggregates the matching rows (the measures the proxy serves are additive).
-    // Exact coordinates resolve through a map built once; only the (All) slots
-    // (`None`) fall back to summing every matching row, and there are a
-    // handful of those. The first version scanned all rows per cell, which is
-    // O(cells x rows) — a three-field pivot would never have finished
-    // (plan 051-C cells). The separator cannot collide with dimension values.
-    let mut exact_by_coord: std::collections::HashMap<String, &[f64]> =
-        std::collections::HashMap::with_capacity(data.len());
-    for (keys, values) in data {
-        exact_by_coord.insert(keys.join("\u{1}"), values.as_slice());
-    }
-    let value_for = |coord: &[Option<&str>], mi: usize| -> Option<f64> {
-        if coord.iter().all(|c| c.is_some()) {
-            let key = coord
-                .iter()
-                .map(|c| c.unwrap_or_default())
-                .collect::<Vec<_>>()
-                .join("\u{1}");
-            return exact_by_coord
-                .get(&key)
-                .map(|values| values.get(mi).copied().unwrap_or(0.0));
-        }
-        let mut sum = 0.0;
-        let mut found = false;
-        for (keys, values) in data {
-            let matches = keys.iter().zip(coord.iter()).all(|(key, want)| match want {
-                Some(w) => key == w,
-                None => true,
-            });
-            if matches {
-                found = true;
-                sum += values.get(mi).copied().unwrap_or(0.0);
-            }
-        }
-        found.then_some(sum)
-    };
-
     // ---- edges -------------------------------------------------------------
     // Each edge contributes its coordinates: one dimension gives (All) +
     // members; a cross-joined pair gives the product with (All) first on each
@@ -502,6 +456,25 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     let nested_edges = query.drilldown_member_hierarchy.is_some();
     let axis0_coords = edge_coords(&spec0.dims, nested_edges && spec0.dims.len() >= 2);
     let axis1_coords = edge_coords(&spec1.dims, nested_edges && spec1.dims.len() >= 2);
+
+    // Coordinate lookups: exact coordinates plus one roll-up per `(All)` mask
+    // the cell loop's coordinates actually use. The first version scanned every
+    // row per cell — O(cells x rows), which cost 12.7 s on an 84k-cell
+    // cross-tab (plan 051). Masks are collected from the same coordinates the
+    // cell loop assembles, so every lookup is O(1).
+    let mut needed_masks: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for row in &axis1_coords {
+        for col in &axis0_coords {
+            let coord = cell_coord(&query.shape.flat_dims(), spec0, spec1, col, row);
+            let mask = crate::execute::coords::coord_mask(&coord);
+            if mask != 0 {
+                needed_masks.insert(mask);
+            }
+        }
+    }
+    let coord_index = crate::execute::coords::CoordIndex::build(data, n_measures, &needed_masks);
+    let value_for =
+        |coord: &[Option<&str>], mi: usize| -> Option<f64> { coord_index.get(coord, mi) };
 
     // ---- tuples ------------------------------------------------------------
     // One member per dimension of the edge, in edge order, plus the measures

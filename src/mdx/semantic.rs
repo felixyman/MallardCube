@@ -567,6 +567,10 @@ pub struct SemanticQuery {
     /// (plan 049). `axis_dimensions` is the flattened view; this keeps which
     /// edge a dimension (and the measures) belongs to.
     pub axis_specs: Vec<crate::mdx::frontend::AxisSpec>,
+    /// The same axes as a validated shape with key-column order: the plan's
+    /// group-by columns and the renderers' key indices both derive from it
+    /// (plan 051).
+    pub shape: crate::mdx::shape::QueryShape,
     pub slicers: Vec<SlicerSelection>,
     pub excluded_members: Vec<ExcludedMember>,
     pub drilldown_member_hierarchy: Option<String>,
@@ -707,6 +711,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             cchildren_leaf_name: None,
             row_dimension: None,
             axis_dimensions: vec![],
+            shape: crate::mdx::shape::QueryShape::default(),
             axis_specs: vec![],
             slicers: vec![],
             excluded_members: vec![],
@@ -777,17 +782,25 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     // dimension referenced in the select tuple must land in the SlicerAxis
     // (as a filter), not be skipped as an axis dimension. (Kept identical to
     // the construction below.)
+    // One source for both sides of the engine: the shape owns the axis
+    // structure and the key-column order, and `axis_dimensions` is its flat
+    // view. Deriving it here — from the parsed axes in axis order — is what
+    // stops the plan and the renderer from disagreeing (plan 051).
+    let shape = crate::mdx::shape::QueryShape::from_axis_specs(&parsed.axis_specs);
+    if let Err(reason) = shape.validate() {
+        debug_assert!(false, "query shape invalid: {reason}");
+        eprintln!("!!! query shape invalid: {reason}");
+    }
     let axis_dims: Vec<String> = if matches!(
         kind,
         SemanticQueryKind::SlicerOnly | SemanticQueryKind::SlicerAllAndMeasure
     ) {
         vec![]
     } else {
-        parsed
-            .axis_dimension_ids
-            .iter()
+        shape
+            .flat_dims()
+            .into_iter()
             .filter(|id| project.model.dim_def_opt(id).is_some())
-            .cloned()
             .collect()
     };
 
@@ -1095,6 +1108,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .cloned(),
         axis_dimensions: axis_dims,
         axis_specs: parsed.axis_specs.clone(),
+        shape: shape.clone(),
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parsed
             .excluded_members
