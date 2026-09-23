@@ -545,6 +545,11 @@ fn classify_add_calculated_members(
 pub enum AxisSetOp {
     /// `TopCount(set, n, expr)` (desc=true) / `BottomCount(...)` (desc=false).
     TopCount { n: usize, desc: bool },
+    /// A Top/Bottom N that *filters* the axis instead of replacing it:
+    /// Excel's current dialog wraps the set in a subselect
+    /// (`Generate(<set>, TopCount(Filter(…), n, measure))`), and the reference
+    /// then returns the surviving members in the outer axis's own order.
+    TopCountFilter { n: usize, desc: bool },
     /// `TopPercent(set, p, expr)` — top p percent of members by expr.
     TopPercent { p: f64 },
     /// `Order(set, expr, DESC|ASC)`.

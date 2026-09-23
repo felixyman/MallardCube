@@ -1232,6 +1232,11 @@ pub fn drilldown_member_hierarchy(sel: &Select) -> Option<String> {
 
 /// A TopCount/BottomCount/TopPercent/Order/Filter wrapper around the axis set.
 pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
+    // Excel wraps its current Top/Bottom N in a subselect:
+    // `FROM (SELECT Generate(<set> AS [XL_Filter_Set_0],
+    //        TopCount(Filter(Except(DrilldownLevel(<set>.Current …), …),
+    //                  Not IsEmpty(<measure>)), n, <measure>)) ON COLUMNS …)`.
+    // The outer axis is the plain drilldown, so the limit only shows up there.
     fn num(e: &Expr) -> Option<f64> {
         match e {
             Expr::Number(n) => n.parse().ok(),
@@ -1274,7 +1279,31 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
             _ => None,
         }
     }
-    sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk)
+    if let Some(op) = sel.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk) {
+        return Some(op);
+    }
+    // A subselect Top/Bottom N filters the outer axis (`TopCountFilter`): the
+    // reference keeps the surviving members in the outer axis's order.
+    sel.subquery
+        .as_ref()
+        .and_then(|sub| sub.axes.iter().flat_map(|a| a.exprs.iter()).find_map(walk))
+        .map(|op| match op {
+            AxisSetOp::TopCount { n, desc } => AxisSetOp::TopCountFilter { n, desc },
+            other => other,
+        })
+}
+
+/// Does this expression contain an `IsEmpty(...)` call (case-insensitive)?
+fn contains_is_empty_call(e: &Expr) -> bool {
+    let mut found = false;
+    walk_expr(e, &mut |x| {
+        if let Expr::Call { name, .. } = x
+            && name.eq_ignore_ascii_case("IsEmpty")
+        {
+            found = true;
+        }
+    });
+    found
 }
 
 /// `(has_cols, has_rows)` from the axes' ordinals — structural, so
@@ -1814,6 +1843,10 @@ pub fn unsupported_filter_count(sel: &Select) -> usize {
                         _ => None,
                     });
                     let lowered = match condition {
+                        // `IsEmpty(<measure>)` (Excel's Top/Bottom N wraps it
+                        // in `Not`): the axes are `NON EMPTY` anyway, so there
+                        // is nothing to lower and nothing to fault on.
+                        _ if args.iter().any(contains_is_empty_call) => true,
                         // Excel's Label Filters (`Left(caption,1)="B"`, …)
                         // lower to caption predicates on the dimension column.
                         Some(Expr::Binary { op, lhs, rhs })

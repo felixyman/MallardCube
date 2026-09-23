@@ -13,6 +13,9 @@ fn set_op_suffix(op: &Option<AxisSetOp>) -> String {
     match op {
         None => String::new(),
         Some(AxisSetOp::TopCount { n, desc }) => format!("|setop=topcount:{n}:{desc}"),
+        Some(AxisSetOp::TopCountFilter { n, desc }) => {
+            format!("|setop=topcountfilter:{n}:{desc}")
+        }
         Some(AxisSetOp::TopPercent { p }) => format!("|setop=toppercent:{p}"),
         Some(AxisSetOp::Order { desc }) => format!("|setop=order:{desc}"),
         Some(AxisSetOp::Filter { op, value }) => format!("|setop=filter:{op:?}:{value}"),

@@ -3591,6 +3591,38 @@ mod tests {
 
     const NESTED_ROWS_TUPLES: &str = "All/All,Automotive/All,Automotive/Retail,Baby/All,Baby/Retail,Beauty/All,Beauty/Direct,Books/All,Books/Direct,Clothing/All,Clothing/Direct,Electronics/All,Electronics/Wholesale,Food/All,Food/Online,Furniture/All,Furniture/Retail,Garden/All,Garden/Online,Health/All,Health/Wholesale,Home/All,Home/Online,Jewelry/All,Jewelry/Direct,Music/All,Music/Direct,Office/All,Office/Retail,Outdoors/All,Outdoors/Retail,Pet Supplies/All,Pet Supplies/Wholesale,Shoes/All,Shoes/Online,Sports/All,Sports/Wholesale,Tools/All,Tools/Wholesale,Toys/All,Toys/Online";
 
+    // Excel's current Top/Bottom N dialog wraps the set in a subselect
+    // (`FROM (SELECT Generate(<set> AS [XL_Filter_Set_0],
+    //  TopCount(Filter(Except(DrilldownLevel(<set>.Current …), …),
+    //            Not IsEmpty(<measure>)), n, <measure>)) ON COLUMNS …)`).
+    // The reference answers with the surviving members in the outer axis's own
+    // order and an `(All)` carrying the subset total — verified against the
+    // mirror, member for member (plan 049).
+    #[test]
+    fn oracle_excel_top_n_subselect_matches_the_reference() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], TopCount(Filter(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0,INCLUDE_CALC_MEMBERS), [XL_Filter_HelperSet_0]), Not IsEmpty([Measures].[Revenue])), 5, [Measures].[Revenue])) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            let captions: Vec<String> = axis0_member_infos(&xml)
+                .into_iter()
+                .map(|(caption, _, _, _)| caption)
+                .collect();
+            assert_eq!(captions[0], "All", "the reference keeps (All) first");
+            assert_eq!(captions.len(), 6, "All + the top 5 categories");
+            let members = &captions[1..];
+            assert!(
+                members.windows(2).all(|w| w[0] <= w[1]),
+                "the reference returns them in the axis's own (hierarchy) order: {members:?}"
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 6);
+            let subset: f64 = values[1..].iter().sum();
+            assert_eq!(values[0], subset, "(All) aggregates the returned subset");
+        });
+    }
+
     #[test]
     fn oracle_nested_rows_returns_parents_and_channels() {
         with_project3(|| {
@@ -3601,9 +3633,13 @@ mod tests {
             assert_eq!(axis_signature(&xml, "Axis1"), NESTED_ROWS_TUPLES);
             let values = cell_values(&xml);
             assert_eq!(values.len(), 41, "mirror: 41 cells");
-            assert_eq!(values[0], 521_586_767.0, "root = grand total");
-            assert_eq!(values[1], 25_102_648.0, "Automotive total");
-            assert_eq!(values[2], 25_102_648.0, "Automotive's only channel");
+            let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], total, "root = grand total");
+            let automotive = demo_scalar(
+                "SELECT SUM(revenue) FROM sales_fact WHERE category = 'Automotive'",
+            );
+            assert_eq!(values[1], automotive, "Automotive total");
+            assert_eq!(values[2], automotive, "Automotive's only channel");
         });
     }
 
@@ -3617,7 +3653,8 @@ mod tests {
             assert_eq!(axis_signature(&xml, "Axis0"), expected);
             let values = cell_values(&xml);
             assert_eq!(values.len(), 40, "mirror: 40 cells (Baby collapsed)");
-            assert_eq!(values[0], 521_586_767.0);
+            let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], total);
         });
     }
 
@@ -3632,7 +3669,9 @@ mod tests {
             assert_eq!(axis_signature(&xml, "Axis0"), CATEGORY_2MEAS_TUPLES);
             let values = cell_values(&xml);
             assert_eq!(values.len(), 42, "21 rows × 2 measures");
-            assert_eq!(&values[0..4], &[521_586_767.0, 4_931_640.0, 25_102_648.0, 232_966.0]);
+            let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            let units = demo_scalar("SELECT SUM(units) FROM sales_fact");
+            assert_eq!(&values[0..2], &[revenue, units], "All row: Revenue then Units");
         });
     }
 
@@ -3653,7 +3692,8 @@ mod tests {
             // The reference sends only the combinations with data (45 of 105).
             let values = cell_values(&xml);
             assert_eq!(values.len(), 45, "mirror: 45 cells, sparse");
-            assert_eq!(&values[0..4], &[521_586_767.0, 130_516_005.0, 131_632_046.0, 129_699_084.0]);
+            let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], total, "All × All");
         });
     }
 
@@ -3680,9 +3720,15 @@ mod tests {
                 "columns × nested rows"
             );
             // Axis 0 varies fastest: (All/Revenue, All/All) first.
-            assert_eq!(values[0], 521_586_767.0, "All revenue");
-            assert_eq!(values[1], 4_931_640.0, "All units");
-            assert_eq!(values[2], 77_866_061.0, "first year revenue");
+            let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            let units = demo_scalar("SELECT SUM(units) FROM sales_fact");
+            assert_eq!(values[0], revenue, "All revenue");
+            assert_eq!(values[1], units, "All units");
+            let first_year = data_year_keys().first().cloned().expect("a year");
+            let year_revenue = demo_scalar(&format!(
+                "SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = {first_year}"
+            ));
+            assert_eq!(values[2], year_revenue, "first year revenue");
         });
     }
 
@@ -3698,8 +3744,13 @@ mod tests {
             assert_eq!(axis_tuple_captions(&xml, "Axis1").len(), 21, "All + categories");
             let values = cell_values(&xml);
             assert_eq!(values.len(), (data_year_keys().len() + 1) * 21);
-            assert_eq!(values[0], 521_586_767.0, "All × All");
-            assert_eq!(values[1], 77_866_061.0, "2020 × All");
+            let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
+            assert_eq!(values[0], total, "All × All");
+            let first_year = data_year_keys().first().cloned().expect("a year");
+            let year_total = demo_scalar(&format!(
+                "SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = {first_year}"
+            ));
+            assert_eq!(values[1], year_total, "first year × All");
         });
     }
 
@@ -3745,7 +3796,11 @@ mod tests {
             let values = cell_values(&xml);
             assert_eq!(values.len(), cols.len() * rows.len());
             assert_eq!(values[0], 521_586_767.0, "All × All = grand total");
-            assert_eq!(values[1], 77_866_061.0, "2020 × All = year total");
+            let first_year = data_year_keys().first().cloned().expect("a year");
+            let year_total = demo_scalar(&format!(
+                "SELECT SUM(f.revenue) FROM sales_fact f JOIN date_dim d ON f.date_key = d.date_key WHERE d.year = {first_year}"
+            ));
+            assert_eq!(values[1], year_total, "first year × All");
         });
     }
 
@@ -3889,10 +3944,12 @@ mod tests {
             let xml = get_execute_statement_response(
                 "SELECT TopCount([Category].[Category].Members, 3, [Measures].[Revenue]) ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
             );
+            // The reference answers a set-op axis with (All) first, carrying the
+            // returned subset's total, then the top 3 sorted by the measure.
             assert_eq!(
                 cell_values(&xml),
-                vec![28_502_160.0, 27_702_858.0, 27_242_512.0],
-                "top 3 categories by revenue, descending"
+                vec![83_447_530.0, 28_502_160.0, 27_702_858.0, 27_242_512.0],
+                "All (subset total) + top 3 categories, descending"
             );
         });
     }
@@ -3904,9 +3961,11 @@ mod tests {
                 "SELECT Order([Category].[Category].Members, [Measures].[Revenue], DESC) ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
             );
             let values = cell_values(&xml);
-            assert_eq!(values.len(), 20, "all 20 categories");
-            assert_eq!(values[0], 28_502_160.0, "first is the max");
-            assert_eq!(values[19], 24_440_800.0, "last is the min");
+            // (All) first (the reference keeps it on a set-op axis), then the
+            // categories sorted by revenue descending.
+            assert_eq!(values.len(), 21, "All + 20 categories");
+            assert_eq!(values[1], 28_502_160.0, "first is the max");
+            assert_eq!(values[20], 24_440_800.0, "last is the min");
         });
     }
 

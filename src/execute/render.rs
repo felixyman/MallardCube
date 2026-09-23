@@ -1091,12 +1091,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     // A top-level drag (`DrilldownLevel({All})`) returns the (All) member
     // first, as the reference does; Excel reads it as the Grand Total row or
     // column. The key-hierarchy view adds its own (All) below.
+    // A set-op axis (TopCount/Order/Filter) keeps it too: the reference's
+    // `(All)` for such an axis aggregates the *returned* subset (verified
+    // against the mirror for Excel's Top-5 subselect), which is exactly what
+    // summing the data here produces.
     if matches!(query.drilldown_level(), None | Some(0))
         && !query.level_drag
-        // A set-op axis (TopCount/Order/Filter) returns a subset, so summing
-        // its members is not the grand total; those axes keep the reference's
-        // `(All)` only once the plan can supply the real total (plan 049 note).
-        && query.axis_set_op.is_none()
         && query.key_hierarchy_view.is_none()
         && members
             .first()

@@ -213,6 +213,14 @@ fn apply_set_op(rows: &mut Vec<(String, f64)>, op: &Option<AxisSetOp>) {
             sort_by_value(rows, *desc);
             rows.truncate(*n);
         }
+        AxisSetOp::TopCountFilter { n, desc } => {
+            // Keep the members of the top n by value, in the axis's own order
+            // (what the reference does for Excel's subselect Top-N).
+            let mut ranked = rows.clone();
+            sort_by_value(&mut ranked, *desc);
+            ranked.truncate(*n);
+            rows.retain(|row| ranked.iter().any(|r| r.0 == row.0));
+        }
         AxisSetOp::TopPercent { p } => {
             let n = ((rows.len() as f64) * (*p / 100.0)).ceil() as usize;
             sort_by_value(rows, true);
