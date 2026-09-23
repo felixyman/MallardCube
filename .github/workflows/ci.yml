@@ -34,3 +34,21 @@ jobs:
 
       - name: Test
         run: cargo test --lib --release
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: site
+        run: bun install
+
+      # `build` also runs scripts/check-links.mjs, so a broken internal link
+      # (or asset reference) fails the pull request.
+      - name: Build docs and check links
+        working-directory: site
+        run: bun run build
