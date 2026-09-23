@@ -622,17 +622,6 @@ fn build_user_context(headers: &HeaderMap, config: &ProxyConfig) -> UserContext 
 
 // ---- HTTP helpers ----
 
-/// SOAP fault body for request-level failures (panic, timeout, shutdown).
-fn fault_body(message: &str) -> String {
-    format!(
-        "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\
-         <soap:Body><soap:Fault><faultcode>XMLAnalysisError</faultcode>\
-         <faultstring>{}</faultstring></soap:Fault></soap:Body>\
-         </soap:Envelope>",
-        mallardcube::response::xml_escape(message)
-    )
-}
-
 fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -765,7 +754,7 @@ async fn handle_xmla(
             return (
                 StatusCode::OK,
                 headers,
-                fault_body("Server is shutting down"),
+                mallardcube::xmla::response::fault_response("Server is shutting down"),
             );
         }
     };
@@ -805,7 +794,17 @@ async fn handle_xmla(
                 &cfg,
             )
         })) {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                // Last-resort size guard covering every response shape; the
+                // member/cell caps do the work before this can trigger.
+                match mallardcube::engine::settings::budget().bytes_exceeded(resp.len()) {
+                    Some(message) => {
+                        eprintln!("!!! response size limit: {message}");
+                        mallardcube::xmla::response::fault_response(&message)
+                    }
+                    None => resp,
+                }
+            }
             Err(payload) => {
                 let msg = payload
                     .downcast_ref::<&str>()
@@ -820,7 +819,7 @@ async fn handle_xmla(
                     None,
                     None,
                 );
-                fault_body(&format!("Internal error: {msg}"))
+                mallardcube::xmla::response::fault_response(&format!("Internal error: {msg}"))
             }
         }
     });
@@ -830,7 +829,7 @@ async fn handle_xmla(
             Ok(Ok(resp)) => resp,
             Ok(Err(join_err)) => {
                 eprintln!("!!! XMLA worker task failed: {join_err}");
-                fault_body(&format!("Internal error: {join_err}"))
+                mallardcube::xmla::response::fault_response(&format!("Internal error: {join_err}"))
             }
             Err(_elapsed) => {
                 // Abort the engine query on the connection the worker holds;
@@ -848,7 +847,7 @@ async fn handle_xmla(
                     None,
                     None,
                 );
-                fault_body(&format!(
+                mallardcube::xmla::response::fault_response(&format!(
                     "Query exceeded the {} second timeout and was cancelled",
                     timeout.as_secs()
                 ))

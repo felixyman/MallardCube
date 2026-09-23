@@ -101,6 +101,11 @@ impl StatusInfo {
                 "max_concurrent_queries_source": self.engine.max_concurrent_queries.source.as_str(),
                 "query_timeout_s": self.engine.query_timeout.value,
                 "query_timeout_s_source": self.engine.query_timeout.source.as_str(),
+                "budget": {
+                    "max_members": self.engine.budget.max_members.value,
+                    "max_cells": self.engine.budget.max_cells.value,
+                    "max_response_bytes": self.engine.budget.max_response_bytes.value,
+                },
             }
         })
         .to_string()
@@ -173,6 +178,7 @@ mod tests {
                     value: Some(300),
                     source: SettingSource::Default,
                 },
+                budget: crate::engine::settings::ResponseBudget::default(),
             },
         };
         let json = info.to_json();
@@ -190,6 +196,8 @@ mod tests {
             "\"max_concurrent_queries\":4",
             "\"query_timeout_s\":300",
             "\"query_timeout_s_source\":\"default\"",
+            "\"max_members\":1000000",
+            "\"max_cells\":2000000",
         ] {
             assert!(json.contains(needle), "missing {needle} in {json}");
         }

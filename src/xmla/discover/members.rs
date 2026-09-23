@@ -622,6 +622,10 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
         }
     };
 
+    if let Some(message) = crate::engine::settings::budget().members_exceeded(selected.len()) {
+        return crate::xmla::response::fault_response(&message);
+    }
+
     let xml_rows: String = selected
         .iter()
         .map(|r| r.xml.as_str())

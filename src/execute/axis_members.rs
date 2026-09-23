@@ -435,6 +435,9 @@ pub(crate) fn render_response(
     cells: Vec<cellset::CellConfig>,
     cell_props: &[String],
 ) -> String {
+    if let Some(message) = crate::engine::settings::budget().cells_exceeded(cells.len()) {
+        return crate::xmla::response::fault_response(&message);
+    }
     let resp = cellset::CellsetResponse {
         cube_name: proxy_project::project().config.cube.clone(),
         axes,

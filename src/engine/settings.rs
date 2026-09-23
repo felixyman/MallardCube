@@ -92,6 +92,73 @@ const DEFAULT_QUERY_TIMEOUT_S: u64 = 300;
 /// cgroup v1 reports "unlimited" as the page-aligned i64 maximum.
 const CGROUP_V1_UNLIMITED: u64 = 0x7FFF_FFFF_FFFF_F000;
 
+/// Built-in response caps. Generous — far above any PivotTable Excel renders
+/// — but low enough that a pathological request fails with a fault instead of
+/// taking the process out. `0` disables a cap.
+pub const DEFAULT_MAX_MEMBERS: usize = 1_000_000;
+pub const DEFAULT_MAX_CELLS: usize = 2_000_000;
+pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Caps on a single response, so a pathological request degrades to a fault
+/// instead of exhausting memory (plan 051-B).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponseBudget {
+    pub max_members: Setting<Option<usize>>,
+    pub max_cells: Setting<Option<usize>>,
+    pub max_response_bytes: Setting<Option<u64>>,
+}
+
+impl Default for ResponseBudget {
+    fn default() -> Self {
+        Self {
+            max_members: Setting {
+                value: Some(DEFAULT_MAX_MEMBERS),
+                source: SettingSource::Default,
+            },
+            max_cells: Setting {
+                value: Some(DEFAULT_MAX_CELLS),
+                source: SettingSource::Default,
+            },
+            max_response_bytes: Setting {
+                value: Some(DEFAULT_MAX_RESPONSE_BYTES),
+                source: SettingSource::Default,
+            },
+        }
+    }
+}
+
+impl ResponseBudget {
+    /// Fault message when a member rowset exceeds its cap; `None` when it fits.
+    pub fn members_exceeded(&self, members: usize) -> Option<String> {
+        let limit = self.max_members.value?;
+        (members > limit).then(|| {
+            format!(
+                "Member count {members} exceeds the configured limit of {limit}                  (MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE); narrow the request with a                  hierarchy, level, or member restriction"
+            )
+        })
+    }
+
+    /// Fault message when a cellset exceeds its cell cap.
+    pub fn cells_exceeded(&self, cells: usize) -> Option<String> {
+        let limit = self.max_cells.value?;
+        (cells > limit).then(|| {
+            format!(
+                "Cell count {cells} exceeds the configured limit of {limit}                  (MALLARDCUBE_MAX_CELLS); filter the query or raise the limit"
+            )
+        })
+    }
+
+    /// Fault message when a rendered response exceeds its byte cap.
+    pub fn bytes_exceeded(&self, bytes: usize) -> Option<String> {
+        let limit = self.max_response_bytes.value?;
+        (bytes as u64 > limit).then(|| {
+            format!(
+                "Response of {bytes} bytes exceeds the configured limit of {limit}                  (MALLARDCUBE_MAX_RESPONSE_MB)"
+            )
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineSettings {
     pub memory_limit: Option<Setting<MemoryLimit>>,
@@ -102,6 +169,8 @@ pub struct EngineSettings {
     pub max_concurrent_queries: Setting<usize>,
     /// Per-request engine timeout; `None` = no limit.
     pub query_timeout: Setting<Option<u64>>,
+    /// Caps on a single response.
+    pub budget: ResponseBudget,
 }
 
 impl EngineSettings {
@@ -124,12 +193,14 @@ impl EngineSettings {
         let temp_directory = resolve_temp_directory(env);
         let threads = resolve_threads(env);
         let query_timeout = resolve_query_timeout(env);
+        let budget = resolve_budget(env);
         Self {
             memory_limit,
             temp_directory,
             threads,
             max_concurrent_queries,
             query_timeout,
+            budget,
         }
     }
 
@@ -141,6 +212,58 @@ impl EngineSettings {
     /// Per-request engine timeout, if one is configured.
     pub fn timeout(&self) -> Option<Duration> {
         self.query_timeout.value.map(Duration::from_secs)
+    }
+}
+
+fn resolve_budget(env: &dyn Fn(&str) -> Option<String>) -> ResponseBudget {
+    let defaults = ResponseBudget::default();
+    let number = |name: &str| -> Option<Option<usize>> {
+        let raw = env(name)?;
+        match raw.parse::<usize>() {
+            Ok(0) => Some(None),
+            Ok(n) => Some(Some(n)),
+            Err(_) => {
+                eprintln!("⚠️  {name}={raw:?} is not a number (0 disables the cap) — ignoring it");
+                None
+            }
+        }
+    };
+    let max_members = number("MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE")
+        .map(|value| Setting {
+            value,
+            source: SettingSource::Env,
+        })
+        .unwrap_or(defaults.max_members);
+    let max_cells = number("MALLARDCUBE_MAX_CELLS")
+        .map(|value| Setting {
+            value,
+            source: SettingSource::Env,
+        })
+        .unwrap_or(defaults.max_cells);
+    // The byte cap is configured in whole megabytes for readability.
+    let max_response_bytes = match env("MALLARDCUBE_MAX_RESPONSE_MB") {
+        None => defaults.max_response_bytes,
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(0) => Setting {
+                value: None,
+                source: SettingSource::Env,
+            },
+            Ok(mb) => Setting {
+                value: Some(mb * 1024 * 1024),
+                source: SettingSource::Env,
+            },
+            Err(_) => {
+                eprintln!(
+                    "⚠️  MALLARDCUBE_MAX_RESPONSE_MB={raw:?} is not a number (0 disables the cap) — ignoring it"
+                );
+                defaults.max_response_bytes
+            }
+        },
+    };
+    ResponseBudget {
+        max_members,
+        max_cells,
+        max_response_bytes,
     }
 }
 
@@ -370,6 +493,16 @@ pub fn query_slots() -> usize {
     current().map(|s| s.query_slots()).unwrap_or(1)
 }
 
+static DEFAULT_BUDGET: OnceLock<ResponseBudget> = OnceLock::new();
+
+/// Response caps in force (the resolved settings, or the built-in defaults
+/// before the pool has opened).
+pub fn budget() -> &'static ResponseBudget {
+    current()
+        .map(|s| &s.budget)
+        .unwrap_or_else(|| DEFAULT_BUDGET.get_or_init(ResponseBudget::default))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,6 +678,97 @@ mod tests {
                 .is_none(),
             "zero threads is not a valid override"
         );
+    }
+
+    #[test]
+    fn response_budgets_default_generously_and_disable_at_zero() {
+        let defaults = EngineSettings::resolve_from(&env_from(&[]), None, 16);
+        assert_eq!(defaults.budget.max_members.value, Some(DEFAULT_MAX_MEMBERS));
+        assert_eq!(defaults.budget.max_cells.value, Some(DEFAULT_MAX_CELLS));
+        assert_eq!(
+            defaults.budget.max_response_bytes.value,
+            Some(DEFAULT_MAX_RESPONSE_BYTES)
+        );
+        assert_eq!(defaults.budget.max_members.source, SettingSource::Default);
+
+        let env = env_from(&[
+            ("MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE", "100"),
+            ("MALLARDCUBE_MAX_CELLS", "0"),
+            ("MALLARDCUBE_MAX_RESPONSE_MB", "8"),
+        ]);
+        let tuned = EngineSettings::resolve_from(&env, None, 16).budget;
+        assert_eq!(tuned.max_members.value, Some(100));
+        assert_eq!(tuned.max_cells.value, None, "0 disables the cap");
+        assert_eq!(tuned.max_response_bytes.value, Some(8 * 1024 * 1024));
+        assert_eq!(tuned.max_members.source, SettingSource::Env);
+
+        // A bad value falls back to the default rather than disabling silently.
+        let bad = EngineSettings::resolve_from(
+            &env_from(&[("MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE", "lots")]),
+            None,
+            16,
+        )
+        .budget;
+        assert_eq!(bad.max_members.value, Some(DEFAULT_MAX_MEMBERS));
+    }
+
+    #[test]
+    fn budget_checks_name_the_limit_they_hit() {
+        let budget = ResponseBudget {
+            max_members: Setting {
+                value: Some(10),
+                source: SettingSource::Default,
+            },
+            max_cells: Setting {
+                value: Some(100),
+                source: SettingSource::Default,
+            },
+            max_response_bytes: Setting {
+                value: Some(1024),
+                source: SettingSource::Default,
+            },
+        };
+        assert!(
+            budget.members_exceeded(10).is_none(),
+            "the cap is inclusive"
+        );
+        let message = budget.members_exceeded(11).expect("over the cap");
+        assert!(
+            message.contains("MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE"),
+            "{message}"
+        );
+        assert!(budget.cells_exceeded(100).is_none());
+        assert!(
+            budget
+                .cells_exceeded(101)
+                .expect("over the cap")
+                .contains("MALLARDCUBE_MAX_CELLS")
+        );
+        assert!(budget.bytes_exceeded(1024).is_none());
+        assert!(
+            budget
+                .bytes_exceeded(1025)
+                .expect("over the cap")
+                .contains("MALLARDCUBE_MAX_RESPONSE_MB")
+        );
+
+        let unlimited = ResponseBudget {
+            max_members: Setting {
+                value: None,
+                source: SettingSource::Env,
+            },
+            max_cells: Setting {
+                value: None,
+                source: SettingSource::Env,
+            },
+            max_response_bytes: Setting {
+                value: None,
+                source: SettingSource::Env,
+            },
+        };
+        assert!(unlimited.members_exceeded(usize::MAX).is_none());
+        assert!(unlimited.cells_exceeded(usize::MAX).is_none());
+        assert!(unlimited.bytes_exceeded(usize::MAX).is_none());
     }
 
     #[test]
