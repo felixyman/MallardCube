@@ -88,10 +88,13 @@ run() {
   local kind="$1" concurrency="$2" iterations="$3"
   echo ""
   echo "===== $kind | concurrency $concurrency ====="
+  # The replay tool exits non-zero when the error rate or p95 exceeds its
+  # threshold. That is a result to report, not a reason to abandon the sweep
+  # (this used to abort the script before the AGG comparison could run).
   "$REPO_ROOT/target/release/mallard" load-replay "$TRACE" \
     --url "$URL" --rewrite-session-ids \
     --kind "$kind" --concurrency "$concurrency" --iterations "$iterations" --warmup 20 2>&1 \
-    | grep -E "throughput|p50|p90|p95|p99|error_rate"
+    | grep -E "requests:|ok:|failed:|error_rate|throughput|elapsed|p50|p90|p95|p99|max:|FAIL" || true
 }
 
 run execute 1 300

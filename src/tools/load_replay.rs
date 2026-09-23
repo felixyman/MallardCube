@@ -420,8 +420,13 @@ fn validate_response(kind: &str, body: &str) -> Result<(), String> {
         if !body.contains("<ExecuteResponse") {
             return Err("execute response missing <ExecuteResponse".into());
         }
-        if !body.contains("<CellData>") && !body.contains("<Axes>") {
-            return Err("execute response missing cellset markers".into());
+        // Drillthrough answers with a rowset (`<root>` holding `<row>`
+        // elements), not a cellset, so it has neither `<Axes>` nor
+        // `<CellData>`. Both shapes are valid ExecuteStatement responses.
+        let cellset = body.contains("<CellData>") || body.contains("<Axes>");
+        let rowset = body.contains("<row");
+        if !cellset && !rowset {
+            return Err("execute response missing cellset and rowset markers".into());
         }
     } else {
         let upper = kind.to_ascii_uppercase();
