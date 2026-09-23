@@ -3391,7 +3391,7 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
                 .and_then(|s| s.split(']').next())
                 .unwrap_or("")
                 .to_string();
-            let level = extract_dim_hierarchy_name(target)
+            let level = level_unique_name_for_member(target)
                 .unwrap_or_else(|| "[Measures].[MeasuresLevel]".to_string());
             (target.to_string(), caption, level)
         };
@@ -3433,16 +3433,101 @@ fn build_measure_metadata_probe<B: QueryBackend + ?Sized>(
     render_response(vec![axis0, slicer], cells, &query.cell_props)
 }
 
-fn extract_dim_hierarchy_name(target: &str) -> Option<String> {
-    let rest = target.strip_prefix('[')?;
-    let close = rest.find(']')?;
-    let dim = &rest[..close];
-    let rest = &rest[close + 1..];
-    let rest = rest.strip_prefix(".[")?;
-    let close = rest.find(']')?;
-    let hier = &rest[..close];
-    Some(format!("[{}].[{}].[{}]", dim, hier, hier))
+/// Split `[Date].[Calendar].[Year]` into its bracket-delimited parts.
+fn bracket_segments(input: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = input.trim();
+    while let Some(after_open) = rest.strip_prefix('[') {
+        let Some(close) = after_open.find(']') else {
+            break;
+        };
+        out.push(&after_open[..close]);
+        rest = after_open[close + 1..].trim_start_matches('.');
+    }
+    out
+}
+
+/// Level unique name for a member unique name, the way the mirror answers
+/// `strtomember(...).level.UniqueName` (measured 2026-09-23):
+///
+/// - `[Date].[Calendar].[Year].&[2026]` → `[Date].[Calendar].[Year]` (the
+///   level-qualified prefix),
+/// - `[Category].[Category].&[Books]` → the dimension's leaf level
+///   (`[Category].[Category].[Category]`),
+/// - `[Date].[Full Date].&[2020-01-01]` → `[Date].[Full Date].[Full Date]`
+///   (the date role's key hierarchy is single-level).
+///
+/// Using the hierarchy name as the level made Excel answer `#N/A` for
+/// level-qualified `CUBEVALUE` tuples: its probe returned a level that matched
+/// no advertised level, so it never asked for the value (plan 049 follow-up).
+fn level_unique_name_for_member(target: &str) -> Option<String> {
+    let head = target.split(".&[").next().unwrap_or(target).trim();
+    let segments = bracket_segments(head);
+    match segments.len() {
+        0 | 1 => None,
+        2 => {
+            // The measures hierarchy is answered by the caller's measure
+            // branch; there is no dimension level to name.
+            if segments[0].eq_ignore_ascii_case("Measures") {
+                return None;
+            }
+            let model = &crate::proxy_project::project().model;
+            let dim = model
+                .dimensions
+                .iter()
+                .find(|d| d.hierarchy_unique_name() == head);
+            Some(dim.map(|d| d.leaf_level_unique_name()).unwrap_or_else(|| {
+                format!("[{}].[{}].[{}]", segments[0], segments[1], segments[1])
+            }))
+        }
+        _ => Some(format!(
+            "[{}].[{}].[{}]",
+            segments[0], segments[1], segments[2]
+        )),
+    }
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::level_unique_name_for_member;
+
+    /// Mirror-measured (2026-09-23): the level of a level-qualified member is
+    /// the qualified prefix; a flat member reports its dimension's leaf level.
+    #[test]
+    fn level_unique_name_matches_the_mirror() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        crate::project::project::with_test_project(p, || {
+            let cases = [
+                (
+                    "[Date].[Calendar].[Year].&[2026]",
+                    "[Date].[Calendar].[Year]",
+                ),
+                (
+                    "[Date].[Calendar].[Quarter].&[2026]&[3]",
+                    "[Date].[Calendar].[Quarter]",
+                ),
+                (
+                    "[Category].[Category].&[Electronics]",
+                    "[Category].[Category].[Category]",
+                ),
+                (
+                    "[Territory].[Territory].&[North]",
+                    "[Territory].[Territory].[Territory]",
+                ),
+                (
+                    "[Date].[Full Date].&[2020-01-01]",
+                    "[Date].[Full Date].[Full Date]",
+                ),
+            ];
+            for (member, expected) in cases {
+                assert_eq!(
+                    level_unique_name_for_member(member).as_deref(),
+                    Some(expected),
+                    "level of {member}"
+                );
+            }
+            assert_eq!(level_unique_name_for_member("[Measures].[Revenue]"), None);
+        });
+    }
+}
