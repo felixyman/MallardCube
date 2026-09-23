@@ -85,8 +85,15 @@ makes the bound real. Revisit only if the binding grows a shared-handle API.*
   what makes it a real bound (see 054-C); DuckDB's Rust binding exposes no
   shared `Database`, so the per-slot division is the substitute for one
   process-wide engine.
-- Still open in this section: the response budgets (max members / cells /
-  bytes) and the result cache's byte accounting.
+- Response budgets also landed (commit `93e2137`): member (`> 1M`), cell
+  (`> 2M`), and whole-response byte (`> 512 MB`) caps, each tunable to 0 =
+  off, each answering with a fault that names the limit and the env var.
+  Verified on the 200k-member fixture: a 1000-member cap faults the 200k
+  request and passes a 5-member one; a 10-cell cap faults a 21-cell drilldown
+  and passes a 5-cell one; a 1 MB byte cap faults a 237 MB response with its
+  size.
+- Still open in this section: the result cache's byte accounting (64 entries,
+  each able to hold a large `QueryResult`).
 - Response budgets, checked before and during rendering:
   `MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE`, `MAX_CELLS`, `MAX_RESPONSE_BYTES`.
   On breach: a SOAP fault naming the limit (the shape Excel renders as a data

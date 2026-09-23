@@ -1134,6 +1134,7 @@ mod tests {
                 value: None,
                 source: SettingSource::Default,
             },
+            budget: crate::engine::settings::ResponseBudget::default(),
         };
         let path = temp_db_path("engine-settings");
         {

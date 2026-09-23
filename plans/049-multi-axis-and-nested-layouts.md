@@ -248,6 +248,29 @@ key hierarchy `[Date].[Full Date]` (mirror: 4019 rows) and none for
 `[Measures]` (mirror: 6 rows). Exact mirror shapes and the scale numbers are in
 plan 050.
 
+## Open: CUBEVALUE tuples for hierarchies outside the pivot cache (2026-09-23)
+
+While verifying the plan 051 work in Excel: `CUBEVALUE` (and `CUBEMEMBER`) with
+a member of a hierarchy the workbook's pivot cache does **not** already
+contain returns `#N/A`, and the trace shows Excel never asks the proxy for the
+value — it runs the `XL_SD` member probe, fetches `MDSCHEMA_LEVELS`, then
+decides. Members of hierarchies that are in the cache (Category) resolve
+normally, as do totals, YTD/MTD/QTD, and `CUBESETCOUNT`.
+
+One real defect surfaced by the probe and was fixed: the probe's
+`level.UniqueName` returned the hierarchy name (`[Date].[Calendar].[Calendar]`)
+where the mirror answers `[Date].[Calendar].[Year]` — commit `092a406`, unit
+test pinned to the mirror. It did not, by itself, make Excel resolve those
+tuples, so something further in Excel's validation (or in the metadata it
+validates against) still differs.
+
+Decisive next experiment: run the same formulas in a scratch workbook against
+the **mirror** (`MallardDemo`, via the session-1 COM connection recipe) — if
+SSAS behaves the same, this is Excel-side and the item closes; if not, diff the
+metadata Excel fetches (`MDSCHEMA_HIERARCHIES`/`LEVELS`/`MEMBERS` for
+`[Territory]` and `[Date].[Calendar]`) against ours. The pivot path is
+unaffected: pivots over these hierarchies work in every verified gesture.
+
 ## Still open
 
 - **Set-op axes and the `(All)` member** (see above): the reference keeps

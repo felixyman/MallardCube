@@ -281,6 +281,9 @@ cargo test --lib
 | `MALLARDCUBE_MEMORY_LIMIT` | Engine memory ceiling (`4GiB`, `4GB`, `4294967296B`, `80%`); default is 70% of the container's cgroup limit divided between the query slots, else the engine default |
 | `MALLARDCUBE_MAX_CONCURRENT_QUERIES` | Requests allowed to run engine queries at once (default: CPU count / 4, at least 1). Bounds concurrency and, with it, the memory the per-slot ceiling adds up to |
 | `MALLARDCUBE_QUERY_TIMEOUT_S` | Per-request engine timeout in seconds (default 300; `0` disables). On expiry the query is interrupted and the client gets a SOAP fault |
+| `MALLARDCUBE_MAX_MEMBERS_PER_RESPONSE` | Member cap per response (default 1000000; `0` disables); over it the client gets a SOAP fault naming the limit |
+| `MALLARDCUBE_MAX_CELLS` | Cell cap per cellset (default 2000000; `0` disables) |
+| `MALLARDCUBE_MAX_RESPONSE_MB` | Whole-response byte cap in MB (default 512; `0` disables), covering every response shape |
 | `MALLARDCUBE_TEMP_DIR` | Spill directory for large sorts/aggregations (created if missing); default is the engine's |
 | `MALLARDCUBE_THREADS` | Engine thread count; default is all cores |
 | `MALLARDCUBE_AGG_CACHE` | Aggregation sidecar path; enables rollups for SUM measures |
