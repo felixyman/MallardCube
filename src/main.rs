@@ -928,19 +928,24 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
         XmlaRequest::MdschemaMembers {
             member_unique_name,
             tree_op,
+            restrictions,
         } => {
             println!(
-                "📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?})",
-                member_unique_name, tree_op
+                "📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?}, hier={:?}, level={:?})",
+                member_unique_name,
+                tree_op,
+                restrictions.hierarchy_unique_name,
+                restrictions.level_unique_name
             );
             debug_write("===== MDSCHEMA_MEMBERS REQUEST =====");
             debug_write(&format!(
-                "filter_member: {:?}, tree_op: {:?}",
-                member_unique_name, tree_op
+                "filter_member: {:?}, tree_op: {:?}, restrictions: {:?}",
+                member_unique_name, tree_op, restrictions
             ));
             let resp = members::get_members_response_with_backend(
                 member_unique_name.as_deref(),
                 *tree_op,
+                restrictions,
                 backend,
                 user,
                 config,

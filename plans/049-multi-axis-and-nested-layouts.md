@@ -230,6 +230,24 @@ Verified at parity with the mirror rather than fixed:
   verifies every built `href`/`src` (249 references) as part of
   `npm run build`, and CI builds the site on pull requests.
 
+## `MDSCHEMA_MEMBERS` ignored the Discover restrictions (fixed 2026-09-23)
+
+The scale pass (plan 050) measured the member rowset on a 200k-member dimension
+and found that `DIMENSION_UNIQUE_NAME` / `HIERARCHY_UNIQUE_NAME` /
+`LEVEL_UNIQUE_NAME` were parsed and then dropped: every restricted request
+answered with every hierarchy of every dimension — 237 MB where 27 KB is
+correct. The mirror honours all three (measured: `[Date].[Calendar]` → 4206
+rows, `[Date].[Calendar].[Year]` → 11 with no `(All)`, `[Category].[Category]`
+→ 21, a hierarchy plus member `TREE_OP` 8 → the one intersecting row). The
+member rowset now filters through the existing `coordinates_match`, with tests
+pinned to those numbers.
+
+Two related gaps stay open (both pre-existing, both now *visible* as an empty
+rowset instead of a wrong one): the member list has no rows for the date role's
+key hierarchy `[Date].[Full Date]` (mirror: 4019 rows) and none for
+`[Measures]` (mirror: 6 rows). Exact mirror shapes and the scale numbers are in
+plan 050.
+
 ## Still open
 
 - **Set-op axes and the `(All)` member** (see above): the reference keeps

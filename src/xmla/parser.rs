@@ -55,6 +55,7 @@ pub enum XmlaRequest {
     MdschemaMembers {
         member_unique_name: Option<String>,
         tree_op: Option<i32>,
+        restrictions: Restrictions,
     },
     MdschemaSets,
     MdschemaKpis,
@@ -227,6 +228,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             return XmlaRequest::MdschemaMembers {
                 member_unique_name,
                 tree_op,
+                restrictions,
             };
         }
         "MDSCHEMA_SETS" => return XmlaRequest::MdschemaSets,

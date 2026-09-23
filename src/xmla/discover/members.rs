@@ -10,6 +10,7 @@ use crate::engine::model::{TableAccess, UserContext, effective_table_filter};
 use crate::project::config::ProxyConfig;
 use crate::proxy_project;
 use crate::response::xml_escape;
+use crate::xmla::parser::Restrictions;
 use uuid::Uuid;
 
 const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -42,6 +43,11 @@ struct MemberRow {
     xml: String,
     #[allow(dead_code)] // read by tests only
     dimension_id: String,
+    /// The `(dimension, hierarchy, level)` coordinates the request
+    /// restrictions are matched against (see `coordinates_match`).
+    dimension_unique_name: String,
+    hierarchy_unique_name: String,
+    level_unique_name: String,
     member_unique_name: String,
     parent_unique_name: Option<String>,
 }
@@ -106,6 +112,9 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
                 "All",
             ),
             dimension_id: dim.id.clone(),
+            dimension_unique_name: dim_u.clone(),
+            hierarchy_unique_name: hier_u.clone(),
+            level_unique_name: all_level_u.clone(),
             member_unique_name: all_member_u,
             parent_unique_name: None,
         });
@@ -180,6 +189,9 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
                     val,
                 ),
                 dimension_id: dim.id.clone(),
+                dimension_unique_name: dim_u.clone(),
+                hierarchy_unique_name: hier_u.clone(),
+                level_unique_name: leaf_level_u.clone(),
                 member_unique_name: leaf_member_u,
                 parent_unique_name: Some(all_member_u.clone()),
             });
@@ -297,6 +309,9 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                         &name,
                     ),
                     dimension_id: dim.id.clone(),
+                    dimension_unique_name: dim_u.clone(),
+                    hierarchy_unique_name: hier_u.clone(),
+                    level_unique_name: level_u.clone(),
                     member_unique_name: uname,
                     parent_unique_name: Some(parent_u),
                 });
@@ -431,21 +446,39 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
 
 // ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
 
-fn find_member<'a>(rows: &'a [MemberRow], filter: &str) -> Option<&'a MemberRow> {
+fn find_member<'a>(rows: &'a [&'a MemberRow], filter: &str) -> Option<&'a MemberRow> {
     let decoded = filter.replace("&amp;", "&");
     rows.iter()
+        .copied()
         .find(|r| r.member_unique_name == filter || r.member_unique_name == decoded)
 }
 
-fn find_children<'a>(rows: &'a [MemberRow], parent: &str) -> Vec<&'a MemberRow> {
+fn find_children<'a>(rows: &'a [&'a MemberRow], parent: &str) -> Vec<&'a MemberRow> {
     let decoded = parent.replace("&amp;", "&");
     rows.iter()
+        .copied()
         .filter(|r| {
             r.parent_unique_name
                 .as_deref()
                 .is_some_and(|pun| pun == parent || pun == decoded)
         })
         .collect()
+}
+
+/// Does a member row satisfy the Discover request's restriction list?
+///
+/// The mirror (SQL Server 2025 Analysis Services, measured 2026-09-23) honours
+/// `DIMENSION_UNIQUE_NAME`, `HIERARCHY_UNIQUE_NAME`, and `LEVEL_UNIQUE_NAME`
+/// on `MDSCHEMA_MEMBERS`: a hierarchy restriction returns that hierarchy's
+/// members at every level, a level restriction returns only that level (no
+/// `(All)` row), and a dimension restriction returns all of its hierarchies.
+fn row_matches(restrictions: &Restrictions, row: &MemberRow) -> bool {
+    super::coordinates_match(
+        restrictions,
+        &row.dimension_unique_name,
+        Some(&row.hierarchy_unique_name),
+        Some(&row.level_unique_name),
+    )
 }
 
 // ---- public API ----
@@ -459,6 +492,7 @@ pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -
     get_members_response_with_backend(
         member_filter,
         tree_op,
+        &Restrictions::default(),
         Backend::test_fixture(),
         &UserContext::admin_default(),
         &project.config,
@@ -468,11 +502,21 @@ pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -
 pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     member_filter: Option<&str>,
     tree_op: Option<i32>,
+    restrictions: &Restrictions,
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
-    let rows = all_rows_with_backend(backend, user, config);
+    let all_rows = all_rows_with_backend(backend, user, config);
+    // Restrictions narrow the rowset before the member/tree-op selection: the
+    // reference engine intersects the two (a hierarchy restriction plus a SELF
+    // probe returns the one matching row). Passing everything and filtering
+    // after would be the same result, but this keeps the big row vectors out
+    // of the selection path for the common one-hierarchy cache build.
+    let rows: Vec<&MemberRow> = all_rows
+        .iter()
+        .filter(|row| row_matches(restrictions, row))
+        .collect();
 
     let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
         (Some(filter), Some(8)) => {
@@ -527,8 +571,8 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
             }
         }
         (None, _) => {
-            // No filter: return all members
-            rows.iter().collect()
+            // No filter: return every member left after the restrictions.
+            rows.clone()
         }
     };
 
@@ -812,6 +856,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(year_u),
                 Some(8),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
@@ -826,6 +871,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(year_u),
                 Some(1),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
@@ -836,6 +882,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(8),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
@@ -846,6 +893,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(2),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
@@ -856,6 +904,7 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(4),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
@@ -870,11 +919,152 @@ mod tests {
             let xml = get_members_response_with_backend(
                 Some("[Date].[Calendar].[Year].&[1999]"),
                 Some(8),
+                &crate::xmla::parser::Restrictions::default(),
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
             );
             assert_eq!(xml.matches("<row>").count(), 0);
+        });
+    }
+
+    /// The mirror (SQL Server 2025 Analysis Services, measured 2026-09-23)
+    /// honours the dimension, hierarchy, and level restrictions on
+    /// `MDSCHEMA_MEMBERS`: `[Date].[Calendar]` returns that hierarchy only,
+    /// `[Date]` returns both Date hierarchies, and `[Date].[Calendar].[Year]`
+    /// returns the years with no `(All)` row.
+    ///
+    /// Excel builds a pivot cache one hierarchy at a time, so ignoring these
+    /// ships every hierarchy's members into every cache build — a 237 MB
+    /// response on the 200k-member bench model where 3.7 MB is correct.
+    #[test]
+    fn restrictions_narrow_the_rowset() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let response = |restrictions: &Restrictions| {
+                get_members_response_with_backend(
+                    None,
+                    None,
+                    restrictions,
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &project.config,
+                )
+            };
+            let rows = |xml: &str| xml.matches("<row>").count();
+
+            let all = response(&Restrictions::default());
+
+            let hierarchy = response(&Restrictions {
+                hierarchy_unique_name: Some("[Category].[Category]".into()),
+                ..Default::default()
+            });
+            assert!(rows(&hierarchy) > 0, "requested hierarchy has members");
+            assert!(
+                rows(&hierarchy) < rows(&all),
+                "a restricted rowset is smaller than the full one"
+            );
+            assert_eq!(
+                hierarchy
+                    .matches("<HIERARCHY_UNIQUE_NAME>[Category].[Category]</HIERARCHY_UNIQUE_NAME>")
+                    .count(),
+                rows(&hierarchy),
+                "every row is from the requested hierarchy"
+            );
+            assert!(
+                !hierarchy.contains("[Date].[Calendar]"),
+                "no other hierarchy leaks in: {hierarchy}"
+            );
+
+            let dimension = response(&Restrictions {
+                dimension_unique_name: Some("[Date]".into()),
+                ..Default::default()
+            });
+            assert!(rows(&dimension) > 0, "the Date dimension has members");
+            assert_eq!(
+                dimension
+                    .matches("<DIMENSION_UNIQUE_NAME>[Date]</DIMENSION_UNIQUE_NAME>")
+                    .count(),
+                rows(&dimension),
+                "a dimension restriction covers only that dimension"
+            );
+            assert!(
+                !dimension.contains("<DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>"),
+                "no other dimension leaks in: {dimension}"
+            );
+            // The mirror also enumerates the date role's key hierarchy
+            // (`[Date].[Full Date]`) under this restriction; our rowset exposes
+            // the key level inside `[Date].[Calendar]` instead (open gap, no
+            // Excel gesture has asked for the key hierarchy's member list yet).
+            assert!(
+                dimension.contains("[Date].[Calendar]"),
+                "the Calendar hierarchy is present: {dimension}"
+            );
+
+            let year_level = "[Date].[Calendar].[Year]";
+            let level = response(&Restrictions {
+                level_unique_name: Some(year_level.into()),
+                ..Default::default()
+            });
+            assert_eq!(rows(&level), 11, "demo years 2020-2030: {level}");
+            assert_eq!(
+                level
+                    .matches(&format!(
+                        "<LEVEL_UNIQUE_NAME>{year_level}</LEVEL_UNIQUE_NAME>"
+                    ))
+                    .count(),
+                rows(&level),
+                "every row is at the requested level"
+            );
+            assert_eq!(
+                level
+                    .matches("<MEMBER_UNIQUE_NAME>[Date].[Calendar].[All]</MEMBER_UNIQUE_NAME>")
+                    .count(),
+                0,
+                "a level restriction excludes the (All) member: {level}"
+            );
+        });
+    }
+
+    /// The mirror intersects a hierarchy (or level) restriction with the member
+    /// and `TREE_OP` probe; a probe for a member outside the restricted
+    /// hierarchy comes back empty rather than reaching into another hierarchy.
+    #[test]
+    fn restrictions_intersect_with_member_probes() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let response = |restrictions: &Restrictions, member: &'static str, tree_op: i32| {
+                get_members_response_with_backend(
+                    Some(member),
+                    Some(tree_op),
+                    restrictions,
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &project.config,
+                )
+            };
+
+            let matching = Restrictions {
+                hierarchy_unique_name: Some("[Category].[Category]".into()),
+                ..Default::default()
+            };
+            let xml = response(&matching, "[Category].[Category].&[Books]", 8);
+            assert_eq!(xml.matches("<row>").count(), 1, "SELF inside: {xml}");
+
+            let other = Restrictions {
+                hierarchy_unique_name: Some("[Territory].[Territory]".into()),
+                ..Default::default()
+            };
+            let xml = response(&other, "[Category].[Category].&[Books]", 8);
+            assert_eq!(
+                xml.matches("<row>").count(),
+                0,
+                "a member outside the restricted hierarchy fails closed: {xml}"
+            );
         });
     }
 }

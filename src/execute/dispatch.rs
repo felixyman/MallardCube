@@ -1414,6 +1414,7 @@ mod tests {
             let self_xml = crate::xmla::discover::members::get_members_response_with_backend(
                 Some("[Employee].[Employee].[Level 02].&[1]&[2]"),
                 Some(8),
+                &crate::xmla::parser::Restrictions::default(),
                 &backend,
                 &crate::engine::model::UserContext::admin_default(),
                 &project.config,

@@ -309,7 +309,12 @@ mod tests {
             let config = &project.config;
 
             let first = crate::xmla::discover::members::get_members_response_with_backend(
-                None, None, &backend, &user, config,
+                None,
+                None,
+                &crate::xmla::parser::Restrictions::default(),
+                &backend,
+                &user,
+                config,
             );
             let after_first = backend.calls.load(Ordering::Relaxed);
             assert!(
@@ -318,7 +323,12 @@ mod tests {
             );
 
             let second = crate::xmla::discover::members::get_members_response_with_backend(
-                None, None, &backend, &user, config,
+                None,
+                None,
+                &crate::xmla::parser::Restrictions::default(),
+                &backend,
+                &user,
+                config,
             );
             assert_eq!(
                 backend.calls.load(Ordering::Relaxed),
