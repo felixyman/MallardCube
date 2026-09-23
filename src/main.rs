@@ -1240,6 +1240,16 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("MdschemaFunctions", body, &resp, None, None);
             resp
         }
+        XmlaRequest::Malformed(reason) => {
+            // The request could not be read faithfully: an unparsable entity,
+            // or a Statement we could not decode (CDATA used to land here as an
+            // empty success). Fault — a silent empty cellset is a wrong answer.
+            eprintln!("!!! Malformed request: {reason}");
+            let resp =
+                mallardcube::response::fault_response(&format!("malformed request: {reason}"));
+            mallardcube::xmla_trace::trace_request("Malformed", body, &resp, None, None);
+            resp
+        }
         XmlaRequest::Unknown => {
             // Answer with a fault: an empty body makes Excel report "XML
             // parsing failed … a document must contain exactly one root

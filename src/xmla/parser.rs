@@ -76,8 +76,33 @@ pub enum XmlaRequest {
     DiscoverDatasources,
     BeginSession,
     ExecuteEmpty,
+    /// The request XML could not be read faithfully — an unparsable entity, or
+    /// an `Execute` whose `Statement` held no readable text. Answering those
+    /// with an empty cellset is a silent wrong answer: CDATA-wrapped statements
+    /// (what .NET/PowerShell/Java SOAP clients emit) used to vanish here, and a
+    /// restriction we could not decode used to be dropped, returning the
+    /// *unrestricted* rowset (plan 051).
+    Malformed(String),
     ExecuteStatement(String),
     Unknown,
+}
+
+/// Apply one restriction value by element name. Shared by the flat
+/// `<RestrictionList>` form and both nested `<restriction>` forms so the paths
+/// cannot diverge. Returns whether the name was recognised.
+fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -> bool {
+    match name {
+        b"CATALOG_NAME" => restrictions.catalog_name = Some(text.to_string()),
+        b"CUBE_NAME" => restrictions.cube_name = Some(text.to_string()),
+        b"DIMENSION_UNIQUE_NAME" => restrictions.dimension_unique_name = Some(text.to_string()),
+        b"HIERARCHY_UNIQUE_NAME" => restrictions.hierarchy_unique_name = Some(text.to_string()),
+        b"LEVEL_UNIQUE_NAME" => restrictions.level_unique_name = Some(text.to_string()),
+        b"PROPERTY_NAME" => restrictions.property_name = Some(text.to_string()),
+        b"ORIGIN" => restrictions.origin = text.parse().ok(),
+        b"SchemaName" => restrictions.schema_name = Some(text.to_string()),
+        _ => return false,
+    }
+    true
 }
 
 pub fn parse_xmla(xml: &str) -> XmlaRequest {
@@ -94,6 +119,17 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut in_restriction_list = false;
     let mut restriction_name: Option<Vec<u8>> = None;
     let mut restrictions = Restrictions::default();
+    // Text accumulates for the element currently open (Text and CDATA alike)
+    // and is consumed when that element ends. Processing per text event lost
+    // mixed content and ignored CDATA entirely (plan 051).
+    let mut pending_text = String::new();
+    // The nested restriction forms — `<restriction><NAME>…</NAME></restriction>`
+    // and the standard `<restriction><column>…</column><value>…</value>` —
+    // were ignored, so those clients silently received the unrestricted rowset.
+    let mut in_nested_restriction = false;
+    let mut pending_column: Option<String> = None;
+    let mut statement_seen = false;
+    let mut malformed: Option<String> = None;
 
     let mut parsed_request_type = String::new();
     let mut requested_properties: Vec<String> = Vec::new();
@@ -107,15 +143,20 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"RequestType" => in_request_type = true,
                 b"PropertyName" => in_property_name = true,
-                b"Statement" => in_statement = true,
+                b"Statement" => {
+                    in_statement = true;
+                    statement_seen = true;
+                }
                 b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
                 b"Execute" => is_execute = true,
                 b"PROPERTY_TYPE" => in_property_type = true,
                 b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
                 b"TREE_OP" => in_tree_op = true,
                 b"RestrictionList" => in_restriction_list = true,
+                b"restriction" => in_nested_restriction = true,
+                b"column" | b"value" if in_nested_restriction => {}
                 name => {
-                    if in_restriction_list {
+                    if in_restriction_list || in_nested_restriction {
                         restriction_name = Some(name.to_vec());
                     }
                 }
@@ -123,67 +164,89 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
                 is_execute = true;
             }
-            Ok(Event::Text(e)) => {
-                let text = e.unescape().unwrap_or_default().trim().to_string();
-
-                if !text.is_empty() {
-                    if in_restriction_list && let Some(name) = restriction_name.as_deref() {
-                        match name {
-                            b"CATALOG_NAME" => restrictions.catalog_name = Some(text.clone()),
-                            b"CUBE_NAME" => restrictions.cube_name = Some(text.clone()),
-                            b"DIMENSION_UNIQUE_NAME" => {
-                                restrictions.dimension_unique_name = Some(text.clone())
-                            }
-                            b"HIERARCHY_UNIQUE_NAME" => {
-                                restrictions.hierarchy_unique_name = Some(text.clone())
-                            }
-                            b"LEVEL_UNIQUE_NAME" => {
-                                restrictions.level_unique_name = Some(text.clone())
-                            }
-                            b"PROPERTY_NAME" => restrictions.property_name = Some(text.clone()),
-                            b"ORIGIN" => restrictions.origin = text.trim().parse().ok(),
-                            b"SchemaName" => restrictions.schema_name = Some(text.clone()),
-                            _ => {}
-                        }
-                    }
-                    if in_request_type {
-                        parsed_request_type = text;
-                    } else if in_property_name {
-                        requested_properties.push(text);
-                    } else if in_statement {
-                        statement_text = text;
-                    } else if in_property_type {
-                        if let Ok(v) = text.parse::<i32>() {
-                            property_type = Some(v);
-                        }
-                    } else if in_member_unique_name {
-                        member_unique_name = Some(text);
-                    } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
-                        tree_op = Some(v);
-                    }
-                }
-            }
-            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
-                b"RequestType" => in_request_type = false,
-                b"PropertyName" => in_property_name = false,
-                b"Statement" => in_statement = false,
-                b"PROPERTY_TYPE" => in_property_type = false,
-                b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
-                b"TREE_OP" => in_tree_op = false,
-                b"RestrictionList" => {
-                    in_restriction_list = false;
-                    restriction_name = None;
-                }
-                _ => {
-                    if in_restriction_list {
-                        restriction_name = None;
-                    }
+            Ok(Event::Text(e)) => match e.unescape() {
+                Ok(decoded) => pending_text.push_str(&decoded),
+                Err(_) => {
+                    malformed.get_or_insert_with(|| {
+                        "request text contains an unparsable XML entity".to_string()
+                    });
                 }
             },
+            // CDATA is literal text: .NET/PowerShell/Java SOAP clients wrap
+            // statements in it, and ignoring it answered them with an empty
+            // cellset (plan 051).
+            Ok(Event::CData(e)) => {
+                pending_text.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::End(ref e)) => {
+                let name = e.local_name();
+                let text = pending_text.trim().to_string();
+                if !text.is_empty() {
+                    match name.as_ref() {
+                        // Standard nested form: `<column>` names the
+                        // restriction, the following `<value>` carries it.
+                        b"column" if in_nested_restriction => {
+                            pending_column = Some(text.clone());
+                        }
+                        b"value" if in_nested_restriction => {
+                            if let Some(column) = pending_column.take() {
+                                apply_restriction(&mut restrictions, column.as_bytes(), &text);
+                            }
+                        }
+                        _ => {
+                            // Flat form and `<restriction><NAME>…</NAME>`: the
+                            // element name is the restriction name.
+                            if (in_restriction_list || in_nested_restriction)
+                                && let Some(restriction) = restriction_name.as_deref()
+                            {
+                                apply_restriction(&mut restrictions, restriction, &text);
+                            }
+                            if in_request_type {
+                                parsed_request_type = text.clone();
+                            } else if in_property_name {
+                                requested_properties.push(text.clone());
+                            } else if in_statement {
+                                statement_text.push_str(&text);
+                            } else if in_property_type {
+                                if let Ok(v) = text.parse::<i32>() {
+                                    property_type = Some(v);
+                                }
+                            } else if in_member_unique_name {
+                                member_unique_name = Some(text.clone());
+                            } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
+                                tree_op = Some(v);
+                            }
+                        }
+                    }
+                }
+                pending_text.clear();
+                match name.as_ref() {
+                    b"RequestType" => in_request_type = false,
+                    b"PropertyName" => in_property_name = false,
+                    b"Statement" => in_statement = false,
+                    b"PROPERTY_TYPE" => in_property_type = false,
+                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
+                    b"TREE_OP" => in_tree_op = false,
+                    b"restriction" => in_nested_restriction = false,
+                    b"RestrictionList" => {
+                        in_restriction_list = false;
+                        restriction_name = None;
+                    }
+                    _ if in_restriction_list || in_nested_restriction => restriction_name = None,
+                    _ => {}
+                }
+            }
             Ok(Event::Eof) => break,
-            Err(_) => break,
+            Err(_) => {
+                malformed.get_or_insert_with(|| "request XML could not be read".to_string());
+                break;
+            }
             _ => (),
         }
+    }
+
+    if let Some(reason) = malformed {
+        return XmlaRequest::Malformed(reason);
     }
 
     match parsed_request_type.as_str() {
@@ -252,8 +315,13 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     };
 
     if is_execute {
-        if !statement_text.is_empty() {
+        if !statement_text.trim().is_empty() {
             return XmlaRequest::ExecuteStatement(statement_text);
+        } else if statement_seen {
+            // A Statement element that produced no readable text — an empty
+            // body or content this parser dropped. Returning the empty-success
+            // shape hides the problem; the reference would not accept it.
+            return XmlaRequest::Malformed("Execute carried no readable <Statement>".into());
         } else if is_begin_session {
             return XmlaRequest::BeginSession;
         } else {
@@ -267,6 +335,118 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CDATA is what .NET, PowerShell and Java SOAP clients emit; ignoring it
+    /// answered them with an empty cellset instead of running the query.
+    #[test]
+    fn cdata_statement_is_read() {
+        let xml = r#"<Envelope><Body><Execute><Command>
+            <Statement><![CDATA[SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]]]></Statement>
+        </Command></Execute></Body></Envelope>"#;
+        match parse_xmla(xml) {
+            XmlaRequest::ExecuteStatement(statement) => {
+                assert!(
+                    statement.contains("SELECT {[Measures].[Revenue]}"),
+                    "{statement}"
+                );
+            }
+            other => panic!("expected the statement, got {other:?}"),
+        }
+    }
+
+    /// Mixed content used to overwrite: the last text event won.
+    #[test]
+    fn statement_text_accumulates_across_events() {
+        let xml = r#"<Envelope><Body><Execute><Command>
+            <Statement>SELECT {[Measures].[Revenue]} <![CDATA[ON COLUMNS]]> FROM [Sales]</Statement>
+        </Command></Execute></Body></Envelope>"#;
+        match parse_xmla(xml) {
+            XmlaRequest::ExecuteStatement(statement) => {
+                assert_eq!(
+                    statement.split_whitespace().collect::<Vec<_>>().join(" "),
+                    "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]"
+                );
+            }
+            other => panic!("expected the statement, got {other:?}"),
+        }
+    }
+
+    /// Unreadable text must fault: a blanked statement hid the problem, and a
+    /// dropped restriction silently returned the unrestricted rowset.
+    #[test]
+    fn unparsable_entity_is_malformed() {
+        let statement = r#"<Envelope><Body><Execute><Command>
+            <Statement>SELECT FROM [Sales] &foo; WHERE</Statement>
+        </Command></Execute></Body></Envelope>"#;
+        assert!(
+            matches!(parse_xmla(statement), XmlaRequest::Malformed(_)),
+            "an unparsable entity in a statement must fault"
+        );
+
+        let restriction = r#"<Envelope><Body><Discover>
+            <RequestType>MDSCHEMA_MEMBERS</RequestType>
+            <Restrictions><RestrictionList>
+              <CUBE_NAME>Sales</CUBE_NAME>
+              <DIMENSION_UNIQUE_NAME>[Category]&foo;</DIMENSION_UNIQUE_NAME>
+            </RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        assert!(
+            matches!(parse_xmla(restriction), XmlaRequest::Malformed(_)),
+            "an unparsable entity in a restriction must fault, not widen"
+        );
+    }
+
+    /// A Statement element that produced no text is malformed; an Execute with
+    /// no Statement at all is still the legitimate empty success.
+    #[test]
+    fn empty_statement_is_malformed_but_absent_statement_is_not() {
+        let empty = r#"<Envelope><Body><Execute><Command><Statement></Statement></Command></Execute></Body></Envelope>"#;
+        assert!(matches!(parse_xmla(empty), XmlaRequest::Malformed(_)));
+
+        let absent = r#"<Envelope><Body><Execute><Command/></Execute></Body></Envelope>"#;
+        assert!(matches!(parse_xmla(absent), XmlaRequest::ExecuteEmpty));
+    }
+
+    /// Both nested restriction forms must land in the same fields as the flat
+    /// one; they used to be ignored, widening the rowset with no diagnostic.
+    #[test]
+    fn nested_restriction_forms_are_parsed() {
+        let element_form = r#"<Envelope><Body><Discover>
+            <RequestType>MDSCHEMA_MEMBERS</RequestType>
+            <Restrictions><restriction>
+              <CUBE_NAME>Sales</CUBE_NAME>
+              <DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>
+            </restriction></Restrictions>
+        </Discover></Body></Envelope>"#;
+        match parse_xmla(element_form) {
+            XmlaRequest::MdschemaMembers { restrictions, .. } => {
+                assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
+                assert_eq!(
+                    restrictions.dimension_unique_name.as_deref(),
+                    Some("[Category]")
+                );
+            }
+            other => panic!("expected members, got {other:?}"),
+        }
+
+        let column_value_form = r#"<Envelope><Body><Discover>
+            <RequestType>MDSCHEMA_MEMBERS</RequestType>
+            <Restrictions>
+              <restriction><column>CUBE_NAME</column><value>Sales</value></restriction>
+              <restriction><column>DIMENSION_UNIQUE_NAME</column><value>[Category]</value></restriction>
+            </Restrictions>
+        </Discover></Body></Envelope>"#;
+        match parse_xmla(column_value_form) {
+            XmlaRequest::MdschemaMembers { restrictions, .. } => {
+                assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
+                assert_eq!(
+                    restrictions.dimension_unique_name.as_deref(),
+                    Some("[Category]")
+                );
+            }
+            other => panic!("expected members, got {other:?}"),
+        }
+    }
 
     #[test]
     fn restriction_list_is_parsed() {
