@@ -204,8 +204,14 @@ mod tests {
             };
             let resp = super::get_functions_response(&restrictions);
             // Excel reads the rows against this schema: every field optional.
-            assert!(resp.contains(r#"name="FUNCTION_NAME" type="xsd:string" minOccurs="0""#), "{resp}");
-            assert!(resp.contains(r#"name="RETURN_TYPE" type="xsd:int" minOccurs="0""#), "{resp}");
+            assert!(
+                resp.contains(r#"name="FUNCTION_NAME" type="xsd:string" minOccurs="0""#),
+                "{resp}"
+            );
+            assert!(
+                resp.contains(r#"name="RETURN_TYPE" type="xsd:int" minOccurs="0""#),
+                "{resp}"
+            );
             for name in ["CROSSJOIN", "DRILLDOWNMEMBER", "YTD", "STRTOSET"] {
                 assert!(
                     resp.contains(&format!("<FUNCTION_NAME>{name}</FUNCTION_NAME>")),
@@ -225,7 +231,10 @@ mod tests {
                 ..Restrictions::default()
             };
             let resp = super::get_functions_response(&restrictions);
-            assert!(!resp.contains("<row>"), "user-defined list must be empty: {resp}");
+            assert!(
+                !resp.contains("<row>"),
+                "user-defined list must be empty: {resp}"
+            );
         });
     }
 }

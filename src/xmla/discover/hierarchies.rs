@@ -37,8 +37,8 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
 
     // Measures hierarchy (special case, not in model)
     if super::coordinates_match(restrictions, "[Measures]", Some("[Measures]"), None) {
-    rows.push_str(&format!(
-        r#"          <row>
+        rows.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
@@ -62,9 +62,9 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-        catalog = project.config.catalog,
-        cube = project.config.cube,
-    ));
+            catalog = project.config.catalog,
+            cube = project.config.cube,
+        ));
     }
 
     let catalog = &project.config.catalog;
@@ -167,18 +167,18 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
                 Some(&key_hier),
                 None,
             ) {
-            rows.push_str(&hier_row(
-                guid_base + 1,
-                &d.dimension_unique_name(),
-                &d.caption,
-                name,
-                dim_type,
-                2, // attribute hierarchy (matches the verified reference)
-                level.cardinality.max(1),
-                2,
-                &format!("[{}].[{}].[All]", d.caption, name),
-                d.visible,
-            ));
+                rows.push_str(&hier_row(
+                    guid_base + 1,
+                    &d.dimension_unique_name(),
+                    &d.caption,
+                    name,
+                    dim_type,
+                    2, // attribute hierarchy (matches the verified reference)
+                    level.cardinality.max(1),
+                    2,
+                    &format!("[{}].[{}].[All]", d.caption, name),
+                    d.visible,
+                ));
             }
         }
     }

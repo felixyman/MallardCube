@@ -460,7 +460,12 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     for coord in &axis0_coords {
         if spec0.measures.is_empty() {
             axis0_tuples.push(cellset::TupleConfig {
-                members: vec![member_or_all(&d0, coord[0].as_deref(), &query.dim_props, backend)],
+                members: vec![member_or_all(
+                    &d0,
+                    coord[0].as_deref(),
+                    &query.dim_props,
+                    backend,
+                )],
             });
         } else {
             for m in measure_members.iter().take(n_measures) {
@@ -607,7 +612,10 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
     // Data: one entry per (dim0, dim1) pair; `Vec<f64>` holds one value per
     // measure (a single entry when the measure came from the slicer).
     let rows: Vec<(String, String, Vec<f64>)> = match result {
-        QueryResult::Pairs(pairs) => pairs.iter().map(|(a, b, v)| (a.clone(), b.clone(), vec![*v])).collect(),
+        QueryResult::Pairs(pairs) => pairs
+            .iter()
+            .map(|(a, b, v)| (a.clone(), b.clone(), vec![*v]))
+            .collect(),
         QueryResult::MultiGrouped2(pairs) => pairs.clone(),
         _ => return empty_cellset(query, backend),
     };
@@ -655,8 +663,9 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
         )
         .remove(0)
     };
-    let all_for =
-        |dim: &str| -> cellset::MemberConfig { all_member_for_with_backend(dim, &query.dim_props, backend) };
+    let all_for = |dim: &str| -> cellset::MemberConfig {
+        all_member_for_with_backend(dim, &query.dim_props, backend)
+    };
 
     // Axis 0: (All) + every dim0 member, with the measures when they belong here.
     let mut axis0_members = vec![all_for(&d0)];
@@ -937,7 +946,11 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         }
         apply_member_display_info(&mut members);
         let axis = member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), members);
-        return render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props);
+        return render_response(
+            finish_dim_axis(query, backend, axis),
+            cells,
+            &query.cell_props,
+        );
     }
 
     // Prepend the full ancestor chain so every member's parent is either on the
@@ -1181,7 +1194,11 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         crate::axis_members::hierarchy_for_view(dim, &query.dim_props, key_view),
         members,
     );
-    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
+    render_response(
+        finish_dim_axis(query, backend, axis),
+        cells,
+        &query.cell_props,
+    )
 }
 
 /// Fill in `PARENT_UNIQUE_NAME` for members whose label is a compound path
@@ -2488,7 +2505,11 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
         tuples,
     };
 
-    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
+    render_response(
+        finish_dim_axis(query, backend, axis),
+        cells,
+        &query.cell_props,
+    )
 }
 
 pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
@@ -2605,7 +2626,11 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
         tuples,
     };
 
-    render_response(finish_dim_axis(query, backend, axis), cells, &query.cell_props)
+    render_response(
+        finish_dim_axis(query, backend, axis),
+        cells,
+        &query.cell_props,
+    )
 }
 
 pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(

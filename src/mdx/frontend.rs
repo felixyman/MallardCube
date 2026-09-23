@@ -1275,7 +1275,9 @@ pub fn axis_set_op(sel: &Select) -> Option<AxisSetOp> {
                         _ => None,
                     });
                     match condition {
-                        Some(Expr::Binary { lhs, op, rhs }) if matches!(**lhs, Expr::Measure(_)) => {
+                        Some(Expr::Binary { lhs, op, rhs })
+                            if matches!(**lhs, Expr::Measure(_)) =>
+                        {
                             Some(AxisSetOp::Filter {
                                 op: to_pcmp(*op),
                                 value: num(rhs)?,

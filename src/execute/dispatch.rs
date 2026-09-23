@@ -3201,9 +3201,7 @@ mod tests {
             let ends =
                 captions(r#"Right([Category].[Category].CurrentMember.member_caption,1)="s""#);
             assert!(
-                ends.len() > 1
-                    && ends[0] == "All"
-                    && ends[1..].iter().all(|c| c.ends_with('s')),
+                ends.len() > 1 && ends[0] == "All" && ends[1..].iter().all(|c| c.ends_with('s')),
                 "{ends:?}"
             );
         });
@@ -3667,9 +3665,8 @@ mod tests {
             assert_eq!(values.len(), 41, "mirror: 41 cells");
             let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
             assert_eq!(values[0], total, "root = grand total");
-            let automotive = demo_scalar(
-                "SELECT SUM(revenue) FROM sales_fact WHERE category = 'Automotive'",
-            );
+            let automotive =
+                demo_scalar("SELECT SUM(revenue) FROM sales_fact WHERE category = 'Automotive'");
             assert_eq!(values[1], automotive, "Automotive total");
             assert_eq!(values[2], automotive, "Automotive's only channel");
         });
@@ -3703,7 +3700,11 @@ mod tests {
             assert_eq!(values.len(), 42, "21 rows × 2 measures");
             let revenue = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
             let units = demo_scalar("SELECT SUM(units) FROM sales_fact");
-            assert_eq!(&values[0..2], &[revenue, units], "All row: Revenue then Units");
+            assert_eq!(
+                &values[0..2],
+                &[revenue, units],
+                "All row: Revenue then Units"
+            );
         });
     }
 
@@ -3773,7 +3774,11 @@ mod tests {
             let mut expected = vec!["All/Revenue".to_string()];
             expected.extend(data_year_keys().iter().map(|y| format!("{y}/Revenue")));
             assert_eq!(axis_signature(&xml, "Axis0"), expected.join(","));
-            assert_eq!(axis_tuple_captions(&xml, "Axis1").len(), 21, "All + categories");
+            assert_eq!(
+                axis_tuple_captions(&xml, "Axis1").len(),
+                21,
+                "All + categories"
+            );
             let values = cell_values(&xml);
             assert_eq!(values.len(), (data_year_keys().len() + 1) * 21);
             let total = demo_scalar("SELECT SUM(revenue) FROM sales_fact");
@@ -3797,7 +3802,11 @@ mod tests {
                 "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}), {[Measures].[Revenue],[Measures].[Units]}) ON COLUMNS FROM [Sales]",
             );
             let tuples = axis_tuple_captions(&xml, "Axis0");
-            assert_eq!(tuples.len(), (data_year_keys().len() + 1) * 2, "years × measures");
+            assert_eq!(
+                tuples.len(),
+                (data_year_keys().len() + 1) * 2,
+                "years × measures"
+            );
             assert_eq!(tuples[0], vec!["All", "Revenue"]);
             assert_eq!(tuples[1], vec!["All", "Units"]);
             assert_eq!(tuples[2], vec!["2020", "Revenue"]);
@@ -3866,7 +3875,10 @@ mod tests {
                 "SELECT NON EMPTY {[Measures].[Revenue]} ON COLUMNS, NON EMPTY Hierarchize(DrilldownMember(CrossJoin({[Category].[Category].[All],[Category].[Category].[Category].AllMembers}, {([Channel].[Channel].[All])}), [Category].[Category].[Category].AllMembers, [Channel].[Channel])) ON ROWS FROM [Sales]",
             );
             assert_eq!(axis_tuple_captions(&xml, "Axis0"), vec![vec!["Revenue"]]);
-            assert!(axis_tuple_captions(&xml, "Axis1").len() > 1, "rows on Axis1");
+            assert!(
+                axis_tuple_captions(&xml, "Axis1").len() > 1,
+                "rows on Axis1"
+            );
         });
     }
 
@@ -3885,7 +3897,10 @@ mod tests {
             assert_eq!(values.len(), 42, "21 rows × 2 measures");
             assert_eq!(values[0], 521_586_767.0, "All revenue");
             assert_eq!(values[1], 4_931_640.0, "All units");
-            assert_eq!(values[2], 25_102_648.0, "first category = Automotive revenue");
+            assert_eq!(
+                values[2], 25_102_648.0,
+                "first category = Automotive revenue"
+            );
             assert!(
                 values[3] < 1_000_000.0,
                 "Automotive units (small): {}",

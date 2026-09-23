@@ -458,7 +458,8 @@ fn detect_calculated_members_pat(
 ) -> CalculatedMembersPat {
     use crate::mdx::ast::Expr;
 
-    if let Some(Expr::Call { args, .. }) = crate::mdx::frontend::find_call(sel, "AddCalculatedMembers")
+    if let Some(Expr::Call { args, .. }) =
+        crate::mdx::frontend::find_call(sel, "AddCalculatedMembers")
         && let Some(inner) = args.first()
     {
         return classify_add_calculated_members(inner, sel);
@@ -512,8 +513,9 @@ fn classify_add_calculated_members(
             // `[D].[H].[All].Children` — the All member's children are the leaf
             // grain (Excel's "expand the field" probe).
             Some(m)
-                if m.level()
-                    .is_some_and(|l| l.eq_ignore_ascii_case("all") || l.eq_ignore_ascii_case("(all)")) =>
+                if m.level().is_some_and(|l| {
+                    l.eq_ignore_ascii_case("all") || l.eq_ignore_ascii_case("(all)")
+                }) =>
             {
                 CalculatedMembersPat::LeafLevelMembers
             }
@@ -650,7 +652,10 @@ fn is_slicer_all_measure(sel: &crate::mdx::ast::Select) -> bool {
     if items.len() != 2 {
         return false;
     }
-    let measures = items.iter().filter(|e| matches!(e, Expr::Measure(_))).count();
+    let measures = items
+        .iter()
+        .filter(|e| matches!(e, Expr::Measure(_)))
+        .count();
     let members = items
         .iter()
         .filter(|e| matches!(e, Expr::Member(m) if !m.dim().eq_ignore_ascii_case("Measures")))
@@ -1346,7 +1351,8 @@ mod set_expr_tests {
     #[test]
     fn parses_calculated_count() {
         let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
-        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")).expect("calculated count");
+        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse"))
+            .expect("calculated count");
         assert_eq!(cc.member_name, "XL_SD");
         assert_eq!(
             cc.set,
@@ -1360,7 +1366,8 @@ mod set_expr_tests {
     #[test]
     fn parses_calculated_count_over_explicit_list() {
         let mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT({[Date].[Calendar].[Year].&[2020],[Date].[Calendar].[Year].&[2021]})' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES VALUE";
-        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")).expect("calculated count");
+        let cc = parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse"))
+            .expect("calculated count");
         assert_eq!(
             cc.set,
             SetExpr::MemberList {
@@ -1375,6 +1382,9 @@ mod set_expr_tests {
     #[test]
     fn calculated_count_ignores_non_count_bodies() {
         let mdx = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Channel].[Channel].currentmember.children).count' Set FilteredMembers As '{[Channel].[Channel].&[Wholesale]}' Select {[Measures].cChildren} on ROWS, Hierarchize(Generate(FilteredMembers, Ascendants([Channel].[Channel].currentmember))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME, MEMBER_TYPE ON COLUMNS FROM [Sales]";
-        assert_eq!(parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")), None);
+        assert_eq!(
+            parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")),
+            None
+        );
     }
 }

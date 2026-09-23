@@ -1286,8 +1286,6 @@ mod tests {
         assert_eq!(extract_drill_members(mdx), None);
     }
 
-
-
     #[test]
     fn is_measure_metadata_probe_detects_strtomember() {
         assert!(is_measure_metadata_probe(

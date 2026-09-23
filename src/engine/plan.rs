@@ -770,8 +770,9 @@ pub fn execute_plan_with_backend_and_context<B: QueryBackend + ?Sized>(
                     user,
                     config,
                 ) {
-                    QueryResult::MultiGroupedN(rows) => per_measure
-                        .push(rows.into_iter().map(|(keys, v)| (keys, v[0])).collect()),
+                    QueryResult::MultiGroupedN(rows) => {
+                        per_measure.push(rows.into_iter().map(|(keys, v)| (keys, v[0])).collect())
+                    }
                     _ => per_measure.push(Vec::new()),
                 }
             }

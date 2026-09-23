@@ -1,6 +1,6 @@
 use crate::proxy_project;
-use crate::xmla::parser::Restrictions;
 use crate::response::{UUID_TYPE, discover_rowset_envelope, xml_escape};
+use crate::xmla::parser::Restrictions;
 
 // OLE DB DBTYPE values (oledb.h / mdstypes.h).
 const DBTYPE_I4: i32 = 3;
@@ -72,8 +72,8 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
         Some("[Measures]"),
         Some("[Measures].[MeasuresLevel]"),
     ) {
-    rows.push_str(&format!(
-        r#"          <row>
+        rows.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>[Measures]</DIMENSION_UNIQUE_NAME>
@@ -94,9 +94,9 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-        catalog = project.config.catalog,
-        cube = project.config.cube,
-    ));
+            catalog = project.config.catalog,
+            cube = project.config.cube,
+        ));
     }
 
     for (i, d) in model.dimensions.iter().enumerate() {
@@ -111,8 +111,8 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             Some(&d.hierarchy_unique_name()),
             Some(&d.all_level_unique_name()),
         ) {
-        rows.push_str(&format!(
-            r#"          <row>
+            rows.push_str(&format!(
+                r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
@@ -134,15 +134,15 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-            all_origin = all_origin,
-            dim_u = xml_escape(&d.dimension_unique_name()),
-            hier_u = xml_escape(&d.hierarchy_unique_name()),
-            all_name = xml_escape(&d.all_level_name),
-            all_unique = xml_escape(&d.all_level_unique_name()),
-            guid = base_guid,
-            catalog = project.config.catalog,
-            cube = project.config.cube,
-        ));
+                all_origin = all_origin,
+                dim_u = xml_escape(&d.dimension_unique_name()),
+                hier_u = xml_escape(&d.hierarchy_unique_name()),
+                all_name = xml_escape(&d.all_level_name),
+                all_unique = xml_escape(&d.all_level_unique_name()),
+                guid = base_guid,
+                catalog = project.config.catalog,
+                cube = project.config.cube,
+            ));
         }
 
         if !d.levels.is_empty() {
@@ -208,8 +208,8 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
                 Some(&d.hierarchy_unique_name()),
                 Some(&d.leaf_level_unique_name()),
             ) {
-            rows.push_str(&format!(
-                r#"          <row>
+                rows.push_str(&format!(
+                    r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
@@ -232,20 +232,20 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-                dim_u = xml_escape(&d.dimension_unique_name()),
-                hier_u = xml_escape(&d.hierarchy_unique_name()),
-                leaf_name = xml_escape(&d.leaf_level_name),
-                leaf_unique = xml_escape(&d.leaf_level_unique_name()),
-                guid = base_guid + 1,
-                cardinality = d.cardinality_hint,
-                ldbt = if d.is_date_role {
-                    DBTYPE_DATE
-                } else {
-                    DBTYPE_WSTR
-                },
-                catalog = project.config.catalog,
-                cube = project.config.cube,
-            ));
+                    dim_u = xml_escape(&d.dimension_unique_name()),
+                    hier_u = xml_escape(&d.hierarchy_unique_name()),
+                    leaf_name = xml_escape(&d.leaf_level_name),
+                    leaf_unique = xml_escape(&d.leaf_level_unique_name()),
+                    guid = base_guid + 1,
+                    cardinality = d.cardinality_hint,
+                    ldbt = if d.is_date_role {
+                        DBTYPE_DATE
+                    } else {
+                        DBTYPE_WSTR
+                    },
+                    catalog = project.config.catalog,
+                    cube = project.config.cube,
+                ));
             }
         }
 
@@ -266,8 +266,8 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
                 Some(&key_hier_u),
                 Some(&key_all_unique),
             ) {
-            rows.push_str(&format!(
-                r#"          <row>
+                rows.push_str(&format!(
+                    r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
@@ -289,14 +289,14 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-                all_name = xml_escape(&d.all_level_name),
-                dim_u = xml_escape(&d.dimension_unique_name()),
-                hier_u = xml_escape(&key_hier_u),
-                guid_all = base_guid + 8,
-                all_dbtype = DBTYPE_I4,
-                catalog = project.config.catalog,
-                cube = project.config.cube,
-            ));
+                    all_name = xml_escape(&d.all_level_name),
+                    dim_u = xml_escape(&d.dimension_unique_name()),
+                    hier_u = xml_escape(&key_hier_u),
+                    guid_all = base_guid + 8,
+                    all_dbtype = DBTYPE_I4,
+                    catalog = project.config.catalog,
+                    cube = project.config.cube,
+                ));
             }
             if super::coordinates_match(
                 restrictions,
@@ -304,8 +304,8 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
                 Some(&key_hier_u),
                 Some(&level_unique),
             ) {
-            rows.push_str(&format!(
-                r#"          <row>
+                rows.push_str(&format!(
+                    r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_UNIQUE_NAME>{dim_u}</DIMENSION_UNIQUE_NAME>
@@ -328,16 +328,16 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-                lname = xml_escape(&level.name),
-                lunique = xml_escape(&level_unique),
-                cardinality = cardinality,
-                level_dbtype = DBTYPE_DATE,
-                guid_level = base_guid + 9,
-                dim_u = xml_escape(&d.dimension_unique_name()),
-                hier_u = xml_escape(&key_hier_u),
-                catalog = project.config.catalog,
-                cube = project.config.cube,
-            ));
+                    lname = xml_escape(&level.name),
+                    lunique = xml_escape(&level_unique),
+                    cardinality = cardinality,
+                    level_dbtype = DBTYPE_DATE,
+                    guid_level = base_guid + 9,
+                    dim_u = xml_escape(&d.dimension_unique_name()),
+                    hier_u = xml_escape(&key_hier_u),
+                    catalog = project.config.catalog,
+                    cube = project.config.cube,
+                ));
             }
         }
     }
