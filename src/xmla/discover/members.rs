@@ -57,10 +57,20 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        let all_level_u = dim.all_level_unique_name();
+        // Restrictions skip a dimension before any dictionary or XML work
+        // (plan 051-D): a `[Category].[Category]` request must not enumerate a
+        // 200k-member date hierarchy only to filter it away afterwards.
+        if !super::coordinates_match(restrictions, &dim_u, Some(&hier_u), Some(&all_level_u)) {
+            continue;
+        }
         let dim_table = model.dim_table_for_discovery(&dim.id);
         let access = effective_table_filter(config, user, dim_table);
 
@@ -69,9 +79,6 @@ fn build_all_member_rows<B: QueryBackend + ?Sized>(
             continue;
         }
 
-        let dim_u = dim.dimension_unique_name();
-        let hier_u = dim.hierarchy_unique_name();
-        let all_level_u = dim.all_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
         // SSAS semantics: the (All) member's CHILDREN_CARDINALITY is the number
@@ -127,6 +134,7 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
@@ -137,6 +145,14 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
         if !dim.levels.is_empty() {
             continue;
         }
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        let leaf_level_u = dim.leaf_level_unique_name();
+        // Restrictions skip this dimension's dictionary entirely when it
+        // cannot match (plan 051-D).
+        if !super::coordinates_match(restrictions, &dim_u, Some(&hier_u), Some(&leaf_level_u)) {
+            continue;
+        }
         let dim_table = model.dim_table_for_discovery(&dim.id);
         let access = effective_table_filter(config, user, dim_table);
 
@@ -145,9 +161,6 @@ fn build_leaf_member_rows<B: QueryBackend + ?Sized>(
             continue;
         }
 
-        let dim_u = dim.dimension_unique_name();
-        let hier_u = dim.hierarchy_unique_name();
-        let leaf_level_u = dim.leaf_level_unique_name();
         let all_member_u = dim.all_member_unique_name();
 
         let cached_values;
@@ -211,11 +224,27 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
     let mut rows = Vec::new();
     for dim in &model.dimensions {
         if dim.levels.is_empty() {
+            continue;
+        }
+        let dim_u = dim.dimension_unique_name();
+        let hier_u = dim.hierarchy_unique_name();
+        // Restrictions skip the whole dimension (and therefore its dictionary)
+        // when no level of it can match (plan 051-D).
+        let any_level_matches = dim.levels.iter().any(|level| {
+            super::coordinates_match(
+                restrictions,
+                &dim_u,
+                Some(&hier_u),
+                Some(&format!("{}.[{}]", hier_u, level.name)),
+            )
+        });
+        if !any_level_matches {
             continue;
         }
         let dim_table = model.dim_table_for_discovery(&dim.id);
@@ -228,8 +257,6 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
             _ => "",
         };
 
-        let dim_u = dim.dimension_unique_name();
-        let hier_u = dim.hierarchy_unique_name();
         let all_member_u = dim.all_member_unique_name();
         // Phase 1 — distinct full paths per level (cached dictionary, plan 031;
         // RLS-filtered users query directly because cached values are
@@ -248,6 +275,10 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
         // distinct next-level paths sharing its key as prefix.
         let mut ordinal = 1u32; // 0 belongs to the All member
         for (i, level) in dim.levels.iter().enumerate() {
+            let level_u = format!("{}.[{}]", hier_u, level.name);
+            if !super::coordinates_match(restrictions, &dim_u, Some(&hier_u), Some(&level_u)) {
+                continue;
+            }
             let tuples = &level_paths[i];
             let is_deepest = i + 1 == dim.levels.len();
             let mut child_counts: std::collections::HashMap<String, u32> =
@@ -261,7 +292,6 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
             for t in tuples {
                 let key = t.join("|");
                 let name = t.last().cloned().unwrap_or_default();
-                let level_u = format!("{}.[{}]", hier_u, level.name);
                 let uname = format!("{level_u}.{}", key_suffix(&key));
                 let (parent_u, parent_level) = if i == 0 {
                     (all_member_u.clone(), 0)
@@ -404,27 +434,30 @@ fn all_member_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_all_member_rows(&project.model, backend, user, config)
+    build_all_member_rows(&project.model, backend, user, config, restrictions)
 }
 
 fn leaf_member_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_leaf_member_rows(&project.model, backend, user, config)
+    build_leaf_member_rows(&project.model, backend, user, config, restrictions)
 }
 
 fn level_member_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_level_member_rows(&project.model, backend, user, config)
+    build_level_member_rows(&project.model, backend, user, config, restrictions)
 }
 
 fn key_suffix(key: &str) -> String {
@@ -435,12 +468,25 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
+    restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
-    let mut rows = all_member_rows_with_backend(backend, user, config);
+    // Restrictions are applied inside the builders so excluded dimensions
+    // never reach the dictionary or the XML (plan 051-D).
+    let mut rows = all_member_rows_with_backend(backend, user, config, restrictions);
     // Multi-level hierarchies enumerate their full level tree (years under
     // All, quarters under years, ...); flat dims keep the plain leaf list.
-    rows.extend(level_member_rows_with_backend(backend, user, config));
-    rows.append(&mut leaf_member_rows_with_backend(backend, user, config));
+    rows.extend(level_member_rows_with_backend(
+        backend,
+        user,
+        config,
+        restrictions,
+    ));
+    rows.append(&mut leaf_member_rows_with_backend(
+        backend,
+        user,
+        config,
+        restrictions,
+    ));
     rows
 }
 
@@ -507,7 +553,7 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
-    let all_rows = all_rows_with_backend(backend, user, config);
+    let all_rows = all_rows_with_backend(backend, user, config, restrictions);
     // Restrictions narrow the rowset before the member/tree-op selection: the
     // reference engine intersects the two (a hierarchy restriction plus a SELF
     // probe returns the one matching row). Passing everything and filtering
@@ -596,6 +642,7 @@ mod tests {
             Backend::test_fixture(),
             &UserContext::admin_default(),
             &project.config,
+            &Restrictions::default(),
         )
     }
 
@@ -610,6 +657,7 @@ mod tests {
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &project.config,
+                &Restrictions::default(),
             )
         })
     }
@@ -1024,6 +1072,37 @@ mod tests {
                     .count(),
                 0,
                 "a level restriction excludes the (All) member: {level}"
+            );
+        });
+    }
+
+    /// A restriction that matches no dimension is applied before any
+    /// dictionary or XML work: no engine queries at all (plan 051-D).
+    #[test]
+    fn restrictions_skip_dimensions_before_querying() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            use crate::test_support::counting::Counting;
+            let project = proxy_project::project();
+            let inner = Backend::test_fixture();
+            let backend = Counting::new(&inner);
+            let xml = get_members_response_with_backend(
+                None,
+                None,
+                &Restrictions {
+                    hierarchy_unique_name: Some("[NoSuch].[Hierarchy]".into()),
+                    ..Default::default()
+                },
+                &backend,
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert_eq!(xml.matches("<row>").count(), 0, "nothing matches");
+            assert_eq!(
+                backend.calls(),
+                0,
+                "an unmatched restriction must not enumerate any dimension"
             );
         });
     }

@@ -97,6 +97,14 @@ DuckDB-cursor streaming out of scope.
 
 ### D. Build only what the restrictions ask for
 
+*Landed 2026-09-23.* The three member-row builders take the request's
+restrictions and skip a dimension before any dictionary or XML work; the
+leveled builder skips individual levels too. Measured on the 200k-member
+fixture, a `[Category].[Category]` request went from 934 ms cold / 724 ms warm
+to 72 ms cold / **1 ms warm** (identical 21-row, 27 KB response), while the
+unrestricted 200k-member listing is unchanged. A regression guard asserts an
+unmatched restriction issues zero engine queries (`test_support::counting`).
+
 `get_members_response_with_backend` currently builds every dimension's rows and
 filters afterwards (plan 050). Pass the restrictions into the builders so a
 `HIERARCHY_UNIQUE_NAME=[Category].[Category]` request never enumerates a

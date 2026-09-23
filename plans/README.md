@@ -58,14 +58,14 @@ honor its STOP conditions, and update your row when done.
 | 048  | Excel date filters — the SSAS date-filter surface | P1 | M | 046 | IN PROGRESS |
 | 049  | Multi-axis and nested layouts — two engine bugs, verified against the reference | P1 | L | 048 | DONE |
 | 050  | Scale and query performance — what a 50M-row model costs | P1 | M | 049 | IN PROGRESS |
-| 051  | Scale hardening — one engine, bounded responses, request budgets | P1 | L | 050 | TODO |
+| 051  | Scale hardening — one engine, bounded responses, request budgets | P1 | L | 050 | IN PROGRESS |
 | 052  | Aggregates at scale — cardinality-aware design, more measures, who builds them | P1 | L | 043, 050 | TODO |
 | 053  | Big-data intake and the scale gate — storage contract, object store, capacity proof | P2 | L | 050, 051 | TODO |
 | 054  | Engine readiness — dialect seam, capabilities, protocol-overhead gate | P2 | M | 051 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033, 035–043, 047 and 049 are DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness), 048 (Excel date filters) and 050 (scale and query performance) are IN PROGRESS. 051–054 (scale hardening, aggregates at scale, big-data intake, engine readiness) are planned, in that order. Deployment and packaging specifics — on-prem Kubernetes, air-gapped installs, identity, audit — are deliberately deferred to a later plan. Next milestone: Gate G1 (public validation).**
+**Plans 001–033, 035–043, 047 and 049 are DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness), 048 (Excel date filters) and 050 (scale and query performance) are IN PROGRESS. 051 (scale hardening, two increments landed) and 054 (engine readiness) are in progress; 052–053 are planned, in that order. Deployment and packaging specifics — on-prem Kubernetes, air-gapped installs, identity, audit — are deliberately deferred to a later plan. Next milestone: Gate G1 (public validation).**
 
 - 047 (MDX front-end) **IN PROGRESS** 2026-09-21: the parser was a hybrid of
   `nom` fragments and ~20 hand scanners with a flat `ParsedMdx` flag bag and no

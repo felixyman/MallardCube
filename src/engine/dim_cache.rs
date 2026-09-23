@@ -180,45 +180,8 @@ pub fn query_level_paths<B: QueryBackend + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::{Backend, QueryBackend};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Counts backend calls so a cache hit can be proven.
-    struct Counting<'a> {
-        inner: &'a Backend,
-        calls: AtomicUsize,
-    }
-
-    impl QueryBackend for Counting<'_> {
-        fn query_scalar(&self, sql: &str) -> f64 {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_scalar(sql)
-        }
-        fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_grouped_1d(sql)
-        }
-        fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_pairs(sql)
-        }
-        fn query_count(&self, sql: &str) -> u32 {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_count(sql)
-        }
-        fn query_strings(&self, sql: &str) -> Vec<String> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_strings(sql)
-        }
-        fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_rows(sql)
-        }
-        fn query_column_names(&self, sql: &str) -> Vec<String> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.inner.query_column_names(sql)
-        }
-    }
+    use crate::backend::Backend;
+    use crate::test_support::counting::Counting;
 
     fn project3() -> crate::project::project::ProxyProject {
         crate::project::project::ProxyProject::load("projects/project3/proxy-config.json")
@@ -276,17 +239,15 @@ mod tests {
         let project = project3();
         crate::project::project::with_test_project(project, || {
             let model = &crate::proxy_project::project().model;
-            let backend = Counting {
-                inner: Backend::test_fixture(),
-                calls: AtomicUsize::new(0),
-            };
+            let inner = Backend::test_fixture();
+            let backend = Counting::new(&inner);
             let dim = model.dim_def_opt("Territory").expect("Territory dim");
             let first = model.dim_cache.get(model, dim, &backend);
-            let after_build = backend.calls.load(Ordering::Relaxed);
+            let after_build = backend.calls();
             assert!(after_build > 0, "the first lookup queries the backend");
             let second = model.dim_cache.get(model, dim, &backend);
             assert_eq!(
-                backend.calls.load(Ordering::Relaxed),
+                backend.calls(),
                 after_build,
                 "the second lookup must not query"
             );
@@ -301,10 +262,8 @@ mod tests {
         let project = project3();
         crate::project::project::with_test_project(project, || {
             let project = crate::proxy_project::project();
-            let backend = Counting {
-                inner: Backend::test_fixture(),
-                calls: AtomicUsize::new(0),
-            };
+            let inner = Backend::test_fixture();
+            let backend = Counting::new(&inner);
             let user = crate::engine::model::UserContext::admin_default();
             let config = &project.config;
 
@@ -316,7 +275,7 @@ mod tests {
                 &user,
                 config,
             );
-            let after_first = backend.calls.load(Ordering::Relaxed);
+            let after_first = backend.calls();
             assert!(
                 after_first > 0,
                 "the first response builds the dictionaries"
@@ -331,7 +290,7 @@ mod tests {
                 config,
             );
             assert_eq!(
-                backend.calls.load(Ordering::Relaxed),
+                backend.calls(),
                 after_first,
                 "the second response must issue no metadata queries"
             );
@@ -347,17 +306,15 @@ mod tests {
         let project = project3();
         crate::project::project::with_test_project(project, || {
             let model = &crate::proxy_project::project().model;
-            let backend = Counting {
-                inner: Backend::test_fixture(),
-                calls: AtomicUsize::new(0),
-            };
+            let inner = Backend::test_fixture();
+            let backend = Counting::new(&inner);
             let dim = model.dim_def_opt("Territory").expect("Territory dim");
             model.dim_cache.get(model, dim, &backend);
-            let after_build = backend.calls.load(Ordering::Relaxed);
+            let after_build = backend.calls();
             model.dim_cache.clear();
             model.dim_cache.get(model, dim, &backend);
             assert!(
-                backend.calls.load(Ordering::Relaxed) > after_build,
+                backend.calls() > after_build,
                 "a cleared cache must rebuild (data reload correctness)"
             );
         });
