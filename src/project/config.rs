@@ -429,6 +429,31 @@ pub struct RoleConfig {
     pub table_permissions: Vec<TablePermissionConfig>,
 }
 
+impl RoleConfig {
+    /// Does this role narrow what a user can see — a row filter, a DAX filter,
+    /// or a table hidden by metadata permissions? Administrator roles do not
+    /// narrow anything.
+    pub fn narrows_access(&self) -> bool {
+        if self.model_permission == ModelPermission::Administrator {
+            return false;
+        }
+        self.model_permission == ModelPermission::None
+            || self.table_permissions.iter().any(|tp| {
+                !tp.filter_expression.trim().is_empty()
+                    || tp.dax_filter.is_some()
+                    || tp.metadata_permission == ModelPermission::None
+            })
+    }
+}
+
+impl ProxyConfig {
+    /// Does any declared role narrow access? Drives the `/status` posture line
+    /// so an operator can see whether row-level security is actually in play.
+    pub fn any_role_narrows_access(&self) -> bool {
+        self.roles.iter().any(|role| role.narrows_access())
+    }
+}
+
 /// Authentication configuration for the trusted-proxy boundary.
 ///
 /// When `trusted_proxy` is `true`, the proxy reads the authenticated user

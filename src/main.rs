@@ -492,6 +492,7 @@ async fn run_server() {
             started_at_unix: mallardcube::status::now_unix(),
             data: mallardcube::status::DataStamp::capture(backend_source.path()),
             result_cache: mallardcube::execute::cache::enabled(),
+            auth: mallardcube::status::AuthStatus::from_config(&p.config),
             engine: mallardcube::engine::settings::effective(),
         };
         println!(

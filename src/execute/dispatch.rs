@@ -3730,10 +3730,6 @@ mod tests {
         });
     }
 
-    // Plan 049, phase 3: a field in Columns with two nested in Rows groups by
-    // three dimensions. The reference returns the nested Rows structure (41
-    // tuples) crossed with the Columns field × the measures.
-    #[test]
     /// Excel's value filter on a nested pivot arrives as a subselect —
     /// `FROM (SELECT Filter(<categories>, ([Measures].[Revenue] >= n)) ON COLUMNS ...)`
     /// (captured from the VM sweep, 2026-09-23). The reference keeps the
@@ -3997,6 +3993,10 @@ mod tests {
         });
     }
 
+    // Plan 049, phase 3: a field in Columns with two nested in Rows groups by
+    // three dimensions. The reference returns the nested Rows structure (41
+    // tuples) crossed with the Columns field × the measures.
+    #[test]
     fn oracle_three_dimension_layout_matches_the_reference() {
         with_project3(|| {
             let xml = get_execute_statement_response(

@@ -56,6 +56,34 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Authentication and role posture, so an operator can see whether row-level
+/// security is actually in force. Without an `auth` block every request is the
+/// administrator — correct for a trusted single-user deployment, a silent hole
+/// in any other, and previously invisible from `/status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthStatus {
+    /// Is an `auth` block configured?
+    pub configured: bool,
+    /// Roles the config declares.
+    pub roles: usize,
+    /// Does any declared role narrow access (a filter, or a hidden table)?
+    pub rls_active: bool,
+    /// What an unidentified request gets: `admin` without auth, `deny` with it.
+    pub anonymous: &'static str,
+}
+
+impl AuthStatus {
+    pub fn from_config(config: &crate::project::config::ProxyConfig) -> Self {
+        let configured = config.auth.is_some();
+        Self {
+            configured,
+            roles: config.roles.len(),
+            rls_active: config.any_role_narrows_access(),
+            anonymous: if configured { "deny" } else { "admin" },
+        }
+    }
+}
+
 /// Payload served by `GET /status`.
 #[derive(Debug, Clone)]
 pub struct StatusInfo {
@@ -67,6 +95,8 @@ pub struct StatusInfo {
     pub result_cache: bool,
     /// Engine settings in force and where each came from (plan 051-A/054-C).
     pub engine: EngineSettings,
+    /// Authentication and role posture (plan 051 security review).
+    pub auth: AuthStatus,
 }
 
 impl StatusInfo {
@@ -85,6 +115,12 @@ impl StatusInfo {
                 "size_bytes": self.data.size_bytes,
                 "mtime_unix": self.data.mtime_unix,
                 "loaded_at_unix": self.data.loaded_at_unix,
+            },
+            "auth": {
+                "configured": self.auth.configured,
+                "roles": self.auth.roles,
+                "rls_active": self.auth.rls_active,
+                "anonymous": self.auth.anonymous,
             },
             "engine": {
                 "memory_limit": memory_limit.map(|s| s.value.display()),
@@ -160,6 +196,12 @@ mod tests {
                 loaded_at_unix: 3,
             },
             result_cache: true,
+            auth: AuthStatus {
+                configured: false,
+                roles: 0,
+                rls_active: false,
+                anonymous: "admin",
+            },
             engine: EngineSettings {
                 memory_limit: Some(Setting {
                     value: MemoryLimit {
@@ -196,6 +238,8 @@ mod tests {
             "\"max_concurrent_queries\":4",
             "\"query_timeout_s\":300",
             "\"query_timeout_s_source\":\"default\"",
+            // serde_json orders keys alphabetically.
+            "\"auth\":{\"anonymous\":\"admin\",\"configured\":false,\"rls_active\":false,\"roles\":0}",
             "\"max_members\":1000000",
             "\"max_cells\":2000000",
         ] {
