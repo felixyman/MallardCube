@@ -7,6 +7,7 @@
 - **Risk**: MEDIUM (rollup contents feed query routing; a bad rollup must
   degrade, never answer wrong)
 - **Depends on**: 043 (RLS-aware routing), 050 (measurements)
+- **Related**: 054 (engine readiness — materialisation must stay engine-neutral)
 - **Category**: performance
 
 ## Why this matters
@@ -94,6 +95,17 @@ marts), consistent with "definitions live upstream". Make that first-class:
   validated with `validate_rollups`, and routed without any build.
 - `mode: "proxy"` (default) keeps today's behaviour; `mode: "upstream"` never
   writes to the source.
+- **Aggregates are artifacts, not state.** They are versioned (the manifest
+  carries format version, grain, covered measures and a source fingerprint),
+  can travel as tables in the source database, Parquet/Iceberg, or a DuckDB
+  file, and can be mounted read-only where the database is not writable — so
+  replicas are stateless, a rolling update never reruns a build, and no
+  serve-time write credential is needed.
+- Portable plain tables first (they work on every engine). Engine-specific
+  accelerators — ClickHouse `AggregatingMergeTree` / projections, incremental
+  materialized views — are a documented recipe later, behind the same manifest
+  and the same validation; they must never become a requirement for using
+  aggregates.
 - Document the decision matrix (data size, freshness, deployment count) on the
   Aggregations docs page, and give sqlmesh users a matching SQL recipe.
 

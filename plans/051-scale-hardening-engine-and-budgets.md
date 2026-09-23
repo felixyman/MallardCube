@@ -6,6 +6,7 @@
 - **Effort**: L
 - **Risk**: MEDIUM (engine topology change, response streaming)
 - **Depends on**: 050 (measurements and fixtures)
+- **Related**: 054 (engine settings surface, protocol-overhead gate)
 - **Category**: performance / robustness
 
 ## Why this matters
@@ -29,25 +30,28 @@ that are visible in `/status`.
 
 ## Design
 
-### A. One DuckDB engine, many connections
+### A. One engine, many connections
 
 Today `open_read_only(path)` is called per pooled slot, i.e. N `Database`
 instances. Replace with one `duckdb::Database` per source plus N `Connection`s
 from it: one buffer pool, one catalog, one temp directory, one place to set
-limits.
+limits. (DuckDB is the only engine today; the shape matters because a remote
+engine in the same slot must not change the pool's contract — plan 054.)
 
-- `MALLARDCUBE_MEMORY_LIMIT` (default: 70% of system RAM), applied via
-  `Config`/`SET memory_limit`; `MALLARDCUBE_TEMP_DIR` for spilling
-  (`SET temp_directory`), `SET preserve_insertion_order=false`.
-- `threads`: keep DuckDB's default (all cores) but make the pool size and the
+- Limits come from the **engine settings surface (plan 054-C)**: a
+  cgroup-aware memory ceiling (not "70% of host RAM" — on Kubernetes the pod
+  limit is the truth), a spill directory, and `preserve_insertion_order=false`.
+  `MALLARDCUBE_*` environment variables override the computed defaults.
+- `threads`: keep the engine default (all cores) but make the pool size and the
   query semaphore (below) the concurrency control; document the trade-off.
 - The aggregation sidecar `ATTACH` becomes instance-wide (attach once, not per
   connection) — verify against the plan 041 reload path.
-- `/status` reports `memory_limit`, `temp_directory`, pool size, in-flight and
-  queued queries.
+- `/status` reports the effective settings and their source
+  (`cgroup | host | env | default`), plus pool size, in-flight and queued
+  queries.
 - Fallback if a shared `Database` fights the read-only/RLS test suite: keep the
-  per-connection instances but `SET memory_limit = limit / pool_size` and
-  `SET temp_directory` on each, and record why in this plan.
+  per-connection instances but divide the ceiling by the pool size and set the
+  spill directory on each, and record why in this plan.
 
 ### B. Backpressure and budgets
 
@@ -107,8 +111,9 @@ write paths, changes to rollup design (plan 052) or intake (plan 053).
   ≥ 80 req/s); c=32 stress keeps RSS under a documented ceiling.
 - A query exceeding the timeout or a budget returns an XMLA fault within the
   limit + 1 s; Excel shows the error and stays responsive.
-- `/status` exposes memory limit, in-flight/queued, cache bytes, and the
-  configured budgets; README/docs updated with the new env vars.
+- `/status` exposes the effective engine settings and their source (plan 054-C),
+  in-flight/queued queries, cache bytes, and the configured budgets; README/docs
+  updated with the new env vars.
 - All 516+ lib tests, the oracle corpus, and `proxy-smoke.sh` stay green.
 
 ## STOP conditions

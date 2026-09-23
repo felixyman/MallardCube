@@ -6,6 +6,7 @@
 - **Effort**: L
 - **Risk**: MEDIUM (new storage backends; the validator must be conservative)
 - **Depends on**: 050 (fixtures, bench), 051 (budgets, limits)
+- **Related**: 054 (the engine owns storage; the proxy declares and validates)
 - **Category**: intake / operations
 
 ## Why this matters
@@ -47,15 +48,23 @@ actionable findings:
 
 ### B. Object storage and table formats
 
-- `s3://` paths via DuckDB `httpfs` (endpoint override + credentials from the
-  environment so MinIO works in tests), `MALLARDCUBE_EXTENSION_DIR` for
-  offline installs.
-- Iceberg/Delta scans as the accepted "upstream materialisation" surface:
+The **engine owns storage**; the proxy owns the declaration and validation of
+the semantic mapping on top of it. That keeps a second engine (plan 054) from
+turning into a second intake implementation:
+
+- DuckDB path: `s3://` via `httpfs` (endpoint override + credentials from the
+  environment so MinIO works in tests), Iceberg/Delta scans via their
+  extensions. **No internet at runtime**: extensions are vendored into the
+  image and pointed at with `MALLARDCUBE_EXTENSION_DIR`; nothing may try to
+  fetch an extension or reach a hosted service.
+- Other engines later bring their own object-storage and table-format support;
+  the proxy's job is config, validation and routing, not a parallel reader.
+- Iceberg/Delta is the accepted "upstream materialisation" surface:
   configuration, credential passthrough, and a documented expectation that
   metadata/statistics reads are the new cold-start cost.
-- Persist dimension dictionaries in the aggregation sidecar (or a sibling
-  cache file) so a restart does not re-scan a remote dimension table; invalidate
-  on the same stamp as rollups.
+- Persist dimension dictionaries next to the aggregation artifacts so a restart
+  does not re-scan a remote dimension table; invalidate on the same stamp as
+  rollups.
 - A MinIO-based fixture in the bench directory so this path is exercised, not
   just documented.
 
@@ -99,7 +108,8 @@ engine, replication, multi-node deployment, arbitrary cloud provider plumbing.
 
 - `qualify-scale` on the repo fixtures produces the documented warnings (and
   none on the well-laid-out ones); a deliberately bad fixture (many tiny files,
-  no clustering) is flagged with the expected message.
+  no clustering) is flagged with the expected message. Checks are engine-aware
+  (capabilities and settings from plan 054), not DuckDB-hardcoded.
 - The bench runs all three profiles end-to-end; a report for one ≥500M-row run
   is committed with the gate results.
 - The MinIO fixture answers the same workload as the local fixture, with the
