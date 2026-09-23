@@ -212,6 +212,24 @@ Verified at parity with the mirror rather than fixed:
   pairing each category with a single channel (Automotive → Retail returns
   957 rows).
 
+### Small items
+
+- **Subtotals**: the `Subtotal "<field>"` menu (cell context menu on a row
+  label) adds the `"<Category> Total"` rows on the proxy — Excel takes them
+  from the `(All)` child members we emit for the nested field, no re-query.
+  Client-side, working.
+- **Show Values As**: `% of grand total` works and renders identically on both
+  engines (already covered by the layout sweep). The *parent* variants cannot
+  be set through the object model for OLAP (`DataFields(1).Calculation = 11`
+  leaves the grid blank — identically on the mirror, so it is parity, not a
+  proxy gap); the parent cell values it would use are the ones the subtotal
+  test just proved Excel reads correctly.
+- **Docs deployment**: cross-page links were broken once deployed — a relative
+  `./slug/` from `/installation/` resolves against the page URL, not the docs
+  root. Thirteen links are now `../slug/`, `site/scripts/check-links.mjs`
+  verifies every built `href`/`src` (249 references) as part of
+  `npm run build`, and CI builds the site on pull requests.
+
 ## Still open
 
 - **Set-op axes and the `(All)` member** (see above): the reference keeps
