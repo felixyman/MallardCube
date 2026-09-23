@@ -119,14 +119,29 @@ byte-identical to before:
 | latency | 1.68 s | **1.02 s** |
 | peak RSS | 1,230 MB | **469 MB** |
 
-Still open in this section:
+*Increment 2 landed 2026-09-23 (true streaming).* `MemberRowset` implements
+`Stream` and the handler returns `Body::from_stream`: chunks of
+`STREAM_CHUNK_ROWS` (2,000) rows are rendered, written to the socket, and
+dropped. The XMLA trace takes a bounded preview instead of the full payload, so
+a wide rowset no longer writes hundreds of megabytes into the trace file, and
+the byte budget is checked against a pre-computed estimate before the first
+chunk.
 
-1. **True streaming** — `axum::body::Body::from_stream` writing row chunks
-   straight to the socket; removes the last full copy (the ~240 MB response
-   buffer), which matters most as hierarchies approach the 1M-member cap.
-2. **Cell data** (`execute/render.rs`): plan 034's original scope, extended so
-   cells and both axis member lists stream; member count and cell caps bound
-   it today.
+Same request, release build, each stage measured against the previous one:
+
+| | latency | peak RSS |
+|---|---|---|
+| before the refactor | 1.68 s | 1,230 MB |
+| rows as data, single pass | 1.02 s | 469 MB |
+| streamed chunks | **0.95 s (TTFB 322 ms)** | **305 MB** |
+
+The body is byte-identical throughout (sha256 of the `<soap:Body>` part), the
+transfer uses `chunked` encoding, and Excel resolves `CUBESETCOUNT`/`CUBEVALUE`
+over it.
+
+Still open in this section: **cell data** (`execute/render.rs`) — plan 034's
+original scope, extended so cells and both axis member lists stream; the cell
+cap bounds it today.
 
 Both must keep the XML byte-identical for the oracle tests; leave true
 DuckDB-cursor streaming out of scope.

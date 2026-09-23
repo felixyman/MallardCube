@@ -11,6 +11,7 @@ use crate::project::config::ProxyConfig;
 use crate::proxy_project;
 use crate::response::xml_escape;
 use crate::xmla::parser::Restrictions;
+use futures_core::Stream;
 use uuid::Uuid;
 
 const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -502,22 +503,24 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
 
 // ---- filter/search helpers (reimplemented over Vec<MemberRow>) ----
 
-fn find_member<'a>(rows: &'a [&'a MemberRow], filter: &str) -> Option<&'a MemberRow> {
+/// Index of the member whose unique name matches `filter` (`&amp;` forms are
+/// equivalent). Indices, not references, so the rowset can own its rows.
+fn find_member_index(rows: &[MemberRow], filter: &str) -> Option<usize> {
     let decoded = filter.replace("&amp;", "&");
     rows.iter()
-        .copied()
-        .find(|r| r.member_unique_name == filter || r.member_unique_name == decoded)
+        .position(|r| r.member_unique_name == filter || r.member_unique_name == decoded)
 }
 
-fn find_children<'a>(rows: &'a [&'a MemberRow], parent: &str) -> Vec<&'a MemberRow> {
+fn find_children_indices(rows: &[MemberRow], parent: &str) -> Vec<usize> {
     let decoded = parent.replace("&amp;", "&");
     rows.iter()
-        .copied()
-        .filter(|r| {
+        .enumerate()
+        .filter(|(_, r)| {
             r.parent_unique_name
                 .as_deref()
                 .is_some_and(|pun| pun == parent || pun == decoded)
         })
+        .map(|(i, _)| i)
         .collect()
 }
 
@@ -555,6 +558,232 @@ pub fn get_members_response(member_filter: Option<&str>, tree_op: Option<i32>) -
     )
 }
 
+/// Rows per streamed chunk (~1.5 MB at the usual row size). Chunks are
+/// rendered on demand and dropped once written, so this is the streaming
+/// path's working set (plan 051-C).
+const STREAM_CHUNK_ROWS: usize = 2_000;
+
+/// A member rowset ready to stream, or the fault that replaced it.
+pub enum MemberResponse {
+    Fault(String),
+    Rowset(MemberRowset),
+}
+
+impl MemberResponse {
+    /// Complete response text; tests, tracing previews, and non-streaming
+    /// callers use this (`render` on the rowset is the same thing).
+    pub fn render(&self) -> String {
+        match self {
+            MemberResponse::Fault(message) => crate::xmla::response::fault_response(message),
+            MemberResponse::Rowset(rowset) => rowset.render(),
+        }
+    }
+}
+
+/// SOAP envelope plus rowset rows, rendered on demand.
+///
+/// Implements [`Stream`] so `axum` can write it in chunks: the whole response
+/// never exists in memory at once — one chunk is rendered, written, dropped.
+pub struct MemberRowset {
+    /// SOAP envelope opening plus the rowset schema.
+    open: String,
+    rows: Vec<MemberRow>,
+    /// Rowset and SOAP closing tags.
+    close: String,
+    /// Estimated total size, for the byte budget before the first chunk.
+    estimated_bytes: usize,
+    next_row: usize,
+    finished: bool,
+}
+
+impl MemberRowset {
+    /// Serialise the whole rowset (tests, tracing, non-streaming callers).
+    pub fn render(&self) -> String {
+        let mut out = String::with_capacity(self.estimated_bytes);
+        out.push_str(&self.open);
+        for (i, row) in self.rows.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&row.xml());
+        }
+        out.push('\n');
+        out.push_str(&self.close);
+        out
+    }
+
+    /// Estimated response size (exact once rendered; used by the byte budget).
+    pub fn estimated_bytes(&self) -> usize {
+        self.estimated_bytes
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Bounded rendering for logs and the XMLA trace: small rowsets render
+    /// fully, a wide one truncates with a marker instead of writing hundreds
+    /// of megabytes into the trace file.
+    pub fn preview(&self, max_bytes: usize) -> String {
+        let mut out = String::with_capacity(max_bytes.min(64 * 1024));
+        out.push_str(&self.open);
+        for (i, row) in self.rows.iter().enumerate() {
+            let xml = row.xml();
+            if out.len() + xml.len() + self.close.len() > max_bytes {
+                out.push_str(&format!(
+                    "\n<!-- truncated: {} rows, ~{} bytes total -->\n",
+                    self.rows.len(),
+                    self.estimated_bytes
+                ));
+                return out;
+            }
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&xml);
+        }
+        out.push('\n');
+        out.push_str(&self.close);
+        out
+    }
+}
+
+impl Stream for MemberRowset {
+    type Item = Result<String, std::convert::Infallible>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.finished {
+            return std::task::Poll::Ready(None);
+        }
+        let mut chunk = String::new();
+        if this.next_row == 0 {
+            chunk.push_str(&this.open);
+        }
+        let end = (this.next_row + STREAM_CHUNK_ROWS).min(this.rows.len());
+        for i in this.next_row..end {
+            if i > 0 {
+                chunk.push('\n');
+            }
+            chunk.push_str(&this.rows[i].xml());
+        }
+        this.next_row = end;
+        if this.next_row >= this.rows.len() {
+            chunk.push('\n');
+            chunk.push_str(&this.close);
+            this.finished = true;
+        }
+        std::task::Poll::Ready(Some(Ok(chunk)))
+    }
+}
+
+/// Member rows plus the wrapper needed to write them, or a fault.
+pub fn get_members_response_body<B: QueryBackend + ?Sized>(
+    member_filter: Option<&str>,
+    tree_op: Option<i32>,
+    restrictions: &Restrictions,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> MemberResponse {
+    let all_rows = all_rows_with_backend(backend, user, config, restrictions);
+    // Restrictions narrow the rowset before the member/tree-op selection: the
+    // reference engine intersects the two (a hierarchy restriction plus a SELF
+    // probe returns the one matching row).
+    let rows: Vec<MemberRow> = all_rows
+        .into_iter()
+        .filter(|row| row_matches(restrictions, row))
+        .collect();
+
+    let selected: Vec<usize> = match (member_filter, tree_op) {
+        (Some(filter), Some(8)) => {
+            // 0x08 = SELF — return only the member itself, no children
+            find_member_index(&rows, filter).into_iter().collect()
+        }
+        (Some(filter), Some(1)) => {
+            // 0x01 = CHILDREN — the member plus its direct children. The
+            // rowset now enumerates every hierarchy level up front, so both
+            // are always present in the static set.
+            let mut result: Vec<usize> = Vec::new();
+            if let Some(parent) = find_member_index(&rows, filter) {
+                result.push(parent);
+            }
+            result.extend(find_children_indices(&rows, filter));
+            result
+        }
+        (Some(filter), Some(2)) => {
+            // 0x02 = SIBLINGS — children of the parent of the filtered member
+            match find_member_index(&rows, filter).and_then(|i| rows[i].parent_unique_name.clone())
+            {
+                Some(parent) => find_children_indices(&rows, &parent),
+                None => Vec::new(),
+            }
+        }
+        (Some(filter), Some(4)) => {
+            // 0x04 = PARENT — parent of the filtered member
+            match find_member_index(&rows, filter).and_then(|i| rows[i].parent_unique_name.clone())
+            {
+                Some(parent) => find_member_index(&rows, &parent).into_iter().collect(),
+                None => Vec::new(),
+            }
+        }
+        (Some(filter), _) => {
+            // No tree_op: return just the matching member(s)
+            find_member_index(&rows, filter).into_iter().collect()
+        }
+        (None, _) => {
+            // No filter: return every member left after the restrictions.
+            (0..rows.len()).collect()
+        }
+    };
+
+    if let Some(message) = crate::engine::settings::budget().members_exceeded(selected.len()) {
+        return MemberResponse::Fault(message);
+    }
+
+    // Move the selected rows into the rowset rather than cloning them: a wide
+    // hierarchy holds hundreds of thousands of rows.
+    let selected_rows: Vec<MemberRow> = if selected.len() == rows.len() {
+        rows
+    } else {
+        let mut keep = vec![false; rows.len()];
+        for index in &selected {
+            keep[*index] = true;
+        }
+        rows.into_iter()
+            .zip(keep)
+            .filter_map(|(row, keep)| keep.then_some(row))
+            .collect()
+    };
+
+    let (soap_open, soap_close) = crate::response::soap_envelope_parts();
+    let (rowset_open, rowset_close) = crate::response::discover_rowset_parts("", MEMBER_ROW_FIELDS);
+    let open = format!("{soap_open}{rowset_open}");
+    let close = format!("{rowset_close}\n{soap_close}");
+    // One newline between rows plus one before the closing tags; per-row
+    // overhead covers the tags and attribute names.
+    let estimated_bytes = open.len()
+        + close.len()
+        + 1
+        + selected_rows.len() * 256
+        + selected_rows
+            .iter()
+            .map(|r| r.member_name.len() + r.member_key.len() + 64)
+            .sum::<usize>();
+    MemberResponse::Rowset(MemberRowset {
+        open,
+        rows: selected_rows,
+        close,
+        estimated_bytes,
+        next_row: 0,
+        finished: false,
+    })
+}
+
+/// Complete response as a `String` (tests, and callers that do not stream).
 pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     member_filter: Option<&str>,
     tree_op: Option<i32>,
@@ -563,108 +792,7 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
-    let all_rows = all_rows_with_backend(backend, user, config, restrictions);
-    // Restrictions narrow the rowset before the member/tree-op selection: the
-    // reference engine intersects the two (a hierarchy restriction plus a SELF
-    // probe returns the one matching row). Passing everything and filtering
-    // after would be the same result, but this keeps the big row vectors out
-    // of the selection path for the common one-hierarchy cache build.
-    let rows: Vec<&MemberRow> = all_rows
-        .iter()
-        .filter(|row| row_matches(restrictions, row))
-        .collect();
-
-    let selected: Vec<&MemberRow> = match (member_filter, tree_op) {
-        (Some(filter), Some(8)) => {
-            // 0x08 = SELF — return only the member itself, no children
-            find_member(&rows, filter).into_iter().collect()
-        }
-        (Some(filter), Some(1)) => {
-            // 0x01 = CHILDREN — the member plus its direct children. The
-            // rowset now enumerates every hierarchy level up front, so both
-            // are always present in the static set.
-            let mut result: Vec<&MemberRow> = Vec::new();
-            if let Some(parent) = find_member(&rows, filter) {
-                result.push(parent);
-            }
-            result.extend(find_children(&rows, filter));
-            result
-        }
-        (Some(filter), Some(2)) => {
-            // 0x02 = SIBLINGS — children of the parent of the filtered member
-            if let Some(m) = find_member(&rows, filter) {
-                if let Some(ref pun) = m.parent_unique_name {
-                    find_children(&rows, pun)
-                } else {
-                    vec![]
-                }
-            } else {
-                vec![]
-            }
-        }
-        (Some(filter), Some(4)) => {
-            // 0x04 = PARENT — parent of the filtered member
-            if let Some(m) = find_member(&rows, filter) {
-                if let Some(ref pun) = m.parent_unique_name {
-                    if let Some(p) = find_member(&rows, pun) {
-                        vec![p]
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    vec![]
-                }
-            } else {
-                vec![]
-            }
-        }
-        (Some(filter), _) => {
-            // No tree_op: return just the matching member(s)
-            if let Some(m) = find_member(&rows, filter) {
-                vec![m]
-            } else {
-                vec![]
-            }
-        }
-        (None, _) => {
-            // No filter: return every member left after the restrictions.
-            rows.clone()
-        }
-    };
-
-    if let Some(message) = crate::engine::settings::budget().members_exceeded(selected.len()) {
-        return crate::xmla::response::fault_response(&message);
-    }
-
-    // Compose the whole response in one buffer (plan 051-C): a 200k-member
-    // hierarchy is ~240 MB of XML, and joining/wrapping it into fresh Strings
-    // costs that much again for every copy. True streaming (writing chunks to
-    // the socket) is the next step; this removes the intermediate copies.
-    let (soap_open, soap_close) = crate::response::soap_envelope_parts();
-    let (rowset_open, rowset_close) = crate::response::discover_rowset_parts("", MEMBER_ROW_FIELDS);
-    let capacity = soap_open.len()
-        + soap_close.len()
-        + rowset_open.len()
-        + rowset_close.len()
-        + selected.len() * 256
-        + selected
-            .iter()
-            .map(|r| r.member_name.len() + r.member_key.len() + 64)
-            .sum::<usize>();
-    let mut out = String::with_capacity(capacity);
-    out.push_str(&soap_open);
-    out.push_str(&rowset_open);
-    for (i, row) in selected.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        out.push_str(&row.xml());
-    }
-    out.push('\n');
-    out.push_str(&rowset_close);
-    out.push('\n');
-    out.push_str(&soap_close);
-    out
+    get_members_response_body(member_filter, tree_op, restrictions, backend, user, config).render()
 }
 
 #[cfg(test)]
@@ -1115,6 +1243,58 @@ mod tests {
                 0,
                 "a level restriction excludes the (All) member: {level}"
             );
+        });
+    }
+
+    /// The streamed chunks concatenate to exactly the full render, and a wide
+    /// rowset really is split into several chunks (plan 051-C).
+    #[test]
+    fn streamed_rowset_matches_the_full_render() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let response = get_members_response_body(
+                None,
+                None,
+                &Restrictions::default(),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            let MemberResponse::Rowset(rowset) = response else {
+                panic!("expected a rowset");
+            };
+            assert!(
+                rowset.row_count() > STREAM_CHUNK_ROWS,
+                "fixture must be wide enough to split: {} rows",
+                rowset.row_count()
+            );
+            let full = rowset.render();
+
+            // Small previews stay well-formed; a full-size one truncates.
+            let preview = rowset.preview(1024);
+            assert!(preview.len() < full.len(), "preview is bounded");
+            assert!(preview.contains("truncated"), "preview marks the cut");
+
+            let waker = std::task::Waker::noop();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut rowset = rowset;
+            let mut streamed = String::new();
+            let mut chunks = 0;
+            loop {
+                match std::pin::Pin::new(&mut rowset).poll_next(&mut cx) {
+                    std::task::Poll::Ready(Some(Ok(chunk))) => {
+                        chunks += 1;
+                        streamed.push_str(&chunk);
+                    }
+                    std::task::Poll::Ready(Some(Err(_))) => panic!("infallible stream"),
+                    std::task::Poll::Ready(None) => break,
+                    std::task::Poll::Pending => panic!("stream must never be pending"),
+                }
+            }
+            assert!(chunks > 1, "wide rowset split into {chunks} chunks");
+            assert_eq!(streamed, full, "streamed bytes must equal the full render");
         });
     }
 

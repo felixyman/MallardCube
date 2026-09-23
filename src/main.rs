@@ -16,6 +16,45 @@ use mallardcube::parser::{XmlaRequest, parse_xmla};
 use mallardcube::project::config::ProxyConfig;
 use mallardcube::*;
 
+/// A response that either exists in full or streams in chunks (plan 051-C).
+enum XmlaBody {
+    Full(String),
+    /// Member rowset streamed chunk by chunk — the one response shape that can
+    /// legitimately reach hundreds of megabytes.
+    Members(mallardcube::xmla::discover::members::MemberResponse),
+}
+
+impl XmlaBody {
+    /// Exact size for full bodies, the pre-computed estimate for streamed ones
+    /// (the byte budget must trip before the first chunk is written).
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            XmlaBody::Full(text) => text.len(),
+            XmlaBody::Members(response) => match response {
+                mallardcube::xmla::discover::members::MemberResponse::Fault(message) => {
+                    message.len()
+                }
+                mallardcube::xmla::discover::members::MemberResponse::Rowset(rowset) => {
+                    rowset.estimated_bytes()
+                }
+            },
+        }
+    }
+
+    fn into_body(self) -> axum::body::Body {
+        use mallardcube::xmla::discover::members::MemberResponse;
+        match self {
+            XmlaBody::Full(text) => axum::body::Body::from(text),
+            XmlaBody::Members(MemberResponse::Fault(message)) => {
+                axum::body::Body::from(mallardcube::xmla::response::fault_response(&message))
+            }
+            XmlaBody::Members(MemberResponse::Rowset(rowset)) => {
+                axum::body::Body::from_stream(rowset)
+            }
+        }
+    }
+}
+
 struct AppState {
     /// Swappable so a reload can replace the pool without dropping in-flight
     /// requests (plan 041 phase C). Clone the `Arc` per request — the pool's
@@ -754,7 +793,9 @@ async fn handle_xmla(
             return (
                 StatusCode::OK,
                 headers,
-                mallardcube::xmla::response::fault_response("Server is shutting down"),
+                axum::body::Body::from(mallardcube::xmla::response::fault_response(
+                    "Server is shutting down",
+                )),
             );
         }
     };
@@ -797,10 +838,11 @@ async fn handle_xmla(
             Ok(resp) => {
                 // Last-resort size guard covering every response shape; the
                 // member/cell caps do the work before this can trigger.
-                match mallardcube::engine::settings::budget().bytes_exceeded(resp.len()) {
+                match mallardcube::engine::settings::budget().bytes_exceeded(resp.estimated_bytes())
+                {
                     Some(message) => {
                         eprintln!("!!! response size limit: {message}");
-                        mallardcube::xmla::response::fault_response(&message)
+                        XmlaBody::Full(mallardcube::xmla::response::fault_response(&message))
                     }
                     None => resp,
                 }
@@ -819,7 +861,9 @@ async fn handle_xmla(
                     None,
                     None,
                 );
-                mallardcube::xmla::response::fault_response(&format!("Internal error: {msg}"))
+                XmlaBody::Full(mallardcube::xmla::response::fault_response(&format!(
+                    "Internal error: {msg}"
+                )))
             }
         }
     });
@@ -829,7 +873,9 @@ async fn handle_xmla(
             Ok(Ok(resp)) => resp,
             Ok(Err(join_err)) => {
                 eprintln!("!!! XMLA worker task failed: {join_err}");
-                mallardcube::xmla::response::fault_response(&format!("Internal error: {join_err}"))
+                XmlaBody::Full(mallardcube::xmla::response::fault_response(&format!(
+                    "Internal error: {join_err}"
+                )))
             }
             Err(_elapsed) => {
                 // Abort the engine query on the connection the worker holds;
@@ -847,26 +893,74 @@ async fn handle_xmla(
                     None,
                     None,
                 );
-                mallardcube::xmla::response::fault_response(&format!(
+                XmlaBody::Full(mallardcube::xmla::response::fault_response(&format!(
                     "Query exceeded the {} second timeout and was cancelled",
                     timeout.as_secs()
-                ))
+                )))
             }
         },
     };
 
     if body.contains("MDSCHEMA_MEMBERS") {
-        println!(
-            "📤 RESPONSE (MdschemaMembers):\n{}",
-            &response_body[..response_body.len().min(2000)]
-        );
+        println!("📤 RESPONSE (MdschemaMembers): streamed in chunks");
     }
 
-    (StatusCode::OK, headers, response_body)
+    (StatusCode::OK, headers, response_body.into_body())
 }
 
 /// Route a parsed XMLA request to the appropriate handler.
+/// Route a parsed XMLA request. `MDSCHEMA_MEMBERS` returns a streamed body;
+/// everything else is built in full by [`route_full`].
 fn route_request<B: backend::QueryBackend + ?Sized>(
+    request: &XmlaRequest,
+    body: &str,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> XmlaBody {
+    if let XmlaRequest::MdschemaMembers {
+        member_unique_name,
+        tree_op,
+        restrictions,
+    } = request
+    {
+        println!(
+            "📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?}, hier={:?}, level={:?})",
+            member_unique_name,
+            tree_op,
+            restrictions.hierarchy_unique_name,
+            restrictions.level_unique_name
+        );
+        debug_write("===== MDSCHEMA_MEMBERS REQUEST =====");
+        debug_write(&format!(
+            "filter_member: {:?}, tree_op: {:?}, restrictions: {:?}",
+            member_unique_name, tree_op, restrictions
+        ));
+        let response = members::get_members_response_body(
+            member_unique_name.as_deref(),
+            *tree_op,
+            restrictions,
+            backend,
+            user,
+            config,
+        );
+        // Log and trace a bounded preview: a wide hierarchy's rowset is
+        // hundreds of megabytes and must not be materialised for a log line.
+        let preview = match &response {
+            members::MemberResponse::Fault(message) => message.clone(),
+            members::MemberResponse::Rowset(rowset) => rowset.preview(8 * 1024),
+        };
+        debug_write("RESPONSE XML (preview):");
+        debug_write(&preview);
+        mallardcube::xmla_trace::trace_request("MdschemaMembers", body, &preview, None, None);
+        return XmlaBody::Members(response);
+    }
+    XmlaBody::Full(route_full(request, body, backend, user, config))
+}
+
+/// Route a request whose response is built in full. `route_request` handles
+/// the streaming member rowset first and delegates everything else here.
+fn route_full<B: backend::QueryBackend + ?Sized>(
     request: &XmlaRequest,
     body: &str,
     backend: &B,
@@ -1006,30 +1100,8 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             tree_op,
             restrictions,
         } => {
-            println!(
-                "📥 MDSCHEMA_MEMBERS (filter_member={:?}, tree_op={:?}, hier={:?}, level={:?})",
-                member_unique_name,
-                tree_op,
-                restrictions.hierarchy_unique_name,
-                restrictions.level_unique_name
-            );
-            debug_write("===== MDSCHEMA_MEMBERS REQUEST =====");
-            debug_write(&format!(
-                "filter_member: {:?}, tree_op: {:?}, restrictions: {:?}",
-                member_unique_name, tree_op, restrictions
-            ));
-            let resp = members::get_members_response_with_backend(
-                member_unique_name.as_deref(),
-                *tree_op,
-                restrictions,
-                backend,
-                user,
-                config,
-            );
-            debug_write("RESPONSE XML:");
-            debug_write(&resp);
-            mallardcube::xmla_trace::trace_request("MdschemaMembers", body, &resp, None, None);
-            resp
+            // Handled by `route_request`, which streams the rowset.
+            unreachable!("MDSCHEMA_MEMBERS is routed by route_request")
         }
 
         XmlaRequest::DiscoverLiterals => {

@@ -260,9 +260,19 @@ normally, as do totals, YTD/MTD/QTD, and `CUBESETCOUNT`.
 One real defect surfaced by the probe and was fixed: the probe's
 `level.UniqueName` returned the hierarchy name (`[Date].[Calendar].[Calendar]`)
 where the mirror answers `[Date].[Calendar].[Year]` — commit `092a406`, unit
-test pinned to the mirror. It did not, by itself, make Excel resolve those
-tuples, so something further in Excel's validation (or in the metadata it
-validates against) still differs.
+test pinned to the mirror.
+
+After that fix, most of the surface works: `CUBEVALUE` with flat members (e.g.
+`[Territory].[Territory].&[North]` → `65850256`) and `CUBEMEMBER` captions
+resolve, and the earlier failures were partly a stale per-Excel-session cache
+of the #N/A answers. **Remaining:** a level-qualified *date* member
+(`CUBEVALUE(conn,"[Measures].[Revenue]","[Date].[Calendar].[Year].&[2026]")`,
+and the matching `CUBEMEMBER`) still answers #N/A, again with no value query.
+The trace shows our member probe is correct for it — unique name, caption
+`2026`, and level `[Date].[Calendar].[Year]` all match the mirror — so what
+Excel validates next (member key/value datatype, level numbers, or the
+`[Measures].[Revenue QTD]`-style caption lookup in the same probe) is still
+unknown.
 
 Decisive next experiment: run the same formulas in a scratch workbook against
 the **mirror** (`MallardDemo`, via the session-1 COM connection recipe) — if
