@@ -515,10 +515,20 @@ impl<'a> Parser<'a> {
 // Derivations used by `ParsedMdx` (replacing the hand scanners)
 // ---------------------------------------------------------------------------
 
-/// Dimensions referenced on the axes, in clause order, deduplicated.
+/// Dimensions referenced on the axes, in **axis order** (COLUMNS first, then
+/// ROWS), deduplicated.
+///
+/// The plan's group-by columns and the renderers' key indices both follow this
+/// list, so it must not depend on the order the statement happened to write its
+/// clauses: `... ON ROWS, ... ON COLUMNS` and `... ON COLUMNS, ... ON ROWS`
+/// are the same query. The old clause-order list made the plan and the
+/// renderer disagree whenever ROWS was written first — each axis carried the
+/// other's member keys, silently (plan 051).
 pub fn axis_dimension_ids(sel: &Select) -> Vec<String> {
+    let mut axes: Vec<&Axis> = sel.axes.iter().collect();
+    axes.sort_by_key(|a| a.ordinal);
     let mut out: Vec<String> = Vec::new();
-    for axis in &sel.axes {
+    for axis in axes {
         for expr in &axis.exprs {
             collect_dims(expr, &mut out);
         }

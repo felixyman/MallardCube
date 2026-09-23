@@ -3734,6 +3734,50 @@ mod tests {
     // three dimensions. The reference returns the nested Rows structure (41
     // tuples) crossed with the Columns field × the measures.
     #[test]
+    /// Clause order is not part of the query: `ON ROWS, ... ON COLUMNS` and
+    /// `... ON COLUMNS, ... ON ROWS` describe the same cellset and must produce
+    /// the same response. This was the untested axis of variation behind the
+    /// cross-wired axes (plan 051): the plan's key columns followed the
+    /// statement's order while the renderer assumed axis order.
+    #[test]
+    fn clause_order_does_not_change_the_cellset() {
+        with_project3(|| {
+            let body = |xml: &str| xml.split("<soap:Body>").nth(1).unwrap_or("").to_string();
+            let cases = [
+                // Two-field cross-tab.
+                (
+                    "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS, \
+                     NON EMPTY Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS \
+                     FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+                    "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)}) ON COLUMNS, \
+                     NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS \
+                     FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+                ),
+                // Cross-joined pair on Columns beside a Rows edge.
+                (
+                    "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS, \
+                     NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), \
+                     Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)})) ON COLUMNS \
+                     FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+                    "SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}), \
+                     Hierarchize({DrilldownLevel({[Channel].[Channel].[All]},,,INCLUDE_CALC_MEMBERS)})) ON COLUMNS, \
+                     NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) ON ROWS \
+                     FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING",
+                ),
+            ];
+            for (rows_first, columns_first) in cases {
+                let a = get_execute_statement_response(rows_first);
+                let b = get_execute_statement_response(columns_first);
+                assert_eq!(
+                    body(&a),
+                    body(&b),
+                    "clause order changed the cellset\nROWS-first: {rows_first}\nCOLUMNS-first: {columns_first}"
+                );
+                assert!(a.contains("<Cell "), "the statement produced cells: {a}");
+            }
+        });
+    }
+
     /// Mirror-measured (2026-09-23): a cross-joined pair on COLUMNS beside a
     /// ROWS edge keeps **both** dimensions on that axis — the reference returns
     /// the product with `(All)` first on each side and the inner member varying

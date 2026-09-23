@@ -355,8 +355,19 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
     // CrossJoin(A, B) ON COLUMNS` the plan's columns follow the statement, so
     // every axis got the other edge's values — dimension names with foreign
     // member keys, and most cells missing (plan 051, mirror-measured).
-    let key_of =
-        |dim: &str| -> Option<usize> { query.axis_dimensions.iter().position(|d| d == dim) };
+    let key_of = |dim: &str| -> Option<usize> {
+        let found = query.axis_dimensions.iter().position(|d| d == dim);
+        if found.is_none() {
+            // Internal invariant: every dimension on an axis has a key column.
+            // A miss used to mean silently missing cells (plan 051).
+            debug_assert!(false, "dimension {dim} missing from axis_dimensions");
+            eprintln!(
+                "!!! render: dimension {dim} has no key column in {:?}",
+                query.axis_dimensions
+            );
+        }
+        found
+    };
     // The value of a dimension in a plan row, or None for a missing column.
     let value_of = |keys: &[String], dim: &str| -> Option<String> {
         key_of(dim).and_then(|i| keys.get(i)).cloned()
@@ -806,7 +817,11 @@ fn cell_coord<'a>(
                         .and_then(|pos| axis1.get(pos))
                 })
                 .map(|value| value.as_deref())
-                .unwrap_or(None)
+                .unwrap_or_else(|| {
+                    debug_assert!(false, "axis dimension {dim} is on neither edge");
+                    eprintln!("!!! render: axis dimension {dim} is on neither edge");
+                    None
+                })
         })
         .collect()
 }

@@ -208,6 +208,16 @@ Still open in this section:
    grand-total/wholesale/Automotive cell values). Excel renders the gesture —
    two fields in Columns, one in Rows — with Grand Total 521,586,767.
 
+   **Two cheap follow-ups landed 2026-09-23:** `axis_dimension_ids` now returns
+   dimensions in axis order (COLUMNS first, then ROWS) rather than clause
+   order, which removes the disagreement class by construction — it also fixed
+   the same latent bug in the two-field cross-tab renderer, which assigned the
+   plan's first two columns to its axes positionally. Key lookups that miss now
+   trip a `debug_assert!` and log. A differential test pins the property that
+   the whole bug family violated: the same statement written ROWS-first and
+   COLUMNS-first must produce byte-identical cellsets (verified to fail with
+   the normalization reverted).
+
    **Design implication** (see plan 049's phase 4): this was a disagreement
    between two representations of the same structure — a flat
    `axis_dimensions` list for SQL and per-axis `AxisSpec`s for rendering —
