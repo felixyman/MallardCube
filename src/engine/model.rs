@@ -205,7 +205,12 @@ pub fn effective_table_filter(
         }
         let mut role_has_permission = false;
         for tp in &role.table_permissions {
-            if tp.table != table_name {
+            // Table identifiers are case-insensitive in practice (a converted
+            // model carries `Customer` in the config and `customer` in the
+            // database). An exact-match lookup turned a case mismatch into
+            // *full access*, which is the wrong direction to fail (plan 051 RLS
+            // review).
+            if !tp.table.trim().eq_ignore_ascii_case(table_name.trim()) {
                 continue;
             }
             role_has_permission = true;

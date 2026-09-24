@@ -63,6 +63,21 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
         );
     }
 
+    // A dimension hidden by OLS must not be read through an axis or a filter:
+    // the plan carries no deny predicate for it, so the query would return its
+    // members and values (plan 051 RLS review). Refusing is the fail-closed
+    // answer where the reference faults for an inaccessible object.
+    if let Some(dimension) = plan_hidden_dimension(&plan, model, user, config) {
+        let timings = Timings::new(RuntimePath::DirectSql, "hidden-dimension".into(), 0);
+        return (
+            crate::xmla::response::fault_response(&format!(
+                "dimension '{dimension}' is hidden for the requesting role; the query is \
+                 refused rather than reading its members"
+            )),
+            timings,
+        );
+    }
+
     let key = plan_key(&plan);
 
     // Excel repeats the same query once per CELL PROPERTIES variant; serve the
@@ -105,6 +120,53 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// The first dimension a plan reads that is OLS-hidden for this user, if any.
+fn plan_hidden_dimension(
+    plan: &crate::engine::plan::QueryPlan,
+    model: &crate::engine::model::SemanticModel,
+    user: &crate::engine::model::UserContext,
+    config: &ProxyConfig,
+) -> Option<String> {
+    use crate::engine::model::{TableAccess, effective_table_filter};
+    use crate::engine::plan::QueryPlan;
+
+    let mut dimensions: Vec<&str> = Vec::new();
+    match plan {
+        QueryPlan::Total { filters, .. } | QueryPlan::MultiMeasure { filters, .. } => {
+            dimensions.extend(filters.iter().map(|f| f.dimension.as_str()));
+        }
+        QueryPlan::GroupBy {
+            group_by, filters, ..
+        }
+        | QueryPlan::MultiGroupBy {
+            group_by, filters, ..
+        } => {
+            dimensions.extend(group_by.iter().map(String::as_str));
+            dimensions.extend(filters.iter().map(|f| f.dimension.as_str()));
+        }
+        QueryPlan::Count { dimension } => dimensions.push(dimension),
+        QueryPlan::MetaCount { dim, .. } => dimensions.push(dim),
+        QueryPlan::TupleSet { cells } => {
+            dimensions.extend(
+                cells
+                    .iter()
+                    .flat_map(|cell| cell.filters.iter().map(|f| f.dimension.as_str())),
+            );
+        }
+        _ => {}
+    }
+
+    dimensions
+        .into_iter()
+        .find(|dimension| {
+            model.dim_def_opt(dimension).is_some_and(|def| {
+                effective_table_filter(config, user, model.dim_table_for_discovery(&def.id))
+                    == TableAccess::Hidden
+            })
+        })
+        .map(str::to_string)
+}
 
 /// Every measure a plan would execute. Composite plans (`MultiMeasure`,
 /// `TupleSet`, `MultiGroupBy`) carry measure ids directly and the executor
@@ -156,7 +218,13 @@ pub fn unhonourable_filter_fault(
         .filter(|role| user.roles.iter().any(|name| name == &role.name))
         .flat_map(|role| role.table_permissions.iter())
         .find(|permission| {
-            permission.dax_filter.is_some() && permission.filter_expression.trim().is_empty()
+            permission.dax_filter.is_some()
+                && permission.filter_expression.trim().is_empty()
+                // Only when the table is *still* hidden effectively: another
+                // role may grant full access to it (union semantics), in which
+                // case nothing leaks and nothing is refused.
+                && crate::engine::model::effective_table_filter(config, user, &permission.table)
+                    == crate::engine::model::TableAccess::Hidden
         })
         .map(|permission| permission.table.clone());
     table.map(|table| {
@@ -170,7 +238,13 @@ pub fn unhonourable_filter_fault(
 
 /// Does this user's access get narrowed by any of their roles? Administrators
 /// and users without roles are unrestricted.
+///
+/// The answer is about *effective* access: a second role granting full access
+/// to the same table wins (the documented union semantics), so a union user
+/// must not be refused (plan 051 RLS review).
 fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserContext) -> bool {
+    use crate::engine::model::{TableAccess, effective_table_filter};
+
     if user.is_administrator {
         return false;
     }
@@ -178,7 +252,10 @@ fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserCon
         .roles
         .iter()
         .filter(|role| user.roles.iter().any(|name| name == &role.name))
-        .any(|role| role.narrows_access())
+        .flat_map(|role| role.table_permissions.iter())
+        .any(|permission| {
+            effective_table_filter(config, user, &permission.table) != TableAccess::Full
+        })
 }
 
 #[cfg(test)]
@@ -278,7 +355,7 @@ mod tests {
     /// table alone would still serve unfiltered facts.
     #[test]
     fn unhonourable_dax_filters_refuse_queries() {
-        use super::unhonourable_filter_fault;
+        use super::{unhonourable_filter_fault, user_is_restricted};
         use crate::engine::model::UserContext;
         use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
 
@@ -308,6 +385,74 @@ mod tests {
             unhonourable_filter_fault(&config, &user).is_some(),
             "an unlowerable DAX filter must refuse the query"
         );
+        assert!(user_is_restricted(&config, &user));
+
+        // A second role granting full access to the same table wins the union:
+        // nothing leaks, so nothing is refused.
+        let mut union = config.clone();
+        union.roles.push(RoleConfig {
+            name: "Full".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "sales_fact".into(),
+                filter_expression: String::new(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::Read,
+            }],
+        });
+        let mut union_user = user.clone();
+        union_user.roles.push("Full".into());
+        assert!(
+            unhonourable_filter_fault(&union, &union_user).is_none(),
+            "full access from another role wins"
+        );
+        assert!(!user_is_restricted(&union, &union_user));
+    }
+
+    /// A dimension hidden by OLS refuses the query rather than serving its
+    /// members (plan 051 RLS review).
+    #[test]
+    fn hidden_dimensions_refuse_queries() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let table = project.model.dim_table_for_discovery("Date").to_string();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table,
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            let (response, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales] WHERE ([Date].[Calendar].[Year].&[2020])",
+                    Backend::test_fixture(),
+                    &user,
+                    &config,
+                );
+            assert!(
+                response.contains("faultstring") && response.contains("hidden"),
+                "{response}"
+            );
+        });
     }
 
     /// Drillthrough applies no role predicates, so a restricted user must be

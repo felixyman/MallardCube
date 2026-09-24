@@ -544,3 +544,34 @@ unrestricted ones (an information leak, not row data); and catalog/cube scope
 names are still unvalidated (we return the configured catalog's rows where the
 reference answers an empty rowset).
 
+### RLS review round 2: what the end-of-bucket review falsified
+
+Fixed in this round:
+
+- `MDSCHEMA_MEMBERS` bypassed the no-permission refusal (it is handled before
+  the dispatch-level check), so a role-less user could still read the member
+  dictionary; the member builder refuses too now.
+- Table permissions matched table names exactly, so `Product` against a
+  `product` table silently became full access; matching is case-insensitive.
+- A hidden *dimension* was still queryable through axes and filters (the plan
+  emitted no deny predicate for it); a plan that references a hidden dimension
+  now faults instead of reading its members.
+- `Count` checked the fact-table fallback for relationship-backed dimensions
+  rather than the counted table; it now uses `dim_table_for_discovery`.
+- `[Measures].Members` was misread as a level of the first dimension, so
+  `COUNT([Measures].Members)` counted categories (20) instead of measures (6);
+  the count path resolves the measure set now. A measure set *on an axis* still
+  needs a real, user-aware expansion — open.
+- `user_is_restricted`/`unhonourable_filter_fault` now look at *effective*
+  access, so a second role granting full access (the documented union
+  semantics) no longer causes a false refusal.
+
+Recorded, not fixed (metadata names only, no row data; or behaviour agreed as
+out of scope):
+
+- `MDSCHEMA_PROPERTIES`, `MDSCHEMA_MEASUREGROUPS`, the `[Measures]` part of
+  `MDSCHEMA_MEMBERS` and the `TMSCHEMA_*` stubs still ignore OLS visibility.
+- Cellset rendering builds the SlicerAxis from every model dimension and
+  resolves `STRTO_MEMBER`/member-only probes against the full model.
+- Unknown session ids are accepted (documented statelessness) and fault
+  responses carry no session header.

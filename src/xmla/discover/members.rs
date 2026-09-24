@@ -860,6 +860,18 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> MemberResponse {
+    // A user with no model permission has no access at all, member dictionary
+    // included. The dispatch-level refusal covered the ordinary routes but not
+    // the streaming `MDSCHEMA_MEMBERS` special case, so the check lives here
+    // too (plan 051 RLS review).
+    if crate::engine::model::effective_model_permission(config, user)
+        == crate::project::config::ModelPermission::None
+    {
+        return MemberResponse::Fault(
+            "the user has no access to this model: no role grants read permission".to_string(),
+        );
+    }
+
     let all_rows = all_rows_with_backend(backend, user, config, restrictions);
     // Restrictions narrow the rowset before the member/tree-op selection: the
     // reference engine intersects the two (a hierarchy restriction plus a SELF
@@ -1537,6 +1549,35 @@ mod tests {
                 0,
                 "a member outside the restricted hierarchy fails closed: {xml}"
             );
+        });
+    }
+
+    /// A user with no model permission gets a fault, not the member
+    /// dictionary: the dispatch-level refusal missed this streaming path.
+    #[test]
+    fn members_refuse_users_without_model_permission() {
+        use crate::engine::model::UserContext;
+
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let mut config = project.config.clone();
+            config.auth = Some(crate::project::config::AuthConfig {
+                trusted_proxy: true,
+                trusted_header: "X-User".into(),
+                oidc: None,
+            });
+            let response = get_members_response_with_backend(
+                None,
+                None,
+                &Restrictions::default(),
+                Backend::test_fixture(),
+                &UserContext::deny_all(),
+                &config,
+            );
+            assert!(response.contains("faultstring"), "{response}");
+            assert!(!response.contains("<row>"), "{response}");
         });
     }
 

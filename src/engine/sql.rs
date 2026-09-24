@@ -294,8 +294,9 @@ pub fn sql_for_query_plan_with_context(
                 .get(dimension.as_str())
                 .map(|s| s.as_str())
                 .unwrap_or(&dim.physical_field);
+            let counted_table = model.dim_table_for_discovery(dimension);
             let from = if joins.is_empty() {
-                format!("FROM {}", model.dim_table(dimension))
+                format!("FROM {counted_table}")
             } else {
                 let table = &model.fact_table(0).table_name;
                 format!("FROM {} f{}", table, joins)
@@ -304,7 +305,7 @@ pub fn sql_for_query_plan_with_context(
             // OLS-hidden table counts nothing (fail closed). Measured on the
             // reference: a role filtering Territory shrinks its member list to
             // North + (All), while unrelated dimensions are unaffected.
-            let predicate = match effective_table_filter(config, user, model.dim_table(dimension)) {
+            let predicate = match effective_table_filter(config, user, counted_table) {
                 TableAccess::Hidden => " WHERE 1=0".to_string(),
                 TableAccess::Filtered(filter) => {
                     if joins.is_empty() {

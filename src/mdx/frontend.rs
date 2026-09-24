@@ -951,6 +951,13 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
     match expr {
         Expr::Members(inner) => {
             let m = inner.as_member()?;
+            // `[Measures].Members` is the measure set, not the first
+            // dimension's members: the planner has a branch for it, but nothing
+            // constructed the variant, so `COUNT([Measures].Members)` counted
+            // categories instead of measures (plan 051 RLS review).
+            if m.dim() == "Measures" {
+                return Some(SetExpr::Measures);
+            }
             Some(match m.level() {
                 Some(level) => SetExpr::LevelMembers {
                     dim: m.dim().to_string(),

@@ -1523,6 +1523,22 @@ mod tests {
     // shape. Excel drags it as a field and drills it from `(All)`: the axis must
     // list the dates in that hierarchy's own namespace — never the user
     // hierarchy's years (plan 048).
+    /// `COUNT([Measures].Members)` counts the measure set; it used to be
+    /// misread as a level of the first dimension and counted categories
+    /// (plan 051 RLS review). A measure set *on an axis* still needs a real
+    /// expansion — recorded in plan 051.
+    #[test]
+    fn measures_members_counts_the_measure_set() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Measures].Members)' \
+                 SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+            );
+            assert!(xml.contains(">6</Value>"), "{xml}");
+            assert!(!xml.contains(">20</Value>"), "{xml}");
+        });
+    }
+
     #[test]
     fn key_attribute_hierarchy_drill_lists_dates_in_its_own_namespace() {
         with_project3(|| {
