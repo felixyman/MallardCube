@@ -16,6 +16,10 @@ pub struct Restrictions {
     /// `MDSCHEMA_FUNCTIONS` restriction: 1 = built-in MDX functions,
     /// 2 = user-defined (plan 049).
     pub origin: Option<i32>,
+    /// `MDSCHEMA_MEMBERS` restriction: member type (1 = regular, 2 = `(All)`,
+    /// 4 = measure). Dropping it widened the rowset — the mirror excludes
+    /// `(All)` for `MEMBER_TYPE=1` (plan 051 round 3).
+    pub member_type: Option<i32>,
     /// `DISCOVER_SCHEMA_ROWSETS` restriction (`SchemaName`, no underscore).
     /// Excel asks for one rowset's entry to learn its restrictions; answering
     /// with the whole list makes it miss `HIERARCHY_VISIBILITY` and skip the
@@ -99,6 +103,7 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
         b"LEVEL_UNIQUE_NAME" => restrictions.level_unique_name = Some(text.to_string()),
         b"PROPERTY_NAME" => restrictions.property_name = Some(text.to_string()),
         b"ORIGIN" => restrictions.origin = text.parse().ok(),
+        b"MEMBER_TYPE" => restrictions.member_type = text.parse().ok(),
         b"SchemaName" => restrictions.schema_name = Some(text.to_string()),
         _ => return false,
     }

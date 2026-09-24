@@ -698,6 +698,11 @@ fn find_children_indices(rows: &[MemberRow], parent: &str) -> Vec<usize> {
 /// members at every level, a level restriction returns only that level (no
 /// `(All)` row), and a dimension restriction returns all of its hierarchies.
 fn row_matches(restrictions: &Restrictions, row: &MemberRow) -> bool {
+    if let Some(member_type) = restrictions.member_type
+        && row.member_type as i32 != member_type
+    {
+        return false;
+    }
     super::coordinates_match(
         restrictions,
         &row.dimension_unique_name,
@@ -1613,6 +1618,43 @@ mod tests {
                     .any(|r| r.member_unique_name == "[Measures].[Revenue]"),
                 "the model's measures are listed"
             );
+        });
+    }
+
+    /// `MEMBER_TYPE` is a real restriction: the mirror excludes `(All)` for
+    /// type 1 and returns only `(All)` for type 2 (measured 2026-09-24).
+    #[test]
+    fn member_type_restriction_narrows_the_rowset() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let response = |member_type: i32| {
+                let restrictions = Restrictions {
+                    hierarchy_unique_name: Some("[Category].[Category]".into()),
+                    member_type: Some(member_type),
+                    ..Default::default()
+                };
+                get_members_response_with_backend(
+                    None,
+                    None,
+                    &restrictions,
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &project.config,
+                )
+            };
+
+            let leaves = response(1);
+            assert!(leaves.contains("<row>"), "leaves remain: {leaves}");
+            assert!(
+                !leaves.contains("<MEMBER_TYPE>2</MEMBER_TYPE>"),
+                "type 1 excludes (All): {leaves}"
+            );
+
+            let all = response(2);
+            assert_eq!(all.matches("<row>").count(), 1, "only (All): {all}");
+            assert!(all.contains("[Category].[Category].[All]"), "{all}");
         });
     }
 }

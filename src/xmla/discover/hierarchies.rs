@@ -48,13 +48,13 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
             <HIERARCHY_CAPTION>Measures</HIERARCHY_CAPTION>
             <DIMENSION_TYPE>2</DIMENSION_TYPE>
             <HIERARCHY_CARDINALITY>1</HIERARCHY_CARDINALITY>
-            <DEFAULT_MEMBER>[Measures].[Total Sales]</DEFAULT_MEMBER>
+            <DEFAULT_MEMBER>{default_member}</DEFAULT_MEMBER>
             <STRUCTURE>0</STRUCTURE>
             <DIMENSION_IS_VISIBLE>false</DIMENSION_IS_VISIBLE>
             <HIERARCHY_ORDINAL>0</HIERARCHY_ORDINAL>
             <DIMENSION_IS_SHARED>true</DIMENSION_IS_SHARED>
             <HIERARCHY_IS_VISIBLE>false</HIERARCHY_IS_VISIBLE>
-            <HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>
+            <HIERARCHY_ORIGIN>6</HIERARCHY_ORIGIN>
             <HIERARCHY_DISPLAY_FOLDER></HIERARCHY_DISPLAY_FOLDER>
             <INSTANCE_SELECTION>0</INSTANCE_SELECTION>
             <GROUPING_BEHAVIOR>0</GROUPING_BEHAVIOR>
@@ -64,6 +64,15 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
 "#,
             catalog = project.config.catalog,
             cube = project.config.cube,
+            // The mirror reports its internal `[Measures].[__Default measure]`
+            // placeholder; a real first measure is resolvable and does not
+            // borrow another project's measure name (plan 051 round 3).
+            default_member = project
+                .model
+                .measures
+                .first()
+                .map(|m| m.measure_unique_name())
+                .unwrap_or_default(),
         ));
     }
 
