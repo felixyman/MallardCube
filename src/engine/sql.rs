@@ -300,7 +300,27 @@ pub fn sql_for_query_plan_with_context(
                 let table = &model.fact_table(0).table_name;
                 format!("FROM {} f{}", table, joins)
             };
-            format!("SELECT COUNT(DISTINCT {}) {}", col, from)
+            // Role filters on the counted table itself constrain the count; an
+            // OLS-hidden table counts nothing (fail closed). Measured on the
+            // reference: a role filtering Territory shrinks its member list to
+            // North + (All), while unrelated dimensions are unaffected.
+            let predicate = match effective_table_filter(config, user, model.dim_table(dimension)) {
+                TableAccess::Hidden => " WHERE 1=0".to_string(),
+                TableAccess::Filtered(filter) => {
+                    if joins.is_empty() {
+                        format!(" WHERE ({filter})")
+                    } else if let Some(rel) = model.rel_for_dimension(dimension) {
+                        format!(
+                            " WHERE f.{} IN (SELECT {} FROM {} WHERE {filter})",
+                            rel.fact_column, rel.dim_column, rel.dim_table
+                        )
+                    } else {
+                        format!(" WHERE ({filter})")
+                    }
+                }
+                TableAccess::Full => String::new(),
+            };
+            format!("SELECT COUNT(DISTINCT {}) {}{}", col, from, predicate)
         }
 
         QueryPlan::MetaCount {
@@ -310,16 +330,22 @@ pub fn sql_for_query_plan_with_context(
         } => {
             let d = model.dim_def(dim);
             let table = model.dim_table_for_discovery(dim);
-            // Date windows restrict which members are counted.
-            let windows: Vec<String> = filters
+            // Date windows restrict which members are counted, and so does a
+            // role filter on the table being counted (or hiding it entirely).
+            let mut predicates: Vec<String> = filters
                 .iter()
                 .filter_map(|f| f.date_window.as_ref())
                 .map(|w| date_window_predicate(model, d, w, table))
                 .collect();
-            let where_clause = if windows.is_empty() {
+            match effective_table_filter(config, user, table) {
+                TableAccess::Hidden => predicates.push("1=0".to_string()),
+                TableAccess::Filtered(filter) => predicates.push(format!("({filter})")),
+                TableAccess::Full => {}
+            }
+            let where_clause = if predicates.is_empty() {
                 String::new()
             } else {
-                format!(" WHERE {}", windows.join(" AND "))
+                format!(" WHERE {}", predicates.join(" AND "))
             };
             // A level member is identified by its FULL ancestor path (Q1 of
             // 2020 differs from Q1 of 2021), so count distinct paths.
@@ -1559,6 +1585,74 @@ mod tests {
             sql.contains("FROM inv_fact"),
             "Stock should use inv_fact, got: {sql}"
         );
+    }
+
+    /// A role filter on the counted table must reach dimension-side counts:
+    /// the reference shrinks a filtered hierarchy's member list (Territory
+    /// 9 → 2) while leaving unrelated dimensions alone, and an OLS-hidden
+    /// table counts nothing.
+    #[test]
+    fn counts_apply_the_dimension_role_filter() {
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let model = &project.model;
+            let dimension = "Date";
+            let table = model.dim_table_for_discovery(dimension);
+            config.roles = vec![RoleConfig {
+                name: "EU".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: table.to_string(),
+                    filter_expression: "year = 2024".into(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::Read,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["EU".into()];
+
+            for plan in [
+                QueryPlan::Count {
+                    dimension: dimension.into(),
+                },
+                QueryPlan::MetaCount {
+                    dim: dimension.into(),
+                    group_level: None,
+                    filters: vec![],
+                },
+            ] {
+                let sql = sql_for_query_plan_with_context(model, &plan, &user, &config);
+                assert!(
+                    sql.contains("year = 2024"),
+                    "role predicate missing from {plan:?}: {sql}"
+                );
+            }
+
+            // Hidden: nothing is counted at all.
+            config.roles[0].table_permissions[0].metadata_permission = ModelPermission::None;
+            let hidden = sql_for_query_plan_with_context(
+                model,
+                &QueryPlan::MetaCount {
+                    dim: dimension.into(),
+                    group_level: None,
+                    filters: vec![],
+                },
+                &user,
+                &config,
+            );
+            assert!(
+                hidden.contains("1=0"),
+                "hidden table must count nothing: {hidden}"
+            );
+        });
     }
 
     #[test]
