@@ -47,6 +47,10 @@ for (const [index, line] of readFileSync(claimsFile, "utf8").split("\n").entries
     errors.push(`reference/claims.jsonl:${index + 1}: not JSON (${error.message})`);
     continue;
   }
+  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+    errors.push(`reference/claims.jsonl:${index + 1}: each line must be a JSON object`);
+    continue;
+  }
   const where = `reference/claims.jsonl:${index + 1} (${claim.id ?? "no id"})`;
   if (!isString(claim.id) || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(claim.id ?? "")) {
     errors.push(`${where}: id must be a kebab-case string`);
@@ -57,8 +61,19 @@ for (const [index, line] of readFileSync(claimsFile, "utf8").split("\n").entries
   if (!["verified", "open", "superseded"].includes(claim.status)) {
     errors.push(`${where}: status must be verified, open or superseded`);
   }
-  if (!isString(claim.environment?.engine) && !isString(claim.environment?.client)) {
-    errors.push(`${where}: environment needs an engine or a client string`);
+  if (
+    typeof claim.environment !== "object" ||
+    claim.environment === null ||
+    Array.isArray(claim.environment)
+  ) {
+    errors.push(`${where}: environment must be an object`);
+  } else {
+    if (!isString(claim.environment.engine) && !isString(claim.environment.client)) {
+      errors.push(`${where}: environment needs an engine or a client string`);
+    }
+    if (claim.environment.compat !== undefined && !isString(claim.environment.compat)) {
+      errors.push(`${where}: environment.compat must be a string when present`);
+    }
   }
   if (!isRealDate(claim.environment?.date)) {
     errors.push(`${where}: environment.date must be a real past calendar date (YYYY-MM-DD)`);
@@ -78,6 +93,25 @@ for (const [index, line] of readFileSync(claimsFile, "utf8").split("\n").entries
   claims.set(claim.id, claim);
 }
 
+// --- supersession links -----------------------------------------------------
+for (const claim of claims.values()) {
+  for (const [field, reciprocal] of [
+    ["supersedes", "superseded_by"],
+    ["superseded_by", "supersedes"],
+  ]) {
+    const target = claim[field];
+    if (!target) continue;
+    const other = claims.get(target);
+    if (!other) {
+      errors.push(`claim '${claim.id}': ${field} '${target}' is not a claim`);
+    } else if (other[reciprocal] !== claim.id) {
+      errors.push(
+        `claim '${claim.id}': ${field} '${target}' is not reciprocal — ${target}.${reciprocal} should be '${claim.id}'`,
+      );
+    }
+  }
+}
+
 // --- catalog cases ----------------------------------------------------------
 const catalog = JSON.parse(readFileSync(catalogFile, "utf8"));
 const caseById = new Map(catalog.cases.map((entry) => [entry.id, entry]));
@@ -92,6 +126,19 @@ for (const claim of claims.values()) {
     );
   }
 }
+for (const entry of catalog.cases) {
+  if (!entry.reference_claim) continue;
+  const claim = claims.get(entry.reference_claim);
+  if (!claim) {
+    errors.push(
+      `parity case '${entry.id}': reference_claim '${entry.reference_claim}' is not a claim`,
+    );
+  } else if (claim.catalog_case !== entry.id) {
+    errors.push(
+      `parity case '${entry.id}': claim '${entry.reference_claim}' must name it in catalog_case`,
+    );
+  }
+}
 
 // --- pages ------------------------------------------------------------------
 const used = new Set();
@@ -100,7 +147,8 @@ const walk = (dir) => {
   let entries = [];
   try {
     entries = readdirSync(dir);
-  } catch {
+  } catch (error) {
+    errors.push(`pages directory '${dir}' cannot be read (${error.code ?? error.message})`);
     return;
   }
   for (const entry of entries) {
@@ -110,6 +158,9 @@ const walk = (dir) => {
   }
 };
 walk(pagesDir);
+if (pages.length === 0) {
+  errors.push(`no pages found under '${pagesDir}' — nothing would be validated`);
+}
 
 for (const page of pages) {
   const text = readFileSync(page, "utf8");

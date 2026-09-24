@@ -20,7 +20,7 @@ const environment = [
 <aside class="claim" data-status={entry.status}>
   <header>
     <span class="badge">{entry.status}</span>
-    <strong>{entry.title}</strong>
+    <strong set:html={renderInline(entry.title)} />
   </header>
   {entry.notes && <p set:html={renderInline(entry.notes)} />}
   {
