@@ -61,6 +61,17 @@ pub fn pool_size() -> usize {
         })
 }
 
+/// SQL for an error log: enough to diagnose, short enough that a customer's
+/// values (a label filter, a member name) do not end up in a log collector.
+fn log_sql(sql: &str) -> String {
+    const MAX: usize = 300;
+    if sql.len() <= MAX {
+        sql.to_string()
+    } else {
+        format!("{}… ({} chars total)", &sql[..MAX], sql.len())
+    }
+}
+
 fn open_read_only(path: &Path, settings: &EngineSettings) -> Result<Connection, duckdb::Error> {
     match open_with_settings(path, settings) {
         Ok(conn) => Ok(conn),
@@ -652,7 +663,7 @@ impl Backend {
     pub fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_grouped_1d: prepare failed: {sql}");
+            eprintln!("query_grouped_1d: prepare failed: {}", log_sql(sql));
             return Vec::new();
         };
         let rows = match stmt.query_map([], |row| {
@@ -672,7 +683,7 @@ impl Backend {
     pub fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_pairs: prepare failed: {sql}");
+            eprintln!("query_pairs: prepare failed: {}", log_sql(sql));
             return Vec::new();
         };
         let rows = match stmt.query_map([], |row| {
@@ -694,7 +705,7 @@ impl Backend {
     pub fn query_grouped_n(&self, sql: &str, dims: usize) -> Vec<(Vec<String>, f64)> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_grouped_n: prepare failed: {sql}");
+            eprintln!("query_grouped_n: prepare failed: {}", log_sql(sql));
             return Vec::new();
         };
         let rows = match stmt.query_map([], |row| {
@@ -723,7 +734,7 @@ impl Backend {
     pub fn query_strings(&self, sql: &str) -> Vec<String> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_strings: prepare failed: {sql}");
+            eprintln!("query_strings: prepare failed: {}", log_sql(sql));
             return Vec::new();
         };
         let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
@@ -746,7 +757,7 @@ impl Backend {
         let pragma = format!("SELECT count(*) FROM pragma_table_info('{table}')");
         let col_count: usize = conn.query_row(&pragma, [], |r| r.get(0)).unwrap_or(0);
         let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_rows: prepare failed: {sql}");
+            eprintln!("query_rows: prepare failed: {}", log_sql(sql));
             return Vec::new();
         };
         if col_count > 0 {

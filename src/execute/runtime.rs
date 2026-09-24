@@ -24,14 +24,14 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     // Excel's pivot Refresh issues `REFRESH CUBE [<cube>]`; the data is live,
     // so answer with an empty success instead of a fault (plan 048).
     if let Some(resp) = crate::execute::builders::ddl_noop_response(mdx) {
-        let timings = Timings::new(RuntimePath::DirectSql, "ddl-noop".to_string(), 0, 0);
+        let timings = Timings::new(RuntimePath::DirectSql, "ddl-noop".to_string(), 0);
         return (resp, timings);
     }
 
     // Unsupported constructs fault loudly instead of returning a dropped axis
     // or a wrong-hierarchy cellset (plan 046).
     if let Some(fault) = crate::execute::builders::unsupported_fault(mdx) {
-        let timings = Timings::new(RuntimePath::DirectSql, "unsupported".to_string(), 0, 0);
+        let timings = Timings::new(RuntimePath::DirectSql, "unsupported".to_string(), 0);
         return (fault, timings);
     }
 
@@ -52,7 +52,7 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
         && model.classify_fallback(measure).is_some()
         && user_is_restricted(config, user)
     {
-        let timings = Timings::new(RuntimePath::DirectSql, "restricted-fallback".into(), 0, 0);
+        let timings = Timings::new(RuntimePath::DirectSql, "restricted-fallback".into(), 0);
         return (
             crate::xmla::response::fault_response(&format!(
                 "measure '{measure}' uses authored SQL that cannot be filtered for the requesting \
@@ -78,16 +78,18 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     let (result, cache_hit) = match cached {
         Some(hit) => (hit, true),
         None => {
-            let result = execute_plan_with_backend_and_context(&plan, model, backend, user, config);
+            let result = std::sync::Arc::new(execute_plan_with_backend_and_context(
+                &plan, model, backend, user, config,
+            ));
             if cache_enabled {
-                cache::RESULT_CACHE.insert(cache_key, result.clone());
+                cache::RESULT_CACHE.insert(cache_key, std::sync::Arc::clone(&result));
             }
             (result, false)
         }
     };
     let sql_execute_us = (Instant::now() - t0).as_micros() as u64;
 
-    let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us, 0);
+    let mut timings = Timings::new(RuntimePath::DirectSql, key, mdx_parse_us);
     timings.plan_us = plan_us;
     timings.cache_hit = cache_hit;
     timings.sql_execute_us = sql_execute_us;

@@ -15,7 +15,7 @@
 use crate::engine::model::UserContext;
 use crate::engine::plan::QueryResult;
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// Excel's three variants arrive within ~50-100 ms of each other. A longer
@@ -26,7 +26,10 @@ const TTL: Duration = Duration::from_secs(5);
 const CAPACITY: usize = 64;
 
 struct Entry {
-    result: QueryResult,
+    /// Shared, not cloned: a hit used to deep-clone the whole result — on a
+    /// 422k-group shape that is ~1.3M String allocations on two of every three
+    /// Excel requests (plan 051 review).
+    result: Arc<QueryResult>,
     inserted_at: Instant,
 }
 
@@ -57,10 +60,12 @@ impl ResultCache {
 
     /// Return a fresh cached result; expired entries are dropped on access.
     /// A poisoned lock degrades to a miss (the request still executes).
-    pub fn get(&self, key: &str) -> Option<QueryResult> {
+    pub fn get(&self, key: &str) -> Option<Arc<QueryResult>> {
         let mut entries = self.entries.lock().ok()?;
         match entries.get(key) {
-            Some(entry) if entry.inserted_at.elapsed() < self.ttl => Some(entry.result.clone()),
+            Some(entry) if entry.inserted_at.elapsed() < self.ttl => {
+                Some(Arc::clone(&entry.result))
+            }
             Some(_) => {
                 entries.remove(key);
                 None
@@ -71,7 +76,7 @@ impl ResultCache {
 
     /// Store a result. When full, expired entries are dropped first, then the
     /// oldest entry.
-    pub fn insert(&self, key: String, result: QueryResult) {
+    pub fn insert(&self, key: String, result: Arc<QueryResult>) {
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
@@ -137,8 +142,8 @@ pub fn cache_key(plan_key: &str, catalog: &str, cube: &str, user: &UserContext) 
 mod tests {
     use super::*;
 
-    fn scalar(v: f64) -> QueryResult {
-        QueryResult::Scalar(v)
+    fn scalar(v: f64) -> Arc<QueryResult> {
+        Arc::new(QueryResult::Scalar(v))
     }
 
     #[test]
@@ -146,7 +151,7 @@ mod tests {
         let cache = ResultCache::with_limits(Duration::from_secs(60), 8);
         assert!(cache.get("k").is_none());
         cache.insert("k".into(), scalar(1.5));
-        assert_eq!(cache.get("k"), Some(scalar(1.5)));
+        assert_eq!(cache.get("k").as_deref(), Some(&QueryResult::Scalar(1.5)));
     }
 
     #[test]
@@ -168,8 +173,22 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
         cache.insert("c".into(), scalar(3.0));
         assert!(cache.get("a").is_none(), "oldest entry evicted");
-        assert_eq!(cache.get("b"), Some(scalar(2.0)));
-        assert_eq!(cache.get("c"), Some(scalar(3.0)));
+        assert_eq!(cache.get("b").as_deref(), Some(&QueryResult::Scalar(2.0)));
+        assert_eq!(cache.get("c").as_deref(), Some(&QueryResult::Scalar(3.0)));
+    }
+
+    /// A hit must hand back the *same* allocation: the old code deep-cloned the
+    /// whole result, which on a wide pivot is millions of allocations per
+    /// repeated request (plan 051 review).
+    #[test]
+    fn a_hit_shares_the_result_instead_of_cloning_it() {
+        let cache = ResultCache::with_limits(Duration::from_secs(60), 8);
+        let stored = scalar(2.5);
+        cache.insert("k".into(), Arc::clone(&stored));
+        let hit = cache.get("k").expect("hit");
+        let hit_again = cache.get("k").expect("hit");
+        assert!(Arc::ptr_eq(&stored, &hit), "same allocation, not a copy");
+        assert!(Arc::ptr_eq(&hit, &hit_again));
     }
 
     #[test]

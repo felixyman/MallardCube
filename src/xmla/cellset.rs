@@ -226,12 +226,21 @@ fn render_cells(cells: &[CellConfig], resp: &CellsetResponse) -> String {
                 out.push_str(&format!(
                     "              <Value xsi:type=\"xsd:int\">{iv}</Value>\n"
                 ));
-            } else {
+            } else if cell.value.is_finite() {
                 out.push_str(&format!(
                     r#"              <Value xsi:type="xsd:double">{val}</Value>
 "#,
                     val = cell.value,
                 ));
+            } else {
+                // inf/NaN is invalid for xsd:double — Excel reports a parse
+                // error for the whole cellset. A config-authored ratio measure
+                // (SUM(a)/SUM(b) with b zero) is how one appears; emit a blank
+                // cell and say so (plan 051 review).
+                eprintln!(
+                    "cellset: non-finite value {} at ordinal {} — emitting a blank cell",
+                    cell.value, cell.ordinal
+                );
             }
         }
         if resp.include_fmt_value {

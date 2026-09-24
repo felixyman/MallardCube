@@ -107,10 +107,12 @@ push, and never disturb a proxy already listening on port 8080.
 3. `bash scripts/probe-fidelity.sh http://127.0.0.1:8099/xmla` is the
    deterministic gate for the silent-wrong-answer class — run it, and add a
    probe if you find a case it does not cover.
-4. Where Excel-visible shape or SSAS semantics are in question, use the
-   `ssas-reference-oracle` skill (mirror at 127.0.0.1:8090 on the Windows VM,
-   `MallardDemo` / `Model`) and `proxy-excel-test` rather than guessing from the
-   specification.
+4. Where Excel-visible shape or SSAS semantics are in question, check the
+   mirror if your session has the Windows/Excel tools (see the
+   `ssas-reference-oracle` and `proxy-excel-test` skills: mirror at
+   127.0.0.1:8090, `MallardDemo` / `Model`). When those tools are not in your
+   catalog, say so and reason from the corpus and the reference notes instead
+   of guessing.
 5. Run `cargo test --lib` and `bash scripts/proxy-smoke.sh` against a proxy you
    started; report which sweeps (`sweep2.ps1`, `sweep3.ps1`) were or were not run.
 
