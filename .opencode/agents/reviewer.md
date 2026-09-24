@@ -119,12 +119,16 @@ permissions:
   - action: shell
     resource: "xargs *"
     effect: allow
-  # Site verification: `npm run build` runs the link and claim checks.
+  # Site verification: the build runs the link and claim checks. Kept exact
+  # rather than a blanket `npm *`/`node *`, which could mutate the tree.
   - action: shell
-    resource: "npm *"
+    resource: "npm run build"
     effect: allow
   - action: shell
-    resource: "node *"
+    resource: "node scripts/check-claims.mjs*"
+    effect: allow
+  - action: shell
+    resource: "node scripts/check-links.mjs*"
     effect: allow
   # Last matching rule wins: these override the broad allows above. The
   # reviewer is advisory — it never mutates the repository or publishes, and it

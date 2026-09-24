@@ -1,5 +1,5 @@
 ---
-import { claim, ageInMonths, type Claim } from "../lib/claims";
+import { claim, ageInMonths, renderInline, type Claim } from "../lib/claims";
 
 interface Props {
   id: string;
@@ -22,11 +22,12 @@ const environment = [
     <span class="badge">{entry.status}</span>
     <strong>{entry.title}</strong>
   </header>
-  {entry.notes && <p set:html={entry.notes} />}
+  {entry.notes && <p set:html={renderInline(entry.notes)} />}
   {
     entry.repro && (
       <p class="repro">
-        <span class="label">How observed</span> <span set:html={entry.repro} />
+        <span class="label">How observed</span>{" "}
+        <span set:html={renderInline(entry.repro)} />
       </p>
     )
   }
@@ -41,7 +42,7 @@ const environment = [
     {
       entry.catalog_case && (
         <>
-          <dt>Checked by</dt>
+          <dt>Related parity case</dt>
           <dd>
             <code>parity/catalog.json → {entry.catalog_case}</code>
           </dd>

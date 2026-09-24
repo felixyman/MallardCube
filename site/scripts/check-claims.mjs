@@ -11,16 +11,29 @@
 // Usage: node scripts/check-claims.mjs   (from site/)
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const claimsFile = join(root, "reference", "claims.jsonl");
-const catalogFile = join(root, "parity", "catalog.json");
-const pagesDir = join(root, "site", "src", "content", "docs", "reference");
+// Optional overrides so the rules themselves can be exercised with fixtures.
+const [claimsArg, catalogArg, pagesArg] = process.argv.slice(2);
+const claimsFile = claimsArg ? resolve(claimsArg) : join(root, "reference", "claims.jsonl");
+const catalogFile = catalogArg ? resolve(catalogArg) : join(root, "parity", "catalog.json");
+const pagesDir = pagesArg ? resolve(pagesArg) : join(root, "site", "src", "content", "docs", "reference");
 
 const errors = [];
 const warnings = [];
+
+const isString = (value) => typeof value === "string" && value.trim().length > 0;
+
+/** A real, past calendar date — `2026-99-99` and `2026-02-30` both fail. */
+const isRealDate = (value) => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return false;
+  if (parsed.toISOString().slice(0, 10) !== value) return false;
+  return parsed.getTime() <= Date.now();
+};
 
 // --- claims -----------------------------------------------------------------
 const claims = new Map();
@@ -35,32 +48,48 @@ for (const [index, line] of readFileSync(claimsFile, "utf8").split("\n").entries
     continue;
   }
   const where = `reference/claims.jsonl:${index + 1} (${claim.id ?? "no id"})`;
-  if (!claim.id || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(claim.id)) {
-    errors.push(`${where}: id must be kebab-case`);
+  if (!isString(claim.id) || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(claim.id ?? "")) {
+    errors.push(`${where}: id must be a kebab-case string`);
   } else if (claims.has(claim.id)) {
     errors.push(`${where}: duplicate id`);
   }
-  if (!claim.title) errors.push(`${where}: missing title`);
+  if (!isString(claim.title)) errors.push(`${where}: title must be a non-empty string`);
   if (!["verified", "open", "superseded"].includes(claim.status)) {
     errors.push(`${where}: status must be verified, open or superseded`);
   }
-  if (!claim.environment?.engine && !claim.environment?.client) {
-    errors.push(`${where}: environment needs an engine or a client`);
+  if (!isString(claim.environment?.engine) && !isString(claim.environment?.client)) {
+    errors.push(`${where}: environment needs an engine or a client string`);
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(claim.environment?.date ?? "")) {
-    errors.push(`${where}: environment.date must be YYYY-MM-DD`);
+  if (!isRealDate(claim.environment?.date)) {
+    errors.push(`${where}: environment.date must be a real past calendar date (YYYY-MM-DD)`);
   }
-  if (!claim.method) errors.push(`${where}: missing method`);
-  if (!claim.notes && !claim.repro) errors.push(`${where}: needs notes or repro`);
+  if (!isString(claim.method)) errors.push(`${where}: method must be a non-empty string`);
+  if (!isString(claim.repro)) {
+    errors.push(`${where}: repro must be a non-empty string (plan 056 requires one)`);
+  }
+  if (claim.status === "superseded" && !isString(claim.supersedes) && !isString(claim.superseded_by)) {
+    errors.push(`${where}: a superseded claim needs supersedes or superseded_by`);
+  }
+  for (const field of ["notes", "repro", "catalog_case", "supersedes", "superseded_by"]) {
+    if (claim[field] !== undefined && !isString(claim[field])) {
+      errors.push(`${where}: ${field} must be a string when present`);
+    }
+  }
   claims.set(claim.id, claim);
 }
 
 // --- catalog cases ----------------------------------------------------------
 const catalog = JSON.parse(readFileSync(catalogFile, "utf8"));
-const caseIds = new Set(catalog.cases.map((entry) => entry.id));
+const caseById = new Map(catalog.cases.map((entry) => [entry.id, entry]));
 for (const claim of claims.values()) {
-  if (claim.catalog_case && !caseIds.has(claim.catalog_case)) {
+  if (!claim.catalog_case) continue;
+  const entry = caseById.get(claim.catalog_case);
+  if (!entry) {
     errors.push(`claim '${claim.id}': catalog_case '${claim.catalog_case}' is not in parity/catalog.json`);
+  } else if (entry.reference_claim !== claim.id) {
+    errors.push(
+      `claim '${claim.id}': parity case '${claim.catalog_case}' must name it in reference_claim`,
+    );
   }
 }
 

@@ -103,18 +103,27 @@ startup; see `parent_child` in the [Model reference](../model/).
 
 MallardCube is stateless. It reads a session id from the XMLA
 `Session`/`EndSession` header when one is present and echoes it back, but keeps
-no session state: `BeginSession` and `EndSession` are no-ops, the same as for
-Excel's pivot workflow, which never notices.
+no session state: `BeginSession` and `EndSession` are no-ops, which is all
+Excel's pivot workflow needs.
 
-That has three consequences worth knowing, and the
-[behaviour reference](../reference/request-shape/) records what the reference
-does instead:
+Three session-scoped features exist in the reference that a stateless adapter
+cannot honour. MallardCube answers each with a fault rather than a silent
+no-op, so a client is never misled:
 
-- **Session-scoped MDX DDL is not supported.** `CREATE MEMBER` and `CREATE SET`
-  statements are answered but a member created this way does not exist in a
-  later request. Define calculated members in the model, or inline them in the
-  query with `WITH MEMBER`.
+- **Session-scoped MDX DDL is refused.** `CREATE MEMBER` and `CREATE SET`
+  answer `unsupported statement: this proxy is a read-only adapter …`. In the
+  reference such a member resolves in later requests on the same session
+  (verified: create 42, select 42, drop). Define calculated members in the
+  model, or inline them with `WITH MEMBER`.
 - **Cancellation is ignored.** A `<Cancel>` header does not stop a running
-  query; the work finishes and the response is discarded.
-- **Session DMVs describe nothing.** `DISCOVER_SESSIONS` and friends are not
-  answered — the proxy has no session list to report.
+  query: the work finishes and its normal response is returned, with the query
+  slot held for the duration.
+- **Session DMVs are refused.** `DISCOVER_SESSIONS`, `DISCOVER_CONNECTIONS`,
+  `DISCOVER_TRANSACTIONS`, `DISCOVER_JOBS`, `DISCOVER_LOCKS` and
+  `DISCOVER_MEMORYUSAGE` answer an unsupported-request fault; the reference
+  reports live server state for all of them (in a two-connection probe:
+  sessions 2, connections 3, transactions 0, jobs 1, locks 0, memory usage
+  rows 135).
+
+The [behaviour reference](../reference/request-shape/) records what the
+reference does in each case, with the measurements.

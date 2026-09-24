@@ -133,4 +133,3 @@ multiple colons"); and the session id is read from an XMLA
 that dropped well-formed ids (spaces, non-ASCII, `&amp;`) is gone, and a
 foreign `Session` header is ignored. We stay stateless: unlike the reference,
 an unknown session id is echoed rather than faulted, recorded as a divergence.
-

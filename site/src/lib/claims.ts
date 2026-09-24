@@ -45,6 +45,18 @@ export function claim(id: string): Claim {
   return found;
 }
 
+/** Escape a registry string, then re-enable the tiny markdown subset the
+ * claims use — `code` spans and **strong**. Escaping first means an XML example
+ * in a claim renders as text instead of becoming elements of the page. */
+export function renderInline(markdown: string): string {
+  return markdown
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
 /** Months since a claim's environment date, for the staleness flag. */
 export function ageInMonths(value: string): number {
   const then = new Date(`${value}T00:00:00Z`).getTime();
