@@ -441,6 +441,138 @@ fn xml_member_row(
     )
 }
 
+/// The date role's key attribute hierarchy lists its dates as members in that
+/// hierarchy's own namespace — a single level under `(All)` (measured against
+/// the mirror 2026-09-24). The user hierarchy's level tree is a different
+/// hierarchy and is not repeated here.
+fn build_key_member_rows<B: QueryBackend + ?Sized>(
+    model: &crate::engine::model::SemanticModel,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+    restrictions: &Restrictions,
+) -> Vec<MemberRow> {
+    let mut rows = Vec::new();
+    for dim in &model.dimensions {
+        let (Some(key_hier), Some(key_level_u)) =
+            (dim.key_hierarchy_unique_name(), dim.key_level_unique_name())
+        else {
+            continue;
+        };
+        let dim_u = dim.dimension_unique_name();
+        if !super::coordinates_match(restrictions, &dim_u, Some(&key_hier), Some(&key_level_u)) {
+            continue;
+        }
+        let dim_table = model.dim_table_for_discovery(&dim.id);
+        let access = effective_table_filter(config, user, dim_table);
+        if access == TableAccess::Hidden {
+            continue;
+        }
+        let filter_sql = match &access {
+            TableAccess::Filtered(sql) => sql.as_str(),
+            _ => "",
+        };
+        let cached_paths;
+        let members;
+        let level_paths: &Vec<Vec<Vec<String>>> = if filter_sql.is_empty() {
+            members = model.dim_cache.get(model, dim, backend);
+            &members.level_paths
+        } else {
+            cached_paths =
+                crate::engine::dim_cache::query_level_paths(backend, dim, dim_table, filter_sql);
+            &cached_paths
+        };
+        let all_u = format!("{key_hier}.[All]");
+        // (All) comes first, with the key level's cardinality as its child
+        // count — the axis reports the same DISPLAY_INFO for this member.
+        rows.push(MemberRow {
+            dimension_id: dim.id.clone(),
+            dimension_unique_name: dim_u.clone(),
+            hierarchy_unique_name: key_hier.clone(),
+            level_unique_name: dim.key_all_level_unique_name().unwrap_or_default(),
+            member_unique_name: all_u.clone(),
+            parent_unique_name: None,
+            level_num: 0,
+            member_ordinal: 0,
+            member_name: "All".into(),
+            member_type: 2,
+            member_guid: all_member_guid(&key_hier),
+            member_caption: "All".into(),
+            children_cardinality: dim.key_level().map(|l| l.cardinality).unwrap_or(0),
+            parent_level: 0,
+            parent_count: 0,
+            member_key: "All".into(),
+        });
+        // The key hierarchy's members are the deepest level's leaves, named
+        // with the leaf key alone — the axis view rewrites the user
+        // hierarchy's leaf members the same way (apply_key_hierarchy_view).
+        let Some(leaves) = level_paths.last() else {
+            continue;
+        };
+        for (ordinal, tuple) in leaves.iter().enumerate() {
+            let value = tuple.last().cloned().unwrap_or_default();
+            rows.push(MemberRow {
+                dimension_id: dim.id.clone(),
+                dimension_unique_name: dim_u.clone(),
+                hierarchy_unique_name: key_hier.clone(),
+                level_unique_name: key_level_u.clone(),
+                member_unique_name: format!("{key_hier}.&[{}]", value),
+                parent_unique_name: Some(all_u.clone()),
+                level_num: 1,
+                member_ordinal: ordinal as u32 + 1,
+                member_name: value.clone(),
+                member_type: 1,
+                member_guid: leaf_member_guid(&key_hier, &value),
+                member_caption: value.clone(),
+                children_cardinality: 0,
+                parent_level: 0,
+                parent_count: 1,
+                member_key: value,
+            });
+        }
+    }
+    rows
+}
+
+/// `[Measures]` is a hierarchy too: the reference lists one row per measure at
+/// `[Measures].[MeasuresLevel]` with member type 4 (measured 2026-09-24).
+fn build_measure_member_rows(
+    model: &crate::engine::model::SemanticModel,
+    restrictions: &Restrictions,
+) -> Vec<MemberRow> {
+    if !super::coordinates_match(
+        restrictions,
+        "[Measures]",
+        Some("[Measures]"),
+        Some("[Measures].[MeasuresLevel]"),
+    ) {
+        return Vec::new();
+    }
+    model
+        .measures
+        .iter()
+        .enumerate()
+        .map(|(ordinal, measure)| MemberRow {
+            dimension_id: "Measures".into(),
+            dimension_unique_name: "[Measures]".into(),
+            hierarchy_unique_name: "[Measures]".into(),
+            level_unique_name: "[Measures].[MeasuresLevel]".into(),
+            member_unique_name: measure.measure_unique_name(),
+            parent_unique_name: None,
+            level_num: 0,
+            member_ordinal: ordinal as u32 + 1,
+            member_name: measure.caption.clone(),
+            member_type: 4,
+            member_guid: leaf_member_guid("Measures", &measure.caption),
+            member_caption: measure.caption.clone(),
+            children_cardinality: 0,
+            parent_level: 0,
+            parent_count: 0,
+            member_key: measure.caption.clone(),
+        })
+        .collect()
+}
+
 fn all_member_rows_with_backend<B: QueryBackend + ?Sized>(
     backend: &B,
     user: &UserContext,
@@ -471,6 +603,26 @@ fn level_member_rows_with_backend<B: QueryBackend + ?Sized>(
     build_level_member_rows(&project.model, backend, user, config, restrictions)
 }
 
+fn key_member_rows_with_backend<B: QueryBackend + ?Sized>(
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+    restrictions: &Restrictions,
+) -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    build_key_member_rows(&project.model, backend, user, config, restrictions)
+}
+
+fn measure_member_rows_with_backend<B: QueryBackend + ?Sized>(
+    _backend: &B,
+    _user: &UserContext,
+    _config: &ProxyConfig,
+    restrictions: &Restrictions,
+) -> Vec<MemberRow> {
+    let project = proxy_project::project();
+    build_measure_member_rows(&project.model, restrictions)
+}
+
 fn key_suffix(key: &str) -> String {
     key.split('|').map(|part| format!("&[{part}]")).collect()
 }
@@ -493,6 +645,20 @@ fn all_rows_with_backend<B: QueryBackend + ?Sized>(
         restrictions,
     ));
     rows.append(&mut leaf_member_rows_with_backend(
+        backend,
+        user,
+        config,
+        restrictions,
+    ));
+    // The date role's key attribute hierarchy (plan 048) and `[Measures]` are
+    // hierarchies too; the reference lists members for both.
+    rows.append(&mut key_member_rows_with_backend(
+        backend,
+        user,
+        config,
+        restrictions,
+    ));
+    rows.extend(measure_member_rows_with_backend(
         backend,
         user,
         config,
@@ -1365,6 +1531,87 @@ mod tests {
                 xml.matches("<row>").count(),
                 0,
                 "a member outside the restricted hierarchy fails closed: {xml}"
+            );
+        });
+    }
+
+    /// The date role's key attribute hierarchy lists its dates in its own
+    /// namespace — (All) plus one row per date at `[Date].[Full Date].[Full
+    /// Date]` — exactly like the mirror (measured 2026-09-24). The user
+    /// hierarchy's level tree is a different hierarchy and must not leak in.
+    #[test]
+    fn key_attribute_hierarchy_lists_its_dates() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Date].[Full Date]".into()),
+                ..Default::default()
+            };
+            let rows = all_rows_with_backend(
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &project.config,
+                &restrictions,
+            );
+            assert!(
+                rows.iter()
+                    .all(|r| r.hierarchy_unique_name == "[Date].[Full Date]"),
+                "no user-hierarchy rows in the attribute hierarchy rowset"
+            );
+            let all = find_row(&rows, "[Date].[Full Date].[All]");
+            assert_eq!(all.member_type, 2);
+            assert_eq!(all.level_num, 0);
+            assert_eq!(
+                all.level_unique_name, "[Date].[Full Date].[(All)]",
+                "the All level keeps the reference's name"
+            );
+            let dates: Vec<&MemberRow> = rows
+                .iter()
+                .filter(|r| r.member_unique_name.starts_with("[Date].[Full Date].&["))
+                .collect();
+            assert!(!dates.is_empty(), "the hierarchy lists dates");
+            assert!(
+                dates.iter().all(|r| r.level_num == 1
+                    && r.parent_unique_name.as_deref() == Some("[Date].[Full Date].[All]")),
+                "dates hang off (All) at level 1"
+            );
+        });
+    }
+
+    /// `[Measures]` is a hierarchy too: the reference lists one row per measure
+    /// at `[Measures].[MeasuresLevel]` with member type 4 (measured
+    /// 2026-09-24).
+    #[test]
+    fn measures_hierarchy_lists_measures() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Measures]".into()),
+                ..Default::default()
+            };
+            let rows = all_rows_with_backend(
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &project.config,
+                &restrictions,
+            );
+            assert_eq!(
+                rows.len(),
+                project.model.measures.len(),
+                "one row per measure"
+            );
+            assert!(
+                rows.iter().all(|r| r.member_type == 4 && r.level_num == 0),
+                "measures are type 4 at level 0"
+            );
+            assert!(
+                rows.iter()
+                    .any(|r| r.member_unique_name == "[Measures].[Revenue]"),
+                "the model's measures are listed"
             );
         });
     }
