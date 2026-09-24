@@ -294,6 +294,55 @@ filters afterwards (plan 050). Pass the restrictions into the builders so a
 200k-member date hierarchy — this is most of the wide-model win even before
 streaming lands.
 
+## Review-driven hardening (2026-09-23, external review + probes)
+
+A second agent reviewed the tree with live probes rather than code reading.
+Four **silent wrong answers** were verified and are fixed; each is pinned by a
+parser unit test *and* by `scripts/probe-fidelity.sh`, which went from 6 of 9
+probes failing to 9 of 9 passing:
+
+| finding | before | after |
+|---|---|---|
+| CDATA-wrapped `<Statement>` | 453 B / 0 cells (empty success) | the statement runs |
+| unparsable entity in a statement | empty success | `Malformed` fault |
+| unparsable entity in a restriction | **unrestricted rowset** (4,247 rows) | `Malformed` fault |
+| nested `<restriction>` forms (both) | unrestricted rowset | honoured, same fields as the flat form |
+| present-but-empty `<Statement>` | empty success | `Malformed` fault |
+
+Text now accumulates per element and is consumed when that element closes —
+which also fixes mixed content, where the last text event used to win. Both
+nested restriction forms share one `apply_restriction` with the flat form, so
+the paths cannot diverge.
+
+**Security**: authored (fallback) SQL is no longer reachable by a restricted
+user — the request faults instead of returning unfiltered rows — and `/status`
+reports the auth posture (`configured`, `roles`, `rls_active`, `anonymous`).
+Open question for the mirror (needs the Windows tools): whether SSAS denies
+tables a role does not list; `effective_table_filter` currently documents
+"no entry = full".
+
+**Hygiene**: the result cache shares `Arc<QueryResult>` instead of deep-cloning
+per hit; non-finite values emit a blank cell rather than invalid `xsd:double`;
+`Timings` dropped the never-assigned `semantic_us`/`sql_emit_us` (they read as
+0, i.e. "instant"); backend error logs truncate SQL to 300 chars; `rusqlite`
+(and its bundled SQLite) is gone; `[profile.release]` states `lto = "thin"` and
+`panic = "unwind"` because the fault-on-panic design depends on unwinding.
+
+Still open from that review, in the order I would take them:
+
+1. **Completeness audit** — every requested set, filter, restriction, measure,
+   property and option must be *consumed* or faulted. The four bugs above are
+   instances of its absence, and it is the change that prevents the next four
+   of that shape. Design: carry an inventory of what the request asked for on
+   the semantic query, have the plan and renderer mark each entry consumed, and
+   fault naming anything left; debug-assert in tests, fault in production.
+2. `<Properties>` (`Format`, `Content`, `AxisFormat`, catalog overrides) are
+   ignored: harmless for Excel, wrong for other clients.
+3. Session id is extracted by a text scan (`body.find("SessionId=\"")`); one
+   escaping serializer for cellsets (the raw `{sv}` interpolation is a footgun).
+4. Log/trace hygiene: rotating `xmla-trace.jsonl` (one wide member listing writes
+   ~300 MB), log levels and correlation ids, and 66 `println!`s in `main.rs`.
+
 ## Scope
 
 **In:** shared engine + limits + semaphore + timeout + budgets + streaming of
