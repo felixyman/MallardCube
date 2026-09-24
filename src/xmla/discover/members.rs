@@ -1444,7 +1444,7 @@ mod tests {
             assert!(preview.contains("truncated"), "preview marks the cut");
 
             let waker = std::task::Waker::noop();
-            let mut cx = std::task::Context::from_waker(&waker);
+            let mut cx = std::task::Context::from_waker(waker);
             let mut rowset = rowset;
             let mut streamed = String::new();
             let mut chunks = 0;
@@ -1474,7 +1474,7 @@ mod tests {
             use crate::test_support::counting::Counting;
             let project = proxy_project::project();
             let inner = Backend::test_fixture();
-            let backend = Counting::new(&inner);
+            let backend = Counting::new(inner);
             let xml = get_members_response_with_backend(
                 None,
                 None,

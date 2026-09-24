@@ -240,7 +240,7 @@ mod tests {
         crate::project::project::with_test_project(project, || {
             let model = &crate::proxy_project::project().model;
             let inner = Backend::test_fixture();
-            let backend = Counting::new(&inner);
+            let backend = Counting::new(inner);
             let dim = model.dim_def_opt("Territory").expect("Territory dim");
             let first = model.dim_cache.get(model, dim, &backend);
             let after_build = backend.calls();
@@ -263,7 +263,7 @@ mod tests {
         crate::project::project::with_test_project(project, || {
             let project = crate::proxy_project::project();
             let inner = Backend::test_fixture();
-            let backend = Counting::new(&inner);
+            let backend = Counting::new(inner);
             let user = crate::engine::model::UserContext::admin_default();
             let config = &project.config;
 
@@ -307,7 +307,7 @@ mod tests {
         crate::project::project::with_test_project(project, || {
             let model = &crate::proxy_project::project().model;
             let inner = Backend::test_fixture();
-            let backend = Counting::new(&inner);
+            let backend = Counting::new(inner);
             let dim = model.dim_def_opt("Territory").expect("Territory dim");
             model.dim_cache.get(model, dim, &backend);
             let after_build = backend.calls();
