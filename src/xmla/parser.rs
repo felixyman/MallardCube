@@ -20,6 +20,11 @@ pub struct Restrictions {
     /// 4 = measure). Dropping it widened the rowset — the mirror excludes
     /// `(All)` for `MEMBER_TYPE=1` (plan 051 round 3).
     pub member_type: Option<i32>,
+    /// Every restriction name seen in this request, in order. Validated
+    /// against the rowset's advertised contract (`DISCOVER_SCHEMA_ROWSETS`)
+    /// before dispatch: an unadvertised name faults like the reference instead
+    /// of being ignored (plan 055).
+    pub seen: Vec<String>,
     /// `DISCOVER_SCHEMA_ROWSETS` restriction (`SchemaName`, no underscore).
     /// Excel asks for one rowset's entry to learn its restrictions; answering
     /// with the whole list makes it miss `HIERARCHY_VISIBILITY` and skip the
@@ -87,6 +92,10 @@ pub enum XmlaRequest {
     /// decode used to be dropped, returning the *unrestricted* rowset (plan
     /// 051). An empty `<Statement>` is not malformed — see `ExecuteEmpty`.
     Malformed(String),
+    /// A restriction name the rowset does not advertise (plan 055). The
+    /// reference faults with "The restriction, X, is not recognized by the
+    /// server" rather than ignoring it.
+    UnsupportedRestriction(String),
     ExecuteStatement(String),
     Unknown,
 }
@@ -146,18 +155,44 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         match reader.read_event() {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"RequestType" => in_request_type = true,
-                b"PropertyName" => in_property_name = true,
+                b"PropertyName" => {
+                    in_property_name = true;
+                    if in_restriction_list || in_nested_restriction {
+                        restrictions.seen.push("PropertyName".into());
+                    }
+                }
                 b"Statement" => in_statement = true,
                 b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
                 b"Execute" => is_execute = true,
-                b"PROPERTY_TYPE" => in_property_type = true,
-                b"MEMBER_UNIQUE_NAME" => in_member_unique_name = true,
-                b"TREE_OP" => in_tree_op = true,
+                b"PROPERTY_TYPE" => {
+                    in_property_type = true;
+                    if in_restriction_list || in_nested_restriction {
+                        restrictions.seen.push("PROPERTY_TYPE".into());
+                    }
+                }
+                b"MEMBER_UNIQUE_NAME" => {
+                    in_member_unique_name = true;
+                    if in_restriction_list || in_nested_restriction {
+                        restrictions.seen.push("MEMBER_UNIQUE_NAME".into());
+                    }
+                }
+                b"TREE_OP" => {
+                    in_tree_op = true;
+                    if in_restriction_list || in_nested_restriction {
+                        restrictions.seen.push("TREE_OP".into());
+                    }
+                }
                 b"RestrictionList" => in_restriction_list = true,
                 b"restriction" => in_nested_restriction = true,
                 b"column" | b"value" if in_nested_restriction => {}
                 name => {
-                    if in_restriction_list || in_nested_restriction {
+                    // `<Value>`/`<value>` carry a restriction's value, not its
+                    // name: Excel sends `<PropertyName><Value>x</Value></…>`
+                    // for DISCOVER_PROPERTIES. Treating `Value` as a name
+                    // dropped the value and would fault the contract check.
+                    if (in_restriction_list || in_nested_restriction)
+                        && !matches!(name, b"Value" | b"value")
+                    {
                         restriction_name = Some(name.to_vec());
                     }
                 }
@@ -191,6 +226,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         }
                         b"value" if in_nested_restriction => {
                             if let Some(column) = pending_column.take() {
+                                restrictions.seen.push(column.clone());
                                 apply_restriction(&mut restrictions, column.as_bytes(), &text);
                             }
                         }
@@ -200,6 +236,9 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             if (in_restriction_list || in_nested_restriction)
                                 && let Some(restriction) = restriction_name.as_deref()
                             {
+                                restrictions
+                                    .seen
+                                    .push(String::from_utf8_lossy(restriction).to_string());
                                 apply_restriction(&mut restrictions, restriction, &text);
                             }
                             if in_request_type {
@@ -248,6 +287,20 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 
     if let Some(reason) = malformed {
         return XmlaRequest::Malformed(reason);
+    }
+
+    // The rowset's advertised contract is the set of restriction names it
+    // accepts (what DISCOVER_SCHEMA_ROWSETS tells clients). The reference
+    // faults on anything else — "The restriction, X, is not recognized by the
+    // server" — rather than answering with a wider rowset (verified against
+    // SSAS 2025, 2026-09-24).
+    if !parsed_request_type.is_empty()
+        && let Some(name) = restrictions
+            .seen
+            .iter()
+            .find(|name| !crate::xmla::schema_rowsets::advertises(&parsed_request_type, name))
+    {
+        return XmlaRequest::UnsupportedRestriction(name.clone());
     }
 
     match parsed_request_type.as_str() {
@@ -415,6 +468,38 @@ mod tests {
 
     /// Both nested restriction forms must land in the same fields as the flat
     /// one; they used to be ignored, widening the rowset with no diagnostic.
+    /// A restriction name the rowset does not advertise is a client error: the
+    /// reference faults rather than answering with a wider rowset (verified
+    /// against SSAS 2025, 2026-09-24).
+    #[test]
+    fn unadvertised_restriction_names_fault() {
+        let bogus = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+            <Restrictions><RestrictionList><CUBE_NAME>Sales</CUBE_NAME><BOGUS_NAME>x</BOGUS_NAME></RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        match parse_xmla(bogus) {
+            XmlaRequest::UnsupportedRestriction(name) => assert_eq!(name, "BOGUS_NAME"),
+            other => panic!("expected UnsupportedRestriction, got {other:?}"),
+        }
+
+        // A name advertised for a different rowset is misrouted, not valid.
+        let misrouted = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+            <Restrictions><RestrictionList><MEMBER_TYPE>1</MEMBER_TYPE></RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        assert!(matches!(
+            parse_xmla(misrouted),
+            XmlaRequest::UnsupportedRestriction(_)
+        ));
+
+        // Advertised for this rowset: parses as before, no fault.
+        let advertised = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+            <Restrictions><RestrictionList><DIMENSION_VISIBILITY>1</DIMENSION_VISIBILITY></RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        assert!(matches!(
+            parse_xmla(advertised),
+            XmlaRequest::MdschemaDimensions
+        ));
+    }
+
     #[test]
     fn nested_restriction_forms_are_parsed() {
         let element_form = r#"<Envelope><Body><Discover>

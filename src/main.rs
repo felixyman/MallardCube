@@ -1264,6 +1264,22 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("MdschemaFunctions", body, &resp, None, None);
             resp
         }
+        XmlaRequest::UnsupportedRestriction(name) => {
+            // The rowset does not advertise this restriction name; the
+            // reference faults instead of ignoring it (plan 055).
+            eprintln!("!!! Unsupported restriction: {name}");
+            let resp = mallardcube::response::fault_response(&format!(
+                "The restriction, {name}, is not recognized by the server."
+            ));
+            mallardcube::xmla_trace::trace_request(
+                "UnsupportedRestriction",
+                body,
+                &resp,
+                None,
+                None,
+            );
+            resp
+        }
         XmlaRequest::Malformed(reason) => {
             // The request could not be read faithfully: an unparsable entity,
             // or a Statement we could not decode (CDATA used to land here as an

@@ -616,9 +616,83 @@ pub fn get_schemas_response(schema_name: Option<&str>) -> String {
     discover_rowset_envelope(UUID_TYPE, SCHEMA_ROW_FIELDS, &data)
 }
 
+/// The restriction names this proxy advertises for a rowset — parsed from the
+/// same `SCHEMA_ROWSET_DATA` that `DISCOVER_SCHEMA_ROWSETS` serves Excel, so
+/// the contract cannot drift from what clients are told.
+pub fn advertised_restrictions(schema: &str) -> Vec<String> {
+    let marker = format!("<SchemaName>{schema}</SchemaName>");
+    let Some(row) = SCHEMA_ROWSET_DATA
+        .split("<row>")
+        .find(|row| row.contains(&marker))
+    else {
+        return Vec::new();
+    };
+    row.split("<Restrictions><Name>")
+        .skip(1)
+        .filter_map(|chunk| chunk.split("</Name>").next())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Is this restriction name advertised for this rowset? The reference rejects
+/// an unadvertised name with a fault ("not recognized by the server") rather
+/// than ignoring it — verified against SSAS 2025, 2026-09-24.
+pub fn advertises(schema: &str, name: &str) -> bool {
+    advertised_restrictions(schema)
+        .iter()
+        .any(|advertised| advertised == name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The advertised lists are the client contract; spot-check the shape and
+    /// that a name from another rowset is not accepted.
+    #[test]
+    fn advertised_restrictions_describe_the_contract() {
+        let dimensions = advertised_restrictions("MDSCHEMA_DIMENSIONS");
+        assert_eq!(dimensions.len(), 7, "{dimensions:?}");
+        assert!(dimensions.iter().any(|name| name == "DIMENSION_VISIBILITY"));
+        assert!(advertises("MDSCHEMA_MEMBERS", "MEMBER_TYPE"));
+        assert!(!advertises("MDSCHEMA_DIMENSIONS", "MEMBER_TYPE"));
+        assert!(!advertises("MDSCHEMA_DIMENSIONS", "BOGUS_NAME"));
+        assert!(advertised_restrictions("NOT_A_ROWSET").is_empty());
+    }
+
+    /// Every row's mask must equal its list's bit mask: the mask and the list
+    /// are two views of one contract, and a client that intersects them would
+    /// see any drift (plan 055).
+    #[test]
+    fn restriction_masks_match_their_lists() {
+        for row in SCHEMA_ROWSET_DATA.split("<row>").skip(1) {
+            let Some(schema) = row
+                .split("<SchemaName>")
+                .nth(1)
+                .and_then(|rest| rest.split("</SchemaName>").next())
+            else {
+                continue;
+            };
+            let names = advertised_restrictions(schema);
+            if names.is_empty() {
+                continue;
+            }
+            let Some(mask) = row
+                .split("<RestrictionsMask>")
+                .nth(1)
+                .and_then(|rest| rest.split("</RestrictionsMask>").next())
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            assert_eq!(
+                mask,
+                (1u64 << names.len()) - 1,
+                "{schema}: mask {mask} does not match {} restrictions {names:?}",
+                names.len()
+            );
+        }
+    }
 
     #[test]
     fn schema_name_restriction_returns_one_rowset() {

@@ -147,11 +147,17 @@ def main() -> int:
 
         try:
             xml = post(url, body)
-            observed = (
-                observe_discover(xml, case) if case["kind"] == "discover" else observe_execute(xml)
-            )
         except Exception as error:  # transport failures are a failed case, not a crash
             observed = {"error": str(error)}
+        else:
+            if case["expect"].get("fault"):
+                observed = {"fault": "<faultstring>" in xml}
+            else:
+                observed = (
+                    observe_discover(xml, case)
+                    if case["kind"] == "discover"
+                    else observe_execute(xml)
+                )
 
         mismatches = compare(case["expect"], observed)
         if mismatches:

@@ -286,6 +286,52 @@
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: without NON EMPTY the mirror returns all 4019 members (All + 4018 dates)",
       "known_gap": "without NON EMPTY the proxy returns only fact-bearing dates (2460 today) where the mirror returns all 4019 members: the axis path always filters by facts and NON EMPTY is not implemented"
+    },
+    {
+      "id": "restriction-unadvertised-faults",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_DIMENSIONS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "BOGUS_NAME": "x"
+        }
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: 'The restriction, BOGUS_NAME, is not recognized by the server.'"
+    },
+    {
+      "id": "dimensions-visibility-zero",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_DIMENSIONS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "DIMENSION_VISIBILITY": "0"
+        }
+      },
+      "expect": {
+        "row_count": 6
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: visibility=0 returns 0 rows, visibility=1 returns all six",
+      "known_gap": "the reference returns 0 rows for DIMENSION_VISIBILITY=0; the proxy advertises the restriction but ignores it (plan 055 slice 2)"
+    },
+    {
+      "id": "dimensions-wrong-cube-is-empty",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_DIMENSIONS",
+        "restrictions": {
+          "CUBE_NAME": "Nope"
+        }
+      },
+      "expect": {
+        "row_count": 6
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: an unknown CUBE_NAME returns 0 rows",
+      "known_gap": "the reference returns 0 rows for an unknown CUBE_NAME; the proxy ignores scope names (plan 055 slice 2)"
     }
   ]
 }
