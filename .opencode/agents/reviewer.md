@@ -2,7 +2,7 @@
 description: Reviews MallardCube changes before commit — silent wrong answers, protocol gaps, RLS holes, scale and regressions
 mode: subagent
 model: opencode/space-bunny-free#max
-steps: 40
+steps: 60
 permissions:
   - action: "*"
     resource: "*"
