@@ -1,0 +1,67 @@
+---
+title: Request shape
+description: What an XMLA client may send, and what the reference rejects — envelope, restrictions, names, statements, sessions
+---
+
+import Claim from '../../../components/Claim.astro';
+
+An XMLA request is a SOAP 1.1 envelope whose body carries one `Discover` or
+`Execute`. That much is in the specification. What clients actually trip over
+is everything around it: which namespaces are checked, which restriction forms
+exist, what an empty statement means, and how sessions attach to requests. Each
+rule below was measured on a real SSAS instance, and the wording is what it
+answers.
+
+## The envelope
+
+<Claim id="soap-11-only" />
+
+<Claim id="xmla-element-namespace" />
+
+## Restrictions
+
+The `Discover` element carries a `Restrictions` container; what may live inside
+it is narrower than most clients assume.
+
+<Claim id="restrictions-shape" />
+
+<Claim id="unknown-restriction-faults" />
+
+<Claim id="duplicate-restrictions-last-wins" />
+
+<Claim id="scope-mismatch-empty-rowset" />
+
+## Names and lexical rules
+
+An XML parser is not a validating one: it will hand a server names and
+characters that the schema forbids, and the server's answer is the difference
+between a clear fault and a plausible result.
+
+<Claim id="invalid-qnames-fault" />
+
+<Claim id="dtds-prohibited" />
+
+<Claim id="control-characters-fault" />
+
+## Statements and sessions
+
+The statement is where clients differ most: some send a full MDX query, some
+send a `BeginSession` with an empty statement, and some send both. Sessions are
+attached through the SOAP header, not the body.
+
+<Claim id="empty-statement-session-begin" />
+
+<Claim id="session-header-and-existence" />
+
+<Claim id="discover-sessions-live" />
+
+<Claim id="session-ddl-scope" />
+
+## Connecting a client at all
+
+Two environment traps account for more "the server is down" reports than any
+protocol bug — both were hit while building this reference.
+
+<Claim id="msolap-secure-channel" />
+
+<Claim id="wininet-loopback-trap" />

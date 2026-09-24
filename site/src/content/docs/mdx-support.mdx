@@ -98,3 +98,23 @@ startup; see `parent_child` in the [Model reference](../model/).
 | DAX queries | Not supported |
 | Writeback | Not supported |
 | Calculation groups | Not supported |
+
+## Session and state
+
+MallardCube is stateless. It reads a session id from the XMLA
+`Session`/`EndSession` header when one is present and echoes it back, but keeps
+no session state: `BeginSession` and `EndSession` are no-ops, the same as for
+Excel's pivot workflow, which never notices.
+
+That has three consequences worth knowing, and the
+[behaviour reference](../reference/request-shape/) records what the reference
+does instead:
+
+- **Session-scoped MDX DDL is not supported.** `CREATE MEMBER` and `CREATE SET`
+  statements are answered but a member created this way does not exist in a
+  later request. Define calculated members in the model, or inline them in the
+  query with `WITH MEMBER`.
+- **Cancellation is ignored.** A `<Cancel>` header does not stop a running
+  query; the work finishes and the response is discarded.
+- **Session DMVs describe nothing.** `DISCOVER_SESSIONS` and friends are not
+  answered — the proxy has no session list to report.

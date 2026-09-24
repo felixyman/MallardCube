@@ -36,6 +36,13 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Behaviour reference',
+					items: [
+						{ label: 'About the reference', slug: 'reference' },
+						{ label: 'Request shape', slug: 'reference/request-shape' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'MDX support', slug: 'mdx-support' },

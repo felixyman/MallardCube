@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'site/**'
+      - 'reference/**'
   workflow_dispatch:
 
 permissions:

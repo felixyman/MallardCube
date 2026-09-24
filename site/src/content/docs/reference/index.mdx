@@ -1,0 +1,46 @@
+---
+title: Behaviour reference
+description: How Excel, SSAS and the XMLA protocol actually behave — measured, dated, and written for engine implementers
+---
+
+Microsoft documents the protocol's shapes. This section records how the
+implementations actually behave: what Excel sends, what SSAS answers, and which
+details decide whether a feature works at all.
+
+The failures that cost real time are rarely in the specification — they sit one
+layer above it. A `memberValueDatatype` Excel never writes because one
+`MEMBER_VALUE` row advertised the wrong type. A connection that dies because a
+server faulted a statement the client considered routine. A filter that never
+reaches the server because the metadata never told Excel it could.
+
+Every entry below is a **claim**: one observable behaviour, with the
+environment it was measured in, how it was observed, and the date. Claims
+linked to `parity/catalog.json` are replayed against a running proxy by
+`scripts/probe-parity.sh`.
+
+## Status
+
+| status | meaning |
+|---|---|
+| **verified** | measured on the reference named in the claim |
+| **open** | believed but unmeasured, or measured only in part — the claim says what is missing |
+| **superseded** | disproven by a later measurement; kept so the history is visible |
+
+A reference that overstates is worse than none, so unresolved questions are
+published as `open` rather than omitted.
+
+## Pages
+
+- [Request shape](./request-shape/) — what a client may send, and what the
+  reference rejects: the SOAP envelope, restrictions, names, statements and
+  sessions.
+- Metadata gating, Date Filters and the cellset shape are being written up
+  next, from the same registry.
+
+## Verifying a claim yourself
+
+Each claim names its method, and most carry a reproduction you can paste into a
+probe. The tooling used here is in the repository: raw XMLA over the pump,
+ADOMD for metadata rowsets, a logging relay for what Excel sends, and a
+sweep of real pivot gestures. A claim you cannot reproduce is a claim to
+distrust — and to report.

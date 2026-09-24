@@ -1,0 +1,119 @@
+---
+import { claim, ageInMonths, type Claim } from "../lib/claims";
+
+interface Props {
+  id: string;
+}
+
+const { id } = Astro.props;
+const entry: Claim = claim(id);
+const stale = entry.status !== "superseded" && ageInMonths(entry.environment.date) > 12;
+const environment = [
+  entry.environment.engine,
+  entry.environment.compat ? `compat ${entry.environment.compat}` : null,
+  entry.environment.client,
+]
+  .filter(Boolean)
+  .join(" · ");
+---
+
+<aside class="claim" data-status={entry.status}>
+  <header>
+    <span class="badge">{entry.status}</span>
+    <strong>{entry.title}</strong>
+  </header>
+  {entry.notes && <p set:html={entry.notes} />}
+  {
+    entry.repro && (
+      <p class="repro">
+        <span class="label">How observed</span> <span set:html={entry.repro} />
+      </p>
+    )
+  }
+  <dl>
+    <dt>Environment</dt>
+    <dd>
+      {environment} · {entry.environment.date}
+      {stale && <span class="stale">stale — re-verify</span>}
+    </dd>
+    <dt>Method</dt>
+    <dd>{entry.method}</dd>
+    {
+      entry.catalog_case && (
+        <>
+          <dt>Checked by</dt>
+          <dd>
+            <code>parity/catalog.json → {entry.catalog_case}</code>
+          </dd>
+        </>
+      )
+    }
+  </dl>
+</aside>
+
+<style>
+  .claim {
+    border-left: 3px solid var(--sl-color-accent);
+    background: var(--sl-color-gray-6);
+    padding: 0.6rem 1rem 0.8rem;
+    margin: 1.5rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .claim header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .badge {
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
+    padding: 0 0.35rem;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    color: #2e7d32;
+    white-space: nowrap;
+  }
+  .claim[data-status="open"] {
+    border-left-style: dashed;
+    border-left-color: #b26a00;
+  }
+  .claim[data-status="open"] .badge {
+    color: #b26a00;
+  }
+  .claim[data-status="superseded"] {
+    border-left-color: var(--sl-color-gray-4);
+    opacity: 0.75;
+  }
+  .claim[data-status="superseded"] .badge {
+    color: var(--sl-color-gray-3);
+  }
+  .claim p {
+    margin: 0.5rem 0 0;
+    font-size: 0.92rem;
+  }
+  .repro .label {
+    color: var(--sl-color-gray-3);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 0.3rem;
+  }
+  .claim dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.15rem 1rem;
+    margin: 0.6rem 0 0;
+    font-size: 0.82rem;
+  }
+  .claim dt {
+    color: var(--sl-color-gray-3);
+  }
+  .claim dd {
+    margin: 0;
+  }
+  .stale {
+    color: #b26a00;
+    margin-left: 0.5rem;
+  }
+</style>
