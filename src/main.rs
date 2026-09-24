@@ -1081,21 +1081,24 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             debug_write("REQUEST XML:");
             debug_write(body);
 
-            let (resp, timings) = if mdx_semantic::is_drillthrough(mdx) {
-                match execute::runtime::drillthrough_fault(config, user) {
-                    Some(fault) => (fault, None),
-                    None => (
-                        execute::dispatch::get_execute_drillthrough_response(mdx, backend),
-                        None,
-                    ),
-                }
-            } else {
-                let (r, t) =
-                    execute_builders::get_execute_cellset_response_with_backend_and_context(
-                        mdx, backend, user, config,
-                    );
-                (r, Some(t))
-            };
+            let (resp, timings) =
+                if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
+                    (fault, None)
+                } else if mdx_semantic::is_drillthrough(mdx) {
+                    match execute::runtime::drillthrough_fault(config, user) {
+                        Some(fault) => (fault, None),
+                        None => (
+                            execute::dispatch::get_execute_drillthrough_response(mdx, backend),
+                            None,
+                        ),
+                    }
+                } else {
+                    let (r, t) =
+                        execute_builders::get_execute_cellset_response_with_backend_and_context(
+                            mdx, backend, user, config,
+                        );
+                    (r, Some(t))
+                };
 
             debug_write("RESPONSE XML:");
             debug_write(&resp);

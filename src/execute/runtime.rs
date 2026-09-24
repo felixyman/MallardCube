@@ -140,6 +140,34 @@ pub fn drillthrough_fault(
     })
 }
 
+/// Fault when a role declares a DAX filter this proxy cannot lower to SQL. The
+/// filter counts as a restriction (the table is hidden), but the reference
+/// *propagates* a table filter to the facts — measured: a role filtering only
+/// `Territory` drops the revenue total to that territory's share. Serving the
+/// facts unfiltered would therefore leak what the role excludes, so a query is
+/// refused until the filter can be honoured (plan 051 review).
+pub fn unhonourable_filter_fault(
+    config: &ProxyConfig,
+    user: &crate::engine::model::UserContext,
+) -> Option<String> {
+    let table = config
+        .roles
+        .iter()
+        .filter(|role| user.roles.iter().any(|name| name == &role.name))
+        .flat_map(|role| role.table_permissions.iter())
+        .find(|permission| {
+            permission.dax_filter.is_some() && permission.filter_expression.trim().is_empty()
+        })
+        .map(|permission| permission.table.clone());
+    table.map(|table| {
+        crate::xmla::response::fault_response(&format!(
+            "the role filter on '{table}' is a DAX expression this proxy cannot lower to \
+             SQL, and the reference propagates table filters to fact aggregates — the \
+             query is refused rather than served unfiltered"
+        ))
+    })
+}
+
 /// Does this user's access get narrowed by any of their roles? Administrators
 /// and users without roles are unrestricted.
 fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserContext) -> bool {
@@ -243,6 +271,43 @@ mod tests {
             }],
         };
         assert_eq!(plan_measures(&tuples), vec!["Revenue"]);
+    }
+
+    /// A DAX filter the proxy cannot lower must refuse the query: the
+    /// reference propagates a table filter to fact aggregates, so hiding the
+    /// table alone would still serve unfiltered facts.
+    #[test]
+    fn unhonourable_dax_filters_refuse_queries() {
+        use super::unhonourable_filter_fault;
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let mut config = crate::proxy_project::project().config.clone();
+        let mut user = UserContext::deny_all();
+        user.roles = vec!["EU".into()];
+        config.roles = vec![RoleConfig {
+            name: "EU".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "sales_fact".into(),
+                filter_expression: "territory = 'North'".into(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::Read,
+            }],
+        }];
+        assert!(
+            unhonourable_filter_fault(&config, &user).is_none(),
+            "a lowerable filter is not a refusal"
+        );
+
+        config.roles[0].table_permissions[0].filter_expression = String::new();
+        config.roles[0].table_permissions[0].dax_filter = Some("Sales[Region] = \"EU\"".into());
+        assert!(
+            unhonourable_filter_fault(&config, &user).is_some(),
+            "an unlowerable DAX filter must refuse the query"
+        );
     }
 
     /// Drillthrough applies no role predicates, so a restricted user must be
