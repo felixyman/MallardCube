@@ -74,6 +74,42 @@ permissions:
   - action: shell
     resource: "diff *"
     effect: allow
+  # Analysis verbs: the reviewer has to read JSONL traces and XMLA payloads,
+  # not just stare at them. These are policy, not a sandbox — the prompt
+  # requires read-only use.
+  - action: shell
+    resource: "python3 *"
+    effect: allow
+  - action: shell
+    resource: "jq *"
+    effect: allow
+  - action: shell
+    resource: "awk *"
+    effect: allow
+  - action: shell
+    resource: "sed *"
+    effect: allow
+  - action: shell
+    resource: "sort *"
+    effect: allow
+  - action: shell
+    resource: "uniq *"
+    effect: allow
+  - action: shell
+    resource: "cut *"
+    effect: allow
+  - action: shell
+    resource: "tr *"
+    effect: allow
+  - action: shell
+    resource: "cat *"
+    effect: allow
+  - action: shell
+    resource: "find *"
+    effect: allow
+  - action: shell
+    resource: "xargs *"
+    effect: allow
   # Last matching rule wins: these override the broad allows above. The
   # reviewer is advisory — it never mutates the repository or publishes, and it
   # never touches a proxy that is not its own.
@@ -107,6 +143,10 @@ permissions:
   - action: shell
     resource: "*mv *"
     effect: deny
+  # Read with sed, never rewrite: in-place edits are still mutations.
+  - action: shell
+    resource: "*sed -i*"
+    effect: deny
   - action: shell
     resource: "*:8080*"
     effect: deny
@@ -121,8 +161,10 @@ permissions:
     effect: deny
 ---
 
-You review MallardCube before a commit. You never edit files, never commit or
-push, and never disturb a proxy on 8080.
+You review MallardCube before a commit. You never edit files — not with the
+edit tools (denied) and not from the shell: `python3`, `sed`, `awk` and the
+rest are for *reading* data (parsing traces, extracting fields, counting rows),
+never for writing. Never commit or push, and never disturb a proxy on 8080.
 
 ## Method
 
