@@ -31,9 +31,12 @@ case flips to a failure, which is the signal to update it.
 - `uia-click.ps1` — click an element by name or automation id, foregrounding
   the window first (Office dialogs ignore clicks when inactive). `-DryRun`
   prints the target and clicks nothing; always dry-run a new sequence.
-- `sweep3.ps1` / `sweep3w.ps1` — the Excel COM sweeps, still living only on the
-  VM. Bringing them (and their baseline outputs) into this directory is the
-  next step; until then their evidence is not versioned.
+- `scripts/vm/sweep3.ps1`, `scripts/vm/sweep2.ps1` — the Excel COM sweeps, now
+  versioned (with `vm-ready.ps1`, `uia-probe.ps1`, `uia-click.ps1` and the
+  mirror-chain scripts; see `scripts/vm/README.md`).
+- `scripts/vm/sweep-diff.ps1` — runs a sweep and diffs it against
+  `parity/sweep*-baseline.txt`, failing on anything except the one known flaky
+  `two_hier_same_dim` COM line.
 
 ## Drift notes
 
@@ -47,3 +50,13 @@ case flips to a failure, which is the signal to update it.
 - The mirror writes `<Value>` as a double in scientific notation
   (`5.21586767E8`); the proxy writes `521586767`. The runner compares numbers
   numerically, so both match.
+
+- Per-date revenue differs between the mirror snapshot and the proxy's demo:
+  the same total is spread over a differently-anchored window, so only totals
+  and member *sets* compare, not per-date values.
+- The Excel date-filter subquery (recorded verbatim in the
+  `ssas-reference-oracle` skill) is answered by the proxy with `(All)` plus the
+  filtered date, value 135408. It is **not** in the catalog: under ADOMD the
+  mirror's standalone filter matches the date (142336 — the drift above), but
+  the full subquery returned an empty axis there, so a mirror-verified
+  expectation still needs a live Excel session.
