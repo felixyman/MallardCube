@@ -105,6 +105,15 @@ permissions:
     resource: "cat *"
     effect: allow
   - action: shell
+    resource: "stat *"
+    effect: allow
+  - action: shell
+    resource: "file *"
+    effect: allow
+  - action: shell
+    resource: "du *"
+    effect: allow
+  - action: shell
     resource: "find *"
     effect: allow
   - action: shell
@@ -174,7 +183,13 @@ never for writing. Never commit or push, and never disturb a proxy on 8080.
    `git diff origin/master..HEAD` — not `git diff` and not `git log -3`, which
    once scoped a review to five commits when there were eight. Pipes and `&&`
    are fine.
-2. **Use the review-proxy wrapper — at most one, reused for the whole review.**
+2. Trace analysis is scripted, so it needs no inline one-liners:
+   `bash scripts/trace-report.sh [trace.jsonl]` summarises a trace (request
+   kinds, faulted responses, restriction names per rowset) and
+   `bash scripts/trace-replay.sh [url] [trace.jsonl]` replays one against a
+   proxy and diffs the fault/no-fault split with what was recorded.
+
+3. **Use the review-proxy wrapper — at most one, reused for the whole review.**
 
    ```
    cd /home/felix/code/MallardCube && bash scripts/review-proxy.sh start
