@@ -1,5 +1,12 @@
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
+
+/// The XMLA namespace every protocol element lives in. The reference accepts
+/// prefixed elements bound to it and rejects foreign namespaces or undeclared
+/// prefixes (measured 2026-09-24) — the prefix is irrelevant, the resolved
+/// namespace is not.
+const XMLA_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:xml-analysis";
 
 /// Values from a Discover request's `RestrictionList` (MS-SSAS). Discover
 /// responses must honour these: Excel asks for one hierarchy's member
@@ -129,39 +136,70 @@ fn has_xml_invalid_control(text: &str) -> bool {
         .any(|c| matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'))
 }
 
-fn attributes_have_control(element: &quick_xml::events::BytesStart<'_>) -> bool {
-    element.attributes().flatten().any(|attribute| {
-        attribute
-            .unescape_value()
-            .map(|value| has_xml_invalid_control(&value))
-            .unwrap_or(false)
-    })
+/// Attribute names and values are part of the document's lexical surface: a
+/// control character anywhere, or an attribute we cannot decode, is a malformed
+/// request (the reference's parser rejects both — measured 2026-09-24).
+fn attribute_error(element: &quick_xml::events::BytesStart<'_>) -> Option<String> {
+    for attribute in element.attributes() {
+        let Ok(attribute) = attribute else {
+            return Some("request contains an unreadable attribute".to_string());
+        };
+        if has_xml_invalid_control(&String::from_utf8_lossy(attribute.key.as_ref())) {
+            return Some("request text contains an XML-invalid control character".to_string());
+        }
+        match attribute.unescape_value() {
+            Ok(value) => {
+                if has_xml_invalid_control(&value) {
+                    return Some(
+                        "request text contains an XML-invalid control character".to_string(),
+                    );
+                }
+            }
+            Err(_) => return Some("request contains an unreadable attribute".to_string()),
+        }
+    }
+    None
+}
+
+fn lexical_error(malformed: &mut Option<String>, bytes: &[u8]) {
+    if has_xml_invalid_control(&String::from_utf8_lossy(bytes)) {
+        malformed.get_or_insert_with(|| {
+            "request text contains an XML-invalid control character".to_string()
+        });
+    }
+}
+
+fn parent_is_xmla_discover(open_elements: &[(Vec<u8>, bool)]) -> bool {
+    open_elements
+        .last()
+        .map(|(local, namespace_ok)| *namespace_ok && local.as_slice() == b"Discover")
+        .unwrap_or(false)
 }
 
 /// Structural rules the reference's schema enforces (plan 055 review): a
 /// `<Restrictions>` is an unprefixed direct child of `<Discover>`, holds at
 /// most one `<RestrictionList>`, and nothing else lives directly under it.
 fn structural_error(
-    raw: &[u8],
+    namespace_ok: bool,
     local: &[u8],
-    parent: Option<&[u8]>,
-    in_discover: bool,
+    parent_is_xmla_discover: bool,
+    restrictions_seen: bool,
     in_restrictions: bool,
     in_restriction_list: bool,
     restriction_list_seen: bool,
 ) -> Option<String> {
-    // A prefixed element cannot be in the XMLA default namespace, so a
-    // structural name with a prefix is a schema error.
-    if matches!(local, b"Restrictions" | b"RestrictionList") && raw != local {
+    // A foreign namespace, or a prefix that is not declared at all, cannot be
+    // the XMLA namespace the schema requires. Only the skeleton is checked;
+    // SOAP's own elements are in a different namespace by design.
+    let structural = matches!(local, b"Discover" | b"Restrictions" | b"RestrictionList");
+    if !namespace_ok && (structural || in_restrictions || in_restriction_list) {
         return Some(format!(
-            "<{}> must be in the default namespace",
+            "<{}> is not in the XMLA namespace",
             String::from_utf8_lossy(local)
         ));
     }
-    match raw {
-        b"Restrictions"
-            if !in_discover || in_restrictions || parent != Some(b"Discover".as_slice()) =>
-        {
+    match local {
+        b"Restrictions" if !parent_is_xmla_discover || restrictions_seen => {
             Some("<Restrictions> must be a direct child of <Discover>".to_string())
         }
         b"RestrictionList" if !in_restrictions || in_restriction_list || restriction_list_seen => {
@@ -170,14 +208,14 @@ fn structural_error(
         b"RestrictionList" => None,
         _ if in_restrictions && !in_restriction_list => Some(format!(
             "unexpected <{}> under <Restrictions>",
-            String::from_utf8_lossy(raw)
+            String::from_utf8_lossy(local)
         )),
         _ => None,
     }
 }
 
 pub fn parse_xmla(xml: &str) -> XmlaRequest {
-    let mut reader = Reader::from_str(xml);
+    let mut reader = NsReader::from_str(xml);
 
     let mut in_request_type = false;
     let mut is_execute = false;
@@ -199,12 +237,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     // anything else at the schema layer and ignoring it answered with a wider
     // rowset (verified 2026-09-24).
     let mut in_restrictions = false;
-    let mut in_discover = false;
     let mut restriction_list_seen = false;
-    // Raw names of the open elements, so structural checks can require the
-    // right parent (e.g. `<Restrictions>` directly under `<Discover>`, not
-    // inside a `<Command>`).
-    let mut open_elements: Vec<Vec<u8>> = Vec::new();
+    // Open elements as (local name, namespace ok), so structural checks can
+    // require the right parent (e.g. `<Restrictions>` directly under
+    // `<Discover>`, not inside a `<Command>`).
+    let mut open_elements: Vec<(Vec<u8>, bool)> = Vec::new();
+    let mut restrictions_seen = false;
     let mut malformed: Option<String> = None;
 
     let mut parsed_request_type = String::new();
@@ -215,21 +253,35 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut tree_op: Option<i32> = None;
 
     loop {
-        match reader.read_event() {
-            Ok(Event::Start(ref e)) => {
-                let raw = e.name();
+        let (namespace, event) = match reader.read_resolved_event() {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                malformed.get_or_insert_with(|| "request XML could not be read".to_string());
+                break;
+            }
+        };
+        let namespace_ok = match &namespace {
+            ResolveResult::Bound(ns) => ns.as_ref() == XMLA_NAMESPACE,
+            ResolveResult::Unbound => true,
+            ResolveResult::Unknown(_) => false,
+        };
+        match event {
+            Event::Start(ref e) => {
                 let name = e.local_name();
-                if attributes_have_control(e) {
+                if has_xml_invalid_control(&String::from_utf8_lossy(e.name().as_ref())) {
                     malformed.get_or_insert_with(|| {
                         "request text contains an XML-invalid control character".to_string()
                     });
                 }
+                if let Some(reason) = attribute_error(e) {
+                    malformed.get_or_insert(reason);
+                }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        raw.as_ref(),
+                        namespace_ok,
                         name.as_ref(),
-                        open_elements.last().map(Vec::as_slice),
-                        in_discover,
+                        parent_is_xmla_discover(&open_elements),
+                        restrictions_seen,
                         in_restrictions,
                         in_restriction_list,
                         restriction_list_seen,
@@ -237,7 +289,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 {
                     malformed = Some(reason);
                 }
-                open_elements.push(raw.as_ref().to_vec());
+                if in_property_name && !matches!(name.as_ref(), b"Value" | b"value") {
+                    malformed
+                        .get_or_insert_with(|| "unexpected child of <PropertyName>".to_string());
+                }
+                open_elements.push((name.as_ref().to_vec(), namespace_ok));
                 match name.as_ref() {
                     b"RequestType" => in_request_type = true,
                     b"PropertyName" => {
@@ -249,8 +305,10 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"Statement" => in_statement = true,
                     b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
                     b"Execute" => is_execute = true,
-                    b"Discover" => in_discover = true,
-                    b"Restrictions" => in_restrictions = true,
+                    b"Restrictions" => {
+                        in_restrictions = true;
+                        restrictions_seen = true;
+                    }
                     b"PROPERTY_TYPE" => {
                         in_property_type = true;
                         if in_restriction_list {
@@ -286,26 +344,25 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     }
                 }
             }
-            Ok(Event::Empty(ref e)) => {
-                let raw = e.name();
+            Event::Empty(ref e) => {
                 let name = e.local_name();
                 if name.as_ref() == b"Execute" {
                     is_execute = true;
                 }
-                if name.as_ref() == b"Discover" {
-                    in_discover = true;
-                }
-                if attributes_have_control(e) {
+                if has_xml_invalid_control(&String::from_utf8_lossy(e.name().as_ref())) {
                     malformed.get_or_insert_with(|| {
                         "request text contains an XML-invalid control character".to_string()
                     });
                 }
+                if let Some(reason) = attribute_error(e) {
+                    malformed.get_or_insert(reason);
+                }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        raw.as_ref(),
+                        namespace_ok,
                         name.as_ref(),
-                        open_elements.last().map(Vec::as_slice),
-                        in_discover,
+                        parent_is_xmla_discover(&open_elements),
+                        restrictions_seen,
                         in_restrictions,
                         in_restriction_list,
                         restriction_list_seen,
@@ -313,7 +370,10 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 {
                     malformed = Some(reason);
                 }
-                if raw.as_ref() == b"RestrictionList" {
+                if name.as_ref() == b"Restrictions" {
+                    restrictions_seen = true;
+                }
+                if name.as_ref() == b"RestrictionList" {
                     restriction_list_seen = true;
                 }
                 // A self-closing restriction name still names a restriction:
@@ -325,10 +385,10 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 if in_restriction_list && !nested_value && name.as_ref() != b"RestrictionList" {
                     restrictions
                         .seen
-                        .push(String::from_utf8_lossy(raw.as_ref()).to_string());
+                        .push(String::from_utf8_lossy(name.as_ref()).to_string());
                 }
             }
-            Ok(Event::Text(e)) => match e.unescape() {
+            Event::Text(e) => match e.unescape() {
                 Ok(decoded) => {
                     if has_xml_invalid_control(&decoded) {
                         malformed.get_or_insert_with(|| {
@@ -346,7 +406,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             // CDATA is literal text: .NET/PowerShell/Java SOAP clients wrap
             // statements in it, and ignoring it answered them with an empty
             // cellset (plan 051).
-            Ok(Event::CData(e)) => {
+            Event::CData(e) => {
                 let decoded = String::from_utf8_lossy(e.as_ref());
                 if has_xml_invalid_control(&decoded) {
                     malformed.get_or_insert_with(|| {
@@ -355,7 +415,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 pending_text.push_str(&decoded);
             }
-            Ok(Event::End(ref e)) => {
+            Event::End(ref e) => {
                 let name = e.local_name();
                 open_elements.pop();
                 let text = pending_text.trim().to_string();
@@ -399,7 +459,6 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"PROPERTY_TYPE" => in_property_type = false,
                     b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
                     b"TREE_OP" => in_tree_op = false,
-                    b"Discover" => in_discover = false,
                     b"Restrictions" => in_restrictions = false,
                     b"RestrictionList" => {
                         in_restriction_list = false;
@@ -409,12 +468,14 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     _ => {}
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(_) => {
-                malformed.get_or_insert_with(|| "request XML could not be read".to_string());
-                break;
-            }
-            _ => (),
+            Event::Eof => break,
+            // Comments, processing instructions, declarations and doctypes are
+            // lexical surface too: the reference rejects control characters in
+            // them (measured 2026-09-24).
+            Event::Comment(e) => lexical_error(&mut malformed, e.as_ref()),
+            Event::PI(e) => lexical_error(&mut malformed, e.as_ref()),
+            Event::Decl(e) => lexical_error(&mut malformed, e.as_ref()),
+            Event::DocType(e) => lexical_error(&mut malformed, e.as_ref()),
         }
     }
 
@@ -756,6 +817,79 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    /// Namespace binding decides, not the prefix: the reference accepts a
+    /// prefixed element bound to the XMLA namespace and rejects a foreign one
+    /// (measured 2026-09-24).
+    #[test]
+    fn namespace_binding_decides_not_the_prefix() {
+        let prefixed = r#"<Envelope><Body>
+            <x:Discover xmlns:x="urn:schemas-microsoft-com:xml-analysis">
+              <x:RequestType>MDSCHEMA_DIMENSIONS</x:RequestType>
+              <x:Restrictions><x:RestrictionList><x:CUBE_NAME>Sales</x:CUBE_NAME></x:RestrictionList></x:Restrictions>
+            </x:Discover>
+        </Body></Envelope>"#;
+        assert!(matches!(
+            parse_xmla(prefixed),
+            XmlaRequest::MdschemaDimensions
+        ));
+
+        let foreign = r#"<Envelope><Body>
+            <Discover xmlns="urn:schemas-microsoft-com:xml-analysis">
+              <RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+              <other:Restrictions xmlns:other="http://example.com/other"><RestrictionList><CUBE_NAME>Sales</CUBE_NAME></RestrictionList></other:Restrictions>
+            </Discover>
+        </Body></Envelope>"#;
+        assert!(matches!(parse_xmla(foreign), XmlaRequest::Malformed(_)));
+    }
+
+    /// The reference faults a nested `<PropertyName>` as a schema error
+    /// (measured 2026-09-24); it used to be reinterpreted as a value.
+    #[test]
+    fn nested_property_name_is_malformed() {
+        let body = r#"<Envelope><Body><Discover><RequestType>DISCOVER_PROPERTIES</RequestType>
+            <Restrictions><RestrictionList><PropertyName><PropertyName>Catalog</PropertyName></PropertyName></RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        assert!(matches!(parse_xmla(body), XmlaRequest::Malformed(_)));
+    }
+
+    /// The reference rejects control characters in comment and PI content
+    /// ("Illegal xml character", measured 2026-09-24).
+    #[test]
+    fn control_characters_in_comments_and_pis_are_malformed() {
+        let comment = format!(
+            "<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType><!-- a{}b --></Discover></Body></Envelope>",
+            '\u{1}'
+        );
+        assert!(matches!(parse_xmla(&comment), XmlaRequest::Malformed(_)));
+
+        let instruction = format!(
+            "<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType><?pi a{}b?></Discover></Body></Envelope>",
+            '\u{1}'
+        );
+        assert!(matches!(
+            parse_xmla(&instruction),
+            XmlaRequest::Malformed(_)
+        ));
+    }
+
+    /// A control character in an attribute *name*, and a self-closing
+    /// duplicate `<Restrictions>`, are both faults for the reference (measured
+    /// 2026-09-24).
+    #[test]
+    fn attribute_names_and_duplicate_restrictions_are_checked() {
+        let attribute = format!(
+            "<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType><Restrictions><RestrictionList><CUBE_NAME foo{}bar=\"x\">Sales</CUBE_NAME></RestrictionList></Restrictions></Discover></Body></Envelope>",
+            '\u{1}'
+        );
+        assert!(matches!(parse_xmla(&attribute), XmlaRequest::Malformed(_)));
+
+        let duplicate = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+            <Restrictions><RestrictionList><CUBE_NAME>Sales</CUBE_NAME></RestrictionList></Restrictions>
+            <Restrictions/>
+        </Discover></Body></Envelope>"#;
+        assert!(matches!(parse_xmla(duplicate), XmlaRequest::Malformed(_)));
     }
 
     /// XML 1.0 forbids control characters anywhere in a document; the

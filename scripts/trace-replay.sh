@@ -24,6 +24,7 @@ import urllib.request
 url, path = sys.argv[1], sys.argv[2]
 counts = collections.Counter()
 interesting = []
+replayed = 0
 
 for line in open(path):
     line = line.strip()
@@ -32,7 +33,9 @@ for line in open(path):
     record = json.loads(line)
     body = record.get("request_xml") or ""
     if not body:
+        counts["empty record"] += 1
         continue
+    replayed += 1
     recorded_fault = "<faultstring>" in (record.get("response_xml") or "")
     request = urllib.request.Request(
         url, data=body.encode(), headers={"Content-Type": "text/xml"}
@@ -69,11 +72,16 @@ for kind, response, request in interesting[:10]:
     print(f"--- {kind}: {request}")
     print(f"    {response}")
 
+if replayed == 0:
+    print("REPLAY FAILED: the trace has no requests with a body")
+    sys.exit(1)
+
 differences = (
     counts["transport error"]
     + counts["contract fault"]
     + counts["new fault"]
     + counts["fault disappeared"]
+    + counts["empty record"]
 )
 print("REPLAY OK" if differences == 0 else f"REPLAY DIFF: {differences} difference(s)")
 sys.exit(1 if differences else 0)

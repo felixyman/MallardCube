@@ -60,10 +60,17 @@ bit mask.
   sweep corpus: replaying it produces **0 contract faults and 0 unexpected
   faults**, alongside 16/16 parity (3 known gaps), 13/13 fidelity, 8/8 smoke,
   and `sweep-diff -Source proxy` → `SWEEP OK`.
-- Follow-up round (same day): `<Value>` is a value only inside its naming
-  element (a direct one is an unadvertised name and faults); control characters
-  are rejected in text, CDATA and attributes; `<Restrictions>` must be an
-  unprefixed direct child of `<Discover>` holding a single `<RestrictionList>`.
+- Follow-up round 1: `<Value>` is a value only inside its naming element (a
+  direct one is an unadvertised name and faults); control characters are
+  rejected in text, CDATA and attributes.
+- Follow-up round 2 (all measured on the reference): **namespace binding
+  decides, not the prefix** — a prefixed element bound to the XMLA namespace is
+  accepted, a foreign namespace or an undeclared prefix is not; control
+  characters in comments, PIs, attribute names and element names are rejected
+  ("Illegal xml character"); a nested `<PropertyName>` is a schema fault; two
+  `<Restrictions>` are a schema fault even when one is self-closing. The parser
+  now reads resolved namespaces (`NsReader`) and tracks open elements, so
+  structural checks are about the schema, not the spelling.
 
 ## Slice 2 — open: advertised but unapplied
 
@@ -98,3 +105,10 @@ behaviour for each needs recording before implementing.
 
 Add one `parity/catalog.json` case per implemented behaviour, with the mirror's
 value — and a `known_gap` on any that remain unimplemented.
+
+Deliberate divergence from the reference: a request whose elements declare
+*no* namespace (`ResolveResult::Unbound`) is accepted, where the reference's
+schema requires the XMLA namespace. Kept because unit tests and hand-written
+curl probes are easier to read un-namespaced, and a client that omits the
+namespace is malformed rather than dangerous — revisit if one ever relies on
+it.

@@ -182,7 +182,7 @@ def main() -> int:
             continue
 
         mismatches = compare(case["expect"], observed)
-        if mismatches and case.get("known_gap"):
+        if mismatches and case.get("known_gap") and "fault" not in case["expect"]:
             # `expect` is always the reference's value. A mismatch on a case
             # that documents a known gap is reported, not failed — and when a
             # gap is closed the case matches and says so, so it gets promoted.

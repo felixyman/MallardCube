@@ -37,7 +37,11 @@ pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
 }
 
 /// Escape text content for safe XML insertion.
-/// Handles `&`, `<`, `>`.
+///
+/// Handles `&`, `<`, `>`; XML 1.0-forbidden control characters (which can only
+/// come from engine data, since the parser rejects them in requests) become
+/// U+FFFD rather than making the whole response unparsable — a visible marker
+/// beats a document no client can read.
 pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -45,6 +49,9 @@ pub fn xml_escape(s: &str) -> String {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
+            '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' => {
+                out.push('\u{fffd}');
+            }
             _ => out.push(c),
         }
     }
