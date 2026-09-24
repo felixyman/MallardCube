@@ -418,3 +418,34 @@ Open, in order:
    one escaping serializer should own that boundary.
 3. The result cache is entry-bounded, not byte-bounded (known, recorded above).
 4. Drillthrough should apply role predicates and OLS rather than refuse.
+
+## VM validation (2026-09-24)
+
+The VM session that followed the review fixes caught a **regression the review
+itself had asked for**: faulting an empty `<Statement>` broke every real MSOLAP
+connection (`E_FAIL`). The reference (SSAS 2025 via the mirror) answers empty,
+self-closing and whitespace-only statements with an empty `ExecuteResponse`,
+and MSOLAP sends `<Statement/>` for every session begin. Both faults are
+reverted (commit `5737101`); `probe-fidelity.sh` now asserts the reference
+behaviour for all three shapes.
+
+With that fixed, `sweep3` through Excel is **byte-identical to the pre-review
+baseline** on the proxy, and the mirror run is byte-identical to its own
+baseline. The two engines differ in exactly one data line:
+
+- **Top-5 pivot filter**: the mirror returns a filtered grid (3x2); the proxy
+  returns all 22 rows. A fresh trace of the whole sweep shows **zero**
+  `TopCount`/`TopSum`/`TopPercent` in 1,352 requests — Excel never asks.
+  Next diagnostic: capture the mirror's requests through the relay, or diff
+  the pivot cache definitions, to see how Excel records the filter there.
+
+Two environment notes for the next VM session:
+
+- The 8090 mirror is a C# `HttpListener` (`pump-proxy2.ps1`) forwarding to
+  `https://localhost:8443`; it does not survive a reboot and must be started
+  before any mirror run.
+- A stale WinINET proxy (`127.0.0.1:8888`, with `<-loopback>`) makes
+  MSOLAP/Excel fail to connect while `curl` keeps working — clear
+  `HKCU\...\Internet Settings\ProxyEnable` first.
+- A cold Excel connection rejects automation calls (`RPC_E_CALL_REJECTED`) for
+  a few seconds; the sweeps need a short settle after `Refresh()`.
