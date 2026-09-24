@@ -100,9 +100,10 @@ pub enum XmlaRequest {
     Unknown,
 }
 
-/// Apply one restriction value by element name. Shared by the flat
-/// `<RestrictionList>` form and both nested `<restriction>` forms so the paths
-/// cannot diverge. Returns whether the name was recognised.
+/// Apply one restriction value by element name. Only the flat
+/// `<RestrictionList>` form reaches this: the reference rejects every other
+/// child of `<Restrictions>` (verified 2026-09-24). Returns whether the name
+/// was recognised.
 fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -> bool {
     match name {
         b"CATALOG_NAME" => restrictions.catalog_name = Some(text.to_string()),
@@ -137,11 +138,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     // and is consumed when that element ends. Processing per text event lost
     // mixed content and ignored CDATA entirely (plan 051).
     let mut pending_text = String::new();
-    // The nested restriction forms — `<restriction><NAME>…</NAME></restriction>`
-    // and the standard `<restriction><column>…</column><value>…</value>` —
-    // were ignored, so those clients silently received the unrestricted rowset.
-    let mut in_nested_restriction = false;
-    let mut pending_column: Option<String> = None;
+    // `<Restrictions>` may only contain `<RestrictionList>`: its direct
+    // children are checked when they start, because the reference rejects
+    // anything else at the schema layer and ignoring it answered with a wider
+    // rowset (verified 2026-09-24).
+    let mut in_restrictions = false;
     let mut malformed: Option<String> = None;
 
     let mut parsed_request_type = String::new();
@@ -153,55 +154,101 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
-                b"RequestType" => in_request_type = true,
-                b"PropertyName" => {
-                    in_property_name = true;
-                    if in_restriction_list || in_nested_restriction {
-                        restrictions.seen.push("PropertyName".into());
+            Ok(Event::Start(ref e)) => {
+                let name = e.local_name();
+                if in_restrictions
+                    && !in_restriction_list
+                    && name.as_ref() != b"RestrictionList"
+                    && malformed.is_none()
+                {
+                    malformed = Some(format!(
+                        "unexpected <{}> under <Restrictions>",
+                        String::from_utf8_lossy(name.as_ref())
+                    ));
+                }
+                match name.as_ref() {
+                    b"RequestType" => in_request_type = true,
+                    b"PropertyName" => {
+                        in_property_name = true;
+                        if in_restriction_list {
+                            restrictions.seen.push("PropertyName".into());
+                        }
+                    }
+                    b"Statement" => in_statement = true,
+                    b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
+                    b"Execute" => is_execute = true,
+                    b"Restrictions" => in_restrictions = true,
+                    b"PROPERTY_TYPE" => {
+                        in_property_type = true;
+                        if in_restriction_list {
+                            restrictions.seen.push("PROPERTY_TYPE".into());
+                        }
+                    }
+                    b"MEMBER_UNIQUE_NAME" => {
+                        in_member_unique_name = true;
+                        if in_restriction_list {
+                            restrictions.seen.push("MEMBER_UNIQUE_NAME".into());
+                        }
+                    }
+                    b"TREE_OP" => {
+                        in_tree_op = true;
+                        if in_restriction_list {
+                            restrictions.seen.push("TREE_OP".into());
+                        }
+                    }
+                    b"RestrictionList" => in_restriction_list = true,
+                    name => {
+                        // `<Value>`/`<value>` carry a restriction's value, not
+                        // its name: Excel sends `<PropertyName><Value>x</Value>`
+                        // for DISCOVER_PROPERTIES, and treating `Value` as a
+                        // name would fault every such request.
+                        if in_restriction_list && !matches!(name, b"Value" | b"value") {
+                            restriction_name = Some(name.to_vec());
+                        }
                     }
                 }
-                b"Statement" => in_statement = true,
-                b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
-                b"Execute" => is_execute = true,
-                b"PROPERTY_TYPE" => {
-                    in_property_type = true;
-                    if in_restriction_list || in_nested_restriction {
-                        restrictions.seen.push("PROPERTY_TYPE".into());
-                    }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = e.local_name();
+                if name.as_ref() == b"Execute" {
+                    is_execute = true;
                 }
-                b"MEMBER_UNIQUE_NAME" => {
-                    in_member_unique_name = true;
-                    if in_restriction_list || in_nested_restriction {
-                        restrictions.seen.push("MEMBER_UNIQUE_NAME".into());
-                    }
+                if in_restrictions
+                    && !in_restriction_list
+                    && name.as_ref() != b"RestrictionList"
+                    && malformed.is_none()
+                {
+                    malformed = Some(format!(
+                        "unexpected <{}> under <Restrictions>",
+                        String::from_utf8_lossy(name.as_ref())
+                    ));
                 }
-                b"TREE_OP" => {
-                    in_tree_op = true;
-                    if in_restriction_list || in_nested_restriction {
-                        restrictions.seen.push("TREE_OP".into());
-                    }
+                // A self-closing restriction name still names a restriction:
+                // the reference faults an unadvertised one even when its value
+                // is empty, and ignores an advertised one (verified
+                // 2026-09-24).
+                if in_restriction_list
+                    && !matches!(name.as_ref(), b"Value" | b"value" | b"RestrictionList")
+                {
+                    restrictions
+                        .seen
+                        .push(String::from_utf8_lossy(name.as_ref()).to_string());
                 }
-                b"RestrictionList" => in_restriction_list = true,
-                b"restriction" => in_nested_restriction = true,
-                b"column" | b"value" if in_nested_restriction => {}
-                name => {
-                    // `<Value>`/`<value>` carry a restriction's value, not its
-                    // name: Excel sends `<PropertyName><Value>x</Value></…>`
-                    // for DISCOVER_PROPERTIES. Treating `Value` as a name
-                    // dropped the value and would fault the contract check.
-                    if (in_restriction_list || in_nested_restriction)
-                        && !matches!(name, b"Value" | b"value")
-                    {
-                        restriction_name = Some(name.to_vec());
-                    }
-                }
-            },
-            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
-                is_execute = true;
             }
             Ok(Event::Text(e)) => match e.unescape() {
-                Ok(decoded) => pending_text.push_str(&decoded),
+                Ok(decoded) => {
+                    // XML 1.0 forbids these anywhere: the reference's parser
+                    // rejects the request, and a name carrying one would make
+                    // our own fault unparsable (plan 055 review).
+                    if decoded.chars().any(
+                        |c| matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'),
+                    ) {
+                        malformed.get_or_insert_with(|| {
+                            "request text contains an XML-invalid control character".to_string()
+                        });
+                    }
+                    pending_text.push_str(&decoded);
+                }
                 Err(_) => {
                     malformed.get_or_insert_with(|| {
                         "request text contains an unparsable XML entity".to_string()
@@ -217,46 +264,40 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Ok(Event::End(ref e)) => {
                 let name = e.local_name();
                 let text = pending_text.trim().to_string();
-                if !text.is_empty() {
-                    match name.as_ref() {
-                        // Standard nested form: `<column>` names the
-                        // restriction, the following `<value>` carries it.
-                        b"column" if in_nested_restriction => {
-                            pending_column = Some(text.clone());
+                if text.is_empty() {
+                    // An empty value does not apply a restriction, but the name
+                    // still has to be advertised: the reference faults an
+                    // unadvertised name even when empty (verified 2026-09-24).
+                    if in_restriction_list
+                        && let Some(restriction) = restriction_name.as_deref()
+                        && restriction != b"Value"
+                        && restriction != b"value"
+                    {
+                        restrictions
+                            .seen
+                            .push(String::from_utf8_lossy(restriction).to_string());
+                    }
+                } else {
+                    if in_restriction_list && let Some(restriction) = restriction_name.as_deref() {
+                        restrictions
+                            .seen
+                            .push(String::from_utf8_lossy(restriction).to_string());
+                        apply_restriction(&mut restrictions, restriction, &text);
+                    }
+                    if in_request_type {
+                        parsed_request_type = text.clone();
+                    } else if in_property_name {
+                        requested_properties.push(text.clone());
+                    } else if in_statement {
+                        statement_text.push_str(&text);
+                    } else if in_property_type {
+                        if let Ok(v) = text.parse::<i32>() {
+                            property_type = Some(v);
                         }
-                        b"value" if in_nested_restriction => {
-                            if let Some(column) = pending_column.take() {
-                                restrictions.seen.push(column.clone());
-                                apply_restriction(&mut restrictions, column.as_bytes(), &text);
-                            }
-                        }
-                        _ => {
-                            // Flat form and `<restriction><NAME>…</NAME>`: the
-                            // element name is the restriction name.
-                            if (in_restriction_list || in_nested_restriction)
-                                && let Some(restriction) = restriction_name.as_deref()
-                            {
-                                restrictions
-                                    .seen
-                                    .push(String::from_utf8_lossy(restriction).to_string());
-                                apply_restriction(&mut restrictions, restriction, &text);
-                            }
-                            if in_request_type {
-                                parsed_request_type = text.clone();
-                            } else if in_property_name {
-                                requested_properties.push(text.clone());
-                            } else if in_statement {
-                                statement_text.push_str(&text);
-                            } else if in_property_type {
-                                if let Ok(v) = text.parse::<i32>() {
-                                    property_type = Some(v);
-                                }
-                            } else if in_member_unique_name {
-                                member_unique_name = Some(text.clone());
-                            } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
-                                tree_op = Some(v);
-                            }
-                        }
+                    } else if in_member_unique_name {
+                        member_unique_name = Some(text.clone());
+                    } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
+                        tree_op = Some(v);
                     }
                 }
                 pending_text.clear();
@@ -267,12 +308,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"PROPERTY_TYPE" => in_property_type = false,
                     b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
                     b"TREE_OP" => in_tree_op = false,
-                    b"restriction" => in_nested_restriction = false,
+                    b"Restrictions" => in_restrictions = false,
                     b"RestrictionList" => {
                         in_restriction_list = false;
                         restriction_name = None;
                     }
-                    _ if in_restriction_list || in_nested_restriction => restriction_name = None,
+                    _ if in_restriction_list => restriction_name = None,
                     _ => {}
                 }
             }
@@ -500,43 +541,80 @@ mod tests {
         ));
     }
 
+    /// Every child of `<Restrictions>` other than `<RestrictionList>` is a
+    /// schema error for the reference — it answers a fault, not a rowset
+    /// (verified 2026-09-24). Ignoring those forms widened the rowset; the
+    /// nested `<restriction>` handling this proxy once had was an invention
+    /// (plan 055 review).
     #[test]
-    fn nested_restriction_forms_are_parsed() {
-        let element_form = r#"<Envelope><Body><Discover>
-            <RequestType>MDSCHEMA_MEMBERS</RequestType>
-            <Restrictions><restriction>
-              <CUBE_NAME>Sales</CUBE_NAME>
-              <DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>
-            </restriction></Restrictions>
-        </Discover></Body></Envelope>"#;
-        match parse_xmla(element_form) {
-            XmlaRequest::MdschemaMembers { restrictions, .. } => {
-                assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
-                assert_eq!(
-                    restrictions.dimension_unique_name.as_deref(),
-                    Some("[Category]")
-                );
-            }
-            other => panic!("expected members, got {other:?}"),
+    fn invalid_restriction_children_are_rejected() {
+        for body in [
+            r#"<Envelope><Body><Discover>
+                <RequestType>MDSCHEMA_MEMBERS</RequestType>
+                <Restrictions><restriction>
+                  <CUBE_NAME>Sales</CUBE_NAME>
+                </restriction></Restrictions>
+            </Discover></Body></Envelope>"#,
+            r#"<Envelope><Body><Discover>
+                <RequestType>MDSCHEMA_MEMBERS</RequestType>
+                <Restrictions>
+                  <restriction><column>CUBE_NAME</column><value>Sales</value></restriction>
+                </Restrictions>
+            </Discover></Body></Envelope>"#,
+            r#"<Envelope><Body><Discover>
+                <RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+                <Restrictions><DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME></Restrictions>
+            </Discover></Body></Envelope>"#,
+            r#"<Envelope><Body><Discover>
+                <RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+                <Restrictions><BOGUS_NAME>x</BOGUS_NAME></Restrictions>
+            </Discover></Body></Envelope>"#,
+        ] {
+            assert!(
+                matches!(parse_xmla(body), XmlaRequest::Malformed(_)),
+                "{body}"
+            );
+        }
+    }
+
+    /// A restriction name is validated even when its value is empty: the
+    /// reference faults an unadvertised name regardless of the value, and
+    /// ignores an advertised name with an empty value (verified 2026-09-24).
+    #[test]
+    fn empty_restriction_values_still_validate_the_name() {
+        for body in [
+            r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+                <Restrictions><RestrictionList><BOGUS_NAME/></RestrictionList></Restrictions>
+            </Discover></Body></Envelope>"#,
+            r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+                <Restrictions><RestrictionList><BOGUS_NAME></BOGUS_NAME></RestrictionList></Restrictions>
+            </Discover></Body></Envelope>"#,
+        ] {
+            assert!(matches!(
+                parse_xmla(body),
+                XmlaRequest::UnsupportedRestriction(_)
+            ));
         }
 
-        let column_value_form = r#"<Envelope><Body><Discover>
-            <RequestType>MDSCHEMA_MEMBERS</RequestType>
-            <Restrictions>
-              <restriction><column>CUBE_NAME</column><value>Sales</value></restriction>
-              <restriction><column>DIMENSION_UNIQUE_NAME</column><value>[Category]</value></restriction>
-            </Restrictions>
+        // Advertised and empty: parsed, and the empty value does not filter.
+        let known_empty = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+            <Restrictions><RestrictionList><DIMENSION_UNIQUE_NAME/></RestrictionList></Restrictions>
         </Discover></Body></Envelope>"#;
-        match parse_xmla(column_value_form) {
-            XmlaRequest::MdschemaMembers { restrictions, .. } => {
-                assert_eq!(restrictions.cube_name.as_deref(), Some("Sales"));
-                assert_eq!(
-                    restrictions.dimension_unique_name.as_deref(),
-                    Some("[Category]")
-                );
-            }
-            other => panic!("expected members, got {other:?}"),
-        }
+        assert!(matches!(
+            parse_xmla(known_empty),
+            XmlaRequest::MdschemaHierarchies { .. }
+        ));
+    }
+
+    /// XML 1.0 forbids control characters; the reference's parser rejects the
+    /// request, and a name carrying one must not reach our fault text (plan
+    /// 055 review).
+    #[test]
+    fn control_characters_in_text_are_malformed() {
+        let body = r#"<Envelope><Body><Discover><RequestType>MDSCHEMA_HIERARCHIES</RequestType>
+            <Restrictions><RestrictionList><BOGUS_NAME>&#x1;</BOGUS_NAME></RestrictionList></Restrictions>
+        </Discover></Body></Envelope>"#;
+        assert!(matches!(parse_xmla(body), XmlaRequest::Malformed(_)));
     }
 
     #[test]

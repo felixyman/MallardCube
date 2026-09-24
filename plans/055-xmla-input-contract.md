@@ -26,13 +26,21 @@ bit mask.
 | `CUBE_NAME` / `CATALOG_NAME` naming something else | **empty rowset** (not a fault) |
 | `DIMENSION_UNIQUE_NAME` that matches | filters (1 row) |
 | `DIMENSION_VISIBILITY=0` / `=1` | 0 rows / all six |
+| unknown name with an **empty** value (self-closing or paired) | still a fault — the name is checked regardless of the value |
+| advertised name with an empty value | **ignored** (no filter) |
+| duplicate restriction names | **last wins** (`match-then-nomatch` → 0 rows) |
+| nested `<restriction>` / `<column>`/`<value>` | **schema fault** — not valid XMLA |
+| raw named child directly under `<Restrictions>` | **schema fault** |
 | advertised lists | ours match the reference name-for-name (MEMBERS 14, DIMENSIONS 7, MEASURES 8, HIERARCHIES 9, LEVELS 10, PROPERTIES 13; identical masks) |
 
 ## What Excel actually sends (scan of 2,402 recorded requests)
 
-- Everything is **flat** except `DISCOVER_PROPERTIES.PropertyName`, which comes
-  in the nested `<PropertyName><Value>x</Value>…</PropertyName>` form (348
-  nested, 174 flat). `<Value>` is a value, never a restriction name.
+- Almost everything is **flat**. `DISCOVER_PROPERTIES.PropertyName` arrives in
+  the nested `<PropertyName><Value>x</Value>…</PropertyName>` form (348 nested,
+  174 flat) — `<Value>` is a value, never a name. Two `MDSCHEMA_MEMBERS`
+  requests use the `<restriction>` element form, which the reference rejects at
+  the schema layer; the first version of this paragraph missed them because the
+  scan only looked at `<RestrictionList>` (review, 2026-09-24).
 - Names seen: `CATALOG_NAME`, `CUBE_NAME`, `HIERARCHY_UNIQUE_NAME`,
   `HIERARCHY_VISIBILITY`, `LEVEL_UNIQUE_NAME`, `MEASURE_VISIBILITY`,
   `DIMENSION_UNIQUE_NAME`, `MEMBER_TYPE`, `MEMBER_UNIQUE_NAME`, `TREE_OP`,
@@ -57,12 +65,12 @@ bit mask.
 |---|---|---|
 | DBSCHEMA_CATALOGS | — | `CATALOG_NAME` |
 | DBSCHEMA_TABLES | — | `TABLE_*` |
-| MDSCHEMA_CUBES | — | scope, `CUBE_SOURCE` |
+| MDSCHEMA_CUBES | — | scope, `CUBE_SOURCE`, `BASE_CUBE_NAME` |
 | MDSCHEMA_DIMENSIONS | — | scope, `DIMENSION_NAME`, `DIMENSION_UNIQUE_NAME`, `CUBE_SOURCE`, `DIMENSION_VISIBILITY` |
 | MDSCHEMA_HIERARCHIES | dimension, hierarchy | scope, `HIERARCHY_NAME`, `HIERARCHY_ORIGIN`, `CUBE_SOURCE`, `HIERARCHY_VISIBILITY` |
 | MDSCHEMA_LEVELS | dimension, hierarchy, level | scope, `LEVEL_NAME`, `LEVEL_ORIGIN`, `CUBE_SOURCE`, `LEVEL_VISIBILITY` |
 | MDSCHEMA_MEASURES | — | scope, `MEASURE_NAME`, `MEASURE_UNIQUE_NAME`, `MEASUREGROUP_NAME`, `CUBE_SOURCE`, `MEASURE_VISIBILITY` |
-| MDSCHEMA_PROPERTIES | cube scope flag, `PROPERTY_TYPE`, `PROPERTY_NAME` | dimension, hierarchy, level, member, `PROPERTY_CONTENT_TYPE`, `PROPERTY_ORIGIN`, `CUBE_SOURCE`, `PROPERTY_VISIBILITY` |
+| MDSCHEMA_PROPERTIES | cube scope flag, dimension, hierarchy, level, `PROPERTY_TYPE`, `PROPERTY_NAME` | member, `PROPERTY_CONTENT_TYPE`, `PROPERTY_ORIGIN`, `CUBE_SOURCE`, `PROPERTY_VISIBILITY` |
 | MDSCHEMA_MEMBERS | dimension, hierarchy, level, `MEMBER_TYPE`, `MEMBER_UNIQUE_NAME`, `TREE_OP` | scope, `LEVEL_NUMBER`, `MEMBER_NAME`, `MEMBER_CAPTION`, `CUBE_SOURCE`, `SCOPE` |
 | MDSCHEMA_FUNCTIONS | `ORIGIN` | `LIBRARY_NAME`, `INTERFACE_NAME`, `FUNCTION_NAME`, `CATALOG_NAME` |
 | MDSCHEMA_SETS / KPIS / MEASUREGROUPS / MEASUREGROUP_DIMENSIONS | — | all |

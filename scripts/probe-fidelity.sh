@@ -11,7 +11,8 @@
 #   * a CDATA-wrapped statement must run (SOAP clients emit CDATA by default)
 #   * unparsable request text must fault, never blank the statement or — worse —
 #     drop a Discover restriction and return the *unrestricted* rowset
-#   * both nested <restriction> forms must be honoured like the flat form
+#   * any child of <Restrictions> other than <RestrictionList> must fault like
+#     the reference (the nested <restriction> forms are schema errors)
 #   * an Execute whose <Statement> was present but unreadable must fault
 #   * an Execute with an empty Statement (or none) is a valid empty success
 #
@@ -101,13 +102,18 @@ report "unparsable entity in a restriction faults instead of widening" \
 
 nested="<restriction><CATALOG_NAME>${CATALOG}</CATALOG_NAME><CUBE_NAME>${CUBE}</CUBE_NAME><DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME></restriction>"
 out="$(post "$(discover "$nested")")"
-rows="$(restricted_rows "$out")"
-report "nested <restriction><NAME> form is honoured" "$([[ "$rows" -eq "$baseline" ]] && echo 1 || echo 0)" "returned ${rows} rows, expected ${baseline}"
+report "nested <restriction><NAME> form faults like the reference" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
 
 columns="<restriction><column>CATALOG_NAME</column><value>${CATALOG}</value></restriction><restriction><column>CUBE_NAME</column><value>${CUBE}</value></restriction><restriction><column>DIMENSION_UNIQUE_NAME</column><value>[Category]</value></restriction>"
 out="$(post "$(discover "$columns")")"
-rows="$(restricted_rows "$out")"
-report "nested <column>/<value> form is honoured" "$([[ "$rows" -eq "$baseline" ]] && echo 1 || echo 0)" "returned ${rows} rows, expected ${baseline}"
+report "nested <column>/<value> form faults like the reference" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+
+unwrapped="<DIMENSION_UNIQUE_NAME>[Category]</DIMENSION_UNIQUE_NAME>"
+out="$(post "$(discover "$unwrapped")")"
+report "raw child under <Restrictions> faults like the reference" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+
+out="$(post "$(discover '<RestrictionList><BOGUS_NAME/></RestrictionList>')")"
+report "self-closing unknown restriction faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
 
 echo
 if [ "$fail" -eq 0 ]; then

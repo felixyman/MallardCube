@@ -14,9 +14,10 @@ Two halves of one idea: **capture on the VM, assert everywhere**.
 **Adding a case.** Whenever a review or a VM session finds a proxy/reference
 difference, add it to `parity/catalog.json`: the request, and the **mirror's**
 value (not the proxy's). Prefer stable observations — see the drift notes.
-A case may carry a `known_gap` string: a documented, still-open difference that
-is printed on every pass but does not fail the run. When the gap is fixed the
-case flips to a failure, which is the signal to update it.
+`expect` is **always the reference's value**. A case may carry a `known_gap`
+string: the mismatch is then reported as `KNOWN` (with both values and the
+note) instead of failing the run. When the gap is fixed the case prints
+`PASS … no longer reproduces`, which is the signal to drop `known_gap`.
 
 ## Capture (VM, `C:\Users\Public\Documents\parity\`)
 

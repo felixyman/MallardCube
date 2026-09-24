@@ -1,7 +1,9 @@
 /// XMLA trace capture — writes every request/response pair as NDJSON.
 ///
-/// Enabled by setting `XMLA_TRACE=1` at startup.
-/// Output: `xmla-trace.jsonl` in the working directory.
+/// Enabled by setting `XMLA_TRACE=1` at startup. `XMLA_TRACE_FILE` overrides
+/// the output path (default `xmla-trace.jsonl` in the working directory) so a
+/// corpus can be kept separate from quick gate runs, which are truncated at
+/// startup.
 ///
 /// Each line is a self-contained JSON record suitable for replay testing.
 use std::cell::Cell;
@@ -29,9 +31,12 @@ fn trace_file() -> std::sync::MutexGuard<'static, Option<File>> {
 
 pub fn init_trace() {
     if std::env::var("XMLA_TRACE").is_ok_and(|v| v == "1") {
-        let file = File::create("xmla-trace.jsonl").expect("failed to create xmla-trace.jsonl");
+        let path =
+            std::env::var("XMLA_TRACE_FILE").unwrap_or_else(|_| "xmla-trace.jsonl".to_string());
+        let file =
+            File::create(&path).unwrap_or_else(|error| panic!("failed to create {path}: {error}"));
         *trace_file() = Some(file);
-        eprintln!("[trace] XMLA trace enabled -> xmla-trace.jsonl");
+        eprintln!("[trace] XMLA trace enabled -> {path}");
     }
 }
 

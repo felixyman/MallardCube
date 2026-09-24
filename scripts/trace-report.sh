@@ -60,7 +60,14 @@ for record in records:
         for name in restriction_names(block):
             pairs[(request_type.group(1), name)] += 1
 
+nested_form = sum(
+    1
+    for record in records
+    if re.search(r"<restriction[ >/]", record.get("request_xml") or "")
+)
 print(f"{path}: {len(records)} requests, {faults} faulted responses")
+if nested_form:
+    print(f"nested <restriction> requests: {nested_form} (the reference rejects this form)")
 print("kinds:", dict(kinds.most_common()))
 if faults_by_kind:
     print("faults by kind:", dict(faults_by_kind.most_common()))

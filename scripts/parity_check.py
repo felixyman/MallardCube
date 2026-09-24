@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import urllib.error
 import urllib.request
 from html import unescape
 from pathlib import Path
@@ -53,8 +54,13 @@ def post(url: str, body: str) -> str:
     request = urllib.request.Request(
         url, data=body.encode(), headers={"Content-Type": "text/xml"}
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        # A SOAP fault can arrive with a 4xx/5xx status; read the body so an
+        # expected-fault case can still compare the message.
+        return error.read().decode("utf-8", "replace")
 
 
 def tag(block: str, name: str) -> str | None:
@@ -150,8 +156,11 @@ def main() -> int:
         except Exception as error:  # transport failures are a failed case, not a crash
             observed = {"error": str(error)}
         else:
-            if case["expect"].get("fault"):
-                observed = {"fault": "<faultstring>" in xml}
+            fault = case["expect"].get("fault")
+            if fault:
+                message = re.search(r"<faultstring[^>]*>(.*?)</faultstring>", xml, re.S)
+                text = unescape(message.group(1)) if message else ""
+                observed = {"fault": text if isinstance(fault, str) else bool(message)}
             else:
                 observed = (
                     observe_discover(xml, case)
@@ -160,7 +169,16 @@ def main() -> int:
                 )
 
         mismatches = compare(case["expect"], observed)
-        if mismatches:
+        if mismatches and case.get("known_gap"):
+            # `expect` is always the reference's value. A mismatch on a case
+            # that documents a known gap is reported, not failed — and when a
+            # gap is closed the case matches and says so, so it gets promoted.
+            known += 1
+            print(f"KNOWN {case['id']}")
+            for key, want, got in mismatches:
+                print(f"     {key}: reference {want!r}, proxy {got!r}")
+            print(f"     GAP: {case['known_gap']}")
+        elif mismatches:
             failed += 1
             print(f"FAIL {case['id']}")
             for key, want, got in mismatches:
@@ -169,8 +187,10 @@ def main() -> int:
             passed += 1
             print(f"PASS {case['id']}")
             if case.get("known_gap"):
-                known += 1
-                print(f"     KNOWN GAP: {case['known_gap']}")
+                print(
+                    "     NOTE: this known gap no longer reproduces — "
+                    "drop known_gap from the case"
+                )
 
     total = passed + failed
     suffix = f" ({known} known gap{'s' if known != 1 else ''})" if known else ""
