@@ -132,8 +132,12 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
 /// restriction name carrying one would make our own fault unparsable (plan 055
 /// review).
 fn has_xml_invalid_control(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'))
+    text.chars().any(|c| {
+        matches!(
+            c,
+            '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}'
+        )
+    })
 }
 
 /// Attribute names and values are part of the document's lexical surface: a

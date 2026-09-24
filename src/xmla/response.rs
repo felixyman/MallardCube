@@ -49,7 +49,12 @@ pub fn xml_escape(s: &str) -> String {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' => {
+            '\u{0}'..='\u{8}'
+            | '\u{b}'
+            | '\u{c}'
+            | '\u{e}'..='\u{1f}'
+            | '\u{fffe}'
+            | '\u{ffff}' => {
                 out.push('\u{fffd}');
             }
             _ => out.push(c),
