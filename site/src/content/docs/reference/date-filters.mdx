@@ -1,0 +1,48 @@
+---
+title: Date Filters
+description: Why Excel offers date filters on some hierarchies and not others, and exactly what it sends when one is applied
+---
+
+import Claim from '../../../components/Claim.astro';
+
+The Date Filters submenu only appears on a pivot field when the metadata says
+the field's members are dates. When it does appear and a filter is applied,
+Excel sends a specific MDX shape — a subquery over the key attribute — that an
+engine has to handle as a filter, not as a slicer. Both halves are measured
+below; the first is metadata, the second is a query.
+
+## Why the menu appears — or does not
+
+<Claim id="member-value-per-attribute-hierarchy" />
+
+The consequence is concrete: if the full-date level is only reachable as a
+level of a user hierarchy, Excel offers no Date Filters on it, no matter how
+correct the dates are. It has to be a **single-level attribute hierarchy of its
+own**, with `MEMBER_VALUE` advertised as a date type on its level.
+
+## What Excel sends when a filter is applied
+
+<Claim id="excel-date-filter-subquery" />
+
+The important part for an engine is the subquery: `Filter(<key level>.AllMembers,
+(CurrentMember.MemberValue = CDate("…")))`. It selects members by their
+`MEMBER_VALUE` — which is why the same metadata that makes the menu appear also
+makes the filter work. Applying it to the *outer axis* is what Excel expects:
+the drilldown on the columns axis is then reduced to the matching date (plus
+`(All)`), and the cells follow.
+
+## Driving the dialog itself
+
+<Claim id="excel-date-filter-dialog" />
+
+## Open questions
+
+- The reference's answer to the full subquery is not yet reproduced outside
+  Excel: an ADOMD replay of the same MDX returned an empty axis, while the
+  standalone `Filter(...)` matched the date. The request shape is captured
+  verbatim from Excel, so the shape is verified; the engine's answer on that
+  path still needs a live Excel session to pin down.
+- Per-date revenue values are not comparable between two demo datasets
+  generated on different days (the data window is anchored to "today"), so any
+  comparison of this path must compare member sets and totals, not per-date
+  cells.

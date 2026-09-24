@@ -1,0 +1,36 @@
+---
+title: Cellset shape
+description: How Excel reads a cellset — member fields, unique-name forms, axis placement — and the request shapes it sends in return
+---
+
+import Claim from '../../../components/Claim.astro';
+
+A cellset is not just values on axes: Excel reads it structurally, in fixed
+positions, and decides from what it finds whether a field can render, expand or
+sort. A correct cell count with the wrong member shape shows as an empty field
+or a crash on expansion, not as a data error.
+
+## Members are positional
+
+<Claim id="cellset-member-order" />
+
+## Unique names
+
+<Claim id="cellset-compound-unames" />
+
+## Attribute hierarchies on the axis
+
+<Claim id="attribute-hierarchy-axis-members" />
+
+## The requests Excel sends back
+
+<Claim id="excel-drilldown-crossjoin" />
+
+## What to check when a field misbehaves
+
+| symptom | first thing to check |
+|---|---|
+| a field renders empty although the axis has members | the member's `Hierarchy` name and `LNum` — Excel places members by field and level |
+| Excel crashes when expanding to a lower level | an unrequested `CHILDREN_CARDINALITY` shifting the positional fields |
+| dates render as text, or not at all | the attribute hierarchy's `MEMBER_VALUE` `DATA_TYPE`, and the axis member's `LName` |
+| a nested field lists the wrong members | whether the drilldown names the attribute hierarchy or the user hierarchy | 

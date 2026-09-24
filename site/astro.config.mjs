@@ -40,6 +40,9 @@ export default defineConfig({
 					items: [
 						{ label: 'About the reference', slug: 'reference' },
 						{ label: 'Request shape', slug: 'reference/request-shape' },
+						{ label: 'Excel metadata', slug: 'reference/excel-metadata' },
+						{ label: 'Date Filters', slug: 'reference/date-filters' },
+						{ label: 'Cellset shape', slug: 'reference/cellset-shape' },
 					],
 				},
 				{

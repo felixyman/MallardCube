@@ -1,0 +1,54 @@
+---
+title: Excel metadata
+description: How Excel builds a pivot cache from metadata, and which details decide whether a feature appears at all
+---
+
+import Claim from '../../../components/Claim.astro';
+
+When a PivotTable connects, Excel does not ask one question — it asks dozens,
+in a burst, and caches what it learns as the pivot cache. The answers decide
+which fields appear, which filters the field menu offers, and what Excel sends
+next. Most "the feature is missing" reports are settled here, before a single
+cell is fetched.
+
+This page collects the observed rules, each measured against a real engine and
+Excel.
+
+## Dimensions and hierarchies
+
+<Claim id="dimension-types" />
+
+<Claim id="hierarchy-origins" />
+
+<Claim id="levels-level-type-and-dbtype" />
+
+## Members and their data types
+
+Excel decides whether a hierarchy's members are dates from one rowset — and the
+decision sticks in the pivot cache.
+
+<Claim id="member-value-per-attribute-hierarchy" />
+
+## Properties, read positionally
+
+<Claim id="property-type-semantics" />
+
+## The metadata that gates behaviour
+
+Two answers change which requests Excel sends at all. Neither is optional if
+you want the newer paths.
+
+<Claim id="schema-rowsets-schemaname" />
+
+<Claim id="preferred-query-patterns" />
+
+## A checklist for an engine
+
+- Answer `DISCOVER_SCHEMA_ROWSETS` with exactly the rowset asked for.
+- Report `PREFERRED_QUERY_PATTERNS` as 3.
+- Emit `MEMBER_VALUE` rows for every level, with the right `DATA_TYPE` for each.
+- If a column is a date, expose it as a single-level attribute hierarchy in its
+  own right, with `MEMBER_VALUE` type 7 — and give the dimension's table
+  `dataCategory: "Time"` so the dimension itself is Time.
+- Emit `MDSCHEMA_PROPERTIES` elements in the reference's order; Excel reads
+  them positionally and a reordered answer reads as different property types.
