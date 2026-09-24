@@ -521,6 +521,26 @@ async fn run_server() {
         })
     };
 
+    // Warn about declared restrictions we cannot honour: a DAX filter with no
+    // SQL translation hides its table (fail closed), which is safe but worth
+    // saying out loud at startup.
+    {
+        let p = proxy_project::project();
+        let dax_only = p
+            .config
+            .roles
+            .iter()
+            .flat_map(|role| role.table_permissions.iter())
+            .filter(|tp| tp.dax_filter.is_some() && tp.filter_expression.trim().is_empty())
+            .count();
+        if dax_only > 0 {
+            println!(
+                "⚠️  WARNING: {dax_only} table permission(s) declare a DAX filter this proxy \
+                 cannot lower to SQL — those tables are hidden for the role (fail closed)"
+            );
+        }
+    }
+
     // Warn if roles are defined but no auth config (roles are not enforced).
     {
         let p = proxy_project::project();
@@ -1062,10 +1082,13 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             debug_write(body);
 
             let (resp, timings) = if mdx_semantic::is_drillthrough(mdx) {
-                (
-                    execute::dispatch::get_execute_drillthrough_response(mdx, backend),
-                    None,
-                )
+                match execute::runtime::drillthrough_fault(config, user) {
+                    Some(fault) => (fault, None),
+                    None => (
+                        execute::dispatch::get_execute_drillthrough_response(mdx, backend),
+                        None,
+                    ),
+                }
             } else {
                 let (r, t) =
                     execute_builders::get_execute_cellset_response_with_backend_and_context(

@@ -164,6 +164,13 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
                 is_execute = true;
             }
+            // A self-closing `<Statement/>` is present but has no text: mark it
+            // seen so the end-of-parse check faults it like the paired form,
+            // instead of answering with the legitimate empty-Execute shape
+            // (plan 051 review).
+            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Statement" => {
+                statement_seen = true;
+            }
             Ok(Event::Text(e)) => match e.unescape() {
                 Ok(decoded) => pending_text.push_str(&decoded),
                 Err(_) => {

@@ -214,12 +214,19 @@ pub fn effective_table_filter(
                 any_hidden = true;
             } else {
                 // Read or Administrator metadata: grants read access.
-                if tp.filter_expression.is_empty() {
-                    // Read with no filter = full access for this role.
-                    any_role_grants_full = true;
-                } else {
+                if !tp.filter_expression.is_empty() {
                     any_role_grants_read = true;
                     filters.push(tp.filter_expression.clone());
+                } else if tp.dax_filter.is_some() {
+                    // A DAX filter we cannot lower to SQL: the reference would
+                    // apply it, we cannot, so the table is hidden for this role
+                    // rather than granted in full. Silently ignoring a
+                    // declared restriction is the one thing RLS must never do
+                    // (plan 051 review).
+                    any_hidden = true;
+                } else {
+                    // Read with no filter = full access for this role.
+                    any_role_grants_full = true;
                 }
             }
         }
@@ -743,6 +750,37 @@ pub fn default_model() -> SemanticModel {
 
 #[cfg(test)]
 mod tests {
+    /// A DAX filter we cannot lower to SQL must hide the table for that role,
+    /// not grant it in full (plan 051 review).
+    #[test]
+    fn dax_only_filter_fails_closed() {
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+        let mut config = crate::proxy_project::project().config.clone();
+        let table = crate::proxy_project::project()
+            .model
+            .primary_table_name()
+            .to_string();
+        config.roles = vec![RoleConfig {
+            name: "EU".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: table.clone(),
+                filter_expression: String::new(),
+                dax_filter: Some("Sales[Region] = \"EU\"".into()),
+                metadata_permission: ModelPermission::Read,
+            }],
+        }];
+        let mut user = UserContext::deny_all();
+        user.roles = vec!["EU".into()];
+        assert_eq!(
+            effective_table_filter(&config, &user, &table),
+            TableAccess::Hidden,
+            "an unlowerable DAX filter hides the table rather than granting it"
+        );
+    }
+
     use super::*;
     use crate::project::config::ModelPermission;
     use crate::project::config::ProxyConfig;

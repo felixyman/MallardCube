@@ -186,7 +186,16 @@ fn filter_suffix(filters: &[TypedDimensionFilter]) -> String {
             } else {
                 let mut members: Vec<&str> = f.members.iter().map(|s| s.as_str()).collect();
                 members.sort();
-                format!("{}={}", dk, members.join(","))
+                // The level and the time flag change which column the filter
+                // targets, so two member filters with the same text but a
+                // different level must not share a cache key (plan 051 review).
+                format!(
+                    "{}={}@{}@{:?}",
+                    dk,
+                    members.join(","),
+                    f.level.as_deref().unwrap_or(""),
+                    f.time_flag
+                )
             }
         })
         .collect();
@@ -295,7 +304,7 @@ mod tests {
         };
         assert_eq!(
             plan_key(&plan),
-            "total|measure=TotalSales|filters=Region=North"
+            "total|measure=TotalSales|filters=Region=North@@None"
         );
     }
 
@@ -345,7 +354,7 @@ mod tests {
         let key = plan_key(&plan);
         assert_eq!(
             key,
-            "groupby|measure=TotalSales|dims=ProductCategory|levels=[]|filters=ProductCategory=Category A,Category B;Region=North"
+            "groupby|measure=TotalSales|dims=ProductCategory|levels=[]|filters=ProductCategory=Category A,Category B@@None;Region=North@@None"
         );
     }
 
@@ -398,6 +407,32 @@ mod tests {
             ],
         };
         assert_eq!(plan_key(&a), plan_key(&b));
+    }
+
+    /// A member filter's level changes the column it targets, so two filters
+    /// with the same text at different levels must not share a cache key.
+    #[test]
+    fn member_level_and_time_flag_change_the_plan_key() {
+        let filter = |level: Option<&str>, flag: Option<&str>| TypedDimensionFilter {
+            dimension: "Date".into(),
+            level: level.map(str::to_string),
+            time_flag: flag.map(str::to_string),
+            members: vec!["1".into()],
+            range: None,
+            date_window: None,
+            label: None,
+        };
+        let key = |f: TypedDimensionFilter| {
+            plan_key(&QueryPlan::Total {
+                measure: "Revenue".into(),
+                filters: vec![f],
+            })
+        };
+        let month = key(filter(Some("Month"), None));
+        let quarter = key(filter(Some("Quarter"), None));
+        let flagged = key(filter(Some("Month"), Some("ytd")));
+        assert_ne!(month, quarter, "level must change the key");
+        assert_ne!(month, flagged, "time flag must change the key");
     }
 
     #[test]

@@ -371,3 +371,45 @@ write paths, changes to rollup design (plan 052) or intake (plan 053).
 - If the shared `Database` requires a self-referential lifetime that spreads
   through the codebase, take the per-connection fallback above rather than a
   wide refactor.
+
+## Review round 2 (2026-09-24): holes in round 1's fixes
+
+Fifteen findings from a second review pass; the code-level ones are fixed here,
+four remain open.
+
+Fixed:
+
+- **Composite plans bypassed the fallback refusal.** `MultiMeasure`, `TupleSet`
+  and `MultiGroupBy` carry measure ids directly and decompose into
+  `Total`/`GroupBy` recursively, so the check that only inspected the outermost
+  variant let a restricted user reach authored SQL through "two measures on an
+  axis". `plan_measures` collects every measure now.
+- **`DRILLTHROUGH` reached raw `SELECT *` SQL with no user context** — no role
+  predicates, no OLS. A restricted role is refused (applying the predicates is
+  open below; the refusal is the honest interim).
+- **A DAX-only table permission was counted as a restriction but enforced as
+  full access.** It now hides the table for that role (fail closed) and warns at
+  startup.
+- **`/status` claimed `deny` for an `auth` block with no mechanism** while
+  requests were administrators. It reports the enforced mode: `configured` means
+  a real mechanism (trusted proxy or OIDC), and `rls_active` requires one.
+- **A self-closing `<Statement/>`** returned the empty-success shape; it faults
+  like the paired empty form.
+- `log_sql` could panic slicing mid-UTF-8-character on the logging path.
+- The plan key omitted `level`/`time_flag`, so two filters with the same text at
+  different levels could share a result-cache entry.
+- Harness: the reviewer prompt scopes with `git diff origin/master..HEAD` and
+  demands the commit count; permissions deny `proxy-smoke.sh serve` and
+  `rls-rollup-ab.sh` (both bind 8080); the wrapper refuses to reuse or kill a
+  process it does not own and warns on a stale binary; two new probes
+  (self-closing and whitespace-only statements) bring `probe-fidelity.sh` to
+  11 cases.
+
+Open, in order:
+
+1. `Count`/`MetaCount` SQL and relationship-backed member discovery still omit
+   role predicates — member counts can disclose restricted totals.
+2. Cellset member rendering interpolates unescaped dynamic text (`&`, `<`);
+   one escaping serializer should own that boundary.
+3. The result cache is entry-bounded, not byte-bounded (known, recorded above).
+4. Drillthrough should apply role predicates and OLS rather than refuse.

@@ -66,10 +66,15 @@ pub fn pool_size() -> usize {
 fn log_sql(sql: &str) -> String {
     const MAX: usize = 300;
     if sql.len() <= MAX {
-        sql.to_string()
-    } else {
-        format!("{}… ({} chars total)", &sql[..MAX], sql.len())
+        return sql.to_string();
     }
+    // Byte index MAX can fall inside a multibyte character; a panic on the
+    // logging path would take down the request it was trying to explain.
+    let end = (0..=MAX)
+        .rev()
+        .find(|i| sql.is_char_boundary(*i))
+        .unwrap_or(0);
+    format!("{}… ({} bytes total)", &sql[..end], sql.len())
 }
 
 fn open_read_only(path: &Path, settings: &EngineSettings) -> Result<Connection, duckdb::Error> {

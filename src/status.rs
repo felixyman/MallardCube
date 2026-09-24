@@ -57,16 +57,23 @@ pub fn now_unix() -> u64 {
 }
 
 /// Authentication and role posture, so an operator can see whether row-level
-/// security is actually in force. Without an `auth` block every request is the
+/// security is actually in force. Without a mechanism every request is the
 /// administrator — correct for a trusted single-user deployment, a silent hole
 /// in any other, and previously invisible from `/status`.
+///
+/// "Configured" means a mechanism that can actually authenticate (the
+/// trusted-proxy header, or OIDC) — not merely that an `auth` block exists. An
+/// `auth` block with neither leaves requests anonymous, and
+/// `build_user_context` makes those administrators; reporting `deny` there was
+/// a contradiction an operator could act on (plan 051 review).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthStatus {
-    /// Is an `auth` block configured?
+    /// Is an authentication mechanism configured?
     pub configured: bool,
     /// Roles the config declares.
     pub roles: usize,
-    /// Does any declared role narrow access (a filter, or a hidden table)?
+    /// Do the declared roles narrow access **and** is something enforcing
+    /// them? Roles without a mechanism are informational only.
     pub rls_active: bool,
     /// What an unidentified request gets: `admin` without auth, `deny` with it.
     pub anonymous: &'static str,
@@ -74,12 +81,15 @@ pub struct AuthStatus {
 
 impl AuthStatus {
     pub fn from_config(config: &crate::project::config::ProxyConfig) -> Self {
-        let configured = config.auth.is_some();
+        let mechanism = config
+            .auth
+            .as_ref()
+            .is_some_and(|auth| auth.trusted_proxy || auth.oidc.is_some());
         Self {
-            configured,
+            configured: mechanism,
             roles: config.roles.len(),
-            rls_active: config.any_role_narrows_access(),
-            anonymous: if configured { "deny" } else { "admin" },
+            rls_active: mechanism && config.any_role_narrows_access(),
+            anonymous: if mechanism { "deny" } else { "admin" },
         }
     }
 }
@@ -245,6 +255,69 @@ mod tests {
         ] {
             assert!(json.contains(needle), "missing {needle} in {json}");
         }
+    }
+
+    /// The posture must describe what is enforced, not what is declared.
+    #[test]
+    fn auth_status_reports_the_enforced_mode() {
+        use crate::project::config::{
+            AuthConfig, ModelPermission, RoleConfig, TablePermissionConfig,
+        };
+
+        let mut config = crate::proxy_project::project().config.clone();
+        let filtered_role = RoleConfig {
+            name: "EU".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "sales_fact".into(),
+                filter_expression: "territory = 'North'".into(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::Read,
+            }],
+        };
+
+        // No auth at all: every request is the administrator.
+        let bare = AuthStatus::from_config(&config);
+        assert!(!bare.configured);
+        assert_eq!(bare.anonymous, "admin");
+        assert!(!bare.rls_active);
+
+        // Roles declared, nothing enforcing them: informational only.
+        config.roles = vec![filtered_role.clone()];
+        let declared_only = AuthStatus::from_config(&config);
+        assert!(!declared_only.configured, "no mechanism");
+        assert_eq!(declared_only.roles, 1);
+        assert!(
+            !declared_only.rls_active,
+            "roles nobody enforces are not active RLS"
+        );
+        assert_eq!(declared_only.anonymous, "admin");
+
+        // An auth block with no mechanism is still anonymous — say so.
+        config.auth = Some(AuthConfig {
+            trusted_proxy: false,
+            trusted_header: "X-User".into(),
+            oidc: None,
+        });
+        let empty_auth = AuthStatus::from_config(&config);
+        assert!(
+            !empty_auth.configured,
+            "an auth block alone authenticates nobody"
+        );
+        assert_eq!(empty_auth.anonymous, "admin");
+
+        // A mechanism plus a narrowing role: this is real RLS.
+        config.auth = Some(AuthConfig {
+            trusted_proxy: true,
+            trusted_header: "X-User".into(),
+            oidc: None,
+        });
+        let enforced = AuthStatus::from_config(&config);
+        assert!(enforced.configured);
+        assert!(enforced.rls_active);
+        assert_eq!(enforced.anonymous, "deny");
     }
 
     #[test]

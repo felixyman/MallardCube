@@ -48,9 +48,10 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     // a restricted user must not reach it: refusing the query is the honest
     // answer, where running it returned unfiltered rows (the limitation that
     // used to be documented in plan.rs).
-    if let Some(measure) = fallback_measure_in_plan(&plan)
-        && model.classify_fallback(measure).is_some()
-        && user_is_restricted(config, user)
+    if user_is_restricted(config, user)
+        && let Some(measure) = plan_measures(&plan)
+            .into_iter()
+            .find(|measure| model.classify_fallback(measure).is_some())
     {
         let timings = Timings::new(RuntimePath::DirectSql, "restricted-fallback".into(), 0);
         return (
@@ -105,13 +106,38 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 // Tests
 // ---------------------------------------------------------------------------
 
-/// The measure a plan would execute through authored (fallback) SQL, if any.
-fn fallback_measure_in_plan(plan: &crate::engine::plan::QueryPlan) -> Option<&str> {
+/// Every measure a plan would execute. Composite plans (`MultiMeasure`,
+/// `TupleSet`, `MultiGroupBy`) carry measure ids directly and the executor
+/// decomposes them into `Total`/`GroupBy` plans recursively — inspecting only
+/// the outermost variant let a restricted user reach authored SQL through a
+/// composite plan such as "two measures on an axis" (plan 051 review).
+fn plan_measures(plan: &crate::engine::plan::QueryPlan) -> Vec<&str> {
     use crate::engine::plan::QueryPlan;
     match plan {
-        QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => Some(measure),
-        _ => None,
+        QueryPlan::Total { measure, .. } | QueryPlan::GroupBy { measure, .. } => vec![measure],
+        QueryPlan::MultiMeasure { measures, .. } | QueryPlan::MultiGroupBy { measures, .. } => {
+            measures.iter().map(|m| m.as_str()).collect()
+        }
+        QueryPlan::TupleSet { cells } => cells.iter().map(|c| c.measure.as_str()).collect(),
+        _ => Vec::new(),
     }
+}
+
+/// Fault when a restricted user asks for a drillthrough. The drillthrough
+/// builder writes raw `SELECT *` SQL and applies no role predicates or OLS, so
+/// the honest answer is a refusal until it does — returning rows the role
+/// should not see is the one outcome a security feature must never produce
+/// (plan 051 review).
+pub fn drillthrough_fault(
+    config: &ProxyConfig,
+    user: &crate::engine::model::UserContext,
+) -> Option<String> {
+    user_is_restricted(config, user).then(|| {
+        crate::xmla::response::fault_response(
+            "drillthrough is not available for a restricted role: it cannot apply \
+             row-level filters yet, and returning unfiltered rows would leak them",
+        )
+    })
 }
 
 /// Does this user's access get narrowed by any of their roles? Administrators
@@ -182,6 +208,71 @@ mod tests {
             "SQL should have a WHERE clause with role filter, got: {}",
             sql
         );
+    }
+
+    /// Composite plans hold measure ids directly and decompose recursively; the
+    /// refusal must see through them (two measures on an axis was the hole).
+    #[test]
+    fn plan_measures_sees_composite_plans() {
+        use super::plan_measures;
+        use crate::engine::plan::{QueryPlan, TupleCell};
+        let total = QueryPlan::Total {
+            measure: "Revenue".into(),
+            filters: vec![],
+        };
+        assert_eq!(plan_measures(&total), vec!["Revenue"]);
+
+        let multi = QueryPlan::MultiMeasure {
+            measures: vec!["Revenue".into(), "Units".into()],
+            filters: vec![],
+        };
+        assert_eq!(plan_measures(&multi), vec!["Revenue", "Units"]);
+
+        let grouped = QueryPlan::MultiGroupBy {
+            measures: vec!["Revenue".into()],
+            group_by: vec!["Category".into()],
+            filters: vec![],
+            group_levels: vec![None],
+        };
+        assert_eq!(plan_measures(&grouped), vec!["Revenue"]);
+
+        let tuples = QueryPlan::TupleSet {
+            cells: vec![TupleCell {
+                measure: "Revenue".into(),
+                filters: vec![],
+            }],
+        };
+        assert_eq!(plan_measures(&tuples), vec!["Revenue"]);
+    }
+
+    /// Drillthrough applies no role predicates, so a restricted user must be
+    /// refused rather than served unfiltered rows.
+    #[test]
+    fn drillthrough_fault_refuses_restricted_users() {
+        use super::drillthrough_fault;
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let mut config = crate::proxy_project::project().config.clone();
+        config.roles = vec![RoleConfig {
+            name: "EU".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "sales_fact".into(),
+                filter_expression: "territory = 'North'".into(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::Read,
+            }],
+        }];
+        let mut restricted = UserContext::deny_all();
+        restricted.roles = vec!["EU".into()];
+        assert!(
+            drillthrough_fault(&config, &restricted).is_some(),
+            "a restricted role must not reach drillthrough"
+        );
+        assert!(drillthrough_fault(&config, &UserContext::admin_default()).is_none());
     }
 
     /// A role that narrows access marks its holders restricted — which is what

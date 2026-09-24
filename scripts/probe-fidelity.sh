@@ -70,6 +70,12 @@ report "unparsable entity in a statement faults" "$([[ "$out" == *"faultstring"*
 out="$(post "$(envelope "<Statement></Statement>")")"
 report "empty Statement faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
 
+out="$(post '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command><Statement/></Command><Properties><PropertyList><Catalog>SALES_ANALYTICS</Catalog></PropertyList></Properties></Execute></soap:Body></soap:Envelope>')"
+report "self-closing <Statement/> faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+
+out="$(post "$(envelope "   ")")"
+report "whitespace-only Statement faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+
 # --- no Statement at all stays a valid empty success -------------------------
 out="$(post '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command/></Execute></soap:Body></soap:Envelope>')"
 report "Execute without a Statement stays empty success" "$([[ "$out" != *"faultstring"* ]] && echo 1 || echo 0)" "faulted a legitimate empty Execute"

@@ -110,6 +110,15 @@ permissions:
   - action: shell
     resource: "*:8080*"
     effect: deny
+  # `bash scripts/*` would otherwise let these reach 8080: proxy-smoke's `serve`
+  # mode, and the RLS A/B script, kill MallardCube and bind it. Their assertions
+  # against an explicit URL remain allowed.
+  - action: shell
+    resource: "*proxy-smoke.sh serve*"
+    effect: deny
+  - action: shell
+    resource: "*rls-rollup-ab.sh*"
+    effect: deny
 ---
 
 You review MallardCube before a commit. You never edit files, never commit or
@@ -117,8 +126,12 @@ push, and never disturb a proxy on 8080.
 
 ## Method
 
-1. `cd /home/felix/code/MallardCube && git diff` (and `git log -3`) to see what
-   changed and why. Pipes and `&&` are fine.
+1. `cd /home/felix/code/MallardCube && git log --oneline origin/master..HEAD`
+   first, and **state the commit count you see**. The work is usually already
+   committed, so the working-tree diff is empty: read the actual changes with
+   `git diff origin/master..HEAD` — not `git diff` and not `git log -3`, which
+   once scoped a review to five commits when there were eight. Pipes and `&&`
+   are fine.
 2. **Use the review-proxy wrapper — at most one, reused for the whole review.**
 
    ```
