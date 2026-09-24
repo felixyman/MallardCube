@@ -449,3 +449,29 @@ Two environment notes for the next VM session:
   `HKCU\...\Internet Settings\ProxyEnable` first.
 - A cold Excel connection rejects automation calls (`RPC_E_CALL_REJECTED`) for
   a few seconds; the sweeps need a short settle after `Refresh()`.
+
+### MDSCHEMA_MEMBERS gaps (fixed)
+
+Measured against the mirror: a request restricted to `[Date].[Full Date]`
+returned **0** members where SSAS returns 4019, and `[Measures]` returned 0
+where SSAS returns 6 (`[Category].[Category]` matched at 21). The key attribute
+hierarchy was advertised in `MDSCHEMA_HIERARCHIES` (plan 048) but never
+enumerated, so Excel's date-filter member list came back empty. Fixed in
+`216fe45`: both hierarchies list their members now (proxy 4019 / 6 / 21 vs
+mirror 4019 / 6 / 21), in the same namespace conventions the axis uses.
+`sweep3` through Excel is unchanged by the fix (the only line that moved is a
+flaky COM error message on a spec that fails against both engines).
+
+Remaining parity nit: the mirror formats date member names/captions as locale
+short dates (`1/1/2020`) where the proxy emits the raw ISO value
+(`2020-01-01`), and its unique names carry `T00:00:00`. Same open item as the
+compound-member naming in the skill notes.
+
+### ADODB loop (open)
+
+ADODB `Execute` against the proxy loops: MSOLAP re-sent the same
+`SELECT [Measures].[Revenue] ON 0 FROM [Sales]` **7,776 times** (identical
+cached responses, ~80 µs each) until the process was killed. Excel is
+unaffected, but the proxy is not ADODB-clean until this is understood — the
+next step is comparing the response shape against the mirror's for the same
+request (the mirror answers it without a loop).
