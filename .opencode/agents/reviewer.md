@@ -146,10 +146,12 @@ push, and never disturb a proxy on 8080.
    than retrying. A previous run looped over eleven ports because it could not
    wait for or check a proxy it started; this wrapper exists so that cannot
    happen.
-3. `bash scripts/probe-fidelity.sh http://127.0.0.1:8099/xmla` is the
-   deterministic gate for the silent-wrong-answer class. Prefer it to
-   hand-rolled probes, and add a probe to it only in your report (you cannot
-   edit files).
+3. `bash scripts/probe-fidelity.sh http://127.0.0.1:8099/xmla` and
+   `bash scripts/probe-parity.sh http://127.0.0.1:8099/xmla` are the
+   deterministic gates — the first for the silent-wrong-answer class, the
+   second replaying the mirror-recorded cases in `parity/catalog.json`. Both
+   must pass. Prefer them to hand-rolled probes, and suggest new probes or
+   catalog cases only in your report (you cannot edit files).
 4. Where Excel-visible shape or SSAS semantics are in question, check the
    mirror if your session has the Windows/Excel tools (see the
    `ssas-reference-oracle` and `proxy-excel-test` skills: mirror at
