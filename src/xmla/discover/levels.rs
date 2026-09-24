@@ -60,18 +60,29 @@ const LEVEL_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALO
                 <xsd:element sql:field="LEVEL_ORIGIN" name="LEVEL_ORIGIN" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_levels_response(restrictions: &Restrictions) -> String {
+pub fn get_levels_response(
+    restrictions: &Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let mut rows = String::new();
 
-    // MeasuresLevel (special case, not in model)
-    if super::coordinates_match(
-        restrictions,
-        "[Measures]",
-        Some("[Measures]"),
-        Some("[Measures].[MeasuresLevel]"),
-    ) {
+    // MeasuresLevel (special case, not in model); hidden when no measure's
+    // table is visible.
+    let measures_visible = model
+        .fact_tables
+        .iter()
+        .any(|ft| super::table_visible(config, user, &ft.table_name));
+    if measures_visible
+        && super::coordinates_match(
+            restrictions,
+            "[Measures]",
+            Some("[Measures]"),
+            Some("[Measures].[MeasuresLevel]"),
+        )
+    {
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -100,6 +111,9 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
     }
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
         let base_guid = 30 + i as u32 * 2;
 
         // (All) level. A flat dimension exposes a single attribute hierarchy
@@ -347,6 +361,49 @@ pub fn get_levels_response(restrictions: &Restrictions) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// An OLS-hidden table disappears from the metadata rowsets; an
+    /// administrator still sees it.
+    #[test]
+    fn hidden_tables_are_not_advertised() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let table = project.model.dim_table_for_discovery("Date").to_string();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table,
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            let restricted = super::get_levels_response(&Restrictions::default(), &user, &config);
+            assert!(
+                !restricted.contains("[Date].[Calendar]"),
+                "a hidden table must not be advertised: {restricted}"
+            );
+            let admin = super::get_levels_response(
+                &Restrictions::default(),
+                &UserContext::admin_default(),
+                &project.config,
+            );
+            assert!(admin.contains("[Date].[Calendar]"), "{admin}");
+        });
+    }
+
     use crate::project::project::ProxyProject;
     use crate::project::project::with_test_project;
     use crate::xmla::parser::Restrictions;
@@ -355,7 +412,11 @@ mod tests {
     fn date_dim_has_five_levels() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_levels_response(&Restrictions::default());
+            let resp = super::get_levels_response(
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             let date_section = &resp[resp.find("[Date]").unwrap_or(0)..];
             let year = date_section.contains("<LEVEL_NAME>Year</LEVEL_NAME>");
             let quarter = date_section.contains("<LEVEL_NAME>Quarter</LEVEL_NAME>");
@@ -448,7 +509,11 @@ mod tests {
     fn single_dim_has_two_levels() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_levels_response(&Restrictions::default());
+            let resp = super::get_levels_response(
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             let cat_section = resp
                 .split("<DIMENSION_UNIQUE_NAME>[Category]")
                 .collect::<Vec<_>>();

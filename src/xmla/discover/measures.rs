@@ -23,13 +23,19 @@ const MEASURE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATA
                 <xsd:element sql:field="MEASURE_DISPLAY_FOLDER" name="MEASURE_DISPLAY_FOLDER" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="DEFAULT_FORMAT_STRING" name="DEFAULT_FORMAT_STRING" type="xsd:string" minOccurs="0"/>"#;
 
-pub fn get_measures_response() -> String {
+pub fn get_measures_response(
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut rows = String::new();
     for (i, m) in model.measures.iter().enumerate() {
+        if !super::table_visible(config, user, &model.fact_table(m.fact_table_idx).table_name) {
+            continue;
+        }
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>

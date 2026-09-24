@@ -988,6 +988,21 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> String {
+    // A user whose roles grant no model permission (no matching role, or a
+    // role set to `none`) has no access at all: the reference answers a
+    // permission fault rather than advertising the model. Measured: an
+    // unknown session/role combination answers "the user ... does not have
+    // permission", and a role-less user's metadata is not disclosed.
+    if crate::engine::model::effective_model_permission(config, user)
+        == crate::project::config::ModelPermission::None
+    {
+        let resp = mallardcube::response::fault_response(
+            "the user has no access to this model: no role grants read permission",
+        );
+        mallardcube::xmla_trace::trace_request("NoModelPermission", body, &resp, None, None);
+        return resp;
+    }
+
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
             let resp = execute::dispatch::get_empty_execute_response();
@@ -1044,32 +1059,32 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             resp
         }
         XmlaRequest::DbschemaTables => {
-            let resp = tables::get_tables_response();
+            let resp = tables::get_tables_response(user, config);
             mallardcube::xmla_trace::trace_request("DbschemaTables", body, &resp, None, None);
             resp
         }
 
         XmlaRequest::MdschemaDimensions => {
             println!("📥 Sending Dimensions to Excel");
-            let resp = dimensions::get_dimensions_response();
+            let resp = dimensions::get_dimensions_response(user, config);
             mallardcube::xmla_trace::trace_request("MdschemaDimensions", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaMeasures => {
             println!("📥 Sending Measures to Excel");
-            let resp = measures::get_measures_response();
+            let resp = measures::get_measures_response(user, config);
             mallardcube::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaHierarchies { restrictions } => {
             println!("📥 Hierarchies");
-            let resp = hierarchies::get_hierarchies_response(restrictions);
+            let resp = hierarchies::get_hierarchies_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("MdschemaHierarchies", body, &resp, None, None);
             resp
         }
         XmlaRequest::MdschemaLevels { restrictions } => {
             println!("📥 Levels");
-            let resp = levels::get_levels_response(restrictions);
+            let resp = levels::get_levels_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("MdschemaLevels", body, &resp, None, None);
             resp
         }
@@ -1159,7 +1174,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         }
         XmlaRequest::MdschemaMeasureGroupDimensions => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
-            let resp = measuregroup_dimensions::get_measuregroup_dimensions_response();
+            let resp = measuregroup_dimensions::get_measuregroup_dimensions_response(user, config);
             mallardcube::xmla_trace::trace_request(
                 "MdschemaMeasureGroupDimensions",
                 body,

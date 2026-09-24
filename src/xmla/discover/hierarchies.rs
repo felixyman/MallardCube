@@ -30,13 +30,24 @@ const HIER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="STRUCTURE_TYPE" name="STRUCTURE_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
+pub fn get_hierarchies_response(
+    restrictions: &Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let mut rows = String::new();
 
-    // Measures hierarchy (special case, not in model)
-    if super::coordinates_match(restrictions, "[Measures]", Some("[Measures]"), None) {
+    // Measures hierarchy (special case, not in model); hidden when no
+    // measure's table is visible.
+    let measures_visible = model
+        .fact_tables
+        .iter()
+        .any(|ft| super::table_visible(config, user, &ft.table_name));
+    if measures_visible
+        && super::coordinates_match(restrictions, "[Measures]", Some("[Measures]"), None)
+    {
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -127,6 +138,9 @@ pub fn get_hierarchies_response(restrictions: &Restrictions) -> String {
     };
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
         let dim_type = if !d.levels.is_empty() {
             if d.is_date_role { 1 } else { 0 } // Time dim = 1, Regular = 0
         } else {
@@ -210,7 +224,11 @@ mod tests {
         // its Date Filters (plan 048).
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_hierarchies_response(&Restrictions::default());
+            let resp = super::get_hierarchies_response(
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Calendar]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
@@ -244,7 +262,11 @@ mod tests {
     fn regular_dim_has_default_origin() {
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_hierarchies_response(&Restrictions::default());
+            let resp = super::get_hierarchies_response(
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             // Category hierarchy should have HIERARCHY_ORIGIN=2, DIMENSION_TYPE=3
             assert!(
                 resp.contains("<HIERARCHY_ORIGIN>2</HIERARCHY_ORIGIN>"),

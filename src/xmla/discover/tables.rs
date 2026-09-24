@@ -13,13 +13,19 @@ const TABLE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="TABLE_
                 <xsd:element sql:field="TABLE_OLAP_TYPE" name="TABLE_OLAP_TYPE" type="xsd:string" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_NAME" name="CUBE_NAME" type="xsd:string" minOccurs="0"/>"#;
 
-pub fn get_tables_response() -> String {
+pub fn get_tables_response(
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut rows = String::new();
 
     for ft in &project.model.fact_tables {
+        if !super::table_visible(config, user, &ft.table_name) {
+            continue;
+        }
         rows.push_str(&format!(
             r#"          <row>
             <TABLE_CATALOG>{catalog}</TABLE_CATALOG>
@@ -34,6 +40,9 @@ pub fn get_tables_response() -> String {
         ));
     }
     for d in &project.model.dimensions {
+        if !super::dimension_visible(&project.model, config, user, &d.id) {
+            continue;
+        }
         rows.push_str(&format!(
             r#"          <row>
             <TABLE_CATALOG>{catalog}</TABLE_CATALOG>

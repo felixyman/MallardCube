@@ -20,16 +20,25 @@ const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_
                 <xsd:element sql:field="DIMENSION_IS_VISIBLE" name="DIMENSION_IS_VISIBLE" type="xsd:boolean" minOccurs="0"/>
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_dimensions_response() -> String {
+pub fn get_dimensions_response(
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut rows = String::new();
 
-    // Measures system dimension (special case)
-    rows.push_str(&format!(
-        r#"          <row>
+    // Measures system dimension (special case); hidden when no measure's table
+    // is visible.
+    let measures_visible = model
+        .fact_tables
+        .iter()
+        .any(|ft| super::table_visible(config, user, &ft.table_name));
+    if measures_visible {
+        rows.push_str(&format!(
+            r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
             <CUBE_NAME>{cube}</CUBE_NAME>
             <DIMENSION_NAME>Measures</DIMENSION_NAME>
@@ -49,9 +58,13 @@ pub fn get_dimensions_response() -> String {
             <CUBE_SOURCE>1</CUBE_SOURCE>
           </row>
 "#,
-    ));
+        ));
+    }
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>

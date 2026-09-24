@@ -12,13 +12,19 @@ const MG_DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATAL
                 <xsd:element sql:field="DIMENSION_IS_FACT_DIMENSION" name="DIMENSION_IS_FACT_DIMENSION" type="xsd:boolean" minOccurs="0"/>
                 <xsd:element sql:field="DIMENSION_GRANULARITY" name="DIMENSION_GRANULARITY" type="xsd:string" minOccurs="0"/>"#;
 
-pub fn get_measuregroup_dimensions_response() -> String {
+pub fn get_measuregroup_dimensions_response(
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let mut rows = String::new();
 
     let mut seen_groups = std::collections::BTreeSet::new();
     for ft in &model.fact_tables {
+        if !super::table_visible(config, user, &ft.table_name) {
+            continue;
+        }
         if !seen_groups.insert(&ft.measure_group_name) {
             continue;
         }
@@ -43,6 +49,9 @@ pub fn get_measuregroup_dimensions_response() -> String {
         ));
 
         for d in &model.dimensions {
+            if !super::dimension_visible(model, config, user, &d.id) {
+                continue;
+            }
             // The dimension's granularity is its key attribute — the key
             // attribute hierarchy for a date role, the single hierarchy
             // otherwise. Excel reads this to know which attribute identifies a

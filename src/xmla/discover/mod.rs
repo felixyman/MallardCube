@@ -22,6 +22,28 @@ pub mod tmschema;
 /// request's restriction list? Discover responses must honour these: Excel
 /// asks for one hierarchy (or level) at a time while it builds a pivot cache,
 /// and rows for other hierarchies corrupt the cache field (plan 048/049).
+/// May this user see discover rows backed by `table`? An OLS-hidden table
+/// disappears from the metadata rowsets, as it does in the reference (plan 051
+/// review). Unlisted tables stay visible — measured: a role listing two tables
+/// still sees all six dimensions.
+pub(crate) fn table_visible(
+    config: &crate::project::config::ProxyConfig,
+    user: &crate::engine::model::UserContext,
+    table: &str,
+) -> bool {
+    crate::engine::model::effective_table_filter(config, user, table)
+        != crate::engine::model::TableAccess::Hidden
+}
+
+pub(crate) fn dimension_visible(
+    model: &crate::engine::model::SemanticModel,
+    config: &crate::project::config::ProxyConfig,
+    user: &crate::engine::model::UserContext,
+    dim_id: &str,
+) -> bool {
+    table_visible(config, user, model.dim_table_for_discovery(dim_id))
+}
+
 pub(crate) fn coordinates_match(
     restrictions: &crate::xmla::parser::Restrictions,
     dim: &str,

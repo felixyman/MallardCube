@@ -4374,7 +4374,10 @@ mod tests {
     #[test]
     fn retail_analytics_discover_dimensions_has_date_role() {
         with_retail_analytics(|| {
-            let xml = crate::xmla::discover::dimensions::get_dimensions_response();
+            let xml = crate::xmla::discover::dimensions::get_dimensions_response(
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"),
                 "missing rowset namespace"
@@ -4389,7 +4392,10 @@ mod tests {
     #[test]
     fn retail_analytics_discover_measures_has_total_revenue() {
         with_retail_analytics(|| {
-            let xml = crate::xmla::discover::measures::get_measures_response();
+            let xml = crate::xmla::discover::measures::get_measures_response(
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"),
                 "missing rowset namespace"
