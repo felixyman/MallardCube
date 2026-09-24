@@ -121,3 +121,16 @@ schema requires the XMLA namespace. Kept because unit tests and hand-written
 curl probes are easier to read un-namespaced, and a client that omits the
 namespace is malformed rather than dangerous — revisit if one ever relies on
 it.
+
+Follow-up round 4 (all measured on the reference): the SOAP skeleton is
+positional — a foreign element named `Header` inside `soap:Header` is a legal
+extension (accepted), while a `Body` without or inside another `Body`, or a
+missing `Body`, faults; an explicit `xmlns=""` faults, unlike the documented
+no-declaration leniency; element and attribute names are validated as XML
+QNames ("Illegal qualified name character", "A qualified name cannot contain
+multiple colons"); and the session id is read from an XMLA
+`Session`/`EndSession` only, echoed as an escaped attribute — the whitelist
+that dropped well-formed ids (spaces, non-ASCII, `&amp;`) is gone, and a
+foreign `Session` header is ignored. We stay stateless: unlike the reference,
+an unknown session id is echoed rather than faulted, recorded as a divergence.
+

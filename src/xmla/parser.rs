@@ -131,13 +131,77 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
     true
 }
 
-/// Element and attribute names cannot carry reference syntax: quick-xml hands
-/// us the raw text, so `Request&amp;Type` arrives intact. The reference rejects
-/// it ("Illegal qualified name character", measured 2026-09-24).
-fn has_invalid_name(name: &[u8]) -> bool {
-    name.iter()
-        .any(|byte| matches!(byte, b'&' | b';' | b'<' | b'>' | b'"' | b'\''))
-        || has_xml_invalid_control(&String::from_utf8_lossy(name))
+fn is_name_start_char(c: char) -> bool {
+    matches!(c, '_' | 'A'..='Z' | 'a'..='z')
+        || matches!(
+            c as u32,
+            0xC0..=0xD6
+                | 0xD8..=0xF6
+                | 0xF8..=0x2FF
+                | 0x370..=0x37D
+                | 0x37F..=0x1FFF
+                | 0x200C..=0x200D
+                | 0x2070..=0x218F
+                | 0x2C00..=0x2FEF
+                | 0x3001..=0xD7FF
+                | 0xF900..=0xFDCF
+                | 0xFDF0..=0xFFFD
+                | 0x10000..=0xEFFFF
+        )
+}
+
+fn is_name_char(c: char) -> bool {
+    is_name_start_char(c)
+        || matches!(c, '-' | '.' | '0'..='9' | '\u{b7}')
+        || matches!(c as u32, 0x300..=0x36F | 0x203F..=0x2040)
+}
+
+/// XML 1.0 QName validation: quick-xml hands us raw names (references and all),
+/// and the reference rejects anything outside the production — "Illegal
+/// qualified name character" for `Request&amp;Type` or `<1Bogus/>`, "A
+/// qualified name cannot contain multiple colons" for `<a:b:c/>` (measured
+/// 2026-09-24).
+fn is_qname(name: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(name) else {
+        return false;
+    };
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if first == ':' || !is_name_start_char(first) {
+        return false;
+    }
+    let mut colon = false;
+    let mut last = first;
+    for c in chars {
+        if c == ':' {
+            if colon {
+                return false;
+            }
+            colon = true;
+        } else if !is_name_char(c) {
+            return false;
+        }
+        last = c;
+    }
+    last != ':'
+}
+
+/// The element's own `xmlns` attribute: `Some(true)` declares a default
+/// namespace, `Some(false)` explicitly un-declares one (`xmlns=""`), `None`
+/// says nothing. quick-xml resolves both empty and absent to `Unbound`, but the
+/// reference faults an explicit undeclaration on a semantic element (measured
+/// 2026-09-24).
+fn default_namespace_attribute(element: &quick_xml::events::BytesStart<'_>) -> Option<bool> {
+    element.attributes().flatten().find_map(|attribute| {
+        (attribute.key.as_ref() == b"xmlns").then(|| {
+            attribute
+                .unescape_value()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        })
+    })
 }
 
 /// XML 1.0 forbids these characters anywhere in a document. The reference's
@@ -161,7 +225,7 @@ fn attribute_error(element: &quick_xml::events::BytesStart<'_>) -> Option<String
         let Ok(attribute) = attribute else {
             return Some("request contains an unreadable attribute".to_string());
         };
-        if has_invalid_name(attribute.key.as_ref()) {
+        if !is_qname(attribute.key.as_ref()) {
             return Some("request contains an invalid attribute name".to_string());
         }
         match attribute.unescape_value() {
@@ -186,10 +250,17 @@ fn lexical_error(malformed: &mut Option<String>, bytes: &[u8]) {
     }
 }
 
-fn parent_is_xmla_discover(open_elements: &[(Vec<u8>, bool)]) -> bool {
+fn parent_is_xmla_discover(open_elements: &[(Vec<u8>, bool, bool)]) -> bool {
     open_elements
         .last()
-        .map(|(local, namespace_ok)| *namespace_ok && local.as_slice() == b"Discover")
+        .map(|(local, namespace_ok, _)| *namespace_ok && local.as_slice() == b"Discover")
+        .unwrap_or(false)
+}
+
+fn parent_is_soap_envelope(open_elements: &[(Vec<u8>, bool, bool)]) -> bool {
+    open_elements
+        .last()
+        .map(|(local, _, soap_ok)| *soap_ok && local.as_slice() == b"Envelope")
         .unwrap_or(false)
 }
 
@@ -203,18 +274,41 @@ struct Structure {
     namespace_ok: bool,
     soap_ok: bool,
     parent_is_xmla_discover: bool,
+    parent_is_soap_envelope: bool,
+    is_root: bool,
     restrictions_seen: bool,
     in_restrictions: bool,
     in_restriction_list: bool,
     restriction_list_seen: bool,
+    body_seen: bool,
+    header_seen: bool,
 }
 
 fn structural_error(local: &[u8], state: Structure) -> Option<String> {
-    if matches!(local, b"Envelope" | b"Body" | b"Header") && !state.soap_ok {
-        return Some(format!(
-            "<{}> is not in the SOAP namespace",
-            String::from_utf8_lossy(local)
-        ));
+    // The SOAP skeleton is positional: `Envelope` is the root, `Body`/`Header`
+    // are its direct children and SOAP-bound. A foreign element that merely
+    // shares one of those names (a SOAP header entry, say) is not the skeleton
+    // — the reference accepted one while faulting a body without an envelope
+    // and a nested body (measured 2026-09-24).
+    if local == b"Envelope" && (!state.is_root || !state.soap_ok) {
+        return Some("<Envelope> must be the SOAP root element".to_string());
+    }
+    if matches!(local, b"Body" | b"Header") && state.soap_ok {
+        // Only a SOAP-bound element can be the skeleton container: a foreign
+        // element that merely shares the name is an extension (SOAP header
+        // entries are explicitly allowed) and is ignored.
+        if !state.parent_is_soap_envelope {
+            return Some(format!(
+                "<{}> must be a direct child of the SOAP envelope",
+                String::from_utf8_lossy(local)
+            ));
+        }
+        if (local == b"Body" && state.body_seen) || (local == b"Header" && state.header_seen) {
+            return Some(format!(
+                "<{}> appears more than once",
+                String::from_utf8_lossy(local)
+            ));
+        }
     }
     // Every element the protocol interprets must be in the XMLA namespace: the
     // reference faults a foreign or undeclared-prefixed RequestType, Execute,
@@ -265,6 +359,38 @@ fn structural_error(local: &[u8], state: Structure) -> Option<String> {
     }
 }
 
+/// The session id carried by an XMLA `Session`/`EndSession` element, XML
+/// unescaped. Only the XMLA namespace counts: a foreign header entry named
+/// `Session` is ignored, exactly as the reference does (measured 2026-09-24).
+/// The proxy is stateless and only echoes the id, so no existence check is
+/// possible (the reference faults an unknown session; recorded as a
+/// divergence).
+pub fn session_id(xml: &str) -> Option<String> {
+    let mut reader = NsReader::from_str(xml);
+    loop {
+        match reader.read_resolved_event() {
+            Ok((namespace, Event::Start(ref e))) | Ok((namespace, Event::Empty(ref e))) => {
+                let in_xmla = matches!(
+                    &namespace,
+                    ResolveResult::Bound(ns) if ns.as_ref() == XMLA_NAMESPACE
+                );
+                if in_xmla && matches!(e.local_name().as_ref(), b"Session" | b"EndSession") {
+                    for attribute in e.attributes().flatten() {
+                        if attribute.key.as_ref() == b"SessionId" {
+                            return attribute
+                                .unescape_value()
+                                .ok()
+                                .map(|value| value.to_string());
+                        }
+                    }
+                }
+            }
+            Ok((_, Event::Eof)) | Err(_) => return None,
+            _ => {}
+        }
+    }
+}
+
 pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut reader = NsReader::from_str(xml);
 
@@ -292,8 +418,15 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     // Open elements as (local name, namespace ok), so structural checks can
     // require the right parent (e.g. `<Restrictions>` directly under
     // `<Discover>`, not inside a `<Command>`).
-    let mut open_elements: Vec<(Vec<u8>, bool)> = Vec::new();
+    let mut open_elements: Vec<(Vec<u8>, bool, bool)> = Vec::new();
     let mut restrictions_seen = false;
+    // Explicit `xmlns=""` (as opposed to no declaration at all) makes an
+    // element invalid for the reference; the flag is inherited until a new
+    // default namespace is declared.
+    let mut default_undeclared_stack: Vec<bool> = Vec::new();
+    let mut envelope_seen = false;
+    let mut body_seen = false;
+    let mut header_seen = false;
     let mut malformed: Option<String> = None;
 
     let mut parsed_request_type = String::new();
@@ -311,12 +444,12 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 break;
             }
         };
-        let namespace_ok = match &namespace {
+        let mut namespace_ok = match &namespace {
             ResolveResult::Bound(ns) => ns.as_ref() == XMLA_NAMESPACE,
             ResolveResult::Unbound => true,
             ResolveResult::Unknown(_) => false,
         };
-        let soap_ok = match &namespace {
+        let mut soap_ok = match &namespace {
             ResolveResult::Bound(ns) => ns.as_ref() == SOAP_NAMESPACE,
             ResolveResult::Unbound => true,
             ResolveResult::Unknown(_) => false,
@@ -324,7 +457,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         match event {
             Event::Start(ref e) => {
                 let name = e.local_name();
-                if has_invalid_name(e.name().as_ref()) {
+                let inherited = default_undeclared_stack.last().copied().unwrap_or(false);
+                let default_undeclared = match default_namespace_attribute(e) {
+                    Some(declares) => !declares,
+                    None => inherited,
+                };
+                if default_undeclared && matches!(&namespace, ResolveResult::Unbound) {
+                    namespace_ok = false;
+                    soap_ok = false;
+                }
+                if !is_qname(e.name().as_ref()) {
                     malformed.get_or_insert_with(|| {
                         "request contains an invalid element name".to_string()
                     });
@@ -339,10 +481,14 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             namespace_ok,
                             soap_ok,
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
+                            parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
+                            is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
                             in_restriction_list,
                             restriction_list_seen,
+                            body_seen,
+                            header_seen,
                         },
                     )
                 {
@@ -352,7 +498,19 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     malformed
                         .get_or_insert_with(|| "unexpected child of <PropertyName>".to_string());
                 }
-                open_elements.push((name.as_ref().to_vec(), namespace_ok));
+                default_undeclared_stack.push(default_undeclared);
+                if name.as_ref() == b"Envelope" && soap_ok {
+                    envelope_seen = true;
+                }
+                if parent_is_soap_envelope(&open_elements) {
+                    if name.as_ref() == b"Body" {
+                        body_seen = true;
+                    }
+                    if name.as_ref() == b"Header" {
+                        header_seen = true;
+                    }
+                }
+                open_elements.push((name.as_ref().to_vec(), namespace_ok, soap_ok));
                 match name.as_ref() {
                     b"RequestType" => in_request_type = true,
                     b"PropertyName" => {
@@ -405,10 +563,19 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             }
             Event::Empty(ref e) => {
                 let name = e.local_name();
+                let inherited = default_undeclared_stack.last().copied().unwrap_or(false);
+                let default_undeclared = match default_namespace_attribute(e) {
+                    Some(declares) => !declares,
+                    None => inherited,
+                };
+                if default_undeclared && matches!(&namespace, ResolveResult::Unbound) {
+                    namespace_ok = false;
+                    soap_ok = false;
+                }
                 if name.as_ref() == b"Execute" {
                     is_execute = true;
                 }
-                if has_invalid_name(e.name().as_ref()) {
+                if !is_qname(e.name().as_ref()) {
                     malformed.get_or_insert_with(|| {
                         "request contains an invalid element name".to_string()
                     });
@@ -423,10 +590,14 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             namespace_ok,
                             soap_ok,
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
+                            parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
+                            is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
                             in_restriction_list,
                             restriction_list_seen,
+                            body_seen,
+                            header_seen,
                         },
                     )
                 {
@@ -437,6 +608,17 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 if name.as_ref() == b"RestrictionList" {
                     restriction_list_seen = true;
+                }
+                if name.as_ref() == b"Envelope" && soap_ok {
+                    envelope_seen = true;
+                }
+                if parent_is_soap_envelope(&open_elements) {
+                    if name.as_ref() == b"Body" {
+                        body_seen = true;
+                    }
+                    if name.as_ref() == b"Header" {
+                        header_seen = true;
+                    }
                 }
                 // A self-closing restriction name still names a restriction:
                 // the reference faults an unadvertised one even when its value
@@ -480,6 +662,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Event::End(ref e) => {
                 let name = e.local_name();
                 open_elements.pop();
+                default_undeclared_stack.pop();
                 let text = pending_text.trim().to_string();
                 if text.is_empty() {
                     // An empty value does not apply a restriction, but the name
@@ -543,6 +726,10 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 malformed.get_or_insert_with(|| "DTD is prohibited".to_string());
             }
         }
+    }
+
+    if envelope_seen && !body_seen {
+        return XmlaRequest::Malformed("<Body> is required under the SOAP envelope".to_string());
     }
 
     if let Some(reason) = malformed {
@@ -929,6 +1116,67 @@ mod tests {
         // DTDs are prohibited.
         let doctype = r#"<!DOCTYPE s:Envelope [<!ENTITY x "y">]><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
         assert!(matches!(parse_xmla(doctype), XmlaRequest::Malformed(_)));
+    }
+
+    /// The SOAP skeleton is positional, and the reference's other round-6
+    /// answers: a foreign header entry is fine, a body without an envelope /
+    /// nested body / missing body fault, explicit `xmlns=""` faults, and
+    /// invalid QNames fault (measured 2026-09-24).
+    #[test]
+    fn soap_skeleton_qnames_and_undeclaration_match_the_reference() {
+        // A foreign header entry named Header is not the SOAP Header.
+        let foreign_header = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><f:Header xmlns:f="urn:probe:foreign"/></s:Header><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
+        assert!(matches!(
+            parse_xmla(foreign_header),
+            XmlaRequest::DiscoverDatasources
+        ));
+
+        // A body without an envelope, a nested body, and no body at all.
+        let stray_body = r#"<s:Body xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"/>"#;
+        assert!(matches!(parse_xmla(stray_body), XmlaRequest::Malformed(_)));
+        let nested_body = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Body/></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(nested_body), XmlaRequest::Malformed(_)));
+        let no_body =
+            r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"></s:Envelope>"#;
+        assert!(matches!(parse_xmla(no_body), XmlaRequest::Malformed(_)));
+
+        // An explicit undeclaration of the XMLA namespace (as opposed to no
+        // declaration at all, which stays the documented divergence).
+        let undeclared = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+            <Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType xmlns="">MDSCHEMA_DIMENSIONS</RequestType></Discover>
+        </s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(undeclared), XmlaRequest::Malformed(_)));
+
+        // QName violations, element and attribute alike.
+        for bad in ["<1Bogus/>", "<Bad~Name/>", "<a:b:c/>"] {
+            let body = format!(
+                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><Discover xmlns=\"urn:schemas-microsoft-com:xml-analysis\">{bad}<RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"
+            );
+            assert!(
+                matches!(parse_xmla(&body), XmlaRequest::Malformed(_)),
+                "{bad}"
+            );
+        }
+        let bad_attr = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis" 1foo="x"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(bad_attr), XmlaRequest::Malformed(_)));
+    }
+
+    /// The session id is read from an XMLA `Session`/`EndSession` only and
+    /// returned XML-unescaped (lossless); a foreign header entry named
+    /// `Session` is ignored like the reference (measured 2026-09-24).
+    #[test]
+    fn session_id_is_namespace_aware_and_lossless() {
+        let xmla_session = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="id with spaces"/></s:Header><s:Body/></s:Envelope>"#;
+        assert_eq!(session_id(xmla_session), Some("id with spaces".to_string()));
+
+        let escaped = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="a&amp;b"/></s:Header><s:Body/></s:Envelope>"#;
+        assert_eq!(session_id(escaped), Some("a&b".to_string()));
+
+        let foreign = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><f:Session xmlns:f="urn:probe:foreign" SessionId="FOREIGN-ID"/></s:Header><s:Body/></s:Envelope>"#;
+        assert_eq!(session_id(foreign), None);
+
+        let end_session = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><EndSession xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="abc"/></s:Header><s:Body/></s:Envelope>"#;
+        assert_eq!(session_id(end_session), Some("abc".to_string()));
     }
 
     /// Namespace binding decides, not the prefix: the reference accepts a

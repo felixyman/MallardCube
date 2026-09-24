@@ -20,10 +20,11 @@ pub fn soap_envelope_parts() -> (String, String) {
     let open = format!(
         r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Header>
-    <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="{session_id}" />
+    <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="{}" />
   </soap:Header>
   <soap:Body>
-"#
+"#,
+        xml_escape_attr(&session_id)
     );
     let close = r#"  </soap:Body>
 </soap:Envelope>"#
@@ -34,6 +35,11 @@ pub fn soap_envelope_parts() -> (String, String) {
 pub fn wrap_in_soap_envelope(inner_xml: &str) -> String {
     let (open, close) = soap_envelope_parts();
     format!("{open}{inner_xml}\n{close}")
+}
+
+/// Escape text for a double-quoted XML attribute: `xml_escape` plus quotes.
+pub fn xml_escape_attr(s: &str) -> String {
+    xml_escape(s).replace('"', "&quot;").replace('\'', "&apos;")
 }
 
 /// Escape text content for safe XML insertion.
@@ -137,6 +143,16 @@ mod tests {
     /// XML parsers normalise a literal CR to LF, so a value carrying one must
     /// be escaped; tab, LF, emoji and U+FFFD survive unchanged, and
     /// XML-invalid controls become U+FFFD (plan 055 review).
+    /// An attribute value must survive quotes too — the session id is echoed
+    /// from client input.
+    #[test]
+    fn xml_escape_attr_escapes_quotes() {
+        assert_eq!(
+            xml_escape_attr("a\"b'c&d<e>"),
+            "a&quot;b&apos;c&amp;d&lt;e&gt;"
+        );
+    }
+
     #[test]
     fn xml_escape_round_trips_control_characters() {
         let escaped = xml_escape("a\r\tb\n\u{1}\u{fffd}\u{1f389}<&>");
