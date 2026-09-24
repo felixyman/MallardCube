@@ -522,3 +522,25 @@ Open, in priority order (recorded, not fixed):
    before streaming; cellsets still need one escaping serializer.
 6. The ADODB `Execute` retry loop remains undiagnosed; response shape, session
    handling and transport headers are the remaining candidates.
+
+### RLS bucket: measured semantics, and what is fixed
+
+Measured on the reference with probe roles:
+
+- unlisted tables stay visible (a role listing two tables still sees six
+  dimensions) — our union semantics are correct;
+- a fact filter does **not** restrict dimension members (Territory stays at 9);
+- a dimension filter **does** propagate to fact totals (65,850,256 of
+  521,586,767) — so hiding a table whose DAX filter cannot be lowered leaks;
+- the filtered table's own members shrink (Territory 9 → 2).
+
+Fixed: `Count`/`MetaCount` role predicates (`e2a1b64`); refusal for unlowerable
+DAX filters (`d984495`); OLS-hidden metadata across six rowsets plus a
+no-model-permission refusal (`3b99c04`).
+
+Still open in this bucket: axis `DISPLAY_INFO`/child counts read the unfiltered
+dimension cache, so a restricted user's member child counts are the
+unrestricted ones (an information leak, not row data); and catalog/cube scope
+names are still unvalidated (we return the configured catalog's rows where the
+reference answers an empty rowset).
+
