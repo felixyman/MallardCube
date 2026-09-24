@@ -32,3 +32,5 @@ projects/*
 !projects/project3/
 !projects/project4/
 !projects/upstream_marts/
+
+__pycache__/

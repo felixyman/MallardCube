@@ -76,11 +76,17 @@ A claim:
   "method": "relay capture of pivotCacheDefinition + MDSCHEMA_PROPERTIES probes",
   "repro": "https://github.com/<repo>/tree/master/reference/repro/member-value.md",
   "catalog_case": "levels-date-key",
+  "supersedes": "optional-earlier-claim-id",
   "notes": "user hierarchy gets time=\"1\" but no memberValueDatatype; attribute hierarchy gets \"7\" from its level's MEMBER_VALUE DATA_TYPE"
 }
 ```
 
 - `status`: `verified` · `open` · `superseded`
+- `supersedes` / `superseded_by`: when a newer direct measurement disproves an
+  older claim, the old one keeps its id with `status: superseded` and a link, so
+  a page shows the history instead of quietly changing its mind. First case: the
+  nested `<restriction>` forms were recorded as honoured in plan 051;
+  measurement (plan 055) shows the reference rejects them as schema errors.
 - `catalog_case`: optional link to `parity/catalog.json`; when present the claim
   is re-checked by `probe-parity.sh` (the catalog case gains an optional
   `reference_claim` field and the checker asserts the link both ways).
@@ -105,6 +111,10 @@ Add a **Reference** section to the Starlight sidebar, seeded with:
 | `reference/probing-cookbook` | ADOMD vs DMV vs relay vs UIA; environment traps (WinINET, secure channels, empty statements, session begin) |
 
 `connect-excel.mdx` and `mdx-support.mdx` link into Reference for the "why".
+
+Deployment: `.github/workflows/deploy-docs.yml` triggers on `site/**` only, so
+`reference/**` must be added to its paths (or the registry moves under `site/`)
+— a claims-only change has to rebuild the site.
 
 ## Consolidation of the skills
 

@@ -18,6 +18,7 @@ python3 - "$url" "$trace" <<'PY'
 import collections
 import json
 import sys
+import urllib.error
 import urllib.request
 
 url, path = sys.argv[1], sys.argv[2]
@@ -39,6 +40,10 @@ for line in open(path):
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             text = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        # A SOAP fault can arrive with an HTTP error status; its body is the
+        # response to compare.
+        text = error.read().decode("utf-8", "replace")
     except Exception as error:
         counts["transport error"] += 1
         interesting.append(("transport", str(error)[:100], body[:140]))
@@ -63,4 +68,13 @@ print(dict(counts))
 for kind, response, request in interesting[:10]:
     print(f"--- {kind}: {request}")
     print(f"    {response}")
+
+differences = (
+    counts["transport error"]
+    + counts["contract fault"]
+    + counts["new fault"]
+    + counts["fault disappeared"]
+)
+print("REPLAY OK" if differences == 0 else f"REPLAY DIFF: {differences} difference(s)")
+sys.exit(1 if differences else 0)
 PY

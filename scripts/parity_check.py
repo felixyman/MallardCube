@@ -141,6 +141,11 @@ def main() -> int:
 
     passed = failed = known = 0
     for case in catalog["cases"]:
+        if not case.get("expect"):
+            failed += 1
+            print(f"FAIL {case['id']}")
+            print("     case has no expectations — a vacuous pass is not allowed")
+            continue
         request = case["request"]
         if case["kind"] == "discover":
             restrictions = {
@@ -167,6 +172,14 @@ def main() -> int:
                     if case["kind"] == "discover"
                     else observe_execute(xml)
                 )
+
+        if "error" in observed:
+            # A transport failure is never a documented gap: the proxy was not
+            # even reachable, so nothing was observed.
+            failed += 1
+            print(f"FAIL {case['id']}")
+            print(f"     transport: {observed['error']}")
+            continue
 
         mismatches = compare(case["expect"], observed)
         if mismatches and case.get("known_gap"):

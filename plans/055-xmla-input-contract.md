@@ -54,10 +54,16 @@ bit mask.
   rowset, and the dispatcher faults with the reference's message.
 - `<Value>`/`<value>` are values, never names; `PropertyName` is recorded as a
   name (so misrouting is caught like the rest).
-- Verification: replaying **all 2,402 recorded Excel requests** through the new
-  build produces **0 contract faults** and the same 2 faults as the recorded
-  baseline; gates 19/19 parity (3 known gaps), 11/11 fidelity, 8/8 smoke, and
-  `sweep-diff -Source proxy` → `SWEEP OK`.
+- Verification: an earlier 2,402-request corpus (probes plus a sweep) was lost
+  to a traced restart — `XMLA_TRACE_FILE` now exists so gate runs cannot
+  truncate a corpus again. The reproducible evidence is a fresh 1,156-request
+  sweep corpus: replaying it produces **0 contract faults and 0 unexpected
+  faults**, alongside 16/16 parity (3 known gaps), 13/13 fidelity, 8/8 smoke,
+  and `sweep-diff -Source proxy` → `SWEEP OK`.
+- Follow-up round (same day): `<Value>` is a value only inside its naming
+  element (a direct one is an unadvertised name and faults); control characters
+  are rejected in text, CDATA and attributes; `<Restrictions>` must be an
+  unprefixed direct child of `<Discover>` holding a single `<RestrictionList>`.
 
 ## Slice 2 — open: advertised but unapplied
 
