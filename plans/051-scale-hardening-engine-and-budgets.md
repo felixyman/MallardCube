@@ -475,3 +475,50 @@ cached responses, ~80 µs each) until the process was killed. Excel is
 unaffected, but the proxy is not ADODB-clean until this is understood — the
 next step is comparing the response shape against the mirror's for the same
 request (the mirror answers it without a loop).
+
+## Review round 3 (2026-09-24, VM session)
+
+The third review verified the empty-statement revert (no production path faults
+an empty statement; the reference agrees) and that **all seven hierarchies'
+`MDSCHEMA_MEMBERS` counts match the mirror** (6 / 21 / 5 / 4206 / 4019 / 6 / 9).
+It found one live silent-wrong-answer and one stale literal, both fixed in
+`fbc4661`:
+
+- `MEMBER_TYPE` was parsed-and-dropped: `MEMBER_TYPE=1` returned 21 rows where
+  the mirror returns 20, and `MEMBER_TYPE=2` returned 21 where the mirror
+  returns 1. It is parsed and applied now (verified live: 20 / 1).
+- `[Measures]` hardcoded `DEFAULT_MEMBER=[Measures].[Total Sales]` — another
+  project's measure — and `HIERARCHY_ORIGIN=2` where the mirror reports 6. The
+  default member is the model's first measure now; the mirror's
+  `[Measures].[__Default measure]` placeholder is a deliberate divergence. The
+  date key attribute hierarchy keeps origin 2 (verified against Excel in plan
+  048).
+
+Open, in priority order (recorded, not fixed):
+
+1. **A DAX-only table permission hides its table but leaves other tables
+   full.** `effective_table_filter` returns `Hidden` for the table carrying the
+   unlowerable filter, but a role with no entry for the fact table still gets
+   `Full` there, so a measure over the fact runs unfiltered. Whether SSAS
+   propagates the dimension filter through the relationship (and so restricts
+   the fact aggregate) is **unverified** — the next mirror experiment: create a
+   role with a filter on a dimension, connect with `Roles=`, compare a fact
+   total. Either way the honest options are to lower the filter or refuse the
+   query, not to hide one table and serve the rest.
+2. **`Count`/`MetaCount` omit role predicates**, and relationship-backed member
+   discovery uses the dimension table's own access only — a fact-table role
+   filter does not reach the member dictionary. Axis `DISPLAY_INFO` and child
+   counts read the unfiltered cache too, so the leak is wider than
+   `MDSCHEMA_MEMBERS`.
+3. **Most metadata rowsets ignore the user**: dimensions, hierarchies, levels,
+   measures, tables, measure-group dimensions and properties iterate the full
+   model without `effective_table_filter`, so a hidden table is still
+   advertised.
+4. **`CATALOG_NAME`/`CUBE_NAME` restrictions are parsed but never checked** — a
+   request naming another catalog or cube still gets the configured one's rows,
+   and `MDSCHEMA_MEASURES` carries no restrictions at all. Same "restriction
+   silently dropped" class as `MEMBER_TYPE`.
+5. Known: cache is entry-bounded, not byte-bounded; member rows materialize
+   before streaming; cellsets still need one escaping serializer.
+6. The ADODB `Execute` retry loop remains undiagnosed; response shape, session
+   handling and transport headers are the remaining candidates.
