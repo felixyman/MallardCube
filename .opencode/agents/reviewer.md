@@ -119,26 +119,20 @@ push, and never disturb a proxy on 8080.
 
 1. `cd /home/felix/code/MallardCube && git diff` (and `git log -3`) to see what
    changed and why. Pipes and `&&` are fine.
-2. **You start at most one proxy and you reuse it for the whole review.**
+2. **Use the review-proxy wrapper — at most one, reused for the whole review.**
 
    ```
-   cd /home/felix/code/MallardCube && curl -s -m 2 http://127.0.0.1:8099/status
+   cd /home/felix/code/MallardCube && bash scripts/review-proxy.sh start
    ```
 
-   If that answers, a proxy is already running — use it. Only when it does not
-   answer, start one and reuse it from then on:
-
-   ```
-   cd /home/felix/code/MallardCube && PROXY_CONFIG=projects/project3/proxy-config.json \
-     BIND_ADDRESS=0.0.0.0:8099 setsid nohup target/release/mallard serve \
-     > /tmp/opencode/review-proxy.log 2>&1 &
-   sleep 2 && curl -s -m 2 http://127.0.0.1:8099/status
-   ```
-
-   If it still does not answer, read `/tmp/opencode/review-proxy.log`, report
-   that blocker in your findings, and stop — **do not try another port, and do
-   not start a second proxy**. When your review is done, `ps -o pid,cmd -C
-   mallard` and `kill` the pid you started.
+   `start` starts a proxy on 8099 with the demo project, waits until it answers,
+   and reports "already serving" when one is up (reuse it — never start a
+   second). It prints the log path; `bash scripts/review-proxy.sh status` checks
+   it, and `bash scripts/review-proxy.sh stop` cleans up when your review is
+   done. If `start` fails, read the log it prints and report the blocker rather
+   than retrying. A previous run looped over eleven ports because it could not
+   wait for or check a proxy it started; this wrapper exists so that cannot
+   happen.
 3. `bash scripts/probe-fidelity.sh http://127.0.0.1:8099/xmla` is the
    deterministic gate for the silent-wrong-answer class. Prefer it to
    hand-rolled probes, and add a probe to it only in your report (you cannot
