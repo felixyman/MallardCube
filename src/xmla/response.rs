@@ -57,6 +57,9 @@ pub fn xml_escape(s: &str) -> String {
             | '\u{ffff}' => {
                 out.push('\u{fffd}');
             }
+            // A literal CR would be normalised to LF by every XML parser, so a
+            // value carrying one would silently change (plan 055 review).
+            '\r' => out.push_str("&#xD;"),
             _ => out.push(c),
         }
     }
@@ -125,4 +128,24 @@ pub fn discover_rowset_envelope(extra_schema: &str, row_fields: &str, rows: &str
     let (open, close) = discover_rowset_parts(extra_schema, row_fields);
     let inner = format!("{open}{rows}\n{close}");
     wrap_in_soap_envelope(&inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// XML parsers normalise a literal CR to LF, so a value carrying one must
+    /// be escaped; tab, LF, emoji and U+FFFD survive unchanged, and
+    /// XML-invalid controls become U+FFFD (plan 055 review).
+    #[test]
+    fn xml_escape_round_trips_control_characters() {
+        let escaped = xml_escape("a\r\tb\n\u{1}\u{fffd}\u{1f389}<&>");
+        assert!(escaped.contains("&#xD;"), "{escaped}");
+        assert!(escaped.contains('\t'), "{escaped}");
+        assert!(escaped.contains('\n'), "{escaped}");
+        assert!(escaped.contains('\u{fffd}'), "{escaped}");
+        assert!(escaped.contains('\u{1f389}'), "{escaped}");
+        assert!(escaped.contains("&lt;&amp;&gt;"), "{escaped}");
+        assert!(!escaped.contains('\u{1}'), "{escaped}");
+    }
 }

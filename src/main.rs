@@ -836,12 +836,26 @@ async fn handle_xmla(
         // The permit is held for the whole request (released on return).
         let _permit = permit;
         mallardcube::xmla_trace::mark_request_start();
-        let session_id = body_for_worker.find("SessionId=\"").and_then(|start| {
-            let after = start + 11;
-            body_for_worker[after..]
-                .find('"')
-                .map(|end| body_for_worker[after..after + end].to_string())
-        });
+        // The session id is echoed into the response header, so it must be a
+        // plain token: a raw capture can carry XML syntax or control
+        // characters from a rejected request, and echoing those would make our
+        // own response unparsable. Anything else gets a fresh id (plan 055
+        // review).
+        let session_id = body_for_worker
+            .find("SessionId=\"")
+            .and_then(|start| {
+                let after = start + 11;
+                body_for_worker[after..]
+                    .find('"')
+                    .map(|end| body_for_worker[after..after + end].to_string())
+            })
+            .filter(|candidate| {
+                !candidate.is_empty()
+                    && candidate.len() <= 128
+                    && candidate.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '{' | '}')
+                    })
+            });
         mallardcube::response::set_session_id(session_id);
         let backend = request_backend;
         // A panic in request handling must not take the whole server down:

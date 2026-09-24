@@ -8,6 +8,10 @@ use quick_xml::reader::NsReader;
 /// namespace is not.
 const XMLA_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:xml-analysis";
 
+/// The reference accepts only SOAP 1.1 (measured 2026-09-24: SOAP 1.2, a
+/// foreign envelope and an XMLA-default envelope all fault).
+const SOAP_NAMESPACE: &[u8] = b"http://schemas.xmlsoap.org/soap/envelope/";
+
 /// Values from a Discover request's `RestrictionList` (MS-SSAS). Discover
 /// responses must honour these: Excel asks for one hierarchy's member
 /// properties at a time while it builds pivot cache fields, and returning rows
@@ -127,6 +131,15 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
     true
 }
 
+/// Element and attribute names cannot carry reference syntax: quick-xml hands
+/// us the raw text, so `Request&amp;Type` arrives intact. The reference rejects
+/// it ("Illegal qualified name character", measured 2026-09-24).
+fn has_invalid_name(name: &[u8]) -> bool {
+    name.iter()
+        .any(|byte| matches!(byte, b'&' | b';' | b'<' | b'>' | b'"' | b'\''))
+        || has_xml_invalid_control(&String::from_utf8_lossy(name))
+}
+
 /// XML 1.0 forbids these characters anywhere in a document. The reference's
 /// parser rejects such requests before the protocol layer sees them, and a
 /// restriction name carrying one would make our own fault unparsable (plan 055
@@ -148,8 +161,8 @@ fn attribute_error(element: &quick_xml::events::BytesStart<'_>) -> Option<String
         let Ok(attribute) = attribute else {
             return Some("request contains an unreadable attribute".to_string());
         };
-        if has_xml_invalid_control(&String::from_utf8_lossy(attribute.key.as_ref())) {
-            return Some("request text contains an XML-invalid control character".to_string());
+        if has_invalid_name(attribute.key.as_ref()) {
+            return Some("request contains an invalid attribute name".to_string());
         }
         match attribute.unescape_value() {
             Ok(value) => {
@@ -183,34 +196,68 @@ fn parent_is_xmla_discover(open_elements: &[(Vec<u8>, bool)]) -> bool {
 /// Structural rules the reference's schema enforces (plan 055 review): a
 /// `<Restrictions>` is an unprefixed direct child of `<Discover>`, holds at
 /// most one `<RestrictionList>`, and nothing else lives directly under it.
-fn structural_error(
+/// The parser state the structural rules need, grouped so the signature stays
+/// readable.
+#[derive(Clone, Copy)]
+struct Structure {
     namespace_ok: bool,
-    local: &[u8],
+    soap_ok: bool,
     parent_is_xmla_discover: bool,
     restrictions_seen: bool,
     in_restrictions: bool,
     in_restriction_list: bool,
     restriction_list_seen: bool,
-) -> Option<String> {
-    // A foreign namespace, or a prefix that is not declared at all, cannot be
-    // the XMLA namespace the schema requires. Only the skeleton is checked;
-    // SOAP's own elements are in a different namespace by design.
-    let structural = matches!(local, b"Discover" | b"Restrictions" | b"RestrictionList");
-    if !namespace_ok && (structural || in_restrictions || in_restriction_list) {
+}
+
+fn structural_error(local: &[u8], state: Structure) -> Option<String> {
+    if matches!(local, b"Envelope" | b"Body" | b"Header") && !state.soap_ok {
+        return Some(format!(
+            "<{}> is not in the SOAP namespace",
+            String::from_utf8_lossy(local)
+        ));
+    }
+    // Every element the protocol interprets must be in the XMLA namespace: the
+    // reference faults a foreign or undeclared-prefixed RequestType, Execute,
+    // Command and Statement alike (measured 2026-09-24). Elements we merely
+    // pass over — the engine's own `<Version>` header, for one — are not
+    // checked.
+    let semantic = matches!(
+        local,
+        b"Discover"
+            | b"Execute"
+            | b"Command"
+            | b"Statement"
+            | b"RequestType"
+            | b"Restrictions"
+            | b"RestrictionList"
+            | b"PropertyName"
+            | b"Properties"
+            | b"PropertyList"
+            | b"BeginSession"
+            | b"BeginGetSessionToken"
+            | b"PROPERTY_TYPE"
+            | b"MEMBER_UNIQUE_NAME"
+            | b"TREE_OP"
+    );
+    if !state.namespace_ok && (semantic || state.in_restrictions || state.in_restriction_list) {
         return Some(format!(
             "<{}> is not in the XMLA namespace",
             String::from_utf8_lossy(local)
         ));
     }
     match local {
-        b"Restrictions" if !parent_is_xmla_discover || restrictions_seen => {
+        b"Restrictions" if !state.parent_is_xmla_discover || state.restrictions_seen => {
             Some("<Restrictions> must be a direct child of <Discover>".to_string())
         }
-        b"RestrictionList" if !in_restrictions || in_restriction_list || restriction_list_seen => {
+        b"RestrictionList"
+            if !state.in_restrictions
+                || state.in_restriction_list
+                || state.restriction_list_seen =>
+        {
             Some("<RestrictionList> must be the only child of <Restrictions>".to_string())
         }
         b"RestrictionList" => None,
-        _ if in_restrictions && !in_restriction_list => Some(format!(
+        _ if state.in_restrictions && !state.in_restriction_list => Some(format!(
             "unexpected <{}> under <Restrictions>",
             String::from_utf8_lossy(local)
         )),
@@ -269,12 +316,17 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             ResolveResult::Unbound => true,
             ResolveResult::Unknown(_) => false,
         };
+        let soap_ok = match &namespace {
+            ResolveResult::Bound(ns) => ns.as_ref() == SOAP_NAMESPACE,
+            ResolveResult::Unbound => true,
+            ResolveResult::Unknown(_) => false,
+        };
         match event {
             Event::Start(ref e) => {
                 let name = e.local_name();
-                if has_xml_invalid_control(&String::from_utf8_lossy(e.name().as_ref())) {
+                if has_invalid_name(e.name().as_ref()) {
                     malformed.get_or_insert_with(|| {
-                        "request text contains an XML-invalid control character".to_string()
+                        "request contains an invalid element name".to_string()
                     });
                 }
                 if let Some(reason) = attribute_error(e) {
@@ -282,13 +334,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        namespace_ok,
                         name.as_ref(),
-                        parent_is_xmla_discover(&open_elements),
-                        restrictions_seen,
-                        in_restrictions,
-                        in_restriction_list,
-                        restriction_list_seen,
+                        Structure {
+                            namespace_ok,
+                            soap_ok,
+                            parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
+                            restrictions_seen,
+                            in_restrictions,
+                            in_restriction_list,
+                            restriction_list_seen,
+                        },
                     )
                 {
                     malformed = Some(reason);
@@ -353,9 +408,9 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 if name.as_ref() == b"Execute" {
                     is_execute = true;
                 }
-                if has_xml_invalid_control(&String::from_utf8_lossy(e.name().as_ref())) {
+                if has_invalid_name(e.name().as_ref()) {
                     malformed.get_or_insert_with(|| {
-                        "request text contains an XML-invalid control character".to_string()
+                        "request contains an invalid element name".to_string()
                     });
                 }
                 if let Some(reason) = attribute_error(e) {
@@ -363,13 +418,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        namespace_ok,
                         name.as_ref(),
-                        parent_is_xmla_discover(&open_elements),
-                        restrictions_seen,
-                        in_restrictions,
-                        in_restriction_list,
-                        restriction_list_seen,
+                        Structure {
+                            namespace_ok,
+                            soap_ok,
+                            parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
+                            restrictions_seen,
+                            in_restrictions,
+                            in_restriction_list,
+                            restriction_list_seen,
+                        },
                     )
                 {
                     malformed = Some(reason);
@@ -479,7 +537,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Event::Comment(e) => lexical_error(&mut malformed, e.as_ref()),
             Event::PI(e) => lexical_error(&mut malformed, e.as_ref()),
             Event::Decl(e) => lexical_error(&mut malformed, e.as_ref()),
-            Event::DocType(e) => lexical_error(&mut malformed, e.as_ref()),
+            // The reference prohibits DTDs outright ("DTD is prohibited",
+            // measured 2026-09-24).
+            Event::DocType(_) => {
+                malformed.get_or_insert_with(|| "DTD is prohibited".to_string());
+            }
         }
     }
 
@@ -821,6 +883,52 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    /// The reference requires the XMLA namespace on every element it
+    /// interprets, SOAP 1.1 for the envelope, and rejects malformed names and
+    /// DTDs (measured 2026-09-24). All of these used to be accepted.
+    #[test]
+    fn semantic_namespaces_soap_and_lexical_names_are_enforced() {
+        // A foreign RequestType under an XMLA Discover.
+        let foreign_request_type = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+            <Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><f:RequestType xmlns:f="urn:example:foreign">MDSCHEMA_DIMENSIONS</f:RequestType></Discover>
+        </s:Body></s:Envelope>"#;
+        assert!(matches!(
+            parse_xmla(foreign_request_type),
+            XmlaRequest::Malformed(_)
+        ));
+
+        // An undeclared prefix on Execute, and a foreign Execute.
+        let undeclared = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><x:Execute><x:Command/></x:Execute></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(undeclared), XmlaRequest::Malformed(_)));
+
+        let foreign_execute = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+            <f:Execute xmlns:f="urn:example:foreign"><f:Command><f:Statement>SELECT FROM [Sales]</f:Statement></f:Command></f:Execute>
+        </s:Body></s:Envelope>"#;
+        assert!(matches!(
+            parse_xmla(foreign_execute),
+            XmlaRequest::Malformed(_)
+        ));
+
+        // SOAP 1.2 and a foreign envelope are not SOAP 1.1; a non-soap prefix
+        // bound to 1.1 is fine.
+        let soap12 = r#"<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(soap12), XmlaRequest::Malformed(_)));
+
+        let non_soap_prefix = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></soapenv:Body></soapenv:Envelope>"#;
+        assert!(matches!(
+            parse_xmla(non_soap_prefix),
+            XmlaRequest::DiscoverDatasources
+        ));
+
+        // Names: references are never part of a name.
+        let bad_name = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><Request&amp;Type/><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(bad_name), XmlaRequest::Malformed(_)));
+
+        // DTDs are prohibited.
+        let doctype = r#"<!DOCTYPE s:Envelope [<!ENTITY x "y">]><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>DISCOVER_DATASOURCES</RequestType></Discover></s:Body></s:Envelope>"#;
+        assert!(matches!(parse_xmla(doctype), XmlaRequest::Malformed(_)));
     }
 
     /// Namespace binding decides, not the prefix: the reference accepts a

@@ -106,6 +106,15 @@ behaviour for each needs recording before implementing.
 Add one `parity/catalog.json` case per implemented behaviour, with the mirror's
 value — and a `known_gap` on any that remain unimplemented.
 
+Follow-up round 3 (all measured on the reference): every element the protocol
+interprets must be in the XMLA namespace (a foreign `RequestType`, `Execute`,
+`Command` or `Statement` faults); the envelope must be SOAP **1.1** (SOAP 1.2,
+a foreign envelope and an XMLA-default envelope fault); element and attribute
+names cannot carry reference syntax (`Request&amp;Type`); and all DTDs are
+prohibited. The session id is only echoed when it is a plain token (a raw
+capture from a rejected request made the response unparsable), and `xml_escape`
+escapes CR as `&#xD;` so values round-trip.
+
 Deliberate divergence from the reference: a request whose elements declare
 *no* namespace (`ResolveResult::Unbound`) is accepted, where the reference's
 schema requires the XMLA namespace. Kept because unit tests and hand-written

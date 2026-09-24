@@ -31,12 +31,13 @@ for line in open(path):
     if not line:
         continue
     record = json.loads(line)
-    body = record.get("request_xml") or ""
-    if not body:
-        counts["empty record"] += 1
+    body = record.get("request_xml")
+    response = record.get("response_xml")
+    if not body or not isinstance(response, str) or not response:
+        counts["incomplete record"] += 1
         continue
     replayed += 1
-    recorded_fault = "<faultstring>" in (record.get("response_xml") or "")
+    recorded_fault = "<faultstring>" in response
     request = urllib.request.Request(
         url, data=body.encode(), headers={"Content-Type": "text/xml"}
     )
@@ -66,7 +67,7 @@ for line in open(path):
     else:
         counts["ok"] += 1
 
-print(f"replayed {sum(counts.values())} requests against {url}")
+print(f"replayed {replayed} requests against {url}")
 print(dict(counts))
 for kind, response, request in interesting[:10]:
     print(f"--- {kind}: {request}")
@@ -81,7 +82,7 @@ differences = (
     + counts["contract fault"]
     + counts["new fault"]
     + counts["fault disappeared"]
-    + counts["empty record"]
+    + counts["incomplete record"]
 )
 print("REPLAY OK" if differences == 0 else f"REPLAY DIFF: {differences} difference(s)")
 sys.exit(1 if differences else 0)
