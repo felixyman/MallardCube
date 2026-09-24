@@ -307,7 +307,7 @@ probes failing to 9 of 9 passing:
 | unparsable entity in a statement | empty success | `Malformed` fault |
 | unparsable entity in a restriction | **unrestricted rowset** (4,247 rows) | `Malformed` fault |
 | nested `<restriction>` forms (both) | unrestricted rowset | honoured, same fields as the flat form |
-| present-but-empty `<Statement>` | empty success | `Malformed` fault |
+| empty or self-closing `<Statement>` | empty success | empty success (the fault was reverted 2026-09-24: the reference accepts it, and MSOLAP sends it for every session begin) |
 
 Text now accumulates per element and is consumed when that element closes —
 which also fixes mixed content, where the last text event used to win. Both
@@ -393,8 +393,13 @@ Fixed:
 - **`/status` claimed `deny` for an `auth` block with no mechanism** while
   requests were administrators. It reports the enforced mode: `configured` means
   a real mechanism (trusted proxy or OIDC), and `rls_active` requires one.
-- **A self-closing `<Statement/>`** returned the empty-success shape; it faults
-  like the paired empty form.
+- ~~**A self-closing `<Statement/>`** returned the empty-success shape; it
+  faults like the paired empty form.~~ **Reverted the same day.** MSOLAP sends
+  `<Statement/>` for every session begin, so faulting it broke every real
+  connection (`E_FAIL`). The reference answers empty, self-closing and
+  whitespace-only statements with an empty `ExecuteResponse` (verified against
+  SSAS 2025 via the mirror, 2026-09-24); both empty-statement faults are gone
+  and `probe-fidelity.sh` now asserts the reference behaviour.
 - `log_sql` could panic slicing mid-UTF-8-character on the logging path.
 - The plan key omitted `level`/`time_flag`, so two filters with the same text at
   different levels could share a result-cache entry.

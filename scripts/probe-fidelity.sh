@@ -13,7 +13,7 @@
 #     drop a Discover restriction and return the *unrestricted* rowset
 #   * both nested <restriction> forms must be honoured like the flat form
 #   * an Execute whose <Statement> was present but unreadable must fault
-#   * an Execute with no Statement at all is still a valid empty success
+#   * an Execute with an empty Statement (or none) is a valid empty success
 #
 # Exit code: 0 when every probe behaves, 1 otherwise.
 
@@ -67,14 +67,19 @@ report "CDATA statement runs" "$([[ "$out" == *"<Cell "* && "$out" == *"52158676
 out="$(post "$(envelope "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [${CUBE}] &foo; CELL PROPERTIES VALUE")")"
 report "unparsable entity in a statement faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
 
+# --- an empty statement is the reference's empty success ---------------------
+# MSOLAP's session-begin request carries exactly `<Statement/>`; faulting it (as
+# a review once asked) breaks every real connection. Verified against SSAS 2025
+# on 2026-09-24: empty, self-closing and whitespace-only statements all answer
+# with an empty ExecuteResponse.
 out="$(post "$(envelope "<Statement></Statement>")")"
-report "empty Statement faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+report "empty Statement is the reference's empty success" "$([[ "$out" == *"ExecuteResponse"* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" "did not answer like the reference"
 
 out="$(post '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command><Statement/></Command><Properties><PropertyList><Catalog>SALES_ANALYTICS</Catalog></PropertyList></Properties></Execute></soap:Body></soap:Envelope>')"
-report "self-closing <Statement/> faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+report "self-closing <Statement/> is the reference's empty success" "$([[ "$out" == *"ExecuteResponse"* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" "did not answer like the reference"
 
 out="$(post "$(envelope "   ")")"
-report "whitespace-only Statement faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
+report "whitespace-only Statement is the reference's empty success" "$([[ "$out" == *"ExecuteResponse"* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" "did not answer like the reference"
 
 # --- no Statement at all stays a valid empty success -------------------------
 out="$(post '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command/></Execute></soap:Body></soap:Envelope>')"

@@ -77,11 +77,11 @@ pub enum XmlaRequest {
     BeginSession,
     ExecuteEmpty,
     /// The request XML could not be read faithfully — an unparsable entity, or
-    /// an `Execute` whose `Statement` held no readable text. Answering those
-    /// with an empty cellset is a silent wrong answer: CDATA-wrapped statements
-    /// (what .NET/PowerShell/Java SOAP clients emit) used to vanish here, and a
-    /// restriction we could not decode used to be dropped, returning the
-    /// *unrestricted* rowset (plan 051).
+    /// text this parser dropped. Answering those with an empty cellset is a
+    /// silent wrong answer: CDATA-wrapped statements (what .NET/PowerShell/Java
+    /// SOAP clients emit) used to vanish here, and a restriction we could not
+    /// decode used to be dropped, returning the *unrestricted* rowset (plan
+    /// 051). An empty `<Statement>` is not malformed — see `ExecuteEmpty`.
     Malformed(String),
     ExecuteStatement(String),
     Unknown,
@@ -128,7 +128,6 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     // were ignored, so those clients silently received the unrestricted rowset.
     let mut in_nested_restriction = false;
     let mut pending_column: Option<String> = None;
-    let mut statement_seen = false;
     let mut malformed: Option<String> = None;
 
     let mut parsed_request_type = String::new();
@@ -143,10 +142,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"RequestType" => in_request_type = true,
                 b"PropertyName" => in_property_name = true,
-                b"Statement" => {
-                    in_statement = true;
-                    statement_seen = true;
-                }
+                b"Statement" => in_statement = true,
                 b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
                 b"Execute" => is_execute = true,
                 b"PROPERTY_TYPE" => in_property_type = true,
@@ -163,13 +159,6 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             },
             Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Execute" => {
                 is_execute = true;
-            }
-            // A self-closing `<Statement/>` is present but has no text: mark it
-            // seen so the end-of-parse check faults it like the paired form,
-            // instead of answering with the legitimate empty-Execute shape
-            // (plan 051 review).
-            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Statement" => {
-                statement_seen = true;
             }
             Ok(Event::Text(e)) => match e.unescape() {
                 Ok(decoded) => pending_text.push_str(&decoded),
@@ -324,11 +313,6 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     if is_execute {
         if !statement_text.trim().is_empty() {
             return XmlaRequest::ExecuteStatement(statement_text);
-        } else if statement_seen {
-            // A Statement element that produced no readable text — an empty
-            // body or content this parser dropped. Returning the empty-success
-            // shape hides the problem; the reference would not accept it.
-            return XmlaRequest::Malformed("Execute carried no readable <Statement>".into());
         } else if is_begin_session {
             return XmlaRequest::BeginSession;
         } else {
@@ -403,12 +387,22 @@ mod tests {
         );
     }
 
-    /// A Statement element that produced no text is malformed; an Execute with
-    /// no Statement at all is still the legitimate empty success.
+    /// An empty or whitespace-only Statement — paired or self-closing — is the
+    /// reference's empty success, not a malformed request. MSOLAP's session
+    /// begin carries exactly `<Statement/>`, so faulting it broke every real
+    /// connection (verified against SSAS 2025, 2026-09-24).
     #[test]
-    fn empty_statement_is_malformed_but_absent_statement_is_not() {
-        let empty = r#"<Envelope><Body><Execute><Command><Statement></Statement></Command></Execute></Body></Envelope>"#;
-        assert!(matches!(parse_xmla(empty), XmlaRequest::Malformed(_)));
+    fn empty_statement_is_the_empty_success() {
+        for body in [
+            r#"<Envelope><Body><Execute><Command><Statement></Statement></Command></Execute></Body></Envelope>"#,
+            r#"<Envelope><Body><Execute><Command><Statement/></Command></Execute></Body></Envelope>"#,
+            r#"<Envelope><Body><Execute><Command><Statement>   </Statement></Command></Execute></Body></Envelope>"#,
+        ] {
+            assert!(
+                matches!(parse_xmla(body), XmlaRequest::ExecuteEmpty),
+                "empty statements answer like the reference: {body}"
+            );
+        }
 
         let absent = r#"<Envelope><Body><Execute><Command/></Execute></Body></Envelope>"#;
         assert!(matches!(parse_xmla(absent), XmlaRequest::ExecuteEmpty));
