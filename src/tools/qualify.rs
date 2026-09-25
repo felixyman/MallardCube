@@ -9,6 +9,8 @@
 /// - PARTIAL: usable but needs manual follow-up (roles, manual measures, etc.).
 /// - BLOCKED: not honestly Excel-safe (stub fallbacks, broken config, etc.).
 use crate::backend::{BackendSource, QueryBackend};
+use crate::engine::model::UserContext;
+use crate::engine::plan::{QueryPlan, TypedDimensionFilter};
 use crate::project::config::ModelPermission;
 use std::path::Path;
 
@@ -191,6 +193,22 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                     data_findings(source.checkout().as_ref(), &shape);
                 blocked.extend(data_blocked);
                 partial.extend(data_partial);
+
+                match load_oracles(config_path) {
+                    Ok(Some(file)) => {
+                        let (oracle_blocked, oracle_partial) = oracle_findings(
+                            source.checkout().as_ref(),
+                            &p.model,
+                            &p.config,
+                            &UserContext::admin_default(),
+                            &file,
+                        );
+                        blocked.extend(oracle_blocked);
+                        partial.extend(oracle_partial);
+                    }
+                    Ok(None) => {}
+                    Err(message) => blocked.push(message),
+                }
             }
             Err(error) => {
                 blocked.push(format!("cannot open the database for data checks: {error}"))
@@ -241,6 +259,131 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     } else {
         Readiness::Ready
     }
+}
+
+/// Value oracles: hand-written expectations from direct SQL, checked against
+/// the same SQL the proxy emits. They are the only way to catch a model whose
+/// *semantics* are wrong rather than its shape (a ratio that silently became
+/// additive, a time window off by one) — a generated expectation would be
+/// circular (plan 057-B).
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct OracleFile {
+    pub oracles: Vec<Oracle>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct Oracle {
+    /// Measure id or caption.
+    pub measure: String,
+    /// Optional slice: a dimension id and one member key.
+    #[serde(default)]
+    pub dimension: Option<String>,
+    #[serde(default)]
+    pub member: Option<String>,
+    /// The value a direct SQL query produced when the oracle was written.
+    pub expected: f64,
+    /// Absolute tolerance; defaults to 1e-6 of the expected value.
+    #[serde(default)]
+    pub tolerance: Option<f64>,
+}
+
+/// `oracles.json` beside the config, when present.
+pub(crate) fn load_oracles(config_path: &str) -> Result<Option<OracleFile>, String> {
+    let Some(dir) = Path::new(config_path).parent() else {
+        return Ok(None);
+    };
+    let path = dir.join("oracles.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let file: OracleFile = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+    Ok(Some(file))
+}
+
+/// Run every oracle through the proxy's own SQL emitter and compare.
+pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
+    backend: &B,
+    model: &crate::engine::model::SemanticModel,
+    config: &crate::project::config::ProxyConfig,
+    user: &UserContext,
+    file: &OracleFile,
+) -> (Vec<String>, Vec<String>) {
+    let mut blocked = Vec::new();
+    let mut partial = Vec::new();
+
+    for oracle in &file.oracles {
+        let Some(measure) = model.meas_def_opt(&oracle.measure) else {
+            blocked.push(format!(
+                "oracle names measure '{}', which the model does not define",
+                oracle.measure
+            ));
+            continue;
+        };
+        let filters = match (&oracle.dimension, &oracle.member) {
+            (Some(dimension), Some(member)) => vec![TypedDimensionFilter {
+                dimension: dimension.clone(),
+                members: vec![member.clone()],
+                level: None,
+                time_flag: None,
+                range: None,
+                date_window: None,
+                label: None,
+            }],
+            (None, None) => Vec::new(),
+            _ => {
+                blocked.push(format!(
+                    "oracle for '{}' sets only one of dimension/member",
+                    oracle.measure
+                ));
+                continue;
+            }
+        };
+        let plan = QueryPlan::Total {
+            measure: measure.id.clone(),
+            filters,
+        };
+        let sql = crate::engine::sql::sql_for_query_plan_with_context(model, &plan, user, config);
+        if sql.trim().is_empty() {
+            blocked.push(format!(
+                "oracle for '{}' produced no SQL (unsupported measure shape)",
+                oracle.measure
+            ));
+            continue;
+        }
+        let _ = backend.take_failure();
+        let got = backend.query_scalar(&sql);
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "oracle for '{}' cannot run: {failure}",
+                oracle.measure
+            ));
+            continue;
+        }
+        let tolerance = oracle
+            .tolerance
+            .unwrap_or_else(|| (oracle.expected.abs() * 1e-6).max(1e-9));
+        if (got - oracle.expected).abs() > tolerance {
+            let slice = match (&oracle.dimension, &oracle.member) {
+                (Some(dimension), Some(member)) => format!(" at {dimension}={member}"),
+                _ => String::new(),
+            };
+            blocked.push(format!(
+                "oracle '{}'{slice}: expected {}, got {got}",
+                oracle.measure, oracle.expected
+            ));
+        }
+    }
+
+    // An oracles file with no expectations is almost certainly a mistake, not a
+    // pass.
+    if file.oracles.is_empty() {
+        partial.push("oracles.json defines no oracles".into());
+    }
+
+    (blocked, partial)
 }
 
 /// The tables, dimension keys and relationships the data-side checks run
@@ -363,9 +506,8 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
     }
 
     for (fact, fact_column, dim, dim_column) in &shape.relationships {
-        let _ = backend.take_failure();
-        let rows = backend.query_rows(&format!(
-            "SELECT (SELECT COUNT(*) FROM \"{fact}\" f JOIN \"{dim}\" d ON f.\"{fact_column}\" = d.\"{dim_column}\"),              (SELECT COUNT(*) FROM \"{fact}\"),              (SELECT COUNT(*) FROM \"{fact}\" f WHERE f.\"{fact_column}\" IS NOT NULL               AND NOT EXISTS (SELECT 1 FROM \"{dim}\" d WHERE d.\"{dim_column}\" = f.\"{fact_column}\"))"
+        let joined = backend.query_scalar(&format!(
+            "SELECT COUNT(*) FROM \"{fact}\" AS f JOIN \"{dim}\" AS d ON f.\"{fact_column}\" = d.\"{dim_column}\""
         ));
         if let Some(failure) = backend.take_failure() {
             blocked.push(format!(
@@ -373,23 +515,30 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
             ));
             continue;
         }
-        let number = |index: usize| {
-            rows.first()
-                .and_then(|row| row.get(index))
-                .and_then(|value| value.parse::<i64>().ok())
-        };
-        if let (Some(joined), Some(facts), Some(orphans)) = (number(0), number(1), number(2)) {
-            if facts > 0 && joined > facts {
-                blocked.push(format!(
-                    "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' fans out:                      {joined} joined rows for {facts} fact rows (x{:.2})",
-                    joined as f64 / facts as f64
-                ));
-            }
-            if orphans > 0 {
-                partial.push(format!(
-                    "{orphans} fact rows have no matching {dim}.{dim_column}                      ({fact}.{fact_column}); they are silently dropped from pivots"
-                ));
-            }
+        let facts = backend.query_scalar(&format!("SELECT COUNT(*) FROM \"{fact}\""));
+        let orphans = backend.query_scalar(&format!(
+            "SELECT COUNT(*) FROM \"{fact}\" AS f WHERE f.\"{fact_column}\" IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM \"{dim}\" AS d WHERE d.\"{dim_column}\" = f.\"{fact_column}\")"
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        let (joined, facts, orphans) = (joined as i64, facts as i64, orphans as i64);
+        if facts > 0 && joined > facts {
+            blocked.push(format!(
+                "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' fans out: \
+                 {joined} joined rows for {facts} fact rows (x{:.2})",
+                joined as f64 / facts as f64
+            ));
+        }
+        if orphans > 0 {
+            partial.push(format!(
+                "{orphans} fact rows have no matching {dim}.{dim_column} \
+                 ({fact}.{fact_column}); they are silently dropped from pivots"
+            ));
         }
     }
 
@@ -775,5 +924,121 @@ mod tests {
         assert_eq!(cols, 0, "qualify must not materialize");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The data-side checks catch the classic silent wrong answers: an
+    /// unreadable table, a duplicate dimension key, a fan-out relationship and
+    /// orphan keys (plan 057-B).
+    #[test]
+    fn data_checks_find_seeded_defects() {
+        let path = std::env::temp_dir().join(format!(
+            "mallardcube-qualify-data-{}.duckdb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = duckdb::Connection::open(&path).expect("open temp db");
+            conn.execute_batch(
+                "CREATE TABLE fact(id INTEGER, amount DOUBLE);
+                 INSERT INTO fact VALUES (1, 1.0), (1, 2.0), (2, 3.0), (9, 4.0);
+                 CREATE TABLE dim(id INTEGER, label VARCHAR);
+                 INSERT INTO dim VALUES (1, 'a'), (1, 'duplicate'), (2, 'b');",
+            )
+            .expect("seed temp db");
+        }
+        let source = crate::backend::BackendSource::file(&path).expect("open seeded db");
+        let backend = source.checkout();
+        let shape = DataShape {
+            tables: vec!["fact".into(), "dim".into(), "missing_table".into()],
+            dimension_keys: vec![("dim".into(), "id".into())],
+            relationships: vec![("fact".into(), "id".into(), "dim".into(), "id".into())],
+        };
+        let (blocked, partial) = data_findings(backend.as_ref(), &shape);
+        assert!(
+            blocked.iter().any(|m| m.contains("missing_table")),
+            "{blocked:?}"
+        );
+        assert!(
+            blocked.iter().any(|m| m.contains("not unique")),
+            "{blocked:?}"
+        );
+        assert!(
+            blocked.iter().any(|m| m.contains("fans out")),
+            "{blocked:?}"
+        );
+        assert!(
+            partial.iter().any(|m| m.contains("no matching")),
+            "{partial:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A healthy shape reports nothing (the demo model, through the same checks
+    /// the CLI uses).
+    #[test]
+    fn data_checks_accept_the_demo_model() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        let shape = data_shape(&p);
+        assert!(!shape.tables.is_empty());
+        let (blocked, _) = data_findings(crate::backend::Backend::test_fixture(), &shape);
+        assert!(blocked.is_empty(), "{blocked:?}");
+    }
+
+    /// Oracles compare the proxy's own emitted SQL against hand-written
+    /// expectations, and a wrong expectation fails (plan 057-B). The expected
+    /// values came from the reference engine, not from the proxy.
+    #[test]
+    fn oracles_compare_against_the_engine() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        let file = OracleFile {
+            oracles: vec![
+                Oracle {
+                    measure: "Revenue".into(),
+                    dimension: None,
+                    member: None,
+                    expected: 521_586_767.0,
+                    tolerance: None,
+                },
+                Oracle {
+                    measure: "Revenue".into(),
+                    dimension: Some("Category".into()),
+                    member: Some("Automotive".into()),
+                    expected: 25_102_648.0,
+                    tolerance: None,
+                },
+                Oracle {
+                    measure: "Revenue".into(),
+                    dimension: None,
+                    member: None,
+                    expected: 1.0,
+                    tolerance: None,
+                },
+                Oracle {
+                    measure: "NoSuchMeasure".into(),
+                    dimension: None,
+                    member: None,
+                    expected: 0.0,
+                    tolerance: None,
+                },
+            ],
+        };
+        let (blocked, _) = oracle_findings(
+            crate::backend::Backend::test_fixture(),
+            &p.model,
+            &p.config,
+            &UserContext::admin_default(),
+            &file,
+        );
+        assert_eq!(blocked.len(), 2, "{blocked:?}");
+        assert!(
+            blocked.iter().any(|m| m.contains("expected 1")),
+            "{blocked:?}"
+        );
+        assert!(
+            blocked.iter().any(|m| m.contains("NoSuchMeasure")),
+            "{blocked:?}"
+        );
     }
 }

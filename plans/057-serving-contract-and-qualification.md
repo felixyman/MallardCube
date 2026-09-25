@@ -230,3 +230,18 @@ features (060), live attach and object-store intake (061), aggregate design
   proves the key changes across a bump. Still open in section B: measure-grain
   checks (ratios, cumulative windows), value oracles (`--oracle n`), and the
   machine-readable JSON verdict.
+
+- **2026-09-25 — value oracles.** `oracles.json` beside the config carries
+  hand-written expectations (measure, optional dimension/member slice, expected
+  value, tolerance); `qualify` runs each through the proxy's own SQL emitter and
+  compares. A wrong expectation and an unknown measure both block, and a test
+  proves both. The demo file ships values recorded from the reference engine
+  (total 521,586,767; Automotive 25,102,648) — independent of the proxy, which
+  is the whole point of an oracle.
+
+  Running the checks also found a stale fixture relationship in project3
+  (`order_date -> date_dim.full_date`, a column `sales_fact` does not have);
+  removed, with the gates as the safety net.
+
+  Still open in section B: measure-grain checks (ratios, cumulative windows)
+  and the machine-readable JSON verdict.

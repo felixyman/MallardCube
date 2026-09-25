@@ -1,0 +1,7 @@
+{
+  "_note": "Hand-written expectations recorded from the reference engine (SSAS 2025, MallardDemo), not from this proxy. qualify compares them against the SQL the proxy emits (plan 057-B).",
+  "oracles": [
+    { "measure": "Revenue", "expected": 521586767 },
+    { "measure": "Revenue", "dimension": "Category", "member": "Automotive", "expected": 25102648 }
+  ]
+}

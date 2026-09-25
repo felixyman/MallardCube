@@ -11,13 +11,6 @@
       "dimension_id": "Date",
       "dim_table": "date_dim",
       "dim_column": "date_key"
-    },
-    {
-      "fact_table": "default",
-      "fact_column": "order_date",
-      "dimension_id": "Date",
-      "dim_table": "date_dim",
-      "dim_column": "full_date"
     }
   ],
   "dimensions": [
