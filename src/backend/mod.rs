@@ -1165,6 +1165,48 @@ mod tests {
         ))
     }
 
+    /// A database that cannot be opened is a startup failure, never a proxy
+    /// that quietly answers zeros (plan 057-C, fault-injection matrix).
+    #[test]
+    fn a_missing_database_file_fails_to_open() {
+        let path = temp_db_path("missing");
+        let _ = std::fs::remove_file(&path);
+        let error = BackendSource::file(&path).expect_err("a missing file must not open");
+        assert!(!error.to_string().is_empty(), "{error}");
+    }
+
+    #[test]
+    fn a_corrupt_database_file_fails_to_open() {
+        let path = temp_db_path("corrupt");
+        std::fs::write(&path, b"this is not a duckdb database").expect("write corrupt file");
+        let error = BackendSource::file(&path).expect_err("a corrupt file must not open");
+        assert!(!error.to_string().is_empty(), "{error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Interrupting a running query records a failure instead of leaving the
+    /// caller with a plausible zero — this is the request-timeout path
+    /// (plan 057-C, fault-injection matrix).
+    #[test]
+    fn an_interrupted_query_records_a_failure() {
+        let source = BackendSource::demo().expect("demo backend");
+        let backend = source.checkout();
+        let interrupting = std::sync::Arc::clone(&backend);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            interrupting.interrupt();
+        });
+        // 20k x 20k = 400M multiplications: long enough that the interrupt
+        // lands, short enough to finish if it does not.
+        let _ =
+            backend.query_scalar("SELECT sum(a.i * b.i) FROM range(20000) a(i), range(20000) b(i)");
+        handle.join().expect("interrupt thread");
+        assert!(
+            backend.take_failure().is_some(),
+            "an interrupted query must be recorded"
+        );
+    }
+
     // The demo must look believable: no future-dated revenue, and every month
     // from the start of the range through the current month has facts. The old
     // LCG date draws left visible gaps and produced "revenue" years ahead.

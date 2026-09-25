@@ -193,3 +193,11 @@ features (060), live attach and object-store intake (061), aggregate design
   interim, not the destination), the rest of the fault-injection matrix
   (locked/corrupt file, interrupted query, sidecar, reload mid-flight), and the
   consumption audit.
+
+- **2026-09-25 — section C, matrix slice**: a missing database file and a
+  corrupt one both fail to open (startup refuses rather than serving zeros),
+  and an interrupted query — the request-timeout path — records a connection
+  failure that the request path faults on. Still open in the matrix: a
+  missing/stale aggregation sidecar and a reload mid-flight. Then the
+  `Result`-typed engine API (the latch is the interim) and the consumption
+  audit close section C.
