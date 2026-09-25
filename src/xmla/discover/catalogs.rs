@@ -10,8 +10,13 @@ const CATALOG_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATA
                 <xsd:element sql:field="VERSION" name="VERSION" type="xsd:long" minOccurs="0"/>
                 <xsd:element sql:field="DATABASE_ID" name="DATABASE_ID" type="xsd:string" minOccurs="0"/>"#;
 
-pub fn get_catalogs_response() -> String {
+pub fn get_catalogs_response(restrictions: &crate::xmla::parser::Restrictions) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog answers the rowset's empty shape
+        // (measured for the metadata rowsets 2026-09-25).
+        return discover_rowset_envelope(UUID_TYPE, CATALOG_ROW_FIELDS, "");
+    }
     let rows = format!(
         r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>

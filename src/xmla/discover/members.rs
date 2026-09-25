@@ -881,7 +881,22 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
         );
     }
 
-    let all_rows = all_rows_with_backend(backend, user, config, restrictions);
+    // The streaming member route is dispatched before the ordinary scope
+    // checks, so both live here too (plan 051 review): a foreign <Catalog>
+    // property faults, a foreign restriction answers the empty rowset.
+    if let Some(message) = crate::execute::runtime::catalog_scope_message(
+        restrictions.property_catalog.as_deref(),
+        config,
+        user,
+    ) {
+        return MemberResponse::Fault(message);
+    }
+    let project = proxy_project::project();
+    let all_rows = if super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        all_rows_with_backend(backend, user, config, restrictions)
+    } else {
+        Vec::new()
+    };
     // Restrictions narrow the rowset before the member/tree-op selection: the
     // reference engine intersects the two (a hierarchy restriction plus a SELF
     // probe returns the one matching row).

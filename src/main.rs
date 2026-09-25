@@ -1062,8 +1062,8 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             );
             resp
         }
-        XmlaRequest::DbSchemaCatalogs => {
-            let resp = catalogs::get_catalogs_response();
+        XmlaRequest::DbSchemaCatalogs { restrictions } => {
+            let resp = catalogs::get_catalogs_response(restrictions);
             mallardcube::xmla_trace::trace_request("DbSchemaCatalogs", body, &resp, None, None);
             resp
         }
@@ -1115,6 +1115,10 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             {
                 (fault, None)
             } else if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
+                (fault, None)
+            } else if mdx_semantic::is_drillthrough(mdx)
+                && let Some(fault) = execute::runtime::mdx_cube_scope_fault(mdx, config)
+            {
                 (fault, None)
             } else if mdx_semantic::is_drillthrough(mdx) {
                 match execute::runtime::drillthrough_fault(config, user) {

@@ -150,10 +150,11 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 // Tests
 // ---------------------------------------------------------------------------
 
-/// A request whose `<Catalog>` property names another database is refused the
-/// way the reference refuses it (measured 2026-09-25); names match
-/// case-insensitively.
-pub fn catalog_scope_fault(
+/// The reference's refusal for a `<Catalog>` property naming another database
+/// (measured 2026-09-25); names match case-insensitively. Split from
+/// `catalog_scope_fault` so the streaming member route can answer the same
+/// message through its own fault type.
+pub fn catalog_scope_message(
     catalog: Option<&str>,
     config: &ProxyConfig,
     user: &crate::engine::model::UserContext,
@@ -167,8 +168,30 @@ pub fn catalog_scope_fault(
     } else {
         format!("the user, '{}',", user.user_id)
     };
-    Some(crate::xmla::response::fault_response(&format!(
+    Some(format!(
         "Either {who} does not have access to the '{wanted}' database, or the database does not exist."
+    ))
+}
+
+/// The same refusal as a complete SOAP fault.
+pub fn catalog_scope_fault(
+    catalog: Option<&str>,
+    config: &ProxyConfig,
+    user: &crate::engine::model::UserContext,
+) -> Option<String> {
+    catalog_scope_message(catalog, config, user)
+        .map(|message| crate::xmla::response::fault_response(&message))
+}
+
+/// A `FROM` clause naming another cube, for the paths that do not build a
+/// `SemanticQuery` (drillthrough); measured 2026-09-25.
+pub fn mdx_cube_scope_fault(mdx: &str, config: &ProxyConfig) -> Option<String> {
+    let cube = crate::mdx::parser::parse_mdx(mdx).cube_name?;
+    if cube.trim().eq_ignore_ascii_case(config.cube.trim()) {
+        return None;
+    }
+    Some(crate::xmla::response::fault_response(&format!(
+        "The {cube} cube does not exist."
     )))
 }
 

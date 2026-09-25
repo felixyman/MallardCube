@@ -726,3 +726,41 @@ larger than the whole budget is not cached rather than thrashing the cache.
 evictions — filled live per request; documented in the developer guide and the
 deployment page. Verified live: two identical Executes report
 `{"bytes":16,"entries":1,"hits":1,"misses":1,"hit_rate":0.5}`.
+
+### Batch review round: the scope/OLS holes it found (fixed 2026-09-25)
+
+- `MDSCHEMA_MEMBERS` is dispatched before the ordinary scope checks, so a
+  foreign `CUBE_NAME` returned 21 members and a foreign `<Catalog>` property
+  returned 8,272 rows. Both rules live in the member builder now (the property
+  through `catalog_scope_message`, so the fault text matches the other routes).
+- `MDSCHEMA_PROPERTIES`' scope guard had landed in only one helper; a
+  catalog-only mismatch still returned the member-value rows. The guard is at
+  the entry point now.
+- `DBSCHEMA_CATALOGS` advertised `CATALOG_NAME` and ignored it; the variant
+  carries its restrictions and answers the empty rowset for a foreign catalog.
+- Drillthrough bypassed the `FROM` cube validation (that check lives in the
+  cellset runtime); `mdx_cube_scope_fault` validates it before the drillthrough
+  branch runs.
+
+Verified live: the two member cases now answer zero rows and the property
+fault; properties and catalogs answer zero rows; drillthrough faults
+"NoSuchCube cube does not exist"; the controls still return 21 members and
+1,000 drillthrough rows.
+
+Recorded, not fixed (same review):
+
+- The `<Catalog>` property is only carried by Execute and the variants with
+  `Restrictions`, so `TMSCHEMA_*`, `DISCOVER_*`, `DBSCHEMA_TABLES`
+  (`TABLE_CATALOG`) and the other restriction-less rowsets still serve local
+  rows for a foreign property. Fix shape: carry the property at request level,
+  or attach `Restrictions` to every Discover variant.
+- `MEASUREGROUP_NAME` is advertised by `MDSCHEMA_MEASUREGROUPS` and
+  `MDSCHEMA_MEASUREGROUP_DIMENSIONS` but not stored, so a foreign group is not
+  narrowed.
+- Measure probe plans (`MeasuresList`, `MetaCountLiteral`, the set-probe member
+  list, the measure `CCHILDREN` probe) are not gated on measure visibility for
+  restricted users (code-path inference: the review proxy had no auth config).
+- A foreign-namespace `<foo:Catalog>` counts as the XMLA property (the parser
+  matches the local name only); the reference behaviour is unmeasured.
+- There is no session catalog state, so a client that sets `Initial Catalog`
+  and then omits the property cannot be detected (stateless by design).

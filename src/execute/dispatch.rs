@@ -1635,6 +1635,75 @@ mod tests {
         });
     }
 
+    /// The scope rules reach the routes that bypass the ordinary dispatch:
+    /// the streaming member rowset, the properties and catalogs rowsets, and
+    /// the drillthrough path (plan 051 review).
+    #[test]
+    fn scope_rules_cover_the_streaming_and_probe_routes() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+        use crate::xmla::parser::Restrictions;
+
+        with_project3(|| {
+            let admin = UserContext::admin_default();
+            let config = &crate::proxy_project::project().config;
+            let wrong_catalog = Restrictions {
+                catalog_name: Some("Nope".into()),
+                ..Default::default()
+            };
+            let properties =
+                crate::xmla::discover::mdschema_properties::get_mdschema_properties_response(
+                    None,
+                    &wrong_catalog,
+                    &admin,
+                    config,
+                );
+            assert!(!properties.contains("<row>"), "{properties}");
+            let catalogs = crate::xmla::discover::catalogs::get_catalogs_response(&wrong_catalog);
+            assert!(!catalogs.contains("<row>"), "{catalogs}");
+            let members = crate::xmla::discover::members::get_members_response_with_backend(
+                None,
+                None,
+                &wrong_catalog,
+                Backend::test_fixture(),
+                &admin,
+                config,
+            );
+            assert!(!members.contains("<row>"), "{members}");
+
+            let foreign_property = Restrictions {
+                property_catalog: Some("Elsewhere".into()),
+                ..Default::default()
+            };
+            let fault = crate::xmla::discover::members::get_members_response_with_backend(
+                None,
+                None,
+                &foreign_property,
+                Backend::test_fixture(),
+                &admin,
+                config,
+            );
+            assert!(fault.contains("faultstring"), "{fault}");
+            assert!(fault.contains("Elsewhere"), "{fault}");
+
+            assert!(
+                crate::execute::runtime::mdx_cube_scope_fault(
+                    "DRILLTHROUGH MAXROWS 3 SELECT FROM [NoSuchCube]",
+                    config,
+                )
+                .is_some(),
+                "drillthrough validates the FROM cube"
+            );
+            assert!(
+                crate::execute::runtime::mdx_cube_scope_fault(
+                    "DRILLTHROUGH MAXROWS 3 SELECT FROM [Sales]",
+                    config,
+                )
+                .is_none()
+            );
+        });
+    }
+
     /// A dimension hidden by OLS stays off the SlicerAxis of a query that does
     /// not name it; the administrator still sees it (plan 051 RLS review).
     #[test]
@@ -4641,7 +4710,9 @@ mod tests {
     #[test]
     fn retail_analytics_discover_catalogs_returns_correct_name() {
         with_retail_analytics(|| {
-            let xml = crate::xmla::discover::catalogs::get_catalogs_response();
+            let xml = crate::xmla::discover::catalogs::get_catalogs_response(
+                &crate::xmla::parser::Restrictions::default(),
+            );
             assert!(
                 xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"),
                 "missing rowset namespace"

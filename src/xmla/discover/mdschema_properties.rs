@@ -440,6 +440,13 @@ pub fn get_mdschema_properties_response(
     user: &crate::engine::model::UserContext,
     config: &crate::project::config::ProxyConfig,
 ) -> String {
+    // Every branch is object metadata for the local model, so the scope check
+    // runs once here — a catalog-only mismatch used to reach the rows (plan 051
+    // review).
+    let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
+    }
     let cube_scoped = restrictions.cube_name.is_some()
         || restrictions.dimension_unique_name.is_some()
         || restrictions.hierarchy_unique_name.is_some()

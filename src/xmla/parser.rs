@@ -61,6 +61,7 @@ impl XmlaRequest {
             | XmlaRequest::MdschemaFunctions { restrictions }
             | XmlaRequest::MdschemaProperties { restrictions, .. }
             | XmlaRequest::MdschemaMembers { restrictions, .. }
+            | XmlaRequest::DbSchemaCatalogs { restrictions }
             | XmlaRequest::MdschemaCubes { restrictions }
             | XmlaRequest::DbschemaTables { restrictions }
             | XmlaRequest::MdschemaDimensions { restrictions }
@@ -84,7 +85,9 @@ pub enum XmlaRequest {
         schema_name: Option<String>,
     },
     DiscoverLiterals,
-    DbSchemaCatalogs,
+    DbSchemaCatalogs {
+        restrictions: Restrictions,
+    },
     MdschemaCubes {
         restrictions: Restrictions,
     },
@@ -815,7 +818,11 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             };
         }
         "DISCOVER_LITERALS" => return XmlaRequest::DiscoverLiterals,
-        "DBSCHEMA_CATALOGS" => return XmlaRequest::DbSchemaCatalogs,
+        "DBSCHEMA_CATALOGS" => {
+            return XmlaRequest::DbSchemaCatalogs {
+                restrictions: restrictions.clone(),
+            };
+        }
         "MDSCHEMA_CUBES" => {
             return XmlaRequest::MdschemaCubes {
                 restrictions: restrictions.clone(),
