@@ -1635,6 +1635,67 @@ mod tests {
         });
     }
 
+    /// A failed query faults instead of rendering zeros: a missing table used
+    /// to look like a legitimate empty or zero result (plan 057-C).
+    #[test]
+    fn a_failed_query_faults_instead_of_rendering_zeros() {
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (response, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+                    &crate::test_support::counting::Failing,
+                    &UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                );
+            assert!(
+                response.contains("faultstring")
+                    && response.contains("a query against the database failed"),
+                "{response}"
+            );
+            assert!(!response.contains("<Value"), "{response}");
+        });
+    }
+
+    /// The connection records its first failure, the request path takes it, and
+    /// NULL stays a value rather than a failure (plan 057-C).
+    #[test]
+    fn a_failed_query_is_recorded_once() {
+        let source = crate::backend::BackendSource::demo().expect("demo backend");
+        let backend = source.checkout();
+        assert!(backend.take_failure().is_none());
+        assert_eq!(backend.query_scalar("SELECT NULL"), 0.0);
+        assert!(backend.take_failure().is_none(), "NULL is a value");
+
+        assert_eq!(
+            backend.query_scalar("SELECT missing_column FROM sales_fact"),
+            0.0
+        );
+        let failure = backend.take_failure().expect("recorded failure");
+        assert!(
+            failure.to_lowercase().contains("missing_column")
+                || failure.to_lowercase().contains("does not exist"),
+            "{failure}"
+        );
+        assert!(backend.take_failure().is_none(), "taken once");
+
+        assert_eq!(backend.query_scalar("SELECT 1"), 1.0);
+        assert!(
+            backend.take_failure().is_none(),
+            "a healthy query is silent"
+        );
+
+        // And the same latch is visible through the trait, which is the only
+        // view the request path has.
+        let trait_view: &dyn crate::backend::QueryBackend = backend.as_ref();
+        trait_view.query_scalar("SELECT also_missing FROM sales_fact");
+        assert!(
+            trait_view.take_failure().is_some(),
+            "the trait forwards the latch"
+        );
+    }
+
     /// The scope rules reach the routes that bypass the ordinary dispatch:
     /// the streaming member rowset, the properties and catalogs rowsets, and
     /// the drillthrough path (plan 051 review).

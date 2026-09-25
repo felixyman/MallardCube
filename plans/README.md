@@ -64,7 +64,7 @@ honor its STOP conditions, and update your row when done.
 | 054  | Engine readiness — dialect seam, capabilities, protocol-overhead gate | P2 | M | 051 | TODO |
 | 055  | XMLA input contract — advertised restrictions honoured or faulted | P1 | L | 051 | IN PROGRESS |
 | 056  | Behaviour reference — the claim-based site for engine implementers | P2 | M | 055 | IN PROGRESS |
-| 057  | The serving contract, qualified — validator before generator | P1 | L | 051, 055 | TODO |
+| 057  | The serving contract, qualified — fail closed, qualify, then the contract | P1 | L | 051, 055 | IN PROGRESS |
 | 058  | Security boundary — isolation complete, defaults secure | P1 | L | 057 | TODO |
 | 059  | Boring operations — release, deploy, observe | P1 | L | 057 | TODO |
 | 060  | Client certification — Excel and the XMLA clients | P1 | L | 056, 057 | TODO |

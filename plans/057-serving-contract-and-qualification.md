@@ -9,44 +9,44 @@
 - **Related**: 044 (boundary contract), 052 (aggregates), 053 (storage contract)
 - **Category**: product / correctness
 
+**Build order: C → B → A → D.** Fail closed, then qualify today's config,
+then design the contract against the qualifier's real needs, then generate.
+The first two sections have zero contract surface; the schema is deliberately
+last so it is derived rather than invented.
+
 ## Why
 
 Two failure shapes make a BI engine untrustworthy, and both exist today:
 
-1. **The config is a second hand-authored model.** `proxy-config.json` duplicates
-   grain, keys, relationships and measure semantics that already live upstream
-   (sqlmesh/dbt). It drifts, and every drift is a silent wrong answer.
-2. **A wrong number can look plausible.** A database error on a query path must
+1. **A wrong number can look plausible.** A database error on a query path must
    never render as zero or an empty cellset; a fan-out relationship must never
    double-count; a ratio measure must never be emitted as if it were additive.
+2. **The config is a second hand-authored model.** `proxy-config.json`
+   duplicates grain, keys, relationships and measure semantics that already
+   live upstream (sqlmesh/dbt). It drifts, and every drift is a silent wrong
+   answer.
 
 The external review (2026-09-25) makes the serving contract its first item.
-This plan keeps that ordering but **inverts the usual build order**: the
-*validator* comes before the *generator*. A qualifier makes today's config
-provably safe and becomes the generator's oracle; a generator built first just
-produces more wrong answers, faster.
+This plan keeps that goal but **inverts the usual build order**: correctness
+and the validator come first. A qualifier makes today's config provably safe
+and becomes the generator's oracle; a generator built first just produces more
+wrong answers, faster.
 
-## A. The contract
+## C. Fail closed (do first)
 
-One source-neutral file (`contract.yaml`, JSON Schema checked in CI) with only
-the fields that are stable across sources and engines:
+- Audit every query path for swallowed errors (`unwrap_or(0)`, `ok()`, ignored
+  `Result`) and give the engine calls typed errors; a failure answers a
+  sanitized SOAP fault, never a number.
+- **Fault-injection matrix** (tests): missing table, missing column, locked or
+  corrupt database file, interrupted query, missing/stale aggregation sidecar,
+  reload mid-flight. Every case must fault — with the class of failure in the
+  message, and without leaking paths or credentials.
+- Finish the **consumption audit** from plan 051: every requested set, filter,
+  measure, property and option is consumed or faults; the plan and renderer
+  mark each entry, and a leftover faults naming it.
+- Faults carry a stable code and a hint; `/status` exposes the last error.
 
-- `contract_version` (semver) and `model` (name, description);
-- `grain` (fact table, key) and `dimensions` (id, key column, table, hierarchy
-  levels or flat, date role, cardinality hint);
-- `relationships` (fact, dimension, columns, cardinality: `many_to_one` only,
-  active flag);
-- `measures` (expression or upstream reference, declared aggregation:
-  `sum` / `min` / `max` / `count` / `distinct_count` / `ratio` / `time_window`,
-  format string, description);
-- `display` (captions, ordinals, visibility) and `security` (role references);
-- `provenance` (source system, source hash, generator name/version, timestamp).
-
-Rules: no SQL dialect specifics in the contract — anything engine-specific is a
-declared **serving hint**, and an unused hint is a qualification failure, not a
-guess. The schema is versioned with a deprecation policy (shared with 061).
-
-## B. The qualifier
+## B. The qualifier (do second)
 
 `mallard qualify <config>` today emits a config/artifact readiness verdict
 (`READY` / `PARTIAL` / `BLOCKED`). Extend it with **data-side checks**, all
@@ -75,21 +75,51 @@ executable, all exit non-zero on failure, each naming the check:
 Output: a machine-readable verdict (JSON, stable shape) plus a human summary;
 CI runs it for every fixture project and the demo.
 
-## C. Fail closed
+The checks above are what the contract must be able to express — they are the
+schema's requirements, which is why they come before it.
 
-- Audit every query path for swallowed errors (`unwrap_or(0)`, `ok()`, ignored
-  `Result`) and give the engine calls typed errors; a failure answers a
-  sanitized SOAP fault, never a number.
-- **Fault-injection matrix** (tests): missing table, missing column, locked or
-  corrupt database file, interrupted query, missing/stale aggregation sidecar,
-  reload mid-flight. Every case must fault — with the class of failure in the
-  message, and without leaking paths or credentials.
-- Finish the **consumption audit** from plan 051: every requested set, filter,
-  measure, property and option is consumed or faults; the plan and renderer
-  mark each entry, and a leftover faults naming it.
-- Faults carry a stable code and a hint; `/status` exposes the last error.
+## A. The contract (do third)
 
-## D. Generators (only after B is green)
+One source-neutral file (`contract.yaml`, JSON Schema checked in CI) with only
+the fields that are stable across sources and engines:
+
+- `contract_version` (semver) and `model` (name, description);
+- `grain` (fact table, key) and `dimensions` (id, key column, table, hierarchy
+  levels or flat, date role, cardinality hint);
+- `relationships` (fact, dimension, columns, cardinality: `many_to_one` only,
+  active flag);
+- `measures` (expression or upstream reference, declared aggregation:
+  `sum` / `min` / `max` / `count` / `distinct_count` / `ratio` / `time_window`,
+  format string, description);
+- `display` (captions, ordinals, visibility) and `security` (role references);
+- `provenance` (source system, source hash, generator name/version, timestamp).
+
+### Compatibility policy — changeable while pre-alpha
+
+The contract is a **projection target, not a public interface** until 1.0. The
+rules that keep it changeable:
+
+- **`0.x` means unstable**: minor bumps may break, a changelog announces it,
+  and there is no deprecation window until 1.0. 1.0 is the commitment point and
+  is tied to Gate G1 and plan 060's certification, not to this plan.
+- **Annotations escape hatch**: an `annotations:` namespace the proxy ignores
+  and generators preserve, so prototyping a new field does not churn the
+  schema. A field earns core status only with a qualifier check behind it.
+- **Fail closed on meaning**: an unknown *core* field is a hard error (a rule
+  you think is enforced but isn't is worse than no rule); a contract version
+  newer than the build supports is refused with an upgrade hint; older
+  versions go through an explicit migration command, never silent tolerance.
+- **The runtime never reads the contract** — it serves the generated
+  projection, so schema churn touches generators and validation only.
+- **Version fixtures**: one contract fixture per supported version, each
+  required to keep qualifying; dropping a version is a deliberate deletion.
+- **Nothing external pins it**: no schema URL, no "certified against this
+  contract version" anywhere, and the docs mark the schema unstable.
+- No SQL dialect specifics in the contract — anything engine-specific is a
+  declared **serving hint**, and an unused hint is a qualification failure, not
+  a guess.
+
+## D. Generators (do last)
 
 1. `sqlmesh → contract`, against a real SQLMesh fixture (the upstream default);
 2. `dbt → contract`;
@@ -103,19 +133,23 @@ one, so no hand edits survive.
 
 ## Scope
 
-**In**: contract schema + JSON Schema, qualifier extensions, fingerprint
-plumbing, fault closure, fault-injection matrix, consumption audit, generators
-and their fixtures, CI wiring.
+**In**: fault closure (typed errors, fault-injection matrix, consumption audit),
+qualifier extensions, fingerprint plumbing, the contract schema plus its
+compatibility policy and version fixtures, generators and their fixtures, CI
+wiring.
 
 **Out**: column-level security (058), deployment/observability (059), MDX
 features (060), live attach and object-store intake (061), aggregate design
-(052), storage contract (053).
+(052), storage contract (053), publishing the schema as a stable interface.
 
 ## Done criteria
 
+- The fault-injection matrix passes: no data-side failure answers a number.
 - A seeded defect (missing column, duplicate key, fan-out, orphan, wrong grain,
   wrong ratio, dead database) fails `qualify` or faults, and CI proves each.
-- The fault-injection matrix passes: no data-side failure answers a number.
+- The contract exists at `0.x` with the annotations namespace, the version
+  rules and at least one fixture; an unknown core field and a newer version
+  both refuse with a clear message.
 - A real SQLMesh fixture and a dbt fixture each generate a contract that
   qualifies unedited and passes the Excel sweeps plus `probe-fidelity.sh` and
   `probe-parity.sh`.
@@ -129,3 +163,33 @@ features (060), live attach and object-store intake (061), aggregate design
   required but unused — never guess.
 - If a generator is not byte-deterministic across runs, fix determinism before
   adding the next generator.
+- If a schema change would require an external consumer to migrate, it is too
+  early for that change: keep it in annotations until 1.0.
+
+## Progress
+
+- **2026-09-25 — section C, first slice: a failed query can no longer look
+  like a number.** `Backend` records the first failure per connection in every
+  query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,
+  `grouped_n`, `strings`, `rows`, `column_names`), the `QueryBackend` trait
+  exposes `take_failure`, and the request paths fault: the cellset runtime
+  checks twice — before caching (a failure is never cached) and after rendering
+  (a member-dictionary failure replaces the rendered cellset) — and the member
+  builder checks after its dictionary queries. Each use site clears the latch
+  first so a failure from an earlier request on a pooled connection cannot
+  fault an unrelated one. NULL stays a value, not a failure.
+
+  Verified live with a scratch model whose measure reads a missing column:
+  `value=0` became `a query against the database failed: Binder Error:
+  Referenced column "no_such_column" not found`, on both the total and the
+  group-by shape, with the healthy demo unchanged.
+
+  Two traps worth remembering: the trait must *forward* the latch (a default
+  `None` silently disarms it — exactly the bug this slice fixed), and shared
+  test fixtures latch across parallel tests, which is why the clear is
+  per-use rather than per-connection.
+
+  Still open in section C: the `Result`-typed engine API (the latch is the
+  interim, not the destination), the rest of the fault-injection matrix
+  (locked/corrupt file, interrupted query, sidecar, reload mid-flight), and the
+  consumption audit.

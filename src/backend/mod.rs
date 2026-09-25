@@ -9,6 +9,10 @@ pub struct Backend {
     /// Engine-side cancellation handle (plan 051-B): the request handler
     /// interrupts this connection when a query outlives its timeout.
     interrupt: Arc<duckdb::InterruptHandle>,
+    /// The first query failure on this connection, taken by the request path.
+    /// A failed query used to look like a legitimate zero or an empty axis;
+    /// the request path faults instead (plan 057-C).
+    failure: Mutex<Option<String>>,
 }
 
 /// A fixed set of pre-opened, read-only DuckDB connections shared across
@@ -130,6 +134,12 @@ pub trait QueryBackend {
     fn query_strings(&self, sql: &str) -> Vec<String>;
     fn query_rows(&self, sql: &str) -> Vec<Vec<String>>;
     fn query_column_names(&self, sql: &str) -> Vec<String>;
+    /// The connection's first query failure, taken by the request path so it
+    /// can fault instead of rendering a plausible value (plan 057-C). The
+    /// default is `None` for backends that cannot fail.
+    fn take_failure(&self) -> Option<String> {
+        None
+    }
 }
 
 impl BackendSource {
@@ -201,6 +211,7 @@ impl BackendPool {
             backends.push(Arc::new(Backend {
                 conn: Mutex::new(conn),
                 interrupt,
+                failure: std::sync::Mutex::new(None),
             }));
         }
         Ok(BackendPool {
@@ -467,6 +478,13 @@ impl QueryBackend for Backend {
     fn query_column_names(&self, sql: &str) -> Vec<String> {
         Backend::query_column_names(self, sql)
     }
+
+    /// The trait must forward the latch: the request path only sees the trait,
+    /// so a missing forward would silently fall back to `None` and render the
+    /// zero it was supposed to fault (plan 057-C).
+    fn take_failure(&self) -> Option<String> {
+        Backend::take_failure(self)
+    }
 }
 
 /// Convert a DuckDB value to f64 for measure/scalar reads, preserving decimal
@@ -508,6 +526,22 @@ impl Backend {
         self.interrupt.interrupt();
     }
 
+    /// Remember the first query failure on this connection. The message is
+    /// surfaced as a SOAP fault by the request path; the SQL is logged (and
+    /// truncated) rather than sent to the client.
+    fn record_failure(&self, error: impl std::fmt::Display) {
+        if let Ok(mut slot) = self.failure.lock()
+            && slot.is_none()
+        {
+            *slot = Some(error.to_string());
+        }
+    }
+
+    /// The first recorded failure, taken (and cleared) by the request path.
+    pub fn take_failure(&self) -> Option<String> {
+        self.failure.lock().ok().and_then(|mut slot| slot.take())
+    }
+
     /// Lock the connection, recovering from a poisoned mutex.
     ///
     /// Request handling catches panics so the server survives (`main.rs`). If a
@@ -527,6 +561,7 @@ impl Backend {
         Ok(Backend {
             conn: Mutex::new(conn),
             interrupt,
+            failure: std::sync::Mutex::new(None),
         })
     }
 
@@ -537,6 +572,7 @@ impl Backend {
         Ok(Backend {
             conn: Mutex::new(conn),
             interrupt,
+            failure: std::sync::Mutex::new(None),
         })
     }
 
@@ -659,17 +695,27 @@ impl Backend {
 
     pub fn query_scalar(&self, sql: &str) -> f64 {
         let conn = self.lock_conn();
-        conn.query_row(sql, [], |row| {
+        match conn.query_row(sql, [], |row| {
             Ok(value_to_f64(&row.get::<_, duckdb::types::Value>(0)?).unwrap_or(0.0))
-        })
-        .unwrap_or(0.0)
+        }) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("query_scalar: query failed: {error}");
+                self.record_failure(&error);
+                0.0
+            }
+        }
     }
 
     pub fn query_grouped_1d(&self, sql: &str) -> Vec<(String, f64)> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_grouped_1d: prepare failed: {}", log_sql(sql));
-            return Vec::new();
+        let mut stmt = match conn.prepare(sql) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_grouped_1d: prepare failed: {}", log_sql(sql));
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         let rows = match stmt.query_map([], |row| {
             let label = row.get::<_, String>(0)?;
@@ -679,17 +725,29 @@ impl Backend {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("query_grouped_1d: query failed: {e}");
+                self.record_failure(&e);
                 return Vec::new();
             }
         };
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(error) => {
+                self.record_failure(&error);
+                None
+            }
+        })
+        .collect()
     }
 
     pub fn query_pairs(&self, sql: &str) -> Vec<(String, String, f64)> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_pairs: prepare failed: {}", log_sql(sql));
-            return Vec::new();
+        let mut stmt = match conn.prepare(sql) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_pairs: prepare failed: {}", log_sql(sql));
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         let rows = match stmt.query_map([], |row| {
             let a = row.get::<_, String>(0)?;
@@ -700,18 +758,30 @@ impl Backend {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("query_pairs: query failed: {e}");
+                self.record_failure(&e);
                 return Vec::new();
             }
         };
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(error) => {
+                self.record_failure(&error);
+                None
+            }
+        })
+        .collect()
     }
 
     /// N dimension keys + one value per row (plan 049, phase 3).
     pub fn query_grouped_n(&self, sql: &str, dims: usize) -> Vec<(Vec<String>, f64)> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_grouped_n: prepare failed: {}", log_sql(sql));
-            return Vec::new();
+        let mut stmt = match conn.prepare(sql) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_grouped_n: prepare failed: {}", log_sql(sql));
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         let rows = match stmt.query_map([], |row| {
             let mut keys = Vec::with_capacity(dims);
@@ -724,23 +794,39 @@ impl Backend {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("query_grouped_n: query failed: {e}");
+                self.record_failure(&e);
                 return Vec::new();
             }
         };
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(error) => {
+                self.record_failure(&error);
+                None
+            }
+        })
+        .collect()
     }
 
     pub fn query_count(&self, sql: &str) -> u32 {
         let conn = self.lock_conn();
         conn.query_row(sql, [], |row| row.get::<_, u32>(0))
-            .unwrap_or(0)
+            .unwrap_or_else(|error| {
+                eprintln!("query_count: query failed: {error}");
+                self.record_failure(&error);
+                0
+            })
     }
 
     pub fn query_strings(&self, sql: &str) -> Vec<String> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_strings: prepare failed: {}", log_sql(sql));
-            return Vec::new();
+        let mut stmt = match conn.prepare(sql) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_strings: prepare failed: {}", log_sql(sql));
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
             Ok(rows) => rows,
@@ -749,7 +835,14 @@ impl Backend {
                 return Vec::new();
             }
         };
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(error) => {
+                self.record_failure(&error);
+                None
+            }
+        })
+        .collect()
     }
 
     pub fn query_rows(&self, sql: &str) -> Vec<Vec<String>> {
@@ -760,10 +853,20 @@ impl Backend {
         let after_from = &sql[from_pos + 5..].trim();
         let table = after_from.split_whitespace().next().unwrap_or("?");
         let pragma = format!("SELECT count(*) FROM pragma_table_info('{table}')");
-        let col_count: usize = conn.query_row(&pragma, [], |r| r.get(0)).unwrap_or(0);
-        let Ok(mut stmt) = conn.prepare(sql) else {
-            eprintln!("query_rows: prepare failed: {}", log_sql(sql));
-            return Vec::new();
+        let col_count: usize = conn
+            .query_row(&pragma, [], |r| r.get(0))
+            .unwrap_or_else(|error| {
+                eprintln!("query_rows: pragma failed: {error}");
+                self.record_failure(&error);
+                0
+            });
+        let mut stmt = match conn.prepare(sql) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_rows: prepare failed: {}", log_sql(sql));
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         if col_count > 0 {
             let rows = match stmt.query_map([], move |row| {
@@ -780,10 +883,18 @@ impl Backend {
                 Ok(rows) => rows,
                 Err(e) => {
                     eprintln!("query_rows: query failed: {e}");
+                    self.record_failure(&e);
                     return Vec::new();
                 }
             };
-            rows.filter_map(|r| r.ok()).collect()
+            rows.filter_map(|r| match r {
+                Ok(row) => Some(row),
+                Err(error) => {
+                    self.record_failure(&error);
+                    None
+                }
+            })
+            .collect()
         } else {
             vec![]
         }
@@ -796,18 +907,30 @@ impl Backend {
         let after_from = &sql[from_pos + 5..].trim();
         let table = after_from.split_whitespace().next().unwrap_or("?");
         let pragma = format!("SELECT name FROM pragma_table_info('{table}') ORDER BY cid");
-        let Ok(mut stmt) = conn.prepare(&pragma) else {
-            eprintln!("query_column_names: prepare failed: {pragma}");
-            return Vec::new();
+        let mut stmt = match conn.prepare(&pragma) {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                eprintln!("query_column_names: prepare failed: {pragma}");
+                self.record_failure(error);
+                return Vec::new();
+            }
         };
         let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("query_column_names: query failed: {e}");
+                self.record_failure(&e);
                 return Vec::new();
             }
         };
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(error) => {
+                self.record_failure(&error);
+                None
+            }
+        })
+        .collect()
     }
 
     pub fn execute_ddl(&self, sql: &str) {
@@ -1315,6 +1438,7 @@ mod tests {
         let backend = Backend {
             conn: std::sync::Mutex::new(conn),
             interrupt,
+            failure: std::sync::Mutex::new(None),
         };
         backend.execute_ddl("CREATE TABLE sales_fact (i INT); INSERT INTO sales_fact VALUES (1);");
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1373,6 +1497,7 @@ mod tests {
         let backend = Backend {
             conn: std::sync::Mutex::new(conn),
             interrupt,
+            failure: std::sync::Mutex::new(None),
         };
         // Malformed SQL / missing tables must degrade to empty/default, not panic.
         assert!(
@@ -1393,6 +1518,7 @@ mod tests {
         let db = Backend {
             conn: std::sync::Mutex::new(conn),
             interrupt,
+            failure: std::sync::Mutex::new(None),
         };
         let sql = include_str!("../../data/seed_date_dim.sql");
         db.execute_ddl(sql);

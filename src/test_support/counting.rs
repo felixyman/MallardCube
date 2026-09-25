@@ -56,4 +56,38 @@ impl QueryBackend for Counting<'_> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.inner.query_column_names(sql)
     }
+    fn take_failure(&self) -> Option<String> {
+        self.inner.take_failure()
+    }
+}
+
+/// A backend that always reports a recorded query failure: the request path
+/// must answer a fault instead of rendering the zeros it returns (plan 057-C).
+pub struct Failing;
+
+impl QueryBackend for Failing {
+    fn query_scalar(&self, _sql: &str) -> f64 {
+        0.0
+    }
+    fn query_grouped_1d(&self, _sql: &str) -> Vec<(String, f64)> {
+        Vec::new()
+    }
+    fn query_pairs(&self, _sql: &str) -> Vec<(String, String, f64)> {
+        Vec::new()
+    }
+    fn query_count(&self, _sql: &str) -> u32 {
+        0
+    }
+    fn query_strings(&self, _sql: &str) -> Vec<String> {
+        Vec::new()
+    }
+    fn query_rows(&self, _sql: &str) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+    fn query_column_names(&self, _sql: &str) -> Vec<String> {
+        Vec::new()
+    }
+    fn take_failure(&self) -> Option<String> {
+        Some("Table with name sales_fact does not exist".to_string())
+    }
 }

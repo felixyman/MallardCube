@@ -891,12 +891,19 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
     ) {
         return MemberResponse::Fault(message);
     }
+    // Start clean: only this request's queries may fault it (plan 057-C).
+    let _ = backend.take_failure();
     let project = proxy_project::project();
     let all_rows = if super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
         all_rows_with_backend(backend, user, config, restrictions)
     } else {
         Vec::new()
     };
+    // A failed dictionary query must fault, not answer with an empty
+    // hierarchy (plan 057-C).
+    if let Some(failure) = backend.take_failure() {
+        return MemberResponse::Fault(format!("a query against the database failed: {failure}"));
+    }
     // Restrictions narrow the rowset before the member/tree-op selection: the
     // reference engine intersects the two (a hierarchy restriction plus a SELF
     // probe returns the one matching row).

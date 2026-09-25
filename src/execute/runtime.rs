@@ -112,6 +112,11 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     // Excel repeats the same query once per CELL PROPERTIES variant; serve the
     // repeats from a short-lived cache (plan 032). The cellset is rendered
     // fresh below, so every variant keeps its own cell properties.
+    // Start clean: a failure latched by an earlier request on this pooled
+    // connection must not fault this one (the checks below cover this
+    // request's own queries; plan 057-C).
+    let _ = backend.take_failure();
+
     let cache_enabled = cache::enabled();
     let cache_key = cache::cache_key(&key, &config.catalog, &config.cube, user, &config.roles);
     let t0 = Instant::now();
@@ -126,6 +131,21 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
             let result = std::sync::Arc::new(execute_plan_with_backend_and_context(
                 &plan, model, backend, user, config,
             ));
+            // A failed query must not be cached, let alone rendered as a
+            // plausible number (plan 057-C).
+            if let Some(failure) = backend.take_failure() {
+                let timings = Timings::new(
+                    RuntimePath::DirectSql,
+                    "query-failed".to_string(),
+                    mdx_parse_us,
+                );
+                return (
+                    crate::xmla::response::fault_response(&format!(
+                        "a query against the database failed: {failure}"
+                    )),
+                    timings,
+                );
+            }
             if cache_enabled {
                 cache::RESULT_CACHE.insert(cache_key, std::sync::Arc::clone(&result));
             }
@@ -142,6 +162,17 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     let t0 = Instant::now();
     let xml = dispatch_with_backend(&query, &result, backend);
     timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
+    // Rendering can query too (member dictionaries for axis and child counts);
+    // a failure there replaces whatever was rendered.
+    if let Some(failure) = backend.take_failure() {
+        timings.finish();
+        return (
+            crate::xmla::response::fault_response(&format!(
+                "a query against the database failed: {failure}"
+            )),
+            timings,
+        );
+    }
     timings.finish();
     (xml, timings)
 }
