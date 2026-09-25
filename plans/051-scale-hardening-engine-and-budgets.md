@@ -433,11 +433,34 @@ With that fixed, `sweep3` through Excel is **byte-identical to the pre-review
 baseline** on the proxy, and the mirror run is byte-identical to its own
 baseline. The two engines differ in exactly one data line:
 
-- **Top-5 pivot filter**: the mirror returns a filtered grid (3x2); the proxy
-  returns all 22 rows. A fresh trace of the whole sweep shows **zero**
-  `TopCount`/`TopSum`/`TopPercent` in 1,352 requests — Excel never asks.
-  Next diagnostic: capture the mirror's requests through the relay, or diff
-  the pivot cache definitions, to see how Excel records the filter there.
+- **Top-5 pivot filter — resolved (2026-09-25)**: Excel sends the filter
+  server-side as a **subselect**, identical to both engines:
+
+  ```mdx
+  SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)})
+    DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS
+  FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0],
+          BottomSum(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0, INCLUDE_CALC_MEMBERS),
+            [XL_Filter_HelperSet_0]), 5, [Measures].[Revenue])) ON COLUMNS
+    FROM [Model] WHERE ([Measures].[Revenue]))
+  WHERE ([Measures].[Revenue]) CELL PROPERTIES ...
+  ```
+
+  Captured through the logging relay (8095→8090) while Excel applied a Top-5
+  pivot filter: the reference evaluates the subselect and answers Axis0 =
+  `{All, Toys}` — `BottomSum` means "the bottom members whose cumulative sum
+  reaches 5", which is the single lowest-revenue category, so Excel's grid is
+  `Toys | 24 440 800` + Grand Total (the sweep baseline's 3x2). The proxy
+  ignores the `FROM (SELECT ...)` clause and answers all 21 members (the 22x2
+  grid), and Excel re-sent the filtered query once — the same
+  unexpected-response retry seen with ADODB. There was no `TopCount` because
+  there is none to send: the filter is the subselect.
+
+  So this is not a query-shape mystery but the `NON EMPTY`/subselect gap
+  already recorded for `axis-date-key-drilldown`; parity needs subselect
+  evaluation (`Generate`, `BottomSum`, `Except`, `DrilldownLevel`, `Current`,
+  `Alias`), or a narrow recognizer for Excel's filter idiom that computes the
+  same cumulative set from SQL.
 
 Two environment notes for the next VM session:
 
@@ -467,14 +490,38 @@ short dates (`1/1/2020`) where the proxy emits the raw ISO value
 (`2020-01-01`), and its unique names carry `T00:00:00`. Same open item as the
 compound-member naming in the skill notes.
 
-### ADODB loop (open)
+### ADODB loop (diagnosed 2026-09-25)
 
-ADODB `Execute` against the proxy loops: MSOLAP re-sent the same
-`SELECT [Measures].[Revenue] ON 0 FROM [Sales]` **7,776 times** (identical
-cached responses, ~80 µs each) until the process was killed. Excel is
-unaffected, but the proxy is not ADODB-clean until this is understood — the
-next step is comparing the response shape against the mirror's for the same
-request (the mirror answers it without a loop).
+`ADODB.Connection.Execute` sends `<Format>Tabular</Format>` in the Execute
+properties. The reference answers that with a **flattened rowset**
+(`urn:schemas-microsoft-com:xml-analysis:rowset`, one `<row>` per result row);
+the proxy ignores the property and answers a cellset. MSOLAP cannot consume it
+as a recordset, so it re-sends the query for every field read — the
+"7,776-request loop" is one HTTP Execute per read.
+
+Reproduced and pinned on the VM, with both engines behind logging relays:
+
+- the same ADODB probe (one Execute, then 5,000 field reads) costs the mirror
+  **6 requests** total and the proxy **2,418** (identical 7,390 B cached
+  cellset each, until the watchdog killed it);
+- trigger test against the reference: `<Format>Tabular</Format>` alone ⇒
+  rowset; `<Content>SchemaData</Content>` alone ⇒ cellset; both ⇒ rowset;
+  neither ⇒ cellset;
+- rowset shapes: `SELECT [Measures].[Revenue] ON 0 FROM [Model]` ⇒ one column
+  (`[Measures].[Revenue]`, element name escaped `_x005B_Measures_x005D_._x005B_Revenue_x005D_`),
+  one row, value `5.21586767E8`; with `[Category].[Category].Members` on the
+  other axis ⇒ 21 rows, columns
+  `[Category].[Category].[Category].[MEMBER_CAPTION]` + `[Measures].[Revenue]`;
+- Excel never asks this way: all 11 `Format=Tabular` hits in the 1,156-request
+  corpus are `DiscoverLiterals`, and every Excel Execute uses `Format=Native` —
+  which is why the Excel sweeps never noticed.
+
+Fix scope: honour `Format=Tabular` on Execute by rendering the same SQL plan
+output as the rowset shape (escaped column names per the reference's scheme,
+role suffix `MEMBER_CAPTION` for axis members, doubles in the reference's
+`G9`-style form, one row per group-by tuple), then add the ADODB probe as a
+regression (a bounded request count for the 5,000-read script). Probe two
+dimensions, multiple measures and the `(All)` row before implementing.
 
 ## Review round 3 (2026-09-24, VM session)
 
@@ -575,3 +622,21 @@ out of scope):
   resolves `STRTO_MEMBER`/member-only probes against the full model.
 - Unknown session ids are accepted (documented statelessness) and fault
   responses carry no session header.
+
+### Table-permission case sensitivity — measured on the reference (2026-09-25)
+
+Four roles on MallardDemo (created with TMSL over the pump, probed with
+`Roles=` over ADOMD):
+
+| permission name | setting | revenue | `MDSCHEMA_DIMENSIONS` |
+|---|---|---|---|
+| `Category` | `metadataPermission: none` | 521,586,767 | 6 dims, no `[Category]` |
+| `category` | `metadataPermission: none` | 521,586,767 | 6 dims, no `[Category]` |
+| `Category` | `filterExpression: 'Category'[Category] = "Toys"` | 24,440,800 | — |
+| `category` | `filterExpression: 'Category'[Category] = "Toys"` | 24,440,800 | — |
+
+Both spellings take effect, so the reference matches table names
+**case-insensitively**: our `eq_ignore_ascii_case` change matches the engine
+rather than diverging (the review's "high, conditional" finding is resolved in
+favour of the current behaviour). Roles deleted afterwards; `rls_probe`,
+`rls_terr` and `rls_sales` from the earlier measurements remain on the mirror.
