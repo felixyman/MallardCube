@@ -201,3 +201,23 @@ features (060), live attach and object-store intake (061), aggregate design
   missing/stale aggregation sidecar and a reload mid-flight. Then the
   `Result`-typed engine API (the latch is the interim) and the consumption
   audit close section C.
+
+- **2026-09-25 — section B, first slice: `mallard qualify` runs data-side
+  checks.** Over the physical shape only (fact tables, the dimension tables
+  relationships name, and dimensions that declare their own `table_name`):
+  every table must be readable; every relationship's dimension key must be
+  unique; no relationship may fan out (joined rows ≤ fact rows, reported with
+  the measured multiplier); orphan fact keys are a PARTIAL finding. Dimension
+  keys come from relationships (`dim_column`), never from `physical_field` —
+  that is a display path, and checking it produced false "not unique" findings
+  on the shipped fixtures.
+
+  Verified: `generated_retail_analytics` is READY; a seeded-defect database
+  (duplicate key, fan-out, orphan, missing table) trips all four findings in a
+  test; `generated_contoso` is now BLOCKED because its dummy database lacks
+  `promotion` and other tables its model references — a real fixture gap for
+  plan 045 that a PARTIAL verdict used to hide.
+
+  Still open in section B: the database fingerprint, measure-grain checks
+  (ratios, cumulative windows), value oracles (`--oracle n`), and the
+  machine-readable JSON verdict.

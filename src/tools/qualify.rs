@@ -8,6 +8,7 @@
 /// - READY: no known blockers, project loads cleanly.
 /// - PARTIAL: usable but needs manual follow-up (roles, manual measures, etc.).
 /// - BLOCKED: not honestly Excel-safe (stub fallbacks, broken config, etc.).
+use crate::backend::{BackendSource, QueryBackend};
 use crate::project::config::ModelPermission;
 use std::path::Path;
 
@@ -174,6 +175,30 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
         blocked.push("model has no dimensions or no measures".into());
     }
 
+    // --- data-side checks (plan 057-B) ---
+    // These stop a plausible wrong number: unreadable tables, duplicate
+    // dimension keys, fan-out relationships and orphan keys.
+    match p
+        .config
+        .db_path
+        .as_deref()
+        .and_then(|db| crate::proxy_project::resolve_db_path(config_path, Some(db)))
+    {
+        Some(resolved) if Path::new(&resolved).exists() => match BackendSource::file(&resolved) {
+            Ok(source) => {
+                let shape = data_shape(&p);
+                let (data_blocked, data_partial) =
+                    data_findings(source.checkout().as_ref(), &shape);
+                blocked.extend(data_blocked);
+                partial.extend(data_partial);
+            }
+            Err(error) => {
+                blocked.push(format!("cannot open the database for data checks: {error}"))
+            }
+        },
+        _ => partial.push("db_path is not usable: data-side checks skipped".into()),
+    }
+
     // --- optional replay ---
     if let Some(tp) = trace_path {
         if Path::new(tp).exists() {
@@ -216,6 +241,159 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
     } else {
         Readiness::Ready
     }
+}
+
+/// The tables, dimension keys and relationships the data-side checks run
+/// over. Explicit lists, so tests can point them at any database.
+pub(crate) struct DataShape {
+    pub tables: Vec<String>,
+    /// `(table, key column)` — one per flat dimension.
+    pub dimension_keys: Vec<(String, String)>,
+    /// `(fact table, fact column, dimension table, dimension column)`.
+    pub relationships: Vec<(String, String, String, String)>,
+}
+
+/// Build the shape from a loaded model.
+///
+/// Only *physical* tables take part: the fact tables, the dimension tables a
+/// relationship names, and dimensions that declare a `table_name` of their
+/// own. A flat dimension's `physical_field` is a display path on the fact
+/// table — it repeats by design, so it is not a key (checking it produced
+/// false "not unique" findings).
+pub(crate) fn data_shape(p: &crate::proxy_project::ProxyProject) -> DataShape {
+    let model = &p.model;
+    let mut tables: Vec<String> = Vec::new();
+    let mut dimension_keys: Vec<(String, String)> = Vec::new();
+    let mut relationships = Vec::new();
+
+    fn add_table(tables: &mut Vec<String>, table: &str) {
+        if !table.is_empty() && !tables.iter().any(|t| t == table) {
+            tables.push(table.to_string());
+        }
+    }
+    fn add_key(keys: &mut Vec<(String, String)>, table: &str, column: &str) {
+        if table.is_empty() || column.is_empty() {
+            return;
+        }
+        if !keys.iter().any(|(t, c)| t == table && c == column) {
+            keys.push((table.to_string(), column.to_string()));
+        }
+    }
+
+    for ft in &model.fact_tables {
+        add_table(&mut tables, &ft.table_name);
+    }
+    for rel in &model.relationships {
+        add_table(&mut tables, &rel.dim_table);
+        add_key(&mut dimension_keys, &rel.dim_table, &rel.dim_column);
+        let Some(fact) = model
+            .fact_tables
+            .iter()
+            .find(|ft| ft.id == rel.fact_table_id)
+        else {
+            continue;
+        };
+        relationships.push((
+            fact.table_name.clone(),
+            rel.fact_column.clone(),
+            rel.dim_table.clone(),
+            rel.dim_column.clone(),
+        ));
+    }
+    for d in &model.dimensions {
+        // The table can still be checked for existence…
+        if let Some(table) = d.table_name.as_deref() {
+            add_table(&mut tables, table);
+        }
+        // …but `physical_field` is a display path, not a physical column, so a
+        // dimension without a relationship has no reliable key to check. Keys
+        // come from relationships only (their `dim_column` is the join key).
+    }
+
+    DataShape {
+        tables,
+        dimension_keys,
+        relationships,
+    }
+}
+
+/// The data-side checks (plan 057-B): unreadable tables, duplicate dimension
+/// keys, fan-out relationships and orphan keys — the four ways a projection
+/// produces a plausible wrong number instead of failing.
+pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
+    backend: &B,
+    shape: &DataShape,
+) -> (Vec<String>, Vec<String>) {
+    let mut blocked = Vec::new();
+    let mut partial = Vec::new();
+
+    for table in &shape.tables {
+        let _ = backend.take_failure();
+        let _ = backend.query_rows(&format!("SELECT * FROM \"{table}\" LIMIT 0"));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!("table '{table}' cannot be read: {failure}"));
+        }
+    }
+
+    for (table, column) in &shape.dimension_keys {
+        let _ = backend.take_failure();
+        let rows = backend.query_rows(&format!(
+            "SELECT COUNT(*), COUNT(DISTINCT \"{column}\") FROM \"{table}\""
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "key '{table}.{column}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        let number = |index: usize| {
+            rows.first()
+                .and_then(|row| row.get(index))
+                .and_then(|value| value.parse::<i64>().ok())
+        };
+        if let (Some(total), Some(distinct)) = (number(0), number(1))
+            && total > 0
+            && distinct < total
+        {
+            blocked.push(format!(
+                "dimension key '{table}.{column}' is not unique: {total} rows, {distinct} distinct values ({} duplicates)",
+                total - distinct
+            ));
+        }
+    }
+
+    for (fact, fact_column, dim, dim_column) in &shape.relationships {
+        let _ = backend.take_failure();
+        let rows = backend.query_rows(&format!(
+            "SELECT (SELECT COUNT(*) FROM \"{fact}\" f JOIN \"{dim}\" d ON f.\"{fact_column}\" = d.\"{dim_column}\"),              (SELECT COUNT(*) FROM \"{fact}\"),              (SELECT COUNT(*) FROM \"{fact}\" f WHERE f.\"{fact_column}\" IS NOT NULL               AND NOT EXISTS (SELECT 1 FROM \"{dim}\" d WHERE d.\"{dim_column}\" = f.\"{fact_column}\"))"
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        let number = |index: usize| {
+            rows.first()
+                .and_then(|row| row.get(index))
+                .and_then(|value| value.parse::<i64>().ok())
+        };
+        if let (Some(joined), Some(facts), Some(orphans)) = (number(0), number(1), number(2)) {
+            if facts > 0 && joined > facts {
+                blocked.push(format!(
+                    "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' fans out:                      {joined} joined rows for {facts} fact rows (x{:.2})",
+                    joined as f64 / facts as f64
+                ));
+            }
+            if orphans > 0 {
+                partial.push(format!(
+                    "{orphans} fact rows have no matching {dim}.{dim_column}                      ({fact}.{fact_column}); they are silently dropped from pivots"
+                ));
+            }
+        }
+    }
+
+    (blocked, partial)
 }
 
 /// Proxy-side logic that belongs upstream (plan 044). Empty means a thin
@@ -354,21 +532,22 @@ mod tests {
     }
 
     #[test]
-    fn generated_contoso_is_partial_with_unsupported_roles() {
+    fn generated_contoso_reports_missing_tables_and_roles() {
         let v = qualify("projects/generated_contoso/proxy-config.json", None);
-        // Roles defined without an auth config, plus measures needing manual review.
-        assert_eq!(
-            v.label(),
-            "PARTIAL",
-            "expected PARTIAL, got {}: {:?}",
-            v.label(),
-            v.reasons()
-        );
+        // Roles defined without an auth config, measures needing manual review,
+        // and — with the data-side checks (plan 057-B) — tables the model
+        // references that the shipped dummy database does not contain
+        // (`promotion` among them). The fixture is genuinely not serveable
+        // until the intake work (plan 045) fills the dummy load in.
+        assert_eq!(v.label(), "BLOCKED", "{:?}", v.reasons());
         let reasons: Vec<&str> = v.reasons().iter().map(|s| s.as_str()).collect();
         assert!(
             reasons.iter().any(|r| r.contains("no auth config")),
-            "should report missing auth config: {:?}",
-            reasons
+            "should report missing auth config: {reasons:?}"
+        );
+        assert!(
+            reasons.iter().any(|r| r.contains("promotion")),
+            "should report the missing table: {reasons:?}"
         );
     }
 
