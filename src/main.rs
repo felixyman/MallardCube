@@ -109,6 +109,7 @@ fn reload_data(state: &AppState) -> Result<String, String> {
     }
     let mut status = current_status(state);
     status.data = stamp;
+    status.data_epoch = mallardcube::execute::cache::bump_data_epoch();
     match state.status.write() {
         Ok(mut slot) => *slot = status,
         Err(e) => *e.into_inner() = status,
@@ -494,6 +495,7 @@ async fn run_server() {
             pool_size: backend::pool_size(),
             started_at_unix: mallardcube::status::now_unix(),
             data: mallardcube::status::DataStamp::capture(backend_source.path()),
+            data_epoch: mallardcube::execute::cache::bump_data_epoch(),
             result_cache: mallardcube::execute::cache::enabled(),
             cache: mallardcube::execute::cache::RESULT_CACHE.stats(),
             auth: mallardcube::status::AuthStatus::from_config(&p.config),

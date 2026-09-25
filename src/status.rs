@@ -102,6 +102,8 @@ pub struct StatusInfo {
     pub pool_size: usize,
     pub started_at_unix: u64,
     pub data: DataStamp,
+    /// Data-source generation; part of the result-cache key (plan 057-B).
+    pub data_epoch: u64,
     pub result_cache: bool,
     /// Live cache accounting: entries, bytes and hits (plan 051-B).
     pub cache: crate::execute::cache::CacheStats,
@@ -137,6 +139,7 @@ impl StatusInfo {
                 "size_bytes": self.data.size_bytes,
                 "mtime_unix": self.data.mtime_unix,
                 "loaded_at_unix": self.data.loaded_at_unix,
+                "epoch": self.data_epoch,
             },
             "auth": {
                 "configured": self.auth.configured,
@@ -218,6 +221,7 @@ mod tests {
                 mtime_unix: 2,
                 loaded_at_unix: 3,
             },
+            data_epoch: 1,
             result_cache: true,
             auth: AuthStatus {
                 configured: false,

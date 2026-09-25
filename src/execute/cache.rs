@@ -255,6 +255,19 @@ impl ResultCache {
 /// Process-wide cache for the execution path.
 pub static RESULT_CACHE: LazyLock<ResultCache> = LazyLock::new(ResultCache::new);
 
+/// Bumped whenever the data source is opened or replaced. The cache key carries
+/// it, so a reload cannot serve pre-reload rows even if a clear were missed
+/// (plan 057-B); `/status` reports it so a log line and a cache key correlate.
+pub static DATA_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+pub fn bump_data_epoch() -> u64 {
+    DATA_EPOCH.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+pub fn data_epoch() -> u64 {
+    DATA_EPOCH.load(Ordering::Relaxed)
+}
+
 /// Whether the cache is active. `MALLARDCUBE_RESULT_CACHE=0` disables it
 /// (A/B benchmarks, or a deployment that wants zero staleness).
 pub fn enabled() -> bool {
@@ -290,11 +303,12 @@ pub fn cache_key(
         .collect();
     matched.sort_by(|a, b| a.name.cmp(&b.name));
     format!(
-        "{catalog}|{cube}|{plan_key}|user={}|admin={}|roles={}|groups={}|cfg={matched:?}",
+        "{catalog}|{cube}|{plan_key}|user={}|admin={}|roles={}|groups={}|data={}|cfg={matched:?}",
         user.user_id,
         user.is_administrator,
         roles.join(","),
-        groups.join(",")
+        groups.join(","),
+        data_epoch()
     )
 }
 
@@ -304,6 +318,18 @@ mod tests {
 
     fn scalar(v: f64) -> Arc<QueryResult> {
         Arc::new(QueryResult::Scalar(v))
+    }
+
+    /// A reload bumps the data epoch, and the key follows: an entry from
+    /// before the reload can never be hit (plan 057-B).
+    #[test]
+    fn the_data_epoch_is_part_of_the_key() {
+        let user = UserContext::admin_default();
+        let before = cache_key("p", "cat", "cube", &user, &[]);
+        let epoch = bump_data_epoch();
+        assert_eq!(data_epoch(), epoch);
+        let after = cache_key("p", "cat", "cube", &user, &[]);
+        assert_ne!(before, after);
     }
 
     /// Two configs can reuse a role name with different permissions (the test

@@ -221,3 +221,12 @@ features (060), live attach and object-store intake (061), aggregate design
   Still open in section B: the database fingerprint, measure-grain checks
   (ratios, cumulative windows), value oracles (`--oracle n`), and the
   machine-readable JSON verdict.
+
+- **2026-09-25 — section B, fingerprint slice.** A process-wide data epoch is
+  bumped when the source opens and on every reload; it is part of the result
+  cache key and reported in `/status` (`data.epoch`), so a log line and a cache
+  key correlate and a reload can never serve pre-reload rows even if a cache
+  clear were missed. Verified live: `/status` carries the epoch, and a test
+  proves the key changes across a bump. Still open in section B: measure-grain
+  checks (ratios, cumulative windows), value oracles (`--oracle n`), and the
+  machine-readable JSON verdict.
