@@ -8,6 +8,13 @@ sort out for production are the reverse proxy and the data directory.
 
 ## Reverse proxy
 
+:::caution[Secure by default]
+MallardCube refuses to start on a non-loopback address unless an auth mechanism is
+configured (`auth.trusted_proxy` or `auth.oidc`). Without auth every client that can
+reach the port is an administrator; if that is genuinely what you want (an isolated
+lab, say), set `MALLARDCUBE_ALLOW_ANONYMOUS=1` and accept the warning.
+:::
+
 Put an authenticating reverse proxy in front of the server. The proxy
 terminates TLS and handles authentication, then forwards to the local bind
 address.

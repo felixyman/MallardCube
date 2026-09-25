@@ -182,6 +182,33 @@ fn resolve_jwks_uri(config: &OidcConfig) -> Result<String, AuthError> {
 }
 
 /// Validate a Bearer token and extract the identity it represents.
+/// May this process serve on `bind`?
+///
+/// Loopback always may. Anything else needs a configured auth mechanism, or an
+/// explicit `MALLARDCUBE_ALLOW_ANONYMOUS=1`: an unauthenticated non-loopback
+/// proxy serves every request as an administrator to anyone who can reach it
+/// (plan 058). The `Err` message is what the operator sees before the process
+/// exits.
+pub fn bind_decision(
+    bind: std::net::SocketAddr,
+    auth_configured: bool,
+    allow_anonymous: bool,
+) -> Result<(), String> {
+    if bind.ip().is_loopback() || auth_configured {
+        return Ok(());
+    }
+    if allow_anonymous {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to serve on {bind}: no authentication is configured, so every \
+         client that can reach this port would be an administrator.\n   \
+         Bind loopback (BIND_ADDRESS=127.0.0.1:8080), configure auth \
+         (auth.trusted_proxy or auth.oidc), or set MALLARDCUBE_ALLOW_ANONYMOUS=1 \
+         to accept anonymous administrative access."
+    ))
+}
+
 pub fn validate_and_resolve(
     token: &str,
     config: &OidcConfig,
@@ -245,6 +272,29 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use super::bind_decision;
+
+    /// Loopback is free; anything else needs auth or an explicit opt-in
+    /// (plan 058).
+    #[test]
+    fn non_loopback_binds_require_auth() {
+        let loopback = "127.0.0.1:8080".parse().unwrap();
+        let loopback_v6 = "[::1]:8080".parse().unwrap();
+        let any = "0.0.0.0:8080".parse().unwrap();
+        let routable = "192.0.2.10:8080".parse().unwrap();
+
+        assert!(bind_decision(loopback, false, false).is_ok());
+        assert!(bind_decision(loopback_v6, false, false).is_ok());
+        assert!(
+            bind_decision(any, true, false).is_ok(),
+            "auth makes it safe"
+        );
+        assert!(bind_decision(routable, true, false).is_ok());
+        let refusal = bind_decision(any, false, false).expect_err("must refuse");
+        assert!(refusal.contains("MALLARDCUBE_ALLOW_ANONYMOUS"), "{refusal}");
+        assert!(bind_decision(any, false, true).is_ok(), "explicit opt-in");
+    }
+
     use super::*;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 

@@ -618,6 +618,25 @@ async fn run_server() {
     let addr: SocketAddr = bind_addr
         .parse()
         .expect("invalid BIND_ADDRESS (e.g. 127.0.0.1:8080 or 0.0.0.0:8080)");
+    // An unauthenticated non-loopback bind is an administrator for anyone who
+    // can reach the port; refuse unless the operator opts in explicitly
+    // (plan 058).
+    let auth_status =
+        mallardcube::status::AuthStatus::from_config(&proxy_project::project().config);
+    let allow_anonymous =
+        std::env::var("MALLARDCUBE_ALLOW_ANONYMOUS").is_ok_and(|value| value == "1");
+    if let Err(message) =
+        mallardcube::auth::bind_decision(addr, auth_status.configured, allow_anonymous)
+    {
+        eprintln!("❌ {message}");
+        std::process::exit(1);
+    }
+    if !addr.ip().is_loopback() && !auth_status.configured {
+        println!(
+            "⚠️  Serving without authentication on {addr}: every client is an administrator \
+             (MALLARDCUBE_ALLOW_ANONYMOUS=1)."
+        );
+    }
     println!("🚀 SSAS Proxy running on http://{}", addr);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
