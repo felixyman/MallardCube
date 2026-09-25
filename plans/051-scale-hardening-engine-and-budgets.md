@@ -640,3 +640,31 @@ Both spellings take effect, so the reference matches table names
 rather than diverging (the review's "high, conditional" finding is resolved in
 favour of the current behaviour). Roles deleted afterwards; `rls_probe`,
 `rls_terr` and `rls_sales` from the earlier measurements remain on the mirror.
+
+### Scope names (fixed 2026-09-25)
+
+Measured on the reference, then implemented:
+
+- a Discover restriction naming another catalog or cube (`CATALOG_NAME`,
+  `CUBE_NAME`) answers that rowset's **empty shape** — zero rows, schema
+  intact. Dimensions, measures, hierarchies, levels, properties, measure
+  groups, measure-group dimensions, tables and cubes carry their restrictions
+  now and check the scope before any work;
+- a `<Catalog>` **property** naming another database is a **fault**, for
+  Discover and Execute alike: "Either the user, '…', does not have access to
+  the 'X' database, or the database does not exist." (checked once at dispatch
+  through `XmlaRequest::property_catalog`);
+- `FROM [NoSuchCube]` faults "The NoSuchCube cube does not exist." — the
+  `SemanticQuery` carries the FROM cube now, so the cellset path refuses it
+  without parsing the MDX twice;
+- both names match case-insensitively.
+
+`parity/catalog.json`: `dimensions-wrong-cube-is-empty` lost its `known_gap`,
+and `dimensions-wrong-catalog-is-empty` plus `execute-unknown-cube-faults`
+were added — 19/19 matched with two known gaps left (the `DIMENSION_VISIBILITY`
+filter and the date-key drilldown).
+
+Still open in this bucket: the OLS leftovers in `MDSCHEMA_PROPERTIES`,
+`MDSCHEMA_MEASUREGROUPS`, the `[Measures]` part of `MDSCHEMA_MEMBERS` and the
+`TMSCHEMA_*` stubs; the axis `DISPLAY_INFO`/child counts; the result cache's
+byte accounting.

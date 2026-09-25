@@ -37,6 +37,18 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 
     let t0 = Instant::now();
     let query = crate::mdx_semantic::semantic_query_from_mdx(mdx);
+
+    // A `FROM` clause naming another cube is a scope error: the reference
+    // faults "The <name> cube does not exist." (measured 2026-09-25).
+    if let Some(cube) = query.cube.as_deref()
+        && !cube.trim().eq_ignore_ascii_case(config.cube.trim())
+    {
+        let timings = Timings::new(RuntimePath::DirectSql, "scope".to_string(), 0);
+        return (
+            crate::xmla::response::fault_response(&format!("The {cube} cube does not exist.")),
+            timings,
+        );
+    }
     let mdx_parse_us = (Instant::now() - t0).as_micros() as u64;
 
     let t0 = Instant::now();
@@ -120,6 +132,28 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// A request whose `<Catalog>` property names another database is refused the
+/// way the reference refuses it (measured 2026-09-25); names match
+/// case-insensitively.
+pub fn catalog_scope_fault(
+    catalog: Option<&str>,
+    config: &ProxyConfig,
+    user: &crate::engine::model::UserContext,
+) -> Option<String> {
+    let wanted = catalog?.trim();
+    if wanted.is_empty() || wanted.eq_ignore_ascii_case(config.catalog.trim()) {
+        return None;
+    }
+    let who = if user.user_id.is_empty() {
+        "the user".to_string()
+    } else {
+        format!("the user, '{}',", user.user_id)
+    };
+    Some(crate::xmla::response::fault_response(&format!(
+        "Either {who} does not have access to the '{wanted}' database, or the database does not exist."
+    )))
+}
 
 /// The first dimension a plan reads that is OLS-hidden for this user, if any.
 fn plan_hidden_dimension(
@@ -409,6 +443,45 @@ mod tests {
             "full access from another role wins"
         );
         assert!(!user_is_restricted(&union, &union_user));
+    }
+
+    /// A `FROM` clause naming another cube, and a `<Catalog>` property naming
+    /// another database, are scope faults like the reference's (measured
+    /// 2026-09-25; names match case-insensitively).
+    #[test]
+    fn scope_mismatches_fault() {
+        use super::catalog_scope_fault;
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let config = &crate::proxy_project::project().config;
+            let user = UserContext::admin_default();
+
+            let (response, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    "SELECT [Measures].[Revenue] ON 0 FROM [NoSuchCube]",
+                    Backend::test_fixture(),
+                    &user,
+                    config,
+                );
+            assert!(
+                response.contains("faultstring")
+                    && response.contains("NoSuchCube cube does not exist"),
+                "{response}"
+            );
+
+            assert!(catalog_scope_fault(Some("Elsewhere"), config, &user).is_some());
+            assert!(catalog_scope_fault(Some(config.catalog.as_str()), config, &user).is_none());
+            assert!(
+                catalog_scope_fault(Some(&config.catalog.to_lowercase()), config, &user).is_none(),
+                "catalog names match case-insensitively"
+            );
+            assert!(catalog_scope_fault(None, config, &user).is_none());
+        });
     }
 
     /// A dimension hidden by OLS refuses the query rather than serving its

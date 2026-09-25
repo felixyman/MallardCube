@@ -1,340 +1,364 @@
 {
-  "about": "Recorded observations from the real SSAS 2025 tabular mirror on the VM, replayed against a running proxy by scripts/probe-parity.sh. Add a case whenever a review or VM session finds a proxy/reference difference, and record the MIRROR's value, not the proxy's. {catalog} and {cube} are substituted from the fields below, so the same case can be replayed against the mirror.",
-  "catalog": "SALES_ANALYTICS",
-  "cube": "Sales",
-  "cases": [
-    {
-      "id": "members-measures",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Measures]"
-        }
-      },
-      "columns": {
-        "member": "MEMBER_UNIQUE_NAME"
-      },
-      "expect": {
-        "row_count": 6,
-        "member_sorted": [
-          "[Measures].[Revenue MTD]",
-          "[Measures].[Revenue Prior Year]",
-          "[Measures].[Revenue QTD]",
-          "[Measures].[Revenue YTD]",
-          "[Measures].[Revenue]",
-          "[Measures].[Units]"
-        ]
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-category",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]"
-        }
-      },
-      "columns": {
-        "member": "MEMBER_UNIQUE_NAME"
-      },
-      "expect": {
-        "row_count": 21,
-        "member_first": "[Category].[Category].[All]"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-category-type1",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
-          "MEMBER_TYPE": "1"
-        }
-      },
-      "expect": {
-        "row_count": 20
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (MEMBER_TYPE was silently dropped before)"
-    },
-    {
-      "id": "members-category-type2",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
-          "MEMBER_TYPE": "2"
-        }
-      },
-      "columns": {
-        "member": "MEMBER_UNIQUE_NAME"
-      },
-      "expect": {
-        "row_count": 1,
-        "member_first": "[Category].[Category].[All]"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-channel",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Channel].[Channel]"
-        }
-      },
-      "expect": {
-        "row_count": 5
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-segment",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Segment].[Segment]"
-        }
-      },
-      "expect": {
-        "row_count": 6
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-territory",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Territory].[Territory]"
-        }
-      },
-      "expect": {
-        "row_count": 9
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-date-calendar",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]"
-        }
-      },
-      "expect": {
-        "row_count": 4206
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "members-date-full-date",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEMBERS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
-        }
-      },
-      "columns": {
-        "member": "MEMBER_UNIQUE_NAME"
-      },
-      "expect": {
-        "row_count": 4019,
-        "member_first": "[Date].[Full Date].[All]",
-        "member_last": "[Date].[Full Date].&[2030-12-31]"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (the key attribute hierarchy returned 0 rows before)"
-    },
-    {
-      "id": "hier-measures",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_HIERARCHIES",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Measures]"
-        }
-      },
-      "single": {
-        "origin": "HIERARCHY_ORIGIN",
-        "default_member": "DEFAULT_MEMBER"
-      },
-      "expect": {
-        "row_count": 1,
-        "origin": "6"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (origin was 2)"
-    },
-    {
-      "id": "hier-date-key",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_HIERARCHIES",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
-        }
-      },
-      "single": {
-        "origin": "HIERARCHY_ORIGIN"
-      },
-      "expect": {
-        "row_count": 1,
-        "origin": "2"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (origin 2, not 6: plan 048)"
-    },
-    {
-      "id": "levels-date-key",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_LEVELS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
-        }
-      },
-      "columns": {
-        "level": "LEVEL_UNIQUE_NAME"
-      },
-      "expect": {
-        "level_sorted": [
-          "[Date].[Full Date].[(All)]",
-          "[Date].[Full Date].[Full Date]"
-        ]
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "measures-list",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_MEASURES",
-        "restrictions": {
-          "CUBE_NAME": "{cube}"
-        }
-      },
-      "columns": {
-        "measure": "MEASURE_UNIQUE_NAME"
-      },
-      "expect": {
-        "row_count": 6,
-        "measure_sorted": [
-          "[Measures].[Revenue MTD]",
-          "[Measures].[Revenue Prior Year]",
-          "[Measures].[Revenue QTD]",
-          "[Measures].[Revenue YTD]",
-          "[Measures].[Revenue]",
-          "[Measures].[Units]"
-        ]
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
-    },
-    {
-      "id": "cell-revenue-total",
-      "kind": "execute",
-      "request": {
-        "mdx": "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [{cube}] CELL PROPERTIES VALUE"
-      },
-      "expect": {
-        "cell_count": 1,
-        "cell_values": [
-          "521586767"
-        ]
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (both engines total 521,586,767)"
-    },
-    {
-      "id": "axis-category-drilldown",
-      "kind": "execute",
-      "request": {
-        "mdx": "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [{cube}] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"
-      },
-      "expect": {
-        "axis0_member_count": 21,
-        "axis0_first_member": "[Category].[Category].[All]"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: 21 members (All + 20 categories), first = All \u2014 matches the proxy"
-    },
-    {
-      "id": "axis-date-key-drilldown",
-      "kind": "execute",
-      "request": {
-        "mdx": "SELECT Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [{cube}] CELL PROPERTIES VALUE"
-      },
-      "expect": {
-        "axis0_member_count": 4019,
-        "axis0_first_member": "[Date].[Full Date].[All]"
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: without NON EMPTY the mirror returns all 4019 members (All + 4018 dates)",
-      "known_gap": "without NON EMPTY the proxy returns only fact-bearing dates (2460 today) where the mirror returns all 4019 members: the axis path always filters by facts and NON EMPTY is not implemented"
-    },
-    {
-      "id": "restriction-unadvertised-faults",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_DIMENSIONS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "BOGUS_NAME": "x"
-        }
-      },
-      "expect": {
-        "fault": "The restriction, BOGUS_NAME, is not recognized by the server."
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: 'The restriction, BOGUS_NAME, is not recognized by the server.'",
-      "reference_claim": "unknown-restriction-faults"
-    },
-    {
-      "id": "dimensions-visibility-zero",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_DIMENSIONS",
-        "restrictions": {
-          "CUBE_NAME": "{cube}",
-          "DIMENSION_VISIBILITY": "0"
-        }
-      },
-      "expect": {
-        "row_count": 0
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: visibility=0 returns 0 rows, visibility=1 returns all six",
-      "known_gap": "the reference returns 0 rows for DIMENSION_VISIBILITY=0; the proxy advertises the restriction but ignores it (plan 055 slice 2)"
-    },
-    {
-      "id": "dimensions-wrong-cube-is-empty",
-      "kind": "discover",
-      "request": {
-        "type": "MDSCHEMA_DIMENSIONS",
-        "restrictions": {
-          "CUBE_NAME": "Nope"
-        }
-      },
-      "expect": {
-        "row_count": 0
-      },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: an unknown CUBE_NAME returns 0 rows",
-      "known_gap": "the reference returns 0 rows for an unknown CUBE_NAME; the proxy ignores scope names (plan 055 slice 2)",
-      "reference_claim": "scope-mismatch-empty-rowset"
+ "about": "Recorded observations from the real SSAS 2025 tabular mirror on the VM, replayed against a running proxy by scripts/probe-parity.sh. Add a case whenever a review or VM session finds a proxy/reference difference, and record the MIRROR's value, not the proxy's. {catalog} and {cube} are substituted from the fields below, so the same case can be replayed against the mirror.",
+ "catalog": "SALES_ANALYTICS",
+ "cube": "Sales",
+ "cases": [
+  {
+   "id": "members-measures",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Measures]"
     }
-  ]
+   },
+   "columns": {
+    "member": "MEMBER_UNIQUE_NAME"
+   },
+   "expect": {
+    "row_count": 6,
+    "member_sorted": [
+     "[Measures].[Revenue MTD]",
+     "[Measures].[Revenue Prior Year]",
+     "[Measures].[Revenue QTD]",
+     "[Measures].[Revenue YTD]",
+     "[Measures].[Revenue]",
+     "[Measures].[Units]"
+    ]
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-category",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Category].[Category]"
+    }
+   },
+   "columns": {
+    "member": "MEMBER_UNIQUE_NAME"
+   },
+   "expect": {
+    "row_count": 21,
+    "member_first": "[Category].[Category].[All]"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-category-type1",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+     "MEMBER_TYPE": "1"
+    }
+   },
+   "expect": {
+    "row_count": 20
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (MEMBER_TYPE was silently dropped before)"
+  },
+  {
+   "id": "members-category-type2",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+     "MEMBER_TYPE": "2"
+    }
+   },
+   "columns": {
+    "member": "MEMBER_UNIQUE_NAME"
+   },
+   "expect": {
+    "row_count": 1,
+    "member_first": "[Category].[Category].[All]"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-channel",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Channel].[Channel]"
+    }
+   },
+   "expect": {
+    "row_count": 5
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-segment",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Segment].[Segment]"
+    }
+   },
+   "expect": {
+    "row_count": 6
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-territory",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Territory].[Territory]"
+    }
+   },
+   "expect": {
+    "row_count": 9
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-date-calendar",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]"
+    }
+   },
+   "expect": {
+    "row_count": 4206
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "members-date-full-date",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
+    }
+   },
+   "columns": {
+    "member": "MEMBER_UNIQUE_NAME"
+   },
+   "expect": {
+    "row_count": 4019,
+    "member_first": "[Date].[Full Date].[All]",
+    "member_last": "[Date].[Full Date].&[2030-12-31]"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (the key attribute hierarchy returned 0 rows before)"
+  },
+  {
+   "id": "hier-measures",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_HIERARCHIES",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Measures]"
+    }
+   },
+   "single": {
+    "origin": "HIERARCHY_ORIGIN",
+    "default_member": "DEFAULT_MEMBER"
+   },
+   "expect": {
+    "row_count": 1,
+    "origin": "6"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (origin was 2)"
+  },
+  {
+   "id": "hier-date-key",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_HIERARCHIES",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
+    }
+   },
+   "single": {
+    "origin": "HIERARCHY_ORIGIN"
+   },
+   "expect": {
+    "row_count": 1,
+    "origin": "2"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (origin 2, not 6: plan 048)"
+  },
+  {
+   "id": "levels-date-key",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_LEVELS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]"
+    }
+   },
+   "columns": {
+    "level": "LEVEL_UNIQUE_NAME"
+   },
+   "expect": {
+    "level_sorted": [
+     "[Date].[Full Date].[(All)]",
+     "[Date].[Full Date].[Full Date]"
+    ]
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "measures-list",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASURES",
+    "restrictions": {
+     "CUBE_NAME": "{cube}"
+    }
+   },
+   "columns": {
+    "measure": "MEASURE_UNIQUE_NAME"
+   },
+   "expect": {
+    "row_count": 6,
+    "measure_sorted": [
+     "[Measures].[Revenue MTD]",
+     "[Measures].[Revenue Prior Year]",
+     "[Measures].[Revenue QTD]",
+     "[Measures].[Revenue YTD]",
+     "[Measures].[Revenue]",
+     "[Measures].[Units]"
+    ]
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+  },
+  {
+   "id": "cell-revenue-total",
+   "kind": "execute",
+   "request": {
+    "mdx": "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [{cube}] CELL PROPERTIES VALUE"
+   },
+   "expect": {
+    "cell_count": 1,
+    "cell_values": [
+     "521586767"
+    ]
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (both engines total 521,586,767)"
+  },
+  {
+   "id": "axis-category-drilldown",
+   "kind": "execute",
+   "request": {
+    "mdx": "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [{cube}] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"
+   },
+   "expect": {
+    "axis0_member_count": 21,
+    "axis0_first_member": "[Category].[Category].[All]"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: 21 members (All + 20 categories), first = All \u2014 matches the proxy"
+  },
+  {
+   "id": "axis-date-key-drilldown",
+   "kind": "execute",
+   "request": {
+    "mdx": "SELECT Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [{cube}] CELL PROPERTIES VALUE"
+   },
+   "expect": {
+    "axis0_member_count": 4019,
+    "axis0_first_member": "[Date].[Full Date].[All]"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: without NON EMPTY the mirror returns all 4019 members (All + 4018 dates)",
+   "known_gap": "without NON EMPTY the proxy returns only fact-bearing dates (2460 today) where the mirror returns all 4019 members: the axis path always filters by facts and NON EMPTY is not implemented"
+  },
+  {
+   "id": "restriction-unadvertised-faults",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "BOGUS_NAME": "x"
+    }
+   },
+   "expect": {
+    "fault": "The restriction, BOGUS_NAME, is not recognized by the server."
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: 'The restriction, BOGUS_NAME, is not recognized by the server.'",
+   "reference_claim": "unknown-restriction-faults"
+  },
+  {
+   "id": "dimensions-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "CUBE_NAME": "{cube}",
+     "DIMENSION_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: visibility=0 returns 0 rows, visibility=1 returns all six",
+   "known_gap": "the reference returns 0 rows for DIMENSION_VISIBILITY=0; the proxy advertises the restriction but ignores it (plan 055 slice 2)"
+  },
+  {
+   "id": "dimensions-wrong-cube-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "CUBE_NAME": "Nope"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: an unknown CUBE_NAME returns 0 rows",
+   "reference_claim": "scope-mismatch-empty-rowset"
+  },
+  {
+   "id": "dimensions-wrong-catalog-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "CATALOG_NAME": "Nope"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: an unknown CATALOG_NAME returns 0 rows"
+  },
+  {
+   "id": "execute-unknown-cube-faults",
+   "kind": "execute",
+   "request": {
+    "mdx": "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Nope] CELL PROPERTIES VALUE"
+   },
+   "expect": {
+    "fault": "The Nope cube does not exist."
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: the exact fault text for a FROM clause naming another cube"
+  }
+ ]
 }

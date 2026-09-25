@@ -26,6 +26,23 @@ pub mod tmschema;
 /// disappears from the metadata rowsets, as it does in the reference (plan 051
 /// review). Unlisted tables stay visible — measured: a role listing two tables
 /// still sees all six dimensions.
+/// Do the request's catalog/cube names match the model we serve? Both the
+/// restriction list (`CATALOG_NAME`/`CUBE_NAME`) and the `<Catalog>` property
+/// count, names match case-insensitively, and an absent name means "the
+/// session's scope" (measured 2026-09-25: the reference answers a mismatch
+/// with an empty rowset for Discover and a fault for Execute).
+pub(crate) fn in_scope(
+    restrictions: &crate::xmla::parser::Restrictions,
+    catalog: &str,
+    cube: &str,
+) -> bool {
+    let matches = |value: &str, wanted: Option<&str>| {
+        wanted.is_none_or(|wanted| value.trim().eq_ignore_ascii_case(wanted.trim()))
+    };
+    matches(catalog, restrictions.catalog_name.as_deref())
+        && matches(cube, restrictions.cube_name.as_deref())
+}
+
 pub(crate) fn table_visible(
     config: &crate::project::config::ProxyConfig,
     user: &crate::engine::model::UserContext,
@@ -67,4 +84,53 @@ pub(crate) fn coordinates_match(
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_scope;
+    use crate::xmla::parser::Restrictions;
+
+    /// Scope names match case-insensitively, from the restriction list and the
+    /// `<Catalog>` property, and an absent name means "the session's scope"
+    /// (measured on the reference 2026-09-25).
+    #[test]
+    fn scope_names_match_case_insensitively() {
+        let none = Restrictions::default();
+        assert!(in_scope(&none, "Sales", "Model"));
+
+        let exact = Restrictions {
+            catalog_name: Some("Sales".into()),
+            cube_name: Some("Model".into()),
+            ..Default::default()
+        };
+        assert!(in_scope(&exact, "Sales", "Model"));
+
+        let other_case = Restrictions {
+            catalog_name: Some("sales".into()),
+            cube_name: Some("MODEL".into()),
+            ..Default::default()
+        };
+        assert!(in_scope(&other_case, "Sales", "Model"));
+
+        let wrong_cube = Restrictions {
+            cube_name: Some("Other".into()),
+            ..Default::default()
+        };
+        assert!(!in_scope(&wrong_cube, "Sales", "Model"));
+
+        let wrong_catalog = Restrictions {
+            catalog_name: Some("Other".into()),
+            ..Default::default()
+        };
+        assert!(!in_scope(&wrong_catalog, "Sales", "Model"));
+
+        // The property catalog is a fault at dispatch, not an empty rowset:
+        // `in_scope` only judges the restriction names (measured 2026-09-25).
+        let property = Restrictions {
+            property_catalog: Some("Other".into()),
+            ..Default::default()
+        };
+        assert!(in_scope(&property, "Sales", "Model"));
+    }
 }

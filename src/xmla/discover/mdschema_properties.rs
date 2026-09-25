@@ -186,6 +186,13 @@ fn is_all_level(d: &DimensionDef, level: &str) -> bool {
 /// PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` form the reference sees.
 fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog or cube is out of scope: the
+        // reference answers an empty rowset in this rowset's shape, not a
+        // fault (measured 2026-09-25).
+        return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
+    }
+
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;

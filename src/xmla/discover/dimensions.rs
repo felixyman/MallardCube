@@ -21,10 +21,18 @@ const DIM_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
 pub fn get_dimensions_response(
+    restrictions: &crate::xmla::parser::Restrictions,
     user: &crate::engine::model::UserContext,
     config: &crate::project::config::ProxyConfig,
 ) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog or cube is out of scope: the
+        // reference answers an empty rowset in this rowset's shape, not a
+        // fault (measured 2026-09-25).
+        return discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, "");
+    }
+
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;

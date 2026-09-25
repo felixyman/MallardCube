@@ -1003,6 +1003,16 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         return resp;
     }
 
+    // A `<Catalog>` property naming another database is refused the way the
+    // reference refuses it, for Discover and Execute alike (measured
+    // 2026-09-25). A mismatched *restriction* gets the empty rowset instead.
+    if let Some(fault) =
+        execute::runtime::catalog_scope_fault(request.property_catalog(), config, user)
+    {
+        mallardcube::xmla_trace::trace_request("ScopeFault", body, &fault, None, None);
+        return fault;
+    }
+
     match request {
         XmlaRequest::BeginSession | XmlaRequest::ExecuteEmpty => {
             let resp = execute::dispatch::get_empty_execute_response();
@@ -1053,26 +1063,26 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("DbSchemaCatalogs", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaCubes => {
-            let resp = cubes::get_cubes_response();
+        XmlaRequest::MdschemaCubes { restrictions } => {
+            let resp = cubes::get_cubes_response(restrictions);
             mallardcube::xmla_trace::trace_request("MdschemaCubes", body, &resp, None, None);
             resp
         }
-        XmlaRequest::DbschemaTables => {
-            let resp = tables::get_tables_response(user, config);
+        XmlaRequest::DbschemaTables { restrictions } => {
+            let resp = tables::get_tables_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("DbschemaTables", body, &resp, None, None);
             resp
         }
 
-        XmlaRequest::MdschemaDimensions => {
+        XmlaRequest::MdschemaDimensions { restrictions } => {
             println!("📥 Sending Dimensions to Excel");
-            let resp = dimensions::get_dimensions_response(user, config);
+            let resp = dimensions::get_dimensions_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("MdschemaDimensions", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaMeasures => {
+        XmlaRequest::MdschemaMeasures { restrictions } => {
             println!("📥 Sending Measures to Excel");
-            let resp = measures::get_measures_response(user, config);
+            let resp = measures::get_measures_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("MdschemaMeasures", body, &resp, None, None);
             resp
         }
@@ -1089,31 +1099,34 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::ExecuteStatement(mdx) => {
+        XmlaRequest::ExecuteStatement { mdx, catalog } => {
             println!("📥 MDX: {}", mdx);
             debug_write("===== EXECUTE REQUEST =====");
             debug_write(&format!("MDX: {}", mdx));
             debug_write("REQUEST XML:");
             debug_write(body);
 
-            let (resp, timings) =
-                if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
-                    (fault, None)
-                } else if mdx_semantic::is_drillthrough(mdx) {
-                    match execute::runtime::drillthrough_fault(config, user) {
-                        Some(fault) => (fault, None),
-                        None => (
-                            execute::dispatch::get_execute_drillthrough_response(mdx, backend),
-                            None,
-                        ),
-                    }
-                } else {
-                    let (r, t) =
-                        execute_builders::get_execute_cellset_response_with_backend_and_context(
-                            mdx, backend, user, config,
-                        );
-                    (r, Some(t))
-                };
+            let (resp, timings) = if let Some(fault) =
+                execute::runtime::catalog_scope_fault(catalog.as_deref(), config, user)
+            {
+                (fault, None)
+            } else if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
+                (fault, None)
+            } else if mdx_semantic::is_drillthrough(mdx) {
+                match execute::runtime::drillthrough_fault(config, user) {
+                    Some(fault) => (fault, None),
+                    None => (
+                        execute::dispatch::get_execute_drillthrough_response(mdx, backend),
+                        None,
+                    ),
+                }
+            } else {
+                let (r, t) =
+                    execute_builders::get_execute_cellset_response_with_backend_and_context(
+                        mdx, backend, user, config,
+                    );
+                (r, Some(t))
+            };
 
             debug_write("RESPONSE XML:");
             debug_write(&resp);
@@ -1160,9 +1173,9 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("MdschemaKpis", body, &resp, None, None);
             resp
         }
-        XmlaRequest::MdschemaMeasureGroups => {
+        XmlaRequest::MdschemaMeasureGroups { restrictions } => {
             println!("📥 MDSCHEMA_MEASUREGROUPS");
-            let resp = measure_groups::get_measure_groups_response();
+            let resp = measure_groups::get_measure_groups_response(restrictions);
             mallardcube::xmla_trace::trace_request(
                 "MdschemaMeasureGroups",
                 body,
@@ -1172,9 +1185,13 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             );
             resp
         }
-        XmlaRequest::MdschemaMeasureGroupDimensions => {
+        XmlaRequest::MdschemaMeasureGroupDimensions { restrictions } => {
             println!("📥 MDSCHEMA_MEASUREGROUP_DIMENSIONS");
-            let resp = measuregroup_dimensions::get_measuregroup_dimensions_response(user, config);
+            let resp = measuregroup_dimensions::get_measuregroup_dimensions_response(
+                restrictions,
+                user,
+                config,
+            );
             mallardcube::xmla_trace::trace_request(
                 "MdschemaMeasureGroupDimensions",
                 body,

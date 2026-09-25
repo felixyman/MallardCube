@@ -557,6 +557,8 @@ pub struct ExcludedMember {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticQuery {
     pub kind: SemanticQueryKind,
+    /// The cube named in the `FROM` clause, when the statement has one.
+    pub cube: Option<String>,
     pub dim_props: Vec<String>,
     pub cell_props: Vec<String>,
     pub filters: Vec<DimensionFilter>,
@@ -702,6 +704,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         let props = extract_strtomember_properties(mdx);
         return SemanticQuery {
             kind: SemanticQueryKind::MeasureMetadataProbe,
+            cube: parsed.cube_name.clone(),
             set_probe: None,
             set_count: None,
             drill_members: vec![],
@@ -1108,6 +1111,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             .cloned(),
         axis_dimensions: axis_dims,
         axis_specs: parsed.axis_specs.clone(),
+        cube: parsed.cube_name.clone(),
         shape: shape.clone(),
         slicers: slicers_from_parsed(&parsed),
         excluded_members: parsed

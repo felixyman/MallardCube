@@ -42,6 +42,36 @@ pub struct Restrictions {
     /// visibility-filtered queries that lead to the key attribute's
     /// `MEMBER_VALUE` type (plan 048).
     pub schema_name: Option<String>,
+    /// The `<Properties><PropertyList><Catalog>` value. A request naming
+    /// another database is refused: the reference faults it for Discover and
+    /// Execute alike (measured 2026-09-25).
+    pub property_catalog: Option<String>,
+}
+
+/// The `<Catalog>` property the request carried, whatever its kind. A mismatch
+/// is a scope refusal, so the dispatch needs it without unwrapping every
+/// variant (measured 2026-09-25: the reference faults this for Discover and
+/// Execute alike, where a mismatched *restriction* gets an empty rowset).
+impl XmlaRequest {
+    pub fn property_catalog(&self) -> Option<&str> {
+        match self {
+            XmlaRequest::ExecuteStatement { catalog, .. } => catalog.as_deref(),
+            XmlaRequest::MdschemaHierarchies { restrictions }
+            | XmlaRequest::MdschemaLevels { restrictions }
+            | XmlaRequest::MdschemaFunctions { restrictions }
+            | XmlaRequest::MdschemaProperties { restrictions, .. }
+            | XmlaRequest::MdschemaMembers { restrictions, .. }
+            | XmlaRequest::MdschemaCubes { restrictions }
+            | XmlaRequest::DbschemaTables { restrictions }
+            | XmlaRequest::MdschemaDimensions { restrictions }
+            | XmlaRequest::MdschemaMeasures { restrictions }
+            | XmlaRequest::MdschemaMeasureGroups { restrictions }
+            | XmlaRequest::MdschemaMeasureGroupDimensions { restrictions } => {
+                restrictions.property_catalog.as_deref()
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,10 +85,18 @@ pub enum XmlaRequest {
     },
     DiscoverLiterals,
     DbSchemaCatalogs,
-    MdschemaCubes,
-    DbschemaTables,
-    MdschemaDimensions,
-    MdschemaMeasures,
+    MdschemaCubes {
+        restrictions: Restrictions,
+    },
+    DbschemaTables {
+        restrictions: Restrictions,
+    },
+    MdschemaDimensions {
+        restrictions: Restrictions,
+    },
+    MdschemaMeasures {
+        restrictions: Restrictions,
+    },
     MdschemaHierarchies {
         restrictions: Restrictions,
     },
@@ -79,8 +117,12 @@ pub enum XmlaRequest {
     },
     MdschemaSets,
     MdschemaKpis,
-    MdschemaMeasureGroups,
-    MdschemaMeasureGroupDimensions,
+    MdschemaMeasureGroups {
+        restrictions: Restrictions,
+    },
+    MdschemaMeasureGroupDimensions {
+        restrictions: Restrictions,
+    },
     TmschemaModel,
     TmschemaTables,
     TmschemaColumns,
@@ -107,7 +149,10 @@ pub enum XmlaRequest {
     /// reference faults with "The restriction, X, is not recognized by the
     /// server" rather than ignoring it.
     UnsupportedRestriction(String),
-    ExecuteStatement(String),
+    ExecuteStatement {
+        mdx: String,
+        catalog: Option<String>,
+    },
     Unknown,
 }
 
@@ -435,6 +480,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut property_type: Option<i32> = None;
     let mut member_unique_name: Option<String> = None;
     let mut tree_op: Option<i32> = None;
+    let mut in_catalog_property = false;
+    let mut properties_catalog: Option<String> = None;
 
     loop {
         let (namespace, event) = match reader.read_resolved_event() {
@@ -544,6 +591,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             restrictions.seen.push("TREE_OP".into());
                         }
                     }
+                    b"Catalog" if !in_restrictions => in_catalog_property = true,
                     b"RestrictionList" => {
                         in_restriction_list = true;
                         restriction_list_seen = true;
@@ -694,6 +742,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         member_unique_name = Some(text.clone());
                     } else if in_tree_op && let Ok(v) = text.parse::<i32>() {
                         tree_op = Some(v);
+                    } else if in_catalog_property {
+                        properties_catalog = Some(text.clone());
                     }
                 }
                 pending_text.clear();
@@ -704,6 +754,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"PROPERTY_TYPE" => in_property_type = false,
                     b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
                     b"TREE_OP" => in_tree_op = false,
+                    b"Catalog" => in_catalog_property = false,
                     b"Restrictions" => in_restrictions = false,
                     b"RestrictionList" => {
                         in_restriction_list = false;
@@ -736,6 +787,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         return XmlaRequest::Malformed(reason);
     }
 
+    restrictions.property_catalog = properties_catalog.clone();
+
     // The rowset's advertised contract is the set of restriction names it
     // accepts (what DISCOVER_SCHEMA_ROWSETS tells clients). The reference
     // faults on anything else — "The restriction, X, is not recognized by the
@@ -763,10 +816,26 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         }
         "DISCOVER_LITERALS" => return XmlaRequest::DiscoverLiterals,
         "DBSCHEMA_CATALOGS" => return XmlaRequest::DbSchemaCatalogs,
-        "MDSCHEMA_CUBES" => return XmlaRequest::MdschemaCubes,
-        "DBSCHEMA_TABLES" => return XmlaRequest::DbschemaTables,
-        "MDSCHEMA_DIMENSIONS" => return XmlaRequest::MdschemaDimensions,
-        "MDSCHEMA_MEASURES" => return XmlaRequest::MdschemaMeasures,
+        "MDSCHEMA_CUBES" => {
+            return XmlaRequest::MdschemaCubes {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "DBSCHEMA_TABLES" => {
+            return XmlaRequest::DbschemaTables {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "MDSCHEMA_DIMENSIONS" => {
+            return XmlaRequest::MdschemaDimensions {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "MDSCHEMA_MEASURES" => {
+            return XmlaRequest::MdschemaMeasures {
+                restrictions: restrictions.clone(),
+            };
+        }
         "MDSCHEMA_HIERARCHIES" => {
             return XmlaRequest::MdschemaHierarchies {
                 restrictions: restrictions.clone(),
@@ -797,8 +866,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         }
         "MDSCHEMA_SETS" => return XmlaRequest::MdschemaSets,
         "MDSCHEMA_KPIS" => return XmlaRequest::MdschemaKpis,
-        "MDSCHEMA_MEASUREGROUPS" => return XmlaRequest::MdschemaMeasureGroups,
-        "MDSCHEMA_MEASUREGROUP_DIMENSIONS" => return XmlaRequest::MdschemaMeasureGroupDimensions,
+        "MDSCHEMA_MEASUREGROUPS" => {
+            return XmlaRequest::MdschemaMeasureGroups {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "MDSCHEMA_MEASUREGROUP_DIMENSIONS" => {
+            return XmlaRequest::MdschemaMeasureGroupDimensions {
+                restrictions: restrictions.clone(),
+            };
+        }
         "TMSCHEMA_MODEL" => return XmlaRequest::TmschemaModel,
         "TMSCHEMA_TABLES" => return XmlaRequest::TmschemaTables,
         "TMSCHEMA_COLUMNS" => return XmlaRequest::TmschemaColumns,
@@ -817,7 +894,10 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 
     if is_execute {
         if !statement_text.trim().is_empty() {
-            return XmlaRequest::ExecuteStatement(statement_text);
+            return XmlaRequest::ExecuteStatement {
+                mdx: statement_text,
+                catalog: properties_catalog,
+            };
         } else if is_begin_session {
             return XmlaRequest::BeginSession;
         } else {
@@ -832,6 +912,39 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
 mod tests {
     use super::*;
 
+    /// The `<Properties><PropertyList><Catalog>` value survives parsing: it is
+    /// the request's scope, and a mismatch is an empty rowset (Discover) or a
+    /// fault (Execute), measured on the reference 2026-09-25.
+    #[test]
+    fn catalog_property_is_read() {
+        let discover = r#"<Envelope><Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis">
+            <RequestType>MDSCHEMA_DIMENSIONS</RequestType>
+            <Restrictions><RestrictionList><CUBE_NAME>Other</CUBE_NAME></RestrictionList></Restrictions>
+            <Properties><PropertyList><Catalog>Somewhere</Catalog></PropertyList></Properties>
+        </Discover></Body></Envelope>"#;
+        let request = parse_xmla(discover);
+        match &request {
+            XmlaRequest::MdschemaDimensions { restrictions } => {
+                assert_eq!(restrictions.cube_name.as_deref(), Some("Other"));
+                assert_eq!(restrictions.property_catalog.as_deref(), Some("Somewhere"));
+            }
+            other => panic!("expected dimensions, got {other:?}"),
+        }
+        assert_eq!(request.property_catalog(), Some("Somewhere"));
+
+        let execute = r#"<Envelope><Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis">
+            <Command><Statement>SELECT [Measures].[Revenue] ON 0 FROM [Sales]</Statement></Command>
+            <Properties><PropertyList><Catalog>Somewhere</Catalog></PropertyList></Properties>
+        </Execute></Body></Envelope>"#;
+        match parse_xmla(execute) {
+            XmlaRequest::ExecuteStatement { mdx, catalog } => {
+                assert!(mdx.contains("[Measures].[Revenue]"), "{mdx}");
+                assert_eq!(catalog.as_deref(), Some("Somewhere"));
+            }
+            other => panic!("expected the statement, got {other:?}"),
+        }
+    }
+
     /// CDATA is what .NET, PowerShell and Java SOAP clients emit; ignoring it
     /// answered them with an empty cellset instead of running the query.
     #[test]
@@ -840,7 +953,7 @@ mod tests {
             <Statement><![CDATA[SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]]]></Statement>
         </Command></Execute></Body></Envelope>"#;
         match parse_xmla(xml) {
-            XmlaRequest::ExecuteStatement(statement) => {
+            XmlaRequest::ExecuteStatement { mdx: statement, .. } => {
                 assert!(
                     statement.contains("SELECT {[Measures].[Revenue]}"),
                     "{statement}"
@@ -857,7 +970,7 @@ mod tests {
             <Statement>SELECT {[Measures].[Revenue]} <![CDATA[ON COLUMNS]]> FROM [Sales]</Statement>
         </Command></Execute></Body></Envelope>"#;
         match parse_xmla(xml) {
-            XmlaRequest::ExecuteStatement(statement) => {
+            XmlaRequest::ExecuteStatement { mdx: statement, .. } => {
                 assert_eq!(
                     statement.split_whitespace().collect::<Vec<_>>().join(" "),
                     "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]"
@@ -943,7 +1056,7 @@ mod tests {
         </Discover></Body></Envelope>"#;
         assert!(matches!(
             parse_xmla(advertised),
-            XmlaRequest::MdschemaDimensions
+            XmlaRequest::MdschemaDimensions { .. }
         ));
     }
 
@@ -1192,7 +1305,7 @@ mod tests {
         </Body></Envelope>"#;
         assert!(matches!(
             parse_xmla(prefixed),
-            XmlaRequest::MdschemaDimensions
+            XmlaRequest::MdschemaDimensions { .. }
         ));
 
         let foreign = r#"<Envelope><Body>

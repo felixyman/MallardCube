@@ -24,10 +24,18 @@ const MEASURE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATA
                 <xsd:element sql:field="DEFAULT_FORMAT_STRING" name="DEFAULT_FORMAT_STRING" type="xsd:string" minOccurs="0"/>"#;
 
 pub fn get_measures_response(
+    restrictions: &crate::xmla::parser::Restrictions,
     user: &crate::engine::model::UserContext,
     config: &crate::project::config::ProxyConfig,
 ) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog or cube is out of scope: the
+        // reference answers an empty rowset in this rowset's shape, not a
+        // fault (measured 2026-09-25).
+        return discover_rowset_envelope(UUID_TYPE, MEASURE_ROW_FIELDS, "");
+    }
+
     let model = &project.model;
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;

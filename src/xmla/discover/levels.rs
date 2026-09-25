@@ -66,6 +66,13 @@ pub fn get_levels_response(
     config: &crate::project::config::ProxyConfig,
 ) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog or cube is out of scope: the
+        // reference answers an empty rowset in this rowset's shape, not a
+        // fault (measured 2026-09-25).
+        return discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, "");
+    }
+
     let model = &project.model;
     let mut rows = String::new();
 

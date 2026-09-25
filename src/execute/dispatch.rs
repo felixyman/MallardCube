@@ -1523,6 +1523,58 @@ mod tests {
     // shape. Excel drags it as a field and drills it from `(All)`: the axis must
     // list the dates in that hierarchy's own namespace — never the user
     // hierarchy's years (plan 048).
+    /// A Discover naming another cube or catalog answers an empty rowset in
+    /// the rowset's own shape, and scope names match case-insensitively
+    /// (measured on the reference 2026-09-25).
+    #[test]
+    fn scope_mismatch_answers_an_empty_rowset() {
+        with_project3(|| {
+            let admin = crate::engine::model::UserContext::admin_default();
+            let config = &crate::proxy_project::project().config;
+            let rows = |restrictions: &crate::xmla::parser::Restrictions| {
+                crate::xmla::discover::dimensions::get_dimensions_response(
+                    restrictions,
+                    &admin,
+                    config,
+                )
+            };
+
+            assert!(
+                rows(&crate::xmla::parser::Restrictions::default()).contains("<row>"),
+                "an unrestricted request still lists dimensions"
+            );
+            let lowercase = crate::xmla::parser::Restrictions {
+                cube_name: Some("sales".into()),
+                ..Default::default()
+            };
+            assert!(
+                rows(&lowercase).contains("<row>"),
+                "a differently cased cube name is the same scope"
+            );
+            let wrong_cube = crate::xmla::parser::Restrictions {
+                cube_name: Some("NoSuchCube".into()),
+                ..Default::default()
+            };
+            let scoped = rows(&wrong_cube);
+            assert!(
+                !scoped.contains("<row>"),
+                "no rows for another cube: {scoped}"
+            );
+            assert!(
+                scoped.contains("DIMENSION_UNIQUE_NAME"),
+                "the empty rowset still carries the schema: {scoped}"
+            );
+            let property = crate::xmla::parser::Restrictions {
+                property_catalog: Some("Elsewhere".into()),
+                ..Default::default()
+            };
+            assert!(
+                rows(&property).contains("<row>"),
+                "the property catalog is refused at dispatch, not in the builder"
+            );
+        });
+    }
+
     /// `COUNT([Measures].Members)` counts the measure set; it used to be
     /// misread as a level of the first dimension and counted categories
     /// (plan 051 RLS review). A measure set *on an axis* still needs a real
@@ -4378,7 +4430,9 @@ mod tests {
     #[test]
     fn retail_analytics_discover_cubes_returns_correct_name() {
         with_retail_analytics(|| {
-            let xml = crate::xmla::discover::cubes::get_cubes_response();
+            let xml = crate::xmla::discover::cubes::get_cubes_response(
+                &crate::xmla::parser::Restrictions::default(),
+            );
             assert!(
                 xml.contains("urn:schemas-microsoft-com:xml-analysis:rowset"),
                 "missing rowset namespace"
@@ -4391,6 +4445,7 @@ mod tests {
     fn retail_analytics_discover_dimensions_has_date_role() {
         with_retail_analytics(|| {
             let xml = crate::xmla::discover::dimensions::get_dimensions_response(
+                &crate::xmla::parser::Restrictions::default(),
                 &crate::engine::model::UserContext::admin_default(),
                 &crate::proxy_project::project().config,
             );
@@ -4409,6 +4464,7 @@ mod tests {
     fn retail_analytics_discover_measures_has_total_revenue() {
         with_retail_analytics(|| {
             let xml = crate::xmla::discover::measures::get_measures_response(
+                &crate::xmla::parser::Restrictions::default(),
                 &crate::engine::model::UserContext::admin_default(),
                 &crate::proxy_project::project().config,
             );

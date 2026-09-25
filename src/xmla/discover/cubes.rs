@@ -21,8 +21,15 @@ const CUBE_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG
                 <xsd:element sql:field="CUBE_SOURCE" name="CUBE_SOURCE" type="xsd:unsignedShort" minOccurs="0"/>
                 <xsd:element sql:field="PREFERRED_QUERY_PATTERNS" name="PREFERRED_QUERY_PATTERNS" type="xsd:unsignedShort" minOccurs="0"/>"#;
 
-pub fn get_cubes_response() -> String {
+pub fn get_cubes_response(restrictions: &crate::xmla::parser::Restrictions) -> String {
     let project = proxy_project::project();
+    if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
+        // A request naming another catalog or cube is out of scope: the
+        // reference answers an empty rowset in this rowset's shape, not a
+        // fault (measured 2026-09-25).
+        return discover_rowset_envelope(UUID_TYPE, CUBE_ROW_FIELDS, "");
+    }
+
     // PREFERRED_QUERY_PATTERNS matches the tabular reference: 0x01
     // (DrillDownMember-style asymmetric axes) | 0x02 (implicit measures).
     // Excel takes a different metadata path when this is 0 — it never asks for
