@@ -539,6 +539,8 @@ fn build_key_member_rows<B: QueryBackend + ?Sized>(
 fn build_measure_member_rows(
     model: &crate::engine::model::SemanticModel,
     restrictions: &Restrictions,
+    user: &UserContext,
+    config: &ProxyConfig,
 ) -> Vec<MemberRow> {
     if !super::coordinates_match(
         restrictions,
@@ -551,6 +553,13 @@ fn build_measure_member_rows(
     model
         .measures
         .iter()
+        .filter(|measure| {
+            super::table_visible(
+                config,
+                user,
+                &model.fact_table(measure.fact_table_idx).table_name,
+            )
+        })
         .enumerate()
         .map(|(ordinal, measure)| MemberRow {
             dimension_id: "Measures".into(),
@@ -615,12 +624,12 @@ fn key_member_rows_with_backend<B: QueryBackend + ?Sized>(
 
 fn measure_member_rows_with_backend<B: QueryBackend + ?Sized>(
     _backend: &B,
-    _user: &UserContext,
-    _config: &ProxyConfig,
+    user: &UserContext,
+    config: &ProxyConfig,
     restrictions: &Restrictions,
 ) -> Vec<MemberRow> {
     let project = proxy_project::project();
-    build_measure_member_rows(&project.model, restrictions)
+    build_measure_member_rows(&project.model, restrictions, user, config)
 }
 
 fn key_suffix(key: &str) -> String {

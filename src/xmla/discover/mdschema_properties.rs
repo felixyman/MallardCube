@@ -184,7 +184,11 @@ fn is_all_level(d: &DimensionDef, level: &str) -> bool {
 /// shape — rather than a fabricated list of the standard member properties —
 /// is what keeps its pivot MDX on the short `DIMENSION PROPERTIES
 /// PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME` form the reference sees.
-fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
+fn hierarchy_property_rows(
+    restrictions: &Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
         // A request naming another catalog or cube is out of scope: the
@@ -199,6 +203,9 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
     let mut out = String::new();
 
     for d in &model.dimensions {
+        if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
         let dim = &d.dimension_unique_name();
         for (hier, level, data_type) in member_value_targets(d) {
             if !matches_restrictions(restrictions, dim, &hier, &level) {
@@ -252,18 +259,21 @@ fn hierarchy_property_rows(restrictions: &Restrictions) -> String {
         }
     }
 
-    // [Measures] intrinsic rows (special case)
+    // [Measures] intrinsic rows (special case); hidden with the last measure
+    // when no measure's table is visible.
     let measures_coords = RowCoords {
         dim: "[Measures]",
         hier: "[Measures]",
         level: "[Measures].[MeasuresLevel]",
     };
-    if matches_restrictions(
-        restrictions,
-        measures_coords.dim,
-        measures_coords.hier,
-        measures_coords.level,
-    ) {
+    if super::measures_visible(model, config, user)
+        && matches_restrictions(
+            restrictions,
+            measures_coords.dim,
+            measures_coords.hier,
+            measures_coords.level,
+        )
+    {
         for name in ["KEY0", "MEMBER_VALUE"] {
             if !property_requested(restrictions, name) {
                 continue;
@@ -325,7 +335,11 @@ fn system_property_rows(restrictions: &Restrictions) -> String {
     out
 }
 
-fn member_value_rows(restrictions: &Restrictions) -> String {
+fn member_value_rows(
+    restrictions: &Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     let model = &project.model;
     let catalog = &project.config.catalog;
@@ -337,6 +351,9 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
     // [Measures] first made every hierarchy inherit its type (plan 048).
     let mut targets: Vec<(String, String, String, i32, u32)> = Vec::new();
     for d in &model.dimensions {
+        if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
         let dim = d.dimension_unique_name();
         for (hier, level, data_type) in member_value_targets(d) {
             if !matches_restrictions(restrictions, &dim, &hier, &level) {
@@ -370,8 +387,10 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
         ));
     }
 
-    // [Measures] last, as the reference does, and typed WSTR there.
-    if property_requested(restrictions, "MEMBER_VALUE")
+    // [Measures] last, as the reference does, and typed WSTR there. Hidden
+    // with the last measure when no measure's table is visible.
+    if super::measures_visible(model, config, user)
+        && property_requested(restrictions, "MEMBER_VALUE")
         && matches_restrictions(
             restrictions,
             "[Measures]",
@@ -418,6 +437,8 @@ fn member_value_rows(restrictions: &Restrictions) -> String {
 pub fn get_mdschema_properties_response(
     property_type: Option<i32>,
     restrictions: &Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
 ) -> String {
     let cube_scoped = restrictions.cube_name.is_some()
         || restrictions.dimension_unique_name.is_some()
@@ -432,14 +453,14 @@ pub fn get_mdschema_properties_response(
         // rows (KEY0 / NAME / MEMBER_VALUE), never a standard member-property
         // list. That list made Excel request 38 properties in its pivot MDX
         // where the reference is asked for two.
-        Some(5) => hierarchy_property_rows(restrictions),
+        Some(5) => hierarchy_property_rows(restrictions, user, config),
         // A request that names one hierarchy gets only that hierarchy's rows;
         // mixing the cell properties in is what Excel rejects (plan 048).
-        _ if cube_scoped => hierarchy_property_rows(restrictions),
+        _ if cube_scoped => hierarchy_property_rows(restrictions, user, config),
         _ => format!(
             "{}\n{}",
             system_property_rows(restrictions),
-            member_value_rows(restrictions)
+            member_value_rows(restrictions, user, config)
         ),
     };
     discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, &rows)
@@ -483,7 +504,12 @@ mod tests {
                 hierarchy_unique_name: Some("[Date].[Calendar]".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(None, &restrictions);
+            let resp = super::get_mdschema_properties_response(
+                None,
+                &restrictions,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 resp.contains("<PROPERTY_NAME>KEY0</PROPERTY_NAME>"),
                 "{resp}"
@@ -532,7 +558,12 @@ mod tests {
                 hierarchy_unique_name: Some("[Category].[Category]".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
+            let resp = super::get_mdschema_properties_response(
+                Some(5),
+                &restrictions,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             for name in ["KEY0", "NAME", "MEMBER_VALUE"] {
                 assert!(
                     resp.contains(&format!("<PROPERTY_NAME>{name}</PROPERTY_NAME>")),
@@ -545,7 +576,12 @@ mod tests {
                 property_name: Some("MEMBER_VALUE".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
+            let resp = super::get_mdschema_properties_response(
+                Some(5),
+                &restrictions,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 resp.contains("<PROPERTY_NAME>MEMBER_VALUE</PROPERTY_NAME>"),
                 "{resp}"
@@ -563,7 +599,12 @@ mod tests {
         // attribute's MEMBER_VALUE DATA_TYPE is a date type (plan 048).
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_mdschema_properties_response(None, &Restrictions::default());
+            let resp = super::get_mdschema_properties_response(
+                None,
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             let date_row = member_value_row(&resp, "[Date].[Calendar].[Full Date]");
             assert!(date_row.contains("<DATA_TYPE>7</DATA_TYPE>"), "{date_row}");
             let cat_row = member_value_row(&resp, "[Category].[Category].[Category]");
@@ -582,7 +623,12 @@ mod tests {
                 hierarchy_unique_name: Some("[Date].[Full Date]".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(5), &restrictions);
+            let resp = super::get_mdschema_properties_response(
+                Some(5),
+                &restrictions,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 resp.contains("<HIERARCHY_UNIQUE_NAME>[Date].[Full Date]</HIERARCHY_UNIQUE_NAME>"),
                 "{resp}"
@@ -621,8 +667,12 @@ mod tests {
                 ..Restrictions::default()
             };
             for property_type in [1, 3, 4] {
-                let resp =
-                    super::get_mdschema_properties_response(Some(property_type), &restrictions);
+                let resp = super::get_mdschema_properties_response(
+                    Some(property_type),
+                    &restrictions,
+                    &crate::engine::model::UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                );
                 assert!(
                     !resp.contains("<row>"),
                     "PROPERTY_TYPE={property_type} must answer empty: {resp}"
@@ -638,7 +688,12 @@ mod tests {
         // cube (or hierarchy) answers empty, as the reference does.
         let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
         with_test_project(p, || {
-            let resp = super::get_mdschema_properties_response(Some(2), &Restrictions::default());
+            let resp = super::get_mdschema_properties_response(
+                Some(2),
+                &Restrictions::default(),
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             for name in ["VALUE", "FORMAT_STRING", "FONT_FLAGS", "UPDATEABLE"] {
                 assert!(
                     resp.contains(&format!("<PROPERTY_NAME>{name}</PROPERTY_NAME>")),
@@ -655,7 +710,12 @@ mod tests {
                 cube_name: Some("Sales".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(2), &scoped);
+            let resp = super::get_mdschema_properties_response(
+                Some(2),
+                &scoped,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 !resp.contains("<row>"),
                 "cube-scoped cell properties: {resp}"
@@ -666,7 +726,12 @@ mod tests {
                 property_name: Some("FORMAT_STRING".into()),
                 ..Restrictions::default()
             };
-            let resp = super::get_mdschema_properties_response(Some(2), &named);
+            let resp = super::get_mdschema_properties_response(
+                Some(2),
+                &named,
+                &crate::engine::model::UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
             assert!(
                 resp.contains("<PROPERTY_NAME>FORMAT_STRING</PROPERTY_NAME>"),
                 "{resp}"

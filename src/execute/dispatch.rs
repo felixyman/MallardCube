@@ -1523,6 +1523,178 @@ mod tests {
     // shape. Excel drags it as a field and drills it from `(All)`: the axis must
     // list the dates in that hierarchy's own namespace — never the user
     // hierarchy's years (plan 048).
+    /// OLS-hidden tables disappear from the rowsets the review found
+    /// unthreaded: MDSCHEMA_PROPERTIES, MDSCHEMA_MEASUREGROUPS, the
+    /// `[Measures]` part of MDSCHEMA_MEMBERS, and the model-aware
+    /// TMSCHEMA_TABLES/TMSCHEMA_RELATIONSHIPS (plan 051).
+    #[test]
+    fn hidden_tables_disappear_from_the_remaining_rowsets() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let dim_table = project
+                .model
+                .dim_table_for_discovery("Category")
+                .to_string();
+            let fact_tables: Vec<String> = project
+                .model
+                .fact_tables
+                .iter()
+                .map(|ft| ft.table_name.clone())
+                .collect();
+            let mut permissions: Vec<TablePermissionConfig> = fact_tables
+                .iter()
+                .map(|table| TablePermissionConfig {
+                    table: table.clone(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                })
+                .collect();
+            permissions.push(TablePermissionConfig {
+                table: dim_table.clone(),
+                filter_expression: String::new(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::None,
+            });
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: permissions,
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+            let restrictions = crate::xmla::parser::Restrictions::default();
+
+            // member properties: the hidden dimension and [Measures] are gone
+            let properties =
+                crate::xmla::discover::mdschema_properties::get_mdschema_properties_response(
+                    Some(5),
+                    &restrictions,
+                    &user,
+                    &config,
+                );
+            assert!(!properties.contains("[Category]"), "{properties}");
+            assert!(!properties.contains("[Measures]"), "{properties}");
+
+            // measure groups: no fact table is visible, so none is advertised
+            let groups = crate::xmla::discover::measure_groups::get_measure_groups_response(
+                &restrictions,
+                &user,
+                &config,
+            );
+            assert!(!groups.contains("<row>"), "{groups}");
+
+            // member dictionary: [Measures] lists nothing
+            let members = crate::xmla::discover::members::get_members_response_with_backend(
+                None,
+                None,
+                &restrictions,
+                crate::backend::Backend::test_fixture(),
+                &user,
+                &config,
+            );
+            assert!(!members.contains("[Measures].[Revenue]"), "{members}");
+
+            // TMSCHEMA now describes this model, and hides both tables
+            let tables =
+                crate::xmla::discover::tmschema::get_tmschema_tables_response(&user, &config);
+            assert!(!tables.contains(&dim_table), "{tables}");
+            for table in &fact_tables {
+                assert!(!tables.contains(table.as_str()), "{tables}");
+            }
+            let relationships =
+                crate::xmla::discover::tmschema::get_tmschema_relationships_response(
+                    &user, &config,
+                );
+            assert!(!relationships.contains("<row>"), "{relationships}");
+
+            // the administrator still sees all of it
+            let admin = UserContext::admin_default();
+            let admin_tables = crate::xmla::discover::tmschema::get_tmschema_tables_response(
+                &admin,
+                &project.config,
+            );
+            assert!(admin_tables.contains(&dim_table), "{admin_tables}");
+            let admin_properties =
+                crate::xmla::discover::mdschema_properties::get_mdschema_properties_response(
+                    Some(5),
+                    &restrictions,
+                    &admin,
+                    &project.config,
+                );
+            assert!(
+                admin_properties.contains("[Category]"),
+                "{admin_properties}"
+            );
+        });
+    }
+
+    /// TMSCHEMA_RELATIONSHIPS lists the model's own relationships and hides the
+    /// ones touching an OLS-hidden table — the demo model has no relationships,
+    /// so this uses the converted Contoso project (plan 051).
+    #[test]
+    fn tmschema_relationships_are_model_aware_and_filtered() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project = crate::proxy_project::ProxyProject::load(
+            "projects/generated_contoso/proxy-config.json",
+        )
+        .expect("load contoso");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let model = &project.model;
+            let hidden_table = model
+                .relationships
+                .first()
+                .expect("the converted model has relationships")
+                .dim_table
+                .clone();
+
+            let admin = UserContext::admin_default();
+            let all = crate::xmla::discover::tmschema::get_tmschema_relationships_response(
+                &admin,
+                &project.config,
+            );
+            let all_count = all.matches("<row>").count();
+            assert!(all_count > 0, "the model's relationships are listed: {all}");
+
+            let mut config = project.config.clone();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: hidden_table.clone(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            let filtered = crate::xmla::discover::tmschema::get_tmschema_relationships_response(
+                &user, &config,
+            );
+            assert!(
+                filtered.matches("<row>").count() < all_count,
+                "relationships touching {hidden_table} are hidden: {filtered}"
+            );
+            assert!(!filtered.contains(&hidden_table), "{filtered}");
+            let tables =
+                crate::xmla::discover::tmschema::get_tmschema_tables_response(&user, &config);
+            assert!(!tables.contains(&hidden_table), "{tables}");
+        });
+    }
+
     /// A Discover naming another cube or catalog answers an empty rowset in
     /// the rowset's own shape, and scope names match case-insensitively
     /// (measured on the reference 2026-09-25).

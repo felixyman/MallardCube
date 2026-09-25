@@ -40,10 +40,7 @@ pub fn get_dimensions_response(
 
     // Measures system dimension (special case); hidden when no measure's table
     // is visible.
-    let measures_visible = model
-        .fact_tables
-        .iter()
-        .any(|ft| super::table_visible(config, user, &ft.table_name));
+    let measures_visible = super::measures_visible(model, config, user);
     if measures_visible {
         rows.push_str(&format!(
             r#"          <row>

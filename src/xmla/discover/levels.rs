@@ -78,10 +78,7 @@ pub fn get_levels_response(
 
     // MeasuresLevel (special case, not in model); hidden when no measure's
     // table is visible.
-    let measures_visible = model
-        .fact_tables
-        .iter()
-        .any(|ft| super::table_visible(config, user, &ft.table_name));
+    let measures_visible = super::measures_visible(model, config, user);
     if measures_visible
         && super::coordinates_match(
             restrictions,

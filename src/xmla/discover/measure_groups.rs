@@ -12,7 +12,11 @@ const MEASUREGROUP_ROW_FIELDS: &str = r#"                <xsd:element sql:field=
                 <xsd:element sql:field="MEASUREGROUP_CARDINALITY" name="MEASUREGROUP_CARDINALITY" type="xsd:int" minOccurs="0"/>
                 <xsd:element sql:field="MEASUREGROUP_SIZE" name="MEASUREGROUP_SIZE" type="xsd:long" minOccurs="0"/>"#;
 
-pub fn get_measure_groups_response(restrictions: &crate::xmla::parser::Restrictions) -> String {
+pub fn get_measure_groups_response(
+    restrictions: &crate::xmla::parser::Restrictions,
+    user: &crate::engine::model::UserContext,
+    config: &crate::project::config::ProxyConfig,
+) -> String {
     let project = proxy_project::project();
     if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
         // A request naming another catalog or cube is out of scope: the
@@ -25,6 +29,9 @@ pub fn get_measure_groups_response(restrictions: &crate::xmla::parser::Restricti
     let mut rows = String::new();
     let mut seen = BTreeSet::new();
     for ft in &model.fact_tables {
+        if !super::table_visible(config, user, &ft.table_name) {
+            continue;
+        }
         if seen.insert(ft.measure_group_name.clone()) {
             rows.push_str(&format!(
                 r#"          <row>

@@ -52,6 +52,20 @@ pub(crate) fn table_visible(
         != crate::engine::model::TableAccess::Hidden
 }
 
+/// Are any of the model's measures visible? The `[Measures]` hierarchy
+/// (dimension, member, property and measure-group rowsets) is advertised only
+/// when at least one measure's fact table is visible.
+pub(crate) fn measures_visible(
+    model: &crate::engine::model::SemanticModel,
+    config: &crate::project::config::ProxyConfig,
+    user: &crate::engine::model::UserContext,
+) -> bool {
+    model
+        .fact_tables
+        .iter()
+        .any(|ft| table_visible(config, user, &ft.table_name))
+}
+
 pub(crate) fn dimension_visible(
     model: &crate::engine::model::SemanticModel,
     config: &crate::project::config::ProxyConfig,

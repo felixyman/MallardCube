@@ -1145,8 +1145,12 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             restrictions,
         } => {
             println!("📥 MDSCHEMA_PROPERTIES (PROPERTY_TYPE={:?})", property_type);
-            let resp =
-                mdschema_properties::get_mdschema_properties_response(*property_type, restrictions);
+            let resp = mdschema_properties::get_mdschema_properties_response(
+                *property_type,
+                restrictions,
+                user,
+                config,
+            );
             mallardcube::xmla_trace::trace_request("MdschemaProperties", body, &resp, None, None);
             resp
         }
@@ -1175,7 +1179,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         }
         XmlaRequest::MdschemaMeasureGroups { restrictions } => {
             println!("📥 MDSCHEMA_MEASUREGROUPS");
-            let resp = measure_groups::get_measure_groups_response(restrictions);
+            let resp = measure_groups::get_measure_groups_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request(
                 "MdschemaMeasureGroups",
                 body,
@@ -1210,7 +1214,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         }
         XmlaRequest::TmschemaTables => {
             println!("📥 TMSCHEMA_TABLES");
-            let resp = tmschema::get_tmschema_tables_response();
+            let resp = tmschema::get_tmschema_tables_response(user, config);
             mallardcube::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
             resp
         }
@@ -1240,7 +1244,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         }
         XmlaRequest::TmschemaRelationships => {
             println!("📥 TMSCHEMA_RELATIONSHIPS");
-            let resp = tmschema::get_tmschema_relationships_response();
+            let resp = tmschema::get_tmschema_relationships_response(user, config);
             mallardcube::xmla_trace::trace_request(
                 "TmschemaRelationships",
                 body,

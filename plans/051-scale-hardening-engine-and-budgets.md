@@ -668,3 +668,27 @@ Still open in this bucket: the OLS leftovers in `MDSCHEMA_PROPERTIES`,
 `MDSCHEMA_MEASUREGROUPS`, the `[Measures]` part of `MDSCHEMA_MEMBERS` and the
 `TMSCHEMA_*` stubs; the axis `DISPLAY_INFO`/child counts; the result cache's
 byte accounting.
+
+### OLS leftovers (fixed 2026-09-25)
+
+- `MDSCHEMA_PROPERTIES`: a hidden dimension's member-property rows disappear,
+  and the `[Measures]` rows disappear when no measure's fact table is visible —
+  the three builders that computed measure visibility inline now share
+  `discover::measures_visible`.
+- `MDSCHEMA_MEASUREGROUPS`: a hidden fact table loses its group.
+- `MDSCHEMA_MEMBERS`: `[Measures]` lists only visible measures.
+- `TMSCHEMA_TABLES` and `TMSCHEMA_RELATIONSHIPS` describe **this model** now —
+  fact tables then dimension tables with stable ids, and the model's own
+  relationships (resolved through the fact table's `id`, which is what
+  `fact_table_id` holds) — and are OLS-filtered. The remaining TMSCHEMA
+  rowsets stay empty stubs (`COLUMNS`, `PARTITIONS`), recorded.
+
+Verified live with a scratch auth config: a hidden `date_dim` removes `[Date]`
+from MDSCHEMA_PROPERTIES (38 → 22 rows) while `[Measures]` stays; a hidden
+`sales_fact` empties MDSCHEMA_MEASUREGROUPS and the `[Measures]` member list;
+TMSCHEMA_TABLES shows exactly one of `date_dim` / `sales_fact` per role. The
+relationship path is covered by a unit test against the converted Contoso
+project, since the demo model has no relationships.
+
+Still open in this bucket: the axis `DISPLAY_INFO`/child counts and the result
+cache's byte accounting.
