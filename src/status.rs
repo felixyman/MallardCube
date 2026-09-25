@@ -103,6 +103,8 @@ pub struct StatusInfo {
     pub started_at_unix: u64,
     pub data: DataStamp,
     pub result_cache: bool,
+    /// Live cache accounting: entries, bytes and hits (plan 051-B).
+    pub cache: crate::execute::cache::CacheStats,
     /// Engine settings in force and where each came from (plan 051-A/054-C).
     pub engine: EngineSettings,
     /// Authentication and role posture (plan 051 security review).
@@ -120,6 +122,16 @@ impl StatusInfo {
             "pool_size": self.pool_size,
             "started_at_unix": self.started_at_unix,
             "result_cache": self.result_cache,
+            "cache": {
+                "enabled": self.cache.enabled,
+                "entries": self.cache.entries,
+                "bytes": self.cache.bytes,
+                "max_bytes": self.cache.max_bytes,
+                "hits": self.cache.hits,
+                "misses": self.cache.misses,
+                "hit_rate": self.cache.hit_rate(),
+                "evictions": self.cache.evictions,
+            },
             "data": {
                 "path": self.data.path,
                 "size_bytes": self.data.size_bytes,
@@ -195,6 +207,7 @@ mod tests {
     fn status_json_has_freshness_fields() {
         use crate::engine::settings::{MemoryLimit, Setting, SettingSource};
         let info = StatusInfo {
+            cache: Default::default(),
             catalog: "SALES_ANALYTICS".into(),
             cube: "Sales".into(),
             pool_size: 8,

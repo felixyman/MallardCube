@@ -16,6 +16,7 @@ use crate::engine::model::UserContext;
 use crate::engine::plan::QueryResult;
 use crate::project::config::RoleConfig;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,36 +27,119 @@ const TTL: Duration = Duration::from_secs(5);
 /// A burst of distinct queries must not grow the cache without bound.
 const CAPACITY: usize = 64;
 
+/// Default byte budget for the cached results (overridable with
+/// `MALLARDCUBE_CACHE_MAX_BYTES`; `0` keeps only the entry cap). The entry cap
+/// alone is not a memory bound: one wide pivot can be hundreds of megabytes.
+const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// What `/status` reports: entries, bytes and hit accounting.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CacheStats {
+    pub enabled: bool,
+    pub entries: usize,
+    pub bytes: usize,
+    pub max_bytes: usize,
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+}
+
+impl CacheStats {
+    pub fn hit_rate(&self) -> f64 {
+        let lookups = self.hits + self.misses;
+        if lookups == 0 {
+            0.0
+        } else {
+            self.hits as f64 / lookups as f64
+        }
+    }
+}
+
+/// Approximate heap footprint of a cached result. Group keys are Strings and
+/// dominate the wide shapes, so count their bytes plus a small per-element
+/// overhead; the values themselves are 8 bytes each.
+pub fn estimated_bytes(result: &QueryResult) -> usize {
+    const ELEMENT: usize = 24;
+    let bytes = match result {
+        QueryResult::Scalar(_) | QueryResult::Count(_) => 16,
+        QueryResult::Empty => 0,
+        QueryResult::Multi(values) => values.len() * 8 + ELEMENT,
+        QueryResult::Grouped(rows) => rows.iter().map(|(key, _)| key.len() + 16 + ELEMENT).sum(),
+        QueryResult::Pairs(rows) => rows
+            .iter()
+            .map(|(first, second, _)| first.len() + second.len() + 24 + ELEMENT)
+            .sum(),
+        QueryResult::MultiGrouped(rows) => rows
+            .iter()
+            .map(|(key, values)| key.len() + values.len() * 8 + ELEMENT)
+            .sum(),
+        QueryResult::MultiGrouped2(rows) => rows
+            .iter()
+            .map(|(first, second, values)| first.len() + second.len() + values.len() * 8 + ELEMENT)
+            .sum(),
+        QueryResult::MultiGroupedN(rows) => rows
+            .iter()
+            .map(|(keys, values)| {
+                keys.iter().map(|key| key.len() + ELEMENT).sum::<usize>()
+                    + values.len() * 8
+                    + ELEMENT
+            })
+            .sum(),
+    };
+    bytes.max(16)
+}
+
 struct Entry {
     /// Shared, not cloned: a hit used to deep-clone the whole result — on a
     /// 422k-group shape that is ~1.3M String allocations on two of every three
     /// Excel requests (plan 051 review).
     result: Arc<QueryResult>,
     inserted_at: Instant,
+    /// Approximate footprint, for the byte budget and `/status`.
+    bytes: usize,
+}
+
+/// Byte budget for the cache. `MALLARDCUBE_CACHE_MAX_BYTES=0` disables the
+/// byte bound (the entry cap still applies).
+fn max_bytes_from_env() -> usize {
+    std::env::var("MALLARDCUBE_CACHE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_BYTES)
 }
 
 /// Cache of executed query results, keyed by plan + user scope.
 pub struct ResultCache {
     ttl: Duration,
     capacity: usize,
+    max_bytes: usize,
     entries: Mutex<HashMap<String, Entry>>,
+    bytes_used: AtomicUsize,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
 }
 
 impl ResultCache {
     fn new() -> Self {
-        Self {
-            ttl: TTL,
-            capacity: CAPACITY,
-            entries: Mutex::new(HashMap::new()),
-        }
+        Self::with_byte_limit(TTL, CAPACITY, max_bytes_from_env())
     }
 
     #[cfg(test)]
     fn with_limits(ttl: Duration, capacity: usize) -> Self {
+        Self::with_byte_limit(ttl, capacity, DEFAULT_MAX_BYTES)
+    }
+
+    fn with_byte_limit(ttl: Duration, capacity: usize, max_bytes: usize) -> Self {
         Self {
             ttl,
             capacity,
+            max_bytes,
             entries: Mutex::new(HashMap::new()),
+            bytes_used: AtomicUsize::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
         }
     }
 
@@ -65,46 +149,105 @@ impl ResultCache {
         let mut entries = self.entries.lock().ok()?;
         match entries.get(key) {
             Some(entry) if entry.inserted_at.elapsed() < self.ttl => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
                 Some(Arc::clone(&entry.result))
             }
             Some(_) => {
-                entries.remove(key);
+                if let Some(entry) = entries.remove(key) {
+                    self.bytes_used.fetch_sub(entry.bytes, Ordering::Relaxed);
+                }
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 None
             }
-            None => None,
+            None => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
         }
     }
 
-    /// Store a result. When full, expired entries are dropped first, then the
-    /// oldest entry.
+    /// Store a result. Evicts expired entries first, then the oldest, until
+    /// both the entry cap and the byte budget have room.
     pub fn insert(&self, key: String, result: Arc<QueryResult>) {
+        let bytes = estimated_bytes(&result);
+        if self.max_bytes > 0 && bytes > self.max_bytes {
+            // A single result larger than the whole budget would evict
+            // everything else and still not fit: do not cache it at all.
+            return;
+        }
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
-        if !entries.contains_key(&key) && entries.len() >= self.capacity {
-            entries.retain(|_, entry| entry.inserted_at.elapsed() < self.ttl);
-            if entries.len() >= self.capacity
-                && let Some(oldest) = entries
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.inserted_at)
-                    .map(|(key, _)| key.clone())
-            {
-                entries.remove(&oldest);
+        if let Some(previous) = entries.remove(&key) {
+            self.bytes_used.fetch_sub(previous.bytes, Ordering::Relaxed);
+        }
+        loop {
+            let used = self.bytes_used.load(Ordering::Relaxed);
+            let has_room = entries.len() < self.capacity
+                && (self.max_bytes == 0 || used + bytes <= self.max_bytes);
+            if has_room {
+                break;
+            }
+            let expired: Vec<String> = entries
+                .iter()
+                .filter(|(_, entry)| entry.inserted_at.elapsed() >= self.ttl)
+                .map(|(key, _)| key.clone())
+                .collect();
+            if !expired.is_empty() {
+                for key in expired {
+                    if let Some(entry) = entries.remove(&key) {
+                        self.bytes_used.fetch_sub(entry.bytes, Ordering::Relaxed);
+                        self.evictions.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                continue;
+            }
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = entries.remove(&oldest) {
+                self.bytes_used.fetch_sub(entry.bytes, Ordering::Relaxed);
+                self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.bytes_used.fetch_add(bytes, Ordering::Relaxed);
         entries.insert(
             key,
             Entry {
                 result,
                 inserted_at: Instant::now(),
+                bytes,
             },
         );
     }
+
+    /// Entries, bytes and hit accounting for `/status`.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            enabled: enabled(),
+            entries: self
+                .entries
+                .lock()
+                .map(|entries| entries.len())
+                .unwrap_or(0),
+            bytes: self.bytes_used.load(Ordering::Relaxed),
+            max_bytes: self.max_bytes,
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
+    }
+
     /// Drop every entry. Called on a data reload so no request can serve
     /// pre-reload rows.
     pub fn clear(&self) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.clear();
+            self.bytes_used.store(0, Ordering::Relaxed);
         }
     }
 }
@@ -235,6 +378,54 @@ mod tests {
         let hit_again = cache.get("k").expect("hit");
         assert!(Arc::ptr_eq(&stored, &hit), "same allocation, not a copy");
         assert!(Arc::ptr_eq(&hit, &hit_again));
+    }
+
+    /// One wide result must not blow through the budget: an entry larger than
+    /// the whole budget is not cached, and smaller ones evict to fit.
+    #[test]
+    fn the_byte_budget_bounds_the_cache() {
+        let cache = ResultCache::with_byte_limit(Duration::from_secs(60), 64, 600);
+        let wide = Arc::new(QueryResult::Grouped(
+            (0..1_000)
+                .map(|i| (format!("group-{i:04}"), i as f64))
+                .collect(),
+        ));
+        assert!(estimated_bytes(&wide) > 600);
+        cache.insert("wide".into(), Arc::clone(&wide));
+        assert!(
+            cache.get("wide").is_none(),
+            "oversized results are not cached"
+        );
+
+        let small = |i: usize| {
+            Arc::new(QueryResult::Grouped(vec![(
+                format!("group-{i:04}"),
+                i as f64,
+            )]))
+        };
+        for i in 0..20 {
+            cache.insert(format!("k{i}"), small(i));
+        }
+        let stats = cache.stats();
+        assert!(stats.bytes <= 600, "budget holds: {} bytes", stats.bytes);
+        assert!(stats.entries < 20, "evictions made room: {stats:?}");
+        assert!(stats.evictions > 0, "{stats:?}");
+    }
+
+    #[test]
+    fn stats_count_hits_and_misses() {
+        let cache = ResultCache::with_limits(Duration::from_secs(60), 8);
+        assert!(cache.get("k").is_none());
+        cache.insert("k".into(), scalar(1.0));
+        assert!(cache.get("k").is_some());
+        assert!(cache.get("k").is_some());
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.entries, 1);
+        assert!((stats.hit_rate() - 2.0 / 3.0).abs() < 1e-9);
+        cache.clear();
+        assert_eq!(cache.stats().bytes, 0);
     }
 
     #[test]

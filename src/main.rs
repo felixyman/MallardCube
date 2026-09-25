@@ -79,10 +79,13 @@ fn current_source(state: &AppState) -> std::sync::Arc<backend::BackendSource> {
 }
 
 fn current_status(state: &AppState) -> mallardcube::status::StatusInfo {
-    match state.status.read() {
+    let mut status = match state.status.read() {
         Ok(slot) => slot.clone(),
         Err(e) => e.into_inner().clone(),
-    }
+    };
+    // Cache accounting is live, not the value captured at startup.
+    status.cache = mallardcube::execute::cache::RESULT_CACHE.stats();
+    status
 }
 
 /// Reopen the data file and swap the pool: in-flight requests finish on the
@@ -492,6 +495,7 @@ async fn run_server() {
             started_at_unix: mallardcube::status::now_unix(),
             data: mallardcube::status::DataStamp::capture(backend_source.path()),
             result_cache: mallardcube::execute::cache::enabled(),
+            cache: mallardcube::execute::cache::RESULT_CACHE.stats(),
             auth: mallardcube::status::AuthStatus::from_config(&p.config),
             engine: mallardcube::engine::settings::effective(),
         };

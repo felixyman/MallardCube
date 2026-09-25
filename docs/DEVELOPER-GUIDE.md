@@ -288,6 +288,7 @@ cargo test --lib
 | `MALLARDCUBE_THREADS` | Engine thread count; default is all cores |
 | `MALLARDCUBE_AGG_CACHE` | Aggregation sidecar path; enables rollups for SUM measures |
 | `MALLARDCUBE_RESULT_CACHE` | Set to `0` to disable the 5 s result cache |
+| `MALLARDCUBE_CACHE_MAX_BYTES` | Byte budget for the result cache (default 67108864; `0` keeps only the 64-entry cap) |
 | `MALLARDCUBE_RELOAD_WATCH` | Seconds between data-file stamp checks; a change triggers a reload |
 | `XMLA_TRACE` | Set to `1` to write full request/response NDJSON to `xmla-trace.jsonl` |
 | `MALLARDCUBE_DEBUG` | Set to `1` to write a verbose request log to `debug-last-run.log` |

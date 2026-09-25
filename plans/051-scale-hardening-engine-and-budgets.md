@@ -713,3 +713,16 @@ cache's byte accounting.
 Still open from the review: axis `DISPLAY_INFO`/child counts still come from the
 static model cardinality (a filtered dimension's count is the unfiltered one),
 and `STRTO_MEMBER`/member-only probes still resolve against the full model.
+
+### Result-cache byte accounting (2026-09-25)
+
+The cache had only an entry cap (64), and one entry can be a wide pivot. Each
+entry now carries an estimated footprint (group-key strings + per-element
+overhead + 8 bytes per value), the cache keeps a running byte total, and
+`MALLARDCUBE_CACHE_MAX_BYTES` (default 64 MiB; `0` keeps only the entry cap)
+evicts expired-then-oldest until both budgets have room. A single result
+larger than the whole budget is not cached rather than thrashing the cache.
+`/status` gained a `cache` block — entries, bytes, max, hits, misses, hit rate,
+evictions — filled live per request; documented in the developer guide and the
+deployment page. Verified live: two identical Executes report
+`{"bytes":16,"entries":1,"hits":1,"misses":1,"hit_rate":0.5}`.
