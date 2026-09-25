@@ -66,6 +66,23 @@ pub(crate) fn measures_visible(
         .any(|ft| table_visible(config, user, &ft.table_name))
 }
 
+/// The `*_VISIBILITY` restrictions: `0` answers the empty rowset, `1` (or
+/// absent) answers everything (measured 2026-09-26).
+pub(crate) fn hidden_by_visibility(value: Option<i32>) -> bool {
+    value == Some(0)
+}
+
+/// An exact name restriction (`*_NAME`) matches case-insensitively; absent
+/// means "no filter".
+pub(crate) fn name_matches(wanted: Option<&str>, candidates: &[&str]) -> bool {
+    let Some(wanted) = wanted else {
+        return true;
+    };
+    candidates
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(wanted.trim()))
+}
+
 pub(crate) fn dimension_visible(
     model: &crate::engine::model::SemanticModel,
     config: &crate::project::config::ProxyConfig,

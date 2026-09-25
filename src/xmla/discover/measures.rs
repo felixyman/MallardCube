@@ -40,7 +40,18 @@ pub fn get_measures_response(
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut rows = String::new();
+    if super::hidden_by_visibility(restrictions.measure_visibility) {
+        return discover_rowset_envelope(UUID_TYPE, MEASURE_ROW_FIELDS, "");
+    }
     for (i, m) in model.measures.iter().enumerate() {
+        if !super::name_matches(restrictions.measure_name.as_deref(), &[&m.caption, &m.id])
+            || !super::name_matches(
+                restrictions.measure_unique_name.as_deref(),
+                &[&m.measure_unique_name(), &m.caption, &m.id],
+            )
+        {
+            continue;
+        }
         if !super::table_visible(config, user, &model.fact_table(m.fact_table_idx).table_name) {
             continue;
         }

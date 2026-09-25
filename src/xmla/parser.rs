@@ -46,6 +46,23 @@ pub struct Restrictions {
     /// another database is refused: the reference faults it for Discover and
     /// Execute alike (measured 2026-09-25).
     pub property_catalog: Option<String>,
+    /// Exact name restrictions (`DIMENSION_NAME`, `HIERARCHY_NAME`,
+    /// `LEVEL_NAME`, `MEASURE_NAME`, `MEASURE_UNIQUE_NAME`,
+    /// `MEASUREGROUP_NAME`).
+    pub dimension_name: Option<String>,
+    pub hierarchy_name: Option<String>,
+    pub level_name: Option<String>,
+    pub measure_name: Option<String>,
+    pub measure_unique_name: Option<String>,
+    pub measuregroup_name: Option<String>,
+    /// `*_VISIBILITY` restrictions. The reference answers the whole rowset for
+    /// `1` and **0 rows for `0`** (measured 2026-09-26); we only ever serve
+    /// visible objects, so `0` means empty and `1` is a no-op.
+    pub dimension_visibility: Option<i32>,
+    pub hierarchy_visibility: Option<i32>,
+    pub level_visibility: Option<i32>,
+    pub measure_visibility: Option<i32>,
+    pub property_visibility: Option<i32>,
 }
 
 /// The `<Catalog>` property the request carried, whatever its kind. A mismatch
@@ -200,6 +217,17 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
         b"PROPERTY_NAME" => restrictions.property_name = Some(text.to_string()),
         b"ORIGIN" => restrictions.origin = text.parse().ok(),
         b"MEMBER_TYPE" => restrictions.member_type = text.parse().ok(),
+        b"DIMENSION_NAME" => restrictions.dimension_name = Some(text.to_string()),
+        b"HIERARCHY_NAME" => restrictions.hierarchy_name = Some(text.to_string()),
+        b"LEVEL_NAME" => restrictions.level_name = Some(text.to_string()),
+        b"MEASURE_NAME" => restrictions.measure_name = Some(text.to_string()),
+        b"MEASURE_UNIQUE_NAME" => restrictions.measure_unique_name = Some(text.to_string()),
+        b"MEASUREGROUP_NAME" => restrictions.measuregroup_name = Some(text.to_string()),
+        b"DIMENSION_VISIBILITY" => restrictions.dimension_visibility = text.parse().ok(),
+        b"HIERARCHY_VISIBILITY" => restrictions.hierarchy_visibility = text.parse().ok(),
+        b"LEVEL_VISIBILITY" => restrictions.level_visibility = text.parse().ok(),
+        b"MEASURE_VISIBILITY" => restrictions.measure_visibility = text.parse().ok(),
+        b"PROPERTY_VISIBILITY" => restrictions.property_visibility = text.parse().ok(),
         b"SchemaName" => restrictions.schema_name = Some(text.to_string()),
         _ => return false,
     }

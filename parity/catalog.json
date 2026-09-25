@@ -317,8 +317,7 @@
    "expect": {
     "row_count": 0
    },
-   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: visibility=0 returns 0 rows, visibility=1 returns all six",
-   "known_gap": "the reference returns 0 rows for DIMENSION_VISIBILITY=0; the proxy advertises the restriction but ignores it (plan 055 slice 2)"
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: visibility=0 returns 0 rows, visibility=1 returns all six"
   },
   {
    "id": "dimensions-wrong-cube-is-empty",
@@ -427,6 +426,165 @@
     "fault": "The NoSuchCube cube does not exist."
    },
    "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: the exact fault for a drillthrough naming another cube"
+  },
+  {
+   "id": "dimensions-visibility-one",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "DIMENSION_VISIBILITY": "1"
+    }
+   },
+   "expect": {
+    "row_count": 6
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=1 returns all six dimensions"
+  },
+  {
+   "id": "hierarchies-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_HIERARCHIES",
+    "restrictions": {
+     "HIERARCHY_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: an unknown visibility value returns 0 rows"
+  },
+  {
+   "id": "hierarchies-visibility-one",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_HIERARCHIES",
+    "restrictions": {
+     "HIERARCHY_VISIBILITY": "1"
+    }
+   },
+   "expect": {
+    "row_count": 7
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=1 returns all seven hierarchies"
+  },
+  {
+   "id": "levels-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_LEVELS",
+    "restrictions": {
+     "LEVEL_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=0 returns 0 rows"
+  },
+  {
+   "id": "levels-visibility-one",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_LEVELS",
+    "restrictions": {
+     "LEVEL_VISIBILITY": "1"
+    }
+   },
+   "expect": {
+    "row_count": 16
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=1 returns all sixteen levels"
+  },
+  {
+   "id": "measures-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASURES",
+    "restrictions": {
+     "MEASURE_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=0 returns 0 rows"
+  },
+  {
+   "id": "measures-visibility-one",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASURES",
+    "restrictions": {
+     "MEASURE_VISIBILITY": "1"
+    }
+   },
+   "expect": {
+    "row_count": 6
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=1 returns all six measures"
+  },
+  {
+   "id": "properties-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_PROPERTIES",
+    "restrictions": {
+     "PROPERTY_TYPE": "5",
+     "PROPERTY_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=0 returns 0 rows"
+  },
+  {
+   "id": "measuregroup-dimensions-visibility-zero",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASUREGROUP_DIMENSIONS",
+    "restrictions": {
+     "DIMENSION_VISIBILITY": "0"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: visibility=0 returns 0 rows"
+  },
+  {
+   "id": "measuregroups-unknown-name-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASUREGROUPS",
+    "restrictions": {
+     "MEASUREGROUP_NAME": "Nope"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: an unknown measure group returns 0 rows"
+  },
+  {
+   "id": "measures-measure-name-filters",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEASURES",
+    "restrictions": {
+     "MEASURE_NAME": "Revenue"
+    }
+   },
+   "expect": {
+    "row_count": 1,
+    "measure_name_first": "Revenue"
+   },
+   "columns": {
+    "measure_name": "MEASURE_NAME"
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: MEASURE_NAME=Revenue returns exactly that measure"
   }
  ]
 }

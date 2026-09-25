@@ -29,7 +29,16 @@ pub fn get_measuregroup_dimensions_response(
     let mut rows = String::new();
 
     let mut seen_groups = std::collections::BTreeSet::new();
+    if super::hidden_by_visibility(restrictions.dimension_visibility) {
+        return discover_rowset_envelope("", MG_DIM_ROW_FIELDS, "");
+    }
     for ft in &model.fact_tables {
+        if !super::name_matches(
+            restrictions.measuregroup_name.as_deref(),
+            &[&ft.measure_group_name],
+        ) {
+            continue;
+        }
         if !super::table_visible(config, user, &ft.table_name) {
             continue;
         }

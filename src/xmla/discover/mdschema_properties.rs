@@ -447,6 +447,9 @@ pub fn get_mdschema_properties_response(
     if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
         return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
     }
+    if super::hidden_by_visibility(restrictions.property_visibility) {
+        return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
+    }
     let cube_scoped = restrictions.cube_name.is_some()
         || restrictions.dimension_unique_name.is_some()
         || restrictions.hierarchy_unique_name.is_some()

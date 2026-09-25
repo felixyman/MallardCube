@@ -41,7 +41,9 @@ pub fn get_dimensions_response(
     // Measures system dimension (special case); hidden when no measure's table
     // is visible.
     let measures_visible = super::measures_visible(model, config, user);
-    if measures_visible {
+    if measures_visible
+        && super::name_matches(restrictions.dimension_name.as_deref(), &["Measures"])
+    {
         rows.push_str(&format!(
             r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -66,8 +68,17 @@ pub fn get_dimensions_response(
         ));
     }
 
+    if super::hidden_by_visibility(restrictions.dimension_visibility) {
+        return discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, "");
+    }
     for (i, d) in model.dimensions.iter().enumerate() {
         if !super::dimension_visible(model, config, user, &d.id) {
+            continue;
+        }
+        if !super::name_matches(
+            restrictions.dimension_name.as_deref(),
+            &[&d.caption, &d.id, &d.dimension_unique_name()],
+        ) {
             continue;
         }
         rows.push_str(&format!(

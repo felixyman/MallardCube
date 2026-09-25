@@ -74,6 +74,9 @@ pub fn get_levels_response(
     }
 
     let model = &project.model;
+    if super::hidden_by_visibility(restrictions.level_visibility) {
+        return discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, "");
+    }
     let mut rows = String::new();
 
     // MeasuresLevel (special case, not in model); hidden when no measure's

@@ -142,3 +142,27 @@ Five parity cases were added (`members-wrong-cube-is-empty`,
 Still open in this section: the empty/absent `<Catalog>` default-catalog
 divergence above, and the same probe treatment for `DISCOVER_PROPERTIES`,
 `DISCOVER_LITERALS` and `DBSCHEMA_TABLES` (`TABLE_CATALOG`).
+
+### Advertised restrictions are now applied (2026-09-26)
+
+The mirror's `DISCOVER_SCHEMA_ROWSETS` answered which restrictions each rowset
+advertises — our lists already matched it exactly. What did not match was the
+*behaviour*: `DIMENSION_VISIBILITY`, `HIERARCHY_VISIBILITY`, `LEVEL_VISIBILITY`,
+`MEASURE_VISIBILITY`, `PROPERTY_VISIBILITY` and the name restrictions were
+accepted and ignored. Measured on the reference: every `*_VISIBILITY=0` returns
+**0 rows** and `=1` returns everything (6 dimensions, 7 hierarchies, 16 levels,
+6 measures, 39 properties, 11 measure-group dimensions); `MEASURE_NAME=Revenue`
+returns exactly that measure; an unknown `MEASUREGROUP_NAME` returns 0 rows.
+
+Implemented as two rules in `discover`: `hidden_by_visibility` (0 ⇒ the empty
+rowset, since we only serve visible objects) and `name_matches` (case-insensitive
+exact names), applied in dimensions, hierarchies, levels, measures, properties,
+measure groups and measure-group dimensions. Verified live and pinned by twelve
+new parity cases — `dimensions-visibility-zero` lost its `known_gap`, so the
+catalogue is **36/36 with one known gap left**.
+
+Recorded: `LEVEL_NAME` filters one of the five level-row sites (a half-applied
+filter would silently drop rows, so it was reverted rather than half-done), and
+`HIERARCHY_NAME=Category` returns two rows on our model because it exposes a
+key-attribute hierarchy alongside the user one — a model-shape difference, not a
+filter bug.

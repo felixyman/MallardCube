@@ -44,6 +44,9 @@ pub fn get_hierarchies_response(
     }
 
     let model = &project.model;
+    if super::hidden_by_visibility(restrictions.hierarchy_visibility) {
+        return discover_rowset_envelope(UUID_TYPE, HIER_ROW_FIELDS, "");
+    }
     let mut rows = String::new();
 
     // Measures hierarchy (special case, not in model); hidden when no
@@ -107,6 +110,13 @@ pub fn get_hierarchies_response(
                     ordinal: u32,
                     all_member: &str,
                     visible: bool| {
+        let unique = format!("[{caption}].[{hier_name}]");
+        if !super::name_matches(
+            restrictions.hierarchy_name.as_deref(),
+            &[hier_name, &unique],
+        ) {
+            return String::new();
+        }
         let structure = if origin == 1 { "Unnatural" } else { "Natural" };
         format!(
             r#"          <row>

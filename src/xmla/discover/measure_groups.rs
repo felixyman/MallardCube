@@ -29,6 +29,12 @@ pub fn get_measure_groups_response(
     let mut rows = String::new();
     let mut seen = BTreeSet::new();
     for ft in &model.fact_tables {
+        if !super::name_matches(
+            restrictions.measuregroup_name.as_deref(),
+            &[&ft.measure_group_name],
+        ) {
+            continue;
+        }
         if !super::table_visible(config, user, &ft.table_name) {
             continue;
         }
