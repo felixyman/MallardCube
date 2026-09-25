@@ -1635,6 +1635,58 @@ mod tests {
         });
     }
 
+    /// A dimension hidden by OLS stays off the SlicerAxis of a query that does
+    /// not name it; the administrator still sees it (plan 051 RLS review).
+    #[test]
+    fn hidden_dimensions_stay_off_the_slicer_axis() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let table = project.model.dim_table_for_discovery("Date").to_string();
+            let mut config = project.config.clone();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table,
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            // A different shape from the cache test's query, so the two cannot
+            // share a result-cache entry (the cache is process-wide).
+            let mdx = "SELECT {[Measures].[Revenue]} ON COLUMNS, [Territory].[Territory].Members ON ROWS FROM [Sales] CELL PROPERTIES VALUE";
+            let backend = Backend::test_fixture();
+            let (restricted, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx, backend, &user, &config,
+                );
+            assert!(!restricted.contains("[Date]"), "{restricted}");
+            assert!(
+                restricted.contains("[Channel]"),
+                "visible dimensions stay on the slicer: {restricted}"
+            );
+
+            let (admin, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx,
+                    backend,
+                    &UserContext::admin_default(),
+                    &project.config,
+                );
+            assert!(admin.contains("[Date]"), "{admin}");
+        });
+    }
+
     /// TMSCHEMA_RELATIONSHIPS lists the model's own relationships and hides the
     /// ones touching an OLS-hidden table — the demo model has no relationships,
     /// so this uses the converted Contoso project (plan 051).

@@ -1125,6 +1125,7 @@ mod tests {
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
         let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
+            access: None,
             cube: None,
             set_probe: None,
             set_count: None,
@@ -1175,6 +1176,7 @@ mod tests {
         use crate::mdx_semantic::{SemanticQuery, SemanticQueryKind};
         let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         let query = SemanticQuery {
+            access: None,
             cube: None,
             set_probe: None,
             set_count: None,
@@ -1222,6 +1224,7 @@ mod tests {
         // Cost (inventory) with Channel filter (sales-only dimension).
         // Channel should be ignored because it's unrelated.
         let query = SemanticQuery {
+            access: None,
             cube: None,
             set_probe: None,
             set_count: None,
@@ -1275,6 +1278,7 @@ mod tests {
         let p = ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
         // Category is shared — it should pass through for any measure.
         let query = SemanticQuery {
+            access: None,
             cube: None,
             set_probe: None,
             set_count: None,

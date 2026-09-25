@@ -53,6 +53,23 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 
     let t0 = Instant::now();
     let model = &crate::proxy_project::project().model;
+
+    // The renderer's slicer axis lists every dimension a query does not name.
+    // A dimension hidden by OLS must not appear there, and the Measures
+    // hierarchy follows its measures (plan 051 RLS review).
+    let mut query = query;
+    if !user.is_administrator {
+        let hidden_dimensions = model
+            .dimensions
+            .iter()
+            .filter(|d| !crate::xmla::discover::dimension_visible(model, config, user, &d.id))
+            .map(|d| d.id.clone())
+            .collect();
+        query.access = Some(crate::mdx_semantic::AccessView {
+            hidden_dimensions,
+            measures_visible: crate::xmla::discover::measures_visible(model, config, user),
+        });
+    }
     let plan = plan_from_semantic_with_model_and_context(&query, model, user, config);
     let plan_us = (Instant::now() - t0).as_micros() as u64;
 
@@ -96,7 +113,7 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     // repeats from a short-lived cache (plan 032). The cellset is rendered
     // fresh below, so every variant keeps its own cell properties.
     let cache_enabled = cache::enabled();
-    let cache_key = cache::cache_key(&key, &config.catalog, &config.cube, user);
+    let cache_key = cache::cache_key(&key, &config.catalog, &config.cube, user, &config.roles);
     let t0 = Instant::now();
     let cached = if cache_enabled {
         cache::RESULT_CACHE.get(&cache_key)

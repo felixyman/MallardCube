@@ -611,6 +611,19 @@ pub struct SemanticQuery {
     /// Distinguishes the drill filter from real slicers when re-querying the
     /// hierarchy's input set.
     pub drill_members: Vec<(String, Vec<String>)>,
+    /// What the requesting user may see, when roles restrict them. `None` on
+    /// the internal paths (tests, replay) that carry no role information; the
+    /// request path fills it, so the renderer's slicer axis can leave hidden
+    /// dimensions out (plan 051 RLS review).
+    pub access: Option<AccessView>,
+}
+
+/// Hidden dimensions (OLS) and whether any measure is visible. Built by the
+/// runtime from the effective role filters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessView {
+    pub hidden_dimensions: Vec<String>,
+    pub measures_visible: bool,
 }
 
 impl SemanticQuery {
@@ -703,6 +716,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         let targets = extract_strtomember_targets(mdx);
         let props = extract_strtomember_properties(mdx);
         return SemanticQuery {
+            access: None,
             kind: SemanticQueryKind::MeasureMetadataProbe,
             cube: parsed.cube_name.clone(),
             set_probe: None,
@@ -1099,6 +1113,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     };
 
     SemanticQuery {
+        access: None,
         kind,
         dim_props: parsed.dim_props.clone(),
         cell_props: parsed.cell_props.clone(),

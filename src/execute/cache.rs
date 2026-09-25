@@ -14,6 +14,7 @@
 
 use crate::engine::model::UserContext;
 use crate::engine::plan::QueryResult;
+use crate::project::config::RoleConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -124,13 +125,29 @@ pub fn enabled() -> bool {
 /// one), and roles/groups/the administrator flag are part of the key because
 /// they determine the RLS predicates in the emitted SQL — two users must never
 /// share an entry.
-pub fn cache_key(plan_key: &str, catalog: &str, cube: &str, user: &UserContext) -> String {
+///
+/// The matched roles' whole *definitions* are in the key too, not just their
+/// names: the predicates follow the permissions, and two configs can reuse a
+/// role name with different permissions (the tests do; a reload swaps the
+/// config in-process until the cache is cleared).
+pub fn cache_key(
+    plan_key: &str,
+    catalog: &str,
+    cube: &str,
+    user: &UserContext,
+    roles_config: &[RoleConfig],
+) -> String {
     let mut roles = user.roles.clone();
     roles.sort();
     let mut groups = user.groups.clone();
     groups.sort();
+    let mut matched: Vec<&RoleConfig> = roles_config
+        .iter()
+        .filter(|role| user.roles.iter().any(|name| name == &role.name))
+        .collect();
+    matched.sort_by(|a, b| a.name.cmp(&b.name));
     format!(
-        "{catalog}|{cube}|{plan_key}|user={}|admin={}|roles={}|groups={}",
+        "{catalog}|{cube}|{plan_key}|user={}|admin={}|roles={}|groups={}|cfg={matched:?}",
         user.user_id,
         user.is_administrator,
         roles.join(","),
@@ -144,6 +161,35 @@ mod tests {
 
     fn scalar(v: f64) -> Arc<QueryResult> {
         Arc::new(QueryResult::Scalar(v))
+    }
+
+    /// Two configs can reuse a role name with different permissions (the test
+    /// suite does); the emitted predicates follow the definitions, so the keys
+    /// must differ.
+    #[test]
+    fn role_definitions_are_part_of_the_key() {
+        use crate::project::config::{ModelPermission, TablePermissionConfig};
+
+        let mut user = UserContext::deny_all();
+        user.roles = vec!["OLS".into()];
+        let role = |permission: ModelPermission| RoleConfig {
+            name: "OLS".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "sales".into(),
+                filter_expression: String::new(),
+                dax_filter: None,
+                metadata_permission: permission,
+            }],
+        };
+        let hidden = [role(ModelPermission::None)];
+        let visible = [role(ModelPermission::Read)];
+        assert_ne!(
+            cache_key("p", "cat", "cube", &user, &hidden),
+            cache_key("p", "cat", "cube", &user, &visible)
+        );
     }
 
     #[test]
@@ -216,16 +262,16 @@ mod tests {
         bob.roles = alice.roles.clone();
 
         assert_eq!(
-            cache_key("p", "cat", "cube", &alice),
-            cache_key("p", "cat", "cube", &alice_again)
+            cache_key("p", "cat", "cube", &alice, &[]),
+            cache_key("p", "cat", "cube", &alice_again, &[])
         );
         assert_ne!(
-            cache_key("p", "cat", "cube", &alice),
-            cache_key("p", "cat", "cube", &bob)
+            cache_key("p", "cat", "cube", &alice, &[]),
+            cache_key("p", "cat", "cube", &bob, &[])
         );
         assert_ne!(
-            cache_key("p", "cat", "cube", &alice),
-            cache_key("p", "other", "cube", &alice),
+            cache_key("p", "cat", "cube", &alice, &[]),
+            cache_key("p", "other", "cube", &alice, &[]),
             "different projects must not share entries"
         );
     }

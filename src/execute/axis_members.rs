@@ -713,9 +713,16 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
 
-    // Measures always appear first on the slicer axis.
-    hierarchies.push(measures_hierarchy());
-    members.push(measures_total_member_for_query(query));
+    // Measures always appear first on the slicer axis, unless every measure's
+    // table is hidden from this user.
+    if query
+        .access
+        .as_ref()
+        .is_none_or(|access| access.measures_visible)
+    {
+        hierarchies.push(measures_hierarchy());
+        members.push(measures_total_member_for_query(query));
+    }
 
     let mut dims: Vec<&crate::engine::model::DimensionDef> = project
         .model
@@ -727,6 +734,13 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
 
     for dim in dims {
         if query.axis_dimensions.contains(&dim.id) {
+            continue;
+        }
+        if query
+            .access
+            .as_ref()
+            .is_some_and(|access| access.hidden_dimensions.contains(&dim.id))
+        {
             continue;
         }
 
@@ -770,6 +784,13 @@ pub(crate) fn dims_only_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
 
     for dim in dims {
         if query.axis_dimensions.contains(&dim.id) {
+            continue;
+        }
+        if query
+            .access
+            .as_ref()
+            .is_some_and(|access| access.hidden_dimensions.contains(&dim.id))
+        {
             continue;
         }
         hierarchies.push(hierarchy_for_dim(dim, &[]));

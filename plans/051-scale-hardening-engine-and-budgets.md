@@ -692,3 +692,24 @@ project, since the demo model has no relationships.
 
 Still open in this bucket: the axis `DISPLAY_INFO`/child counts and the result
 cache's byte accounting.
+
+### Hidden dimensions off the renderer, and the cache key's role definitions
+(2026-09-25)
+
+- The runtime now fills a `SemanticQuery.access` view (`hidden_dimensions`,
+  `measures_visible`) from the effective role filters when the user is not an
+  administrator. The two SlicerAxis builders skip hidden dimensions and omit
+  the Measures hierarchy when no measure's fact table is visible, so a query
+  that does not name a hidden dimension no longer advertises it. Verified live:
+  a user whose `date_dim` is hidden gets a cellset with zero `[Date]` mentions
+  where the full user gets the usual nine.
+- The result cache key includes the matched roles' **definitions**, not just
+  their names: two configs can reuse a role name with different permissions (the
+  test suite does) and the emitted predicates follow the definitions. The
+  review's "config-generation/hash would be needed if roles became reloadable"
+  caveat is closed for the config-in-process case; a reload already clears the
+  cache.
+
+Still open from the review: axis `DISPLAY_INFO`/child counts still come from the
+static model cardinality (a filtered dimension's count is the unfiltered one),
+and `STRTO_MEMBER`/member-only probes still resolve against the full model.
