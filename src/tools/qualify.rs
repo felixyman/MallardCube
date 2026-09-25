@@ -194,6 +194,16 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                 blocked.extend(data_blocked);
                 partial.extend(data_partial);
 
+                if let Some(relationship) = p.model.relationships.first() {
+                    blocked.extend(grain_findings(
+                        source.checkout().as_ref(),
+                        &p.model,
+                        &p.config,
+                        &UserContext::admin_default(),
+                        &relationship.dimension_id,
+                    ));
+                }
+
                 match load_oracles(config_path) {
                     Ok(Some(file)) => {
                         let (oracle_blocked, oracle_partial) = oracle_findings(
@@ -383,7 +393,107 @@ pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
         partial.push("oracles.json defines no oracles".into());
     }
 
+    // Once oracles exist, every measure that cannot be checked by additivity
+    // must have one: a ratio or time window with no expectation is exactly the
+    // shape that breaks silently (plan 057-B).
+    for measure in &model.measures {
+        if is_additive(measure) {
+            continue;
+        }
+        let covered = file
+            .oracles
+            .iter()
+            .any(|oracle| oracle.measure == measure.id || oracle.measure == measure.caption);
+        if !covered {
+            partial.push(format!(
+                "measure '{}' is not additive and has no oracle — add one to oracles.json",
+                measure.caption
+            ));
+        }
+    }
+
     (blocked, partial)
+}
+
+/// Is this measure's SQL an additive aggregate (SUM/COUNT)? Ratios, averages
+/// and time windows are not additive and are checked differently.
+fn is_additive(measure: &crate::engine::model::MeasureDef) -> bool {
+    // Time-windowed measures look like `SUM(x)` but are not additive: YTD at
+    // the total is not the sum of the per-day YTD values.
+    if measure.time_flag.is_some() {
+        return false;
+    }
+    let expr = measure.sql_expr.trim().to_uppercase();
+    (expr.starts_with("SUM(") || expr.starts_with("COUNT(") || expr.starts_with("COUNT ("))
+        && !expr.contains("DISTINCT")
+}
+
+/// Grain checks (plan 057-B): an additive measure's total must equal the sum of
+/// its values over a dimension's leaf members. The pivot user relies on that
+/// invariant; when it fails, every subtotal in the workbook is wrong. It is
+/// also the check that notices a join multiplying rows or a silently dropped
+/// key, per measure.
+pub(crate) fn grain_findings<B: QueryBackend + ?Sized>(
+    backend: &B,
+    model: &crate::engine::model::SemanticModel,
+    config: &crate::project::config::ProxyConfig,
+    user: &UserContext,
+    dimension: &str,
+) -> Vec<String> {
+    let mut blocked = Vec::new();
+    for measure in &model.measures {
+        if !is_additive(measure) {
+            continue;
+        }
+        let total_plan = QueryPlan::Total {
+            measure: measure.id.clone(),
+            filters: Vec::new(),
+        };
+        let group_plan = QueryPlan::GroupBy {
+            measure: measure.id.clone(),
+            group_by: vec![dimension.to_string()],
+            filters: Vec::new(),
+            group_levels: vec![None],
+            set_op: None,
+        };
+        let total_sql =
+            crate::engine::sql::sql_for_query_plan_with_context(model, &total_plan, user, config);
+        let group_sql =
+            crate::engine::sql::sql_for_query_plan_with_context(model, &group_plan, user, config);
+        if total_sql.trim().is_empty() || group_sql.trim().is_empty() {
+            continue;
+        }
+
+        let _ = backend.take_failure();
+        let total = backend.query_scalar(&total_sql);
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "grain check for '{}' cannot run: {failure}",
+                measure.caption
+            ));
+            continue;
+        }
+        let groups = backend.query_grouped_1d(&group_sql);
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "grain check for '{}' cannot run: {failure}",
+                measure.caption
+            ));
+            continue;
+        }
+        let sum: f64 = groups.iter().map(|(_, value)| value).sum();
+        let tolerance = total.abs() * 1e-6;
+        if (sum - total).abs() > tolerance {
+            blocked.push(format!(
+                "measure '{}' is not additive over '{dimension}': total {total}, \
+                 sum of {} groups {sum} (difference {:.2})",
+                measure.caption,
+                groups.len(),
+                sum - total
+            ));
+        }
+    }
+    blocked
 }
 
 /// The tables, dimension keys and relationships the data-side checks run
@@ -973,6 +1083,29 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The grain invariant holds on the demo model: an additive measure's
+    /// total equals the sum over a dimension's leaf members (plan 057-B).
+    #[test]
+    fn grain_checks_accept_the_demo_model() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        let dimension = &p
+            .model
+            .relationships
+            .first()
+            .expect("project3 has a relationship")
+            .dimension_id
+            .clone();
+        let blocked = grain_findings(
+            crate::backend::Backend::test_fixture(),
+            &p.model,
+            &p.config,
+            &UserContext::admin_default(),
+            dimension,
+        );
+        assert!(blocked.is_empty(), "{blocked:?}");
+    }
+
     /// A healthy shape reports nothing (the demo model, through the same checks
     /// the CLI uses).
     #[test]
@@ -1024,7 +1157,7 @@ mod tests {
                 },
             ],
         };
-        let (blocked, _) = oracle_findings(
+        let (blocked, partial) = oracle_findings(
             crate::backend::Backend::test_fixture(),
             &p.model,
             &p.config,
@@ -1032,6 +1165,12 @@ mod tests {
             &file,
         );
         assert_eq!(blocked.len(), 2, "{blocked:?}");
+        // Revenue YTD/QTD/MTD/Prior Year are not additive and have no oracle in
+        // this file: the file exists, so coverage is required.
+        assert!(
+            partial.iter().any(|m| m.contains("Revenue YTD")),
+            "uncovered non-additive measures are reported: {partial:?}"
+        );
         assert!(
             blocked.iter().any(|m| m.contains("expected 1")),
             "{blocked:?}"

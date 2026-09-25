@@ -245,3 +245,12 @@ features (060), live attach and object-store intake (061), aggregate design
 
   Still open in section B: measure-grain checks (ratios, cumulative windows)
   and the machine-readable JSON verdict.
+
+- **2026-09-25 — grain checks.** For every additive measure, `qualify` compares
+  its total with the sum over a relationship dimension's leaf members — the
+  invariant every pivot subtotal relies on, and one that notices a multiplying
+  join or a dropped key per measure. Time-windowed measures (YTD/QTD/MTD) look
+  like `SUM(x)` but are not additive, so they are excluded from the invariant
+  and instead require an oracle once an `oracles.json` exists. Verified: the
+  demo model passes, and the oracle-coverage rule reports its uncovered
+  windowed measures (captions are matched, not ids).
