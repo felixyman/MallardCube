@@ -67,7 +67,15 @@ impl XmlaRequest {
             | XmlaRequest::MdschemaDimensions { restrictions }
             | XmlaRequest::MdschemaMeasures { restrictions }
             | XmlaRequest::MdschemaMeasureGroups { restrictions }
-            | XmlaRequest::MdschemaMeasureGroupDimensions { restrictions } => {
+            | XmlaRequest::MdschemaMeasureGroupDimensions { restrictions }
+            | XmlaRequest::TmschemaModel { restrictions }
+            | XmlaRequest::TmschemaTables { restrictions }
+            | XmlaRequest::TmschemaColumns { restrictions }
+            | XmlaRequest::TmschemaMeasures { restrictions }
+            | XmlaRequest::TmschemaHierarchies { restrictions }
+            | XmlaRequest::TmschemaLevels { restrictions }
+            | XmlaRequest::TmschemaRelationships { restrictions }
+            | XmlaRequest::TmschemaPartitions { restrictions } => {
                 restrictions.property_catalog.as_deref()
             }
             _ => None,
@@ -126,14 +134,30 @@ pub enum XmlaRequest {
     MdschemaMeasureGroupDimensions {
         restrictions: Restrictions,
     },
-    TmschemaModel,
-    TmschemaTables,
-    TmschemaColumns,
-    TmschemaMeasures,
-    TmschemaHierarchies,
-    TmschemaLevels,
-    TmschemaRelationships,
-    TmschemaPartitions,
+    TmschemaModel {
+        restrictions: Restrictions,
+    },
+    TmschemaTables {
+        restrictions: Restrictions,
+    },
+    TmschemaColumns {
+        restrictions: Restrictions,
+    },
+    TmschemaMeasures {
+        restrictions: Restrictions,
+    },
+    TmschemaHierarchies {
+        restrictions: Restrictions,
+    },
+    TmschemaLevels {
+        restrictions: Restrictions,
+    },
+    TmschemaRelationships {
+        restrictions: Restrictions,
+    },
+    TmschemaPartitions {
+        restrictions: Restrictions,
+    },
     DiscoverXmlMetadata,
     DiscoverCalcDependency,
     DiscoverEnumerators,
@@ -719,10 +743,17 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     // An empty value does not apply a restriction, but the name
                     // still has to be advertised: the reference faults an
                     // unadvertised name even when empty (verified 2026-09-24).
+                    // Exception: an empty *scope* name matches nothing — the
+                    // reference answers 0 rows for `<CUBE_NAME></CUBE_NAME>`
+                    // (measured 2026-09-25), where ignoring it served the
+                    // configured catalog.
                     if in_restriction_list && let Some(restriction) = restriction_name.as_deref() {
                         restrictions
                             .seen
                             .push(String::from_utf8_lossy(restriction).to_string());
+                        if matches!(restriction, b"CATALOG_NAME" | b"CUBE_NAME") {
+                            apply_restriction(&mut restrictions, restriction, "");
+                        }
                     }
                 } else {
                     if in_restriction_list && let Some(restriction) = restriction_name.as_deref() {
@@ -883,14 +914,46 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 restrictions: restrictions.clone(),
             };
         }
-        "TMSCHEMA_MODEL" => return XmlaRequest::TmschemaModel,
-        "TMSCHEMA_TABLES" => return XmlaRequest::TmschemaTables,
-        "TMSCHEMA_COLUMNS" => return XmlaRequest::TmschemaColumns,
-        "TMSCHEMA_MEASURES" => return XmlaRequest::TmschemaMeasures,
-        "TMSCHEMA_HIERARCHIES" => return XmlaRequest::TmschemaHierarchies,
-        "TMSCHEMA_LEVELS" => return XmlaRequest::TmschemaLevels,
-        "TMSCHEMA_RELATIONSHIPS" => return XmlaRequest::TmschemaRelationships,
-        "TMSCHEMA_PARTITIONS" => return XmlaRequest::TmschemaPartitions,
+        "TMSCHEMA_MODEL" => {
+            return XmlaRequest::TmschemaModel {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_TABLES" => {
+            return XmlaRequest::TmschemaTables {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_COLUMNS" => {
+            return XmlaRequest::TmschemaColumns {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_MEASURES" => {
+            return XmlaRequest::TmschemaMeasures {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_HIERARCHIES" => {
+            return XmlaRequest::TmschemaHierarchies {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_LEVELS" => {
+            return XmlaRequest::TmschemaLevels {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_RELATIONSHIPS" => {
+            return XmlaRequest::TmschemaRelationships {
+                restrictions: restrictions.clone(),
+            };
+        }
+        "TMSCHEMA_PARTITIONS" => {
+            return XmlaRequest::TmschemaPartitions {
+                restrictions: restrictions.clone(),
+            };
+        }
         "DISCOVER_XML_METADATA" => return XmlaRequest::DiscoverXmlMetadata,
         "DISCOVER_CALC_DEPENDENCY" => return XmlaRequest::DiscoverCalcDependency,
         "DISCOVER_ENUMERATORS" => return XmlaRequest::DiscoverEnumerators,

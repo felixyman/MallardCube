@@ -111,3 +111,34 @@ probe decides, TLS termination inside the proxy, OIDC provider building.
   statelessness until then.
 - Do not implement column-level security in the proxy — enforce the upstream
   view boundary instead.
+
+### Scope measurements and the two divergences they found (2026-09-25, VM)
+
+The review's probe list, answered by the mirror (MallardDemo/Model) and
+compared with the proxy:
+
+| request | reference | proxy |
+|---|---|---|
+| `MDSCHEMA_MEMBERS`, foreign `CUBE_NAME` | 0 rows | 0 rows (matches) |
+| `MDSCHEMA_MEMBERS`, foreign `<Catalog>` | access fault | fault (matches) |
+| `DBSCHEMA_CATALOGS`, foreign `CATALOG_NAME` | 0 rows | 0 rows (matches) |
+| `MDSCHEMA_PROPERTIES`, catalog-only mismatch | 0 rows | 0 rows (matches) |
+| `DRILLTHROUGH … FROM [NoSuchCube]` | `The NoSuchCube cube does not exist.` | fault (matches) |
+| `MDSCHEMA_DIMENSIONS`, `<CUBE_NAME></CUBE_NAME>` | **0 rows** | 0 rows after the fix |
+| `TMSCHEMA_TABLES`, foreign `<Catalog>` | **fault** | fault after the fix |
+| `DISCOVER_SCHEMA_ROWSETS`, foreign `<Catalog>` | ignored (132 rows) | ignored (63 rows — our catalogue is smaller, unrelated) |
+| `MDSCHEMA_DIMENSIONS` with no/empty `<Catalog>` | 3 rows (the server's default catalog) | 6 rows (the configured catalog) — the documented stateless divergence |
+
+Two fixes came out of it: an **empty scope value matches nothing** (ignoring it
+served the configured catalog), and **`TMSCHEMA_*` carries the `<Catalog>`
+property** and faults a foreign one — while `DISCOVER_SCHEMA_ROWSETS`
+legitimately ignores it, so the treatment is per-rowset, not global.
+
+Five parity cases were added (`members-wrong-cube-is-empty`,
+`catalogs-wrong-catalog-is-empty`, `properties-wrong-catalog-is-empty`,
+`dimensions-empty-cube-restriction-is-empty`, `drillthrough-unknown-cube-faults`)
+→ 24/24 matched with the two known gaps.
+
+Still open in this section: the empty/absent `<Catalog>` default-catalog
+divergence above, and the same probe treatment for `DISCOVER_PROPERTIES`,
+`DISCOVER_LITERALS` and `DBSCHEMA_TABLES` (`TABLE_CATALOG`).

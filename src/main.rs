@@ -1235,43 +1235,43 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::TmschemaModel => {
+        XmlaRequest::TmschemaModel { .. } => {
             println!("📥 TMSCHEMA_MODEL");
             let resp = tmschema::get_tmschema_model_response();
             mallardcube::xmla_trace::trace_request("TmschemaModel", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaTables => {
+        XmlaRequest::TmschemaTables { .. } => {
             println!("📥 TMSCHEMA_TABLES");
             let resp = tmschema::get_tmschema_tables_response(user, config);
             mallardcube::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaColumns => {
+        XmlaRequest::TmschemaColumns { .. } => {
             println!("📥 TMSCHEMA_COLUMNS");
             let resp = tmschema::get_tmschema_columns_response();
             mallardcube::xmla_trace::trace_request("TmschemaColumns", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaMeasures => {
+        XmlaRequest::TmschemaMeasures { .. } => {
             println!("📥 TMSCHEMA_MEASURES");
             let resp = tmschema::get_tmschema_measures_response();
             mallardcube::xmla_trace::trace_request("TmschemaMeasures", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaHierarchies => {
+        XmlaRequest::TmschemaHierarchies { .. } => {
             println!("📥 TMSCHEMA_HIERARCHIES");
             let resp = tmschema::get_tmschema_hierarchies_response();
             mallardcube::xmla_trace::trace_request("TmschemaHierarchies", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaLevels => {
+        XmlaRequest::TmschemaLevels { .. } => {
             println!("📥 TMSCHEMA_LEVELS");
             let resp = tmschema::get_tmschema_levels_response();
             mallardcube::xmla_trace::trace_request("TmschemaLevels", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaRelationships => {
+        XmlaRequest::TmschemaRelationships { .. } => {
             println!("📥 TMSCHEMA_RELATIONSHIPS");
             let resp = tmschema::get_tmschema_relationships_response(user, config);
             mallardcube::xmla_trace::trace_request(
@@ -1283,7 +1283,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             );
             resp
         }
-        XmlaRequest::TmschemaPartitions => {
+        XmlaRequest::TmschemaPartitions { .. } => {
             println!("📥 TMSCHEMA_PARTITIONS");
             let resp = tmschema::get_tmschema_partitions_response();
             mallardcube::xmla_trace::trace_request("TmschemaPartitions", body, &resp, None, None);

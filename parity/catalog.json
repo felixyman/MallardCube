@@ -359,6 +359,74 @@
     "fault": "The Nope cube does not exist."
    },
    "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: the exact fault text for a FROM clause naming another cube"
+  },
+  {
+   "id": "members-wrong-cube-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_MEMBERS",
+    "restrictions": {
+     "CUBE_NAME": "NoSuchCube",
+     "HIERARCHY_UNIQUE_NAME": "[Category].[Category]"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: an unknown CUBE_NAME returns an empty member rowset"
+  },
+  {
+   "id": "catalogs-wrong-catalog-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "DBSCHEMA_CATALOGS",
+    "restrictions": {
+     "CATALOG_NAME": "NoSuchCatalog"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: a foreign CATALOG_NAME returns an empty catalog rowset"
+  },
+  {
+   "id": "properties-wrong-catalog-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_PROPERTIES",
+    "restrictions": {
+     "CATALOG_NAME": "NoSuchCatalog"
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: a catalog-only mismatch returns an empty properties rowset"
+  },
+  {
+   "id": "dimensions-empty-cube-restriction-is-empty",
+   "kind": "discover",
+   "request": {
+    "type": "MDSCHEMA_DIMENSIONS",
+    "restrictions": {
+     "CUBE_NAME": ""
+    }
+   },
+   "expect": {
+    "row_count": 0
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: an empty scope value matches nothing (it is not ignored)"
+  },
+  {
+   "id": "drillthrough-unknown-cube-faults",
+   "kind": "execute",
+   "request": {
+    "mdx": "DRILLTHROUGH MAXROWS 3 SELECT FROM [NoSuchCube] WHERE (([Measures].[Revenue]))"
+   },
+   "expect": {
+    "fault": "The NoSuchCube cube does not exist."
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: the exact fault for a drillthrough naming another cube"
   }
  ]
 }
