@@ -62,10 +62,17 @@ honor its STOP conditions, and update your row when done.
 | 052  | Aggregates at scale — cardinality-aware design, more measures, who builds them | P1 | L | 043, 050 | TODO |
 | 053  | Big-data intake and the scale gate — storage contract, object store, capacity proof | P2 | L | 050, 051 | TODO |
 | 054  | Engine readiness — dialect seam, capabilities, protocol-overhead gate | P2 | M | 051 | TODO |
+| 055  | XMLA input contract — advertised restrictions honoured or faulted | P1 | L | 051 | IN PROGRESS |
+| 056  | Behaviour reference — the claim-based site for engine implementers | P2 | M | 055 | IN PROGRESS |
+| 057  | The serving contract, qualified — validator before generator | P1 | L | 051, 055 | TODO |
+| 058  | Security boundary — isolation complete, defaults secure | P1 | L | 057 | TODO |
+| 059  | Boring operations — release, deploy, observe | P1 | L | 057 | TODO |
+| 060  | Client certification — Excel and the XMLA clients | P1 | L | 056, 057 | TODO |
+| 061  | Intake paths and the proof journeys | P2 | L | 053, 057 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
-**Plans 001–033, 035–043, 047 and 049 are DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness), 048 (Excel date filters) and 050 (scale and query performance) are IN PROGRESS. 051 (scale hardening, two increments landed) and 054 (engine readiness) are in progress; 052–053 are planned, in that order. Deployment and packaging specifics — on-prem Kubernetes, air-gapped installs, identity, audit — are deliberately deferred to a later plan. Next milestone: Gate G1 (public validation).**
+**Plans 001–033, 035–043, 047 and 049 are DONE. 034 (streaming XML) is deferred; 044 (boundary contract), 045 (intake fidelity), 046 (time intelligence robustness), 048 (Excel date filters) and 050 (scale and query performance) are IN PROGRESS. 051 (scale hardening, two increments landed) and 054 (engine readiness) are in progress; 052–053 are planned, in that order. **057–061 are the next phase**, turning compatibility into boring on-prem infrastructure: 057 the serving contract plus qualification (validator before generator), 058 the security boundary and secure defaults, 059 release/deploy/observe, 060 client certification (Excel and XMLA), 061 intake paths and the proof journeys. Deployment, packaging, identity and audit now live in 058/059 rather than a later plan; Gate G1 (public validation) stays deferred until 057–059 land.**
 
 - 047 (MDX front-end) **IN PROGRESS** 2026-09-21: the parser was a hybrid of
   `nom` fragments and ~20 hand scanners with a flat `ParsedMdx` flag bag and no
