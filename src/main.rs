@@ -1124,7 +1124,11 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::ExecuteStatement { mdx, catalog } => {
+        XmlaRequest::ExecuteStatement {
+            mdx,
+            catalog,
+            format,
+        } => {
             println!("📥 MDX: {}", mdx);
             debug_write("===== EXECUTE REQUEST =====");
             debug_write(&format!("MDX: {}", mdx));
@@ -1150,10 +1154,13 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
                     ),
                 }
             } else {
-                let (r, t) =
-                    execute_builders::get_execute_cellset_response_with_backend_and_context(
-                        mdx, backend, user, config,
-                    );
+                let (r, t) = execute_builders::get_execute_response_with_format(
+                    mdx,
+                    format.as_deref(),
+                    backend,
+                    user,
+                    config,
+                );
                 (r, Some(t))
             };
 

@@ -1705,6 +1705,64 @@ mod tests {
         );
     }
 
+    /// `<Format>Tabular</Format>` answers the flattened rowset ADODB reads
+    /// instead of a cellset (plan 051, the diagnosis of the ADODB field-read
+    /// loop). Without the format the same query is still a cellset.
+    #[test]
+    fn tabular_format_answers_a_rowset() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let config = &crate::proxy_project::project().config;
+            let user = UserContext::admin_default();
+            let backend = Backend::test_fixture();
+
+            let (plain, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
+                Some("Tabular"),
+                backend,
+                &user,
+                config,
+            );
+            assert!(plain.contains("xml-analysis:rowset"), "{plain}");
+            assert!(
+                plain.contains("_x005B_Measures_x005D_._x005B_Revenue_x005D_"),
+                "{plain}"
+            );
+            assert!(!plain.contains("<Axis"), "{plain}");
+            assert_eq!(plain.matches("<row>").count(), 1, "{plain}");
+            assert!(plain.contains(">521586767<"), "{plain}");
+
+            let (grouped, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Category].[Category].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                backend,
+                &user,
+                config,
+            );
+            // The 20 leaf groups; the reference's rowset also carries an
+            // (All) row, which is a recorded difference (plan 051/060).
+            assert_eq!(grouped.matches("<row>").count(), 20, "{grouped}");
+            assert!(
+                grouped.contains(
+                    "_x005B_Category_x005D_._x005B_Category_x005D_._x005B_Category_x005D_._x005B_MEMBER_CAPTION_x005D_"
+                ),
+                "{grouped}"
+            );
+
+            let (cellset, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
+                None,
+                backend,
+                &user,
+                config,
+            );
+            assert!(cellset.contains("<Axis"), "{cellset}");
+            assert!(!cellset.contains("xml-analysis:rowset"), "{cellset}");
+        });
+    }
+
     /// A failed drillthrough query faults instead of answering an empty
     /// rowset with a valid schema (review S1).
     #[test]

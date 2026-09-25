@@ -179,6 +179,9 @@ pub enum XmlaRequest {
     ExecuteStatement {
         mdx: String,
         catalog: Option<String>,
+        /// `<Properties><Format>` — `Tabular` asks for the flattened rowset
+        /// ADODB reads instead of a cellset (plan 051).
+        format: Option<String>,
     },
     Unknown,
 }
@@ -509,6 +512,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut tree_op: Option<i32> = None;
     let mut in_catalog_property = false;
     let mut properties_catalog: Option<String> = None;
+    let mut in_format_property = false;
+    let mut properties_format: Option<String> = None;
 
     loop {
         let (namespace, event) = match reader.read_resolved_event() {
@@ -619,6 +624,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         }
                     }
                     b"Catalog" if !in_restrictions => in_catalog_property = true,
+                    b"Format" if !in_restrictions => in_format_property = true,
                     b"RestrictionList" => {
                         in_restriction_list = true;
                         restriction_list_seen = true;
@@ -778,6 +784,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         tree_op = Some(v);
                     } else if in_catalog_property {
                         properties_catalog = Some(text.clone());
+                    } else if in_format_property {
+                        properties_format = Some(text.clone());
                     }
                 }
                 pending_text.clear();
@@ -789,6 +797,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
                     b"TREE_OP" => in_tree_op = false,
                     b"Catalog" => in_catalog_property = false,
+                    b"Format" => in_format_property = false,
                     b"Restrictions" => in_restrictions = false,
                     b"RestrictionList" => {
                         in_restriction_list = false;
@@ -967,6 +976,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
             return XmlaRequest::ExecuteStatement {
                 mdx: statement_text,
                 catalog: properties_catalog,
+                format: properties_format,
             };
         } else if is_begin_session {
             return XmlaRequest::BeginSession;
@@ -1007,9 +1017,14 @@ mod tests {
             <Properties><PropertyList><Catalog>Somewhere</Catalog></PropertyList></Properties>
         </Execute></Body></Envelope>"#;
         match parse_xmla(execute) {
-            XmlaRequest::ExecuteStatement { mdx, catalog } => {
+            XmlaRequest::ExecuteStatement {
+                mdx,
+                catalog,
+                format,
+            } => {
                 assert!(mdx.contains("[Measures].[Revenue]"), "{mdx}");
                 assert_eq!(catalog.as_deref(), Some("Somewhere"));
+                assert!(format.is_none());
             }
             other => panic!("expected the statement, got {other:?}"),
         }

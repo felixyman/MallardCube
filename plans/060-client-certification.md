@@ -39,11 +39,11 @@ gestures.
 
 ## B. Close the client blockers
 
-1. **ADODB `<Format>Tabular</Format>`** — diagnosed 2026-09-25: ADODB asks for
-   a flattened rowset, the reference answers one, we answer a cellset, and
-   MSOLAP re-sends the query once per field read (5,000 reads: mirror 6
-   requests, proxy 2,418). Implement the rowset shape from the same SQL plan
-   output and add the ADODB probe as a regression with a bounded request count.
+1. **ADODB `<Format>Tabular</Format>` — DONE 2026-09-26.** The flattened rowset
+   is rendered from the same plan and result, and the probe's 5,000 field reads
+   now cost the proxy 6 requests (they cost 2,418 until killed). Recorded
+   differences: the reference also carries an `(All)` row and G9 scientific
+   values.
 2. **Subselect / Top-N** — Excel sends the Top-5 filter as a server-side
    subselect (`Generate` / `BottomSum` / `Except` / `DrilldownLevel`). Either
    implement the idiom (or the general subselect semantics) or fault loudly;

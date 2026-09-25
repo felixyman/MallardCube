@@ -19,6 +19,7 @@ use crate::response::wrap_in_soap_envelope;
 
 // Re-export runtime entry point at the same path callers expect.
 pub use crate::execute::runtime::get_execute_cellset_response_with_backend_and_context;
+pub use crate::execute::runtime::get_execute_response_with_format;
 
 /// Fault envelope for MDX the proxy does not support yet, or `None` when the
 /// statement is fine. Shared by the production and test entry points so both

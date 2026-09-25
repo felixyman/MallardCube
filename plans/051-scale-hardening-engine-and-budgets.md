@@ -764,3 +764,20 @@ Recorded, not fixed (same review):
   matches the local name only); the reference behaviour is unmeasured.
 - There is no session catalog state, so a client that sets `Initial Catalog`
   and then omits the property cannot be detected (stateless by design).
+
+### ADODB loop — fixed 2026-09-26
+
+`<Format>Tabular</Format>` now answers the flattened rowset ADODB reads,
+rendered from the same plan and result: one column per measure (escaped
+`_x005B_…_x005D_` names), one column per grouped member
+(`[Dim].[Hier].[Level].[MEMBER_CAPTION]`), one row per result row, and a clear
+fault for shapes the reference's rowset does not cover (multi-measure,
+filtered, or multi-dimension). A request without the format is unchanged.
+
+Verified with the diagnosis's own probe: 5,000 field reads cost the proxy **6
+requests** (they cost 2,418 until the process was killed before), MSOLAP serves
+them from its own cache, and the script finishes with the right value.
+
+Recorded differences from the reference's rowset: it carries an `(All)` row and
+G9 scientific values; ours carries the leaf groups and plain round-trippable
+values.

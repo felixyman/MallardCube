@@ -21,6 +21,19 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     user: &UserContext,
     config: &ProxyConfig,
 ) -> (String, Timings) {
+    get_execute_response_with_format(mdx, None, backend, user, config)
+}
+
+/// The same execution, rendered as the flattened rowset when the request asked
+/// for `<Format>Tabular</Format>` (what ADODB reads) and as a cellset otherwise
+/// (plan 051).
+pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
+    mdx: &str,
+    format: Option<&str>,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> (String, Timings) {
     // Excel's pivot Refresh issues `REFRESH CUBE [<cube>]`; the data is live,
     // so answer with an empty success instead of a fault (plan 048).
     if let Some(resp) = crate::execute::builders::ddl_noop_response(mdx) {
@@ -160,7 +173,18 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     timings.sql_execute_us = sql_execute_us;
 
     let t0 = Instant::now();
-    let xml = dispatch_with_backend(&query, &result, backend);
+    let tabular = format.is_some_and(|format| format.eq_ignore_ascii_case("tabular"));
+    let xml = if tabular {
+        match render_tabular_rowset(&plan, &result, model) {
+            Ok(rowset) => rowset,
+            Err(message) => {
+                timings.finish();
+                return (crate::xmla::response::fault_response(&message), timings);
+            }
+        }
+    } else {
+        dispatch_with_backend(&query, &result, backend)
+    };
     timings.xml_render_us = (Instant::now() - t0).as_micros() as u64;
     // Rendering can query too (member dictionaries for axis and child counts);
     // a failure there replaces whatever was rendered.
@@ -224,6 +248,128 @@ pub fn mdx_cube_scope_fault(mdx: &str, config: &ProxyConfig) -> Option<String> {
     Some(crate::xmla::response::fault_response(&format!(
         "The {cube} cube does not exist."
     )))
+}
+
+/// The reference's flattened rowset for `<Format>Tabular</Format>`: one row
+/// per result row, one column per grouped member plus one per measure. The
+/// shapes ADODB sends are covered (a lone measure, or one measure grouped by
+/// one dimension); anything else faults rather than answering a rowset that
+/// does not match the cells (plan 051).
+pub(crate) fn render_tabular_rowset(
+    plan: &crate::engine::plan::QueryPlan,
+    result: &crate::engine::plan::QueryResult,
+    model: &crate::engine::model::SemanticModel,
+) -> Result<String, String> {
+    use crate::engine::plan::{QueryPlan, QueryResult};
+
+    let mut columns: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+
+    match (plan, result) {
+        (QueryPlan::Total { measure, filters }, QueryResult::Scalar(value))
+            if filters.is_empty() =>
+        {
+            columns.push(model.meas_def(measure).measure_unique_name());
+            rows.push(vec![format_scalar(*value)]);
+        }
+        (
+            QueryPlan::GroupBy {
+                measure,
+                group_by,
+                group_levels,
+                filters,
+                ..
+            },
+            QueryResult::Grouped(groups),
+        ) if filters.is_empty()
+            && group_by.len() == 1
+            && group_levels.iter().all(Option::is_none) =>
+        {
+            let dimension = model.dim_def(&group_by[0]);
+            columns.push(tabular_member_column(dimension));
+            columns.push(model.meas_def(measure).measure_unique_name());
+            for (key, value) in groups {
+                rows.push(vec![key.clone(), format_scalar(*value)]);
+            }
+        }
+        _ => {
+            return Err(
+                "the tabular format is only supported for one measure grouped by at most one \
+                 dimension"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(tabular_rowset(columns, rows))
+}
+
+/// `[Dim].[Hier].[Level].[MEMBER_CAPTION]` — the reference's column for a
+/// grouped member (measured 2026-09-25).
+fn tabular_member_column(dimension: &crate::engine::model::DimensionDef) -> String {
+    let level = dimension
+        .levels
+        .last()
+        .map(|level| level.name.clone())
+        .unwrap_or_else(|| dimension.caption.clone());
+    format!(
+        "{}.[{}].[MEMBER_CAPTION]",
+        dimension.hierarchy_unique_name(),
+        level
+    )
+}
+
+/// A value the rowset can carry: plain and round-trippable (the reference
+/// writes G9 scientific notation; both parse as `xsd:double`, and the plain
+/// form is what our cellsets already use).
+fn format_scalar(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
+    }
+}
+
+fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>) -> String {
+    fn escaped(name: &str) -> String {
+        name.replace('[', "_x005B_").replace(']', "_x005D_")
+    }
+
+    let mut schema = String::from(
+        r#"              <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql" elementFormDefault="qualified">
+                <xsd:element name="root">
+                  <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
+                </xsd:element>
+                <xsd:complexType name="row">
+                  <xsd:sequence>
+"#,
+    );
+    for column in &columns {
+        schema.push_str(&format!(
+            "                    <xsd:element sql:field=\"{}\" name=\"{}\" minOccurs=\"0\"/>\n",
+            crate::response::xml_escape(column),
+            escaped(column)
+        ));
+    }
+    schema.push_str("                  </xsd:sequence>\n                </xsd:complexType>\n              </xsd:schema>\n");
+
+    let mut body = String::new();
+    for row in &rows {
+        body.push_str("          <row>");
+        for (index, column) in columns.iter().enumerate() {
+            let name = escaped(column);
+            let value = row.get(index).cloned().unwrap_or_default();
+            body.push_str(&format!(
+                "<{name}>{}</{name}>",
+                crate::response::xml_escape(&value)
+            ));
+        }
+        body.push_str("</row>\n");
+    }
+
+    format!(
+        "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><ExecuteResponse xmlns=\"urn:schemas-microsoft-com:xml-analysis\"><return><root xmlns=\"urn:schemas-microsoft-com:xml-analysis:rowset\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:msxmla=\"http://schemas.microsoft.com/analysisservices/2003/xmla\">{schema}{body}</root></return></ExecuteResponse></soap:Body></soap:Envelope>"
+    )
 }
 
 /// The first dimension a plan reads that is OLS-hidden for this user, if any.
