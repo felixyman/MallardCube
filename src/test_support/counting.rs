@@ -59,6 +59,9 @@ impl QueryBackend for Counting<'_> {
     fn take_failure(&self) -> Option<String> {
         self.inner.take_failure()
     }
+    fn failure_recorded(&self) -> bool {
+        self.inner.failure_recorded()
+    }
 }
 
 /// A backend that always reports a recorded query failure: the request path
@@ -89,5 +92,8 @@ impl QueryBackend for Failing {
     }
     fn take_failure(&self) -> Option<String> {
         Some("Table with name sales_fact does not exist".to_string())
+    }
+    fn failure_recorded(&self) -> bool {
+        true
     }
 }

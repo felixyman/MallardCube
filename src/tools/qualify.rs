@@ -194,13 +194,21 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                 blocked.extend(data_blocked);
                 partial.extend(data_partial);
 
-                if let Some(relationship) = p.model.relationships.first() {
+                // Every relationship dimension, not just the first: the
+                // invariant must not be blind to the second one (review S5).
+                let mut dimensions: Vec<String> = Vec::new();
+                for relationship in &p.model.relationships {
+                    if !dimensions.contains(&relationship.dimension_id) {
+                        dimensions.push(relationship.dimension_id.clone());
+                    }
+                }
+                for dimension in &dimensions {
                     blocked.extend(grain_findings(
                         source.checkout().as_ref(),
                         &p.model,
                         &p.config,
                         &UserContext::admin_default(),
-                        &relationship.dimension_id,
+                        dimension,
                     ));
                 }
 
@@ -325,7 +333,7 @@ pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
     let mut partial = Vec::new();
 
     for oracle in &file.oracles {
-        let Some(measure) = model.meas_def_opt(&oracle.measure) else {
+        let Some(measure) = model.lookup_measure(&oracle.measure) else {
             blocked.push(format!(
                 "oracle names measure '{}', which the model does not define",
                 oracle.measure
@@ -372,9 +380,11 @@ pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
             ));
             continue;
         }
+        // A floor, so an oracle recorded as 0 (or a tiny DECIMAL) does not
+        // demand bit-exact f64 arithmetic (review S8).
         let tolerance = oracle
             .tolerance
-            .unwrap_or_else(|| (oracle.expected.abs() * 1e-6).max(1e-9));
+            .unwrap_or_else(|| oracle.expected.abs() * 1e-6 + 0.01);
         if (got - oracle.expected).abs() > tolerance {
             let slice = match (&oracle.dimension, &oracle.member) {
                 (Some(dimension), Some(member)) => format!(" at {dimension}={member}"),
@@ -400,10 +410,11 @@ pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
         if is_additive(measure) {
             continue;
         }
-        let covered = file
-            .oracles
-            .iter()
-            .any(|oracle| oracle.measure == measure.id || oracle.measure == measure.caption);
+        let covered = file.oracles.iter().any(|oracle| {
+            model
+                .lookup_measure(&oracle.measure)
+                .is_some_and(|m| m.id == measure.id)
+        });
         if !covered {
             partial.push(format!(
                 "measure '{}' is not additive and has no oracle — add one to oracles.json",
@@ -423,9 +434,39 @@ fn is_additive(measure: &crate::engine::model::MeasureDef) -> bool {
     if measure.time_flag.is_some() {
         return false;
     }
-    let expr = measure.sql_expr.trim().to_uppercase();
-    (expr.starts_with("SUM(") || expr.starts_with("COUNT(") || expr.starts_with("COUNT ("))
-        && !expr.contains("DISTINCT")
+    is_additive_expr(&measure.sql_expr)
+}
+
+/// Is the expression exactly one additive aggregate call?
+///
+/// This used to accept anything that *started* with `SUM(`, so a ratio of sums
+/// (`SUM(a) / NULLIF(SUM(b), 0)`, the shape the thin-projection fixture ships)
+/// was treated as additive by both the grain invariant — which then false-
+/// blocked a healthy project — and the oracle-coverage rule, which consequently
+/// demanded nothing (review S3). The whole expression must be the aggregate:
+/// no operator at depth zero after it.
+pub(crate) fn is_additive_expr(sql_expr: &str) -> bool {
+    let expr = sql_expr.trim();
+    let upper = expr.to_uppercase();
+    if !(upper.starts_with("SUM(") || upper.starts_with("COUNT(")) || upper.contains("DISTINCT") {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (index, ch) in upper.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                // The aggregate closes before the end: something follows it.
+                if depth == 0 && index + ch.len_utf8() < upper.len() {
+                    return false;
+                }
+            }
+            '/' | '*' | '-' if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    depth == 0 && expr.ends_with(')')
 }
 
 /// Grain checks (plan 057-B): an additive measure's total must equal the sum of
@@ -482,7 +523,7 @@ pub(crate) fn grain_findings<B: QueryBackend + ?Sized>(
             continue;
         }
         let sum: f64 = groups.iter().map(|(_, value)| value).sum();
-        let tolerance = total.abs() * 1e-6;
+        let tolerance = total.abs() * 1e-6 + 0.01;
         if (sum - total).abs() > tolerance {
             blocked.push(format!(
                 "measure '{}' is not additive over '{dimension}': total {total}, \
@@ -581,6 +622,15 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
     let mut partial = Vec::new();
 
     for table in &shape.tables {
+        // An embedded double quote cannot be escaped by the simple quoting
+        // below; report it as a configuration error rather than blaming the
+        // data (review S9).
+        if table.contains('"') {
+            blocked.push(format!(
+                "table name '{table}' contains a double quote; fix the configuration"
+            ));
+            continue;
+        }
         let _ = backend.take_failure();
         let _ = backend.query_rows(&format!("SELECT * FROM \"{table}\" LIMIT 0"));
         if let Some(failure) = backend.take_failure() {
@@ -589,6 +639,12 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
     }
 
     for (table, column) in &shape.dimension_keys {
+        if table.contains('"') || column.contains('"') {
+            blocked.push(format!(
+                "key '{table}.{column}' contains a double quote; fix the configuration"
+            ));
+            continue;
+        }
         let _ = backend.take_failure();
         let rows = backend.query_rows(&format!(
             "SELECT COUNT(*), COUNT(DISTINCT \"{column}\") FROM \"{table}\""
@@ -625,6 +681,9 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
             ));
             continue;
         }
+        let null_keys = backend.query_scalar(&format!(
+            "SELECT COUNT(*) FROM \"{fact}\" WHERE \"{fact_column}\" IS NULL"
+        ));
         let facts = backend.query_scalar(&format!("SELECT COUNT(*) FROM \"{fact}\""));
         let orphans = backend.query_scalar(&format!(
             "SELECT COUNT(*) FROM \"{fact}\" AS f WHERE f.\"{fact_column}\" IS NOT NULL \
@@ -636,7 +695,12 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
             ));
             continue;
         }
-        let (joined, facts, orphans) = (joined as i64, facts as i64, orphans as i64);
+        let (joined, facts, orphans, null_keys) = (
+            joined as i64,
+            facts as i64,
+            orphans as i64,
+            null_keys as i64,
+        );
         if facts > 0 && joined > facts {
             blocked.push(format!(
                 "relationship '{fact}.{fact_column} -> {dim}.{dim_column}' fans out: \
@@ -648,6 +712,12 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
             partial.push(format!(
                 "{orphans} fact rows have no matching {dim}.{dim_column} \
                  ({fact}.{fact_column}); they are silently dropped from pivots"
+            ));
+        }
+        if null_keys > 0 {
+            partial.push(format!(
+                "{null_keys} fact rows have a NULL {fact}.{fact_column}; they are \
+                 silently dropped from every pivot over {dim}"
             ));
         }
     }
@@ -1081,6 +1151,22 @@ mod tests {
             "{partial:?}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Additivity is "is exactly one additive aggregate", not "starts with
+    /// SUM(" — a ratio of sums is not additive and must not be grain-checked
+    /// or exempted from oracle coverage (review S3).
+    #[test]
+    fn additive_expressions_are_exact_aggregates() {
+        assert!(is_additive_expr("SUM(revenue)"));
+        assert!(is_additive_expr("count(*)"));
+        assert!(is_additive_expr("SUM(a + b)"));
+        assert!(!is_additive_expr("SUM(a) / NULLIF(SUM(b), 0)"));
+        assert!(!is_additive_expr("SUM(a) * 100.0 / SUM(b)"));
+        assert!(!is_additive_expr("SUM(a) * 100"));
+        assert!(!is_additive_expr("COUNT(DISTINCT k)"));
+        assert!(!is_additive_expr("AVG(x)"));
+        assert!(!is_additive_expr("revenue"));
     }
 
     /// The grain invariant holds on the demo model: an additive measure's

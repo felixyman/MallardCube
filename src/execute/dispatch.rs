@@ -45,6 +45,10 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
     statement: &str,
     backend: &B,
 ) -> String {
+    // Only this request's queries may fault it (review S1: drillthrough was
+    // the one serving path that never observed the latch, so a failed query
+    // rendered an empty rowset with a valid schema).
+    let _ = backend.take_failure();
     let project = crate::proxy_project::project();
     let model = &project.model;
     let table = model.primary_table_name();
@@ -87,6 +91,11 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
     };
     let rows = backend.query_rows(&sql);
     let col_names = backend.query_column_names(&sql);
+    if let Some(failure) = backend.take_failure() {
+        return crate::xmla::response::fault_response(&format!(
+            "a query against the database failed: {failure}"
+        ));
+    }
     build_drillthrough_rowset(&col_names, rows, statement)
 }
 
@@ -1694,6 +1703,19 @@ mod tests {
             trait_view.take_failure().is_some(),
             "the trait forwards the latch"
         );
+    }
+
+    /// A failed drillthrough query faults instead of answering an empty
+    /// rowset with a valid schema (review S1).
+    #[test]
+    fn a_failed_drillthrough_faults() {
+        let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+            "DRILLTHROUGH SELECT [Measures].[Revenue] ON COLUMNS FROM [Sales] \
+             DIMENSION PROPERTIES MEMBER_TYPE ON ROWS",
+            &crate::test_support::counting::Failing,
+        );
+        assert!(xml.contains("faultstring"), "{xml}");
+        assert!(!xml.contains("<row>"), "{xml}");
     }
 
     /// The scope rules reach the routes that bypass the ordinary dispatch:

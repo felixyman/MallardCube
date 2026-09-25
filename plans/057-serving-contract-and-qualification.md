@@ -254,3 +254,39 @@ features (060), live attach and object-store intake (061), aggregate design
   and instead require an oracle once an `oracles.json` exists. Verified: the
   demo model passes, and the oracle-coverage rule reports its uncovered
   windowed measures (captions are matched, not ids).
+
+### Review round: two more fail-closed holes, and honest additivity (2026-09-25)
+
+The review over the fail-closed + qualifier batch found two serving paths that
+still bypassed the latch and one misclassification:
+
+- **Drillthrough** was the only serving path that never observed the failure
+  latch, so a failed query answered an empty rowset with a valid schema — the
+  exact "plausible empty success" the section exists to prevent. It now clears
+  before and faults after; the Contoso-style missing table the qualifier blocks
+  for is the natural trigger. Fixed and tested with the `Failing` double.
+- **The dimension cache** kept a dictionary built from a failed query, keyed on
+  the dimension alone. One timeout during the first wide `MDSCHEMA_MEMBERS`
+  would have left an empty hierarchy cached for the process lifetime, with no
+  query left to fail and nothing to fault. Failed builds are not cached now, and
+  entries are keyed by the data epoch so a reload or a late in-flight insert
+  cannot be served.
+- **`is_additive` accepted anything starting with `SUM(`,** so a ratio of sums
+  was grain-checked (false-BLOCKING the thin-projection fixture, which is READY
+  again) and exempted from oracle coverage. Additivity now means "exactly one
+  additive aggregate": no operator at depth zero after it.
+
+Smaller review items fixed: oracles resolve by id *or* caption as documented;
+the additivity invariant runs over every relationship dimension, not just the
+first; NULL fact keys are reported as their own finding; tolerances carry a 0.01
+floor; an identifier containing a double quote is a configuration error rather
+than a data defect.
+
+Recorded, not fixed: composite and parent-child key checks (a duplicate
+`(key, parent)` pair still slips), a generation counter so a timed-out
+request's abandoned worker cannot fault the next request, parity cases for the
+three `3a10f91` fixes (they need mirror probes: `MDSCHEMA_MEMBERS` with a
+foreign cube/property, `DBSCHEMA_CATALOGS` and `MDSCHEMA_PROPERTIES` with a
+foreign catalog, `DRILLTHROUGH FROM [Other]`, empty restriction values, and the
+`DISCOVER_*`/`TMSCHEMA_*` property behaviour), the JSON verdict, and computing
+the additivity invariant in SQL rather than pulling every group into Rust.

@@ -140,6 +140,11 @@ pub trait QueryBackend {
     fn take_failure(&self) -> Option<String> {
         None
     }
+    /// Whether a failure is recorded, without consuming it: caches use this to
+    /// refuse to keep whatever a failed query produced (review S2).
+    fn failure_recorded(&self) -> bool {
+        false
+    }
 }
 
 impl BackendSource {
@@ -484,6 +489,13 @@ impl QueryBackend for Backend {
     /// zero it was supposed to fault (plan 057-C).
     fn take_failure(&self) -> Option<String> {
         Backend::take_failure(self)
+    }
+
+    fn failure_recorded(&self) -> bool {
+        self.failure
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false)
     }
 }
 

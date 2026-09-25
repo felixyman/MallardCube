@@ -67,9 +67,13 @@ impl DimMembers {
 }
 
 /// Lazily built member dictionaries, one per dimension.
+///
+/// Keyed by data epoch as well as dimension: a dictionary built before a
+/// reload must not be served after it, even if a late in-flight request inserts
+/// one (review S2).
 #[derive(Default)]
 pub struct DimCache {
-    entries: RwLock<HashMap<DimId, Arc<DimMembers>>>,
+    entries: RwLock<HashMap<(u64, DimId), Arc<DimMembers>>>,
 }
 
 impl DimCache {
@@ -80,14 +84,22 @@ impl DimCache {
         dim: &DimensionDef,
         backend: &B,
     ) -> Arc<DimMembers> {
+        let key = (crate::execute::cache::data_epoch(), dim.id.clone());
         if let Ok(entries) = self.entries.read()
-            && let Some(hit) = entries.get(&dim.id)
+            && let Some(hit) = entries.get(&key)
         {
             return hit.clone();
         }
         let built = Arc::new(build(model, dim, backend));
+        // A dictionary built from a failed query is empty. Caching it would
+        // serve an empty hierarchy for the process lifetime — no query runs on
+        // later hits, so nothing would ever fault — while the request path
+        // still takes the failure and faults this request (review S2).
+        if backend.failure_recorded() {
+            return built;
+        }
         if let Ok(mut entries) = self.entries.write() {
-            entries.insert(dim.id.clone(), built.clone());
+            entries.insert(key, built.clone());
         }
         built
     }
@@ -180,12 +192,36 @@ pub fn query_level_paths<B: QueryBackend + ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use super::DimCache;
     use crate::backend::Backend;
     use crate::test_support::counting::Counting;
 
     fn project3() -> crate::project::project::ProxyProject {
         crate::project::project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3")
+    }
+
+    /// A dictionary built from a failed query must not be cached: a later hit
+    /// would serve an empty hierarchy with nothing left to fault (review S2).
+    #[test]
+    fn a_failed_dictionary_is_not_cached() {
+        let p = project3();
+        crate::project::project::with_test_project(p, || {
+            let model = &crate::proxy_project::project().model;
+            let dim = model
+                .dimensions
+                .iter()
+                .find(|d| !d.levels.is_empty())
+                .expect("project3 has a leveled dimension");
+            let cache = DimCache::default();
+            let _ = cache.get(model, dim, &crate::test_support::counting::Failing);
+            // A failed build must not be kept: the next lookup has to query
+            // again rather than serve an empty dictionary forever (review S2).
+            let counting = Counting::new(Backend::test_fixture());
+            let before = counting.calls();
+            let _ = cache.get(model, dim, &counting);
+            assert!(counting.calls() > before, "the failed build was cached");
+        });
     }
 
     #[test]
