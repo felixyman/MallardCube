@@ -88,3 +88,18 @@ non-Windows clients without probes, Power BI certification.
   evidence is worse than no matrix.
 - If the subselect idiom cannot be implemented safely this cycle, fault loudly
   and record the gap; never keep the silent answer.
+
+### The date-key gap, measured (2026-09-26)
+
+`axis-date-key-drilldown` was the last known gap. Measured on the mirror: the
+date-key drilldown returns **4,019 members with and without `NON EMPTY`** — the
+reference does not prune date members when the axis does not ask it to. The
+proxy prunes to the fact-covered dates (2,459) either way, i.e. it behaves as
+if `NON EMPTY` were always present.
+
+Impact: nil for Excel (its queries always carry `NON EMPTY`), real for clients
+that do not — ADODB/ADOMD members would be missing. Fix shape: render a
+non-`NON EMPTY` drilldown axis from the member dictionary (the same one
+`MDSCHEMA_MEMBERS` enumerates, 4,019 here) with empty cells for the members that
+have no facts, instead of from the group rows. Left as the one known gap rather
+than half-landed in a renderer that every query depends on.
