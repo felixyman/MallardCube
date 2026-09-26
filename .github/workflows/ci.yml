@@ -30,6 +30,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache for every ubuntu job (lint, test, the release gate);
+          # without this each job builds the bundled DuckDB separately.
+          shared-key: rust-ubuntu
 
       - name: Format check
         run: cargo fmt --check
@@ -43,6 +47,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu
 
       - name: Seed converted-project DBs
         run: cargo run --release --bin seed_projects_db

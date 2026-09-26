@@ -27,6 +27,10 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          # Shares the ubuntu cache with ci.yml, so the release gate reuses the
+          # compiled DuckDB instead of rebuilding it for the tag.
+          shared-key: rust-ubuntu
 
       # The converted-project databases are gitignored and regenerated from
       # tracked sources, exactly as in ci.yml.
@@ -62,6 +66,13 @@ jobs:
         uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: ${{ matrix.target }}
+
+      # The matrix jobs never had a cache: every release compiled the bundled
+      # DuckDB from scratch on all three OSes. One cache per target.
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ matrix.target }}
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -150,6 +161,10 @@ jobs:
         with:
           context: .
           push: true
+          # Layer cache in the Actions cache: source-only changes reuse the
+          # dependency layer built by the Dockerfile.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/${{ github.repository_owner }}/mallardcube:${{ inputs.version }}
             ghcr.io/${{ github.repository_owner }}/mallardcube:latest
