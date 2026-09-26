@@ -69,6 +69,7 @@ honor its STOP conditions, and update your row when done.
 | 059  | Boring operations — release, deploy, observe | P1 | L | 057 | TODO |
 | 060  | Client certification — Excel and the XMLA clients | P1 | L | 056, 057 | TODO |
 | 061  | Intake paths and the proof journeys | P2 | L | 053, 057 | TODO |
+| 062  | The Olist demo — a real star schema on the docs site | P2 | M | 057, 060 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
