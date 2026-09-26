@@ -725,23 +725,39 @@ pub struct ExcelFilterSubselect {
     pub measure: String,
 }
 
-/// Recognise the idiom, or `None` for a query that does not contain it.
-pub fn excel_filter_subselect(mdx: &str) -> Option<ExcelFilterSubselect> {
-    if !mdx.contains("[XL_Filter_Set_0]") {
-        return None;
+/// Recognise the idiom. `Ok(None)` means the query does not contain it; `Err`
+/// means it *does* and we cannot evaluate it — the caller must fault, not answer
+/// the unfiltered set (review F2: one extra space used to fail open).
+pub fn excel_filter_subselect(mdx: &str) -> Result<Option<ExcelFilterSubselect>, String> {
+    if !mdx.contains("XL_Filter_Set_") {
+        return Ok(None);
     }
+    // More than one helper set is Excel's multi-filter shape, which this
+    // recognizer cannot bind to the right BottomSum (review F3).
+    if mdx.matches("AS [XL_Filter_Set_").count() > 1 {
+        return Err(
+            "this query carries more than one Excel filter set, which this build cannot \
+             evaluate; it is refused rather than filtered incorrectly"
+                .to_string(),
+        );
+    }
+    let unparsable = || {
+        "an Excel filter set is present but this build could not read it; the query is \
+         refused rather than answered unfiltered"
+            .to_string()
+    };
     let marker = "Generate(Hierarchize({[";
-    let start = mdx.find(marker)? + marker.len();
-    let end = mdx[start..].find(']')? + start;
+    let start = mdx.find(marker).ok_or_else(unparsable)? + marker.len();
+    let end = mdx[start..].find(']').ok_or_else(unparsable)? + start;
     let dimension = mdx[start..end].to_string();
 
-    let open = mdx.find("BottomSum(")? + "BottomSum(".len();
-    let (limit, measure) = bottom_sum_args(&mdx[open..])?;
-    Some(ExcelFilterSubselect {
+    let open = mdx.find("BottomSum(").ok_or_else(unparsable)? + "BottomSum(".len();
+    let (limit, measure) = bottom_sum_args(&mdx[open..]).ok_or_else(unparsable)?;
+    Ok(Some(ExcelFilterSubselect {
         dimension,
         limit,
         measure,
-    })
+    }))
 }
 
 /// The last two depth-zero arguments of a `BottomSum(` call: the limit and the
@@ -1251,13 +1267,26 @@ mod tests {
     #[test]
     fn excel_filter_subselect_is_recognised() {
         let mdx = r#"SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], BottomSum(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0,INCLUDE_CALC_MEMBERS), [XL_Filter_HelperSet_0]), 5, [Measures].[Revenue])) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
-        let idiom = excel_filter_subselect(mdx).expect("recognised");
+        let idiom = excel_filter_subselect(mdx)
+            .expect("not refused")
+            .expect("recognised");
         assert_eq!(idiom.dimension, "Category");
         assert_eq!(idiom.measure, "Revenue");
         assert_eq!(idiom.limit, 5.0);
         assert!(
-            excel_filter_subselect("SELECT [Measures].[Revenue] ON 0 FROM [Sales]").is_none(),
+            excel_filter_subselect("SELECT [Measures].[Revenue] ON 0 FROM [Sales]")
+                .expect("not refused")
+                .is_none(),
             "a plain query is not the idiom"
+        );
+        // An idiom we cannot read faults rather than answering unfiltered
+        // (review F2).
+        assert!(
+            excel_filter_subselect(
+                "SELECT FROM (SELECT Generate( Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], \
+                 BottomSum({[Category].[Category].Children}, 5))) ON COLUMNS FROM [Sales]"
+            )
+            .is_err()
         );
     }
 

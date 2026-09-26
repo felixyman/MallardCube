@@ -60,7 +60,7 @@ case "${1:-}" in
     fi
     mkdir -p "$(dirname "$LOG")"
     cd "$REPO_ROOT" || exit 1
-    PROXY_CONFIG="$CONFIG" BIND_ADDRESS="0.0.0.0:$PORT" \
+    PROXY_CONFIG="$CONFIG" BIND_ADDRESS="0.0.0.0:$PORT" MALLARDCUBE_ALLOW_ANONYMOUS=1 \
       setsid nohup "$BINARY" serve > "$LOG" 2>&1 < /dev/null &
     for _ in $(seq 1 30); do
       if serving; then

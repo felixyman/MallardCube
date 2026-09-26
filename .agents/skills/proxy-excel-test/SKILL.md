@@ -24,7 +24,9 @@ just curl. Two layers, in order of cheapness:
 
 - The proxy runs **on Linux** (`cargo run` / `target/debug/mallard`), and by
   default binds **`127.0.0.1:8080` only**.
-- **HARD REQUIREMENT: always start it with `BIND_ADDRESS=0.0.0.0:8080`.** The
+- **HARD REQUIREMENT: always start it with `BIND_ADDRESS=0.0.0.0:8080` and
+  `MALLARDCUBE_ALLOW_ANONYMOUS=1`** (the proxy refuses a non-loopback bind without
+  auth otherwise). The
   Windows VM/Excel cannot reach `127.0.0.1`; it reaches the Linux host on the
   LAN/VPN interface. If you start without it, curl smoke still passes locally
   but every Excel MCP test fails with a connection hang/timeout. Verify with

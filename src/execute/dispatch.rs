@@ -1611,8 +1611,11 @@ mod tests {
             assert!(!members.contains("[Measures].[Revenue]"), "{members}");
 
             // TMSCHEMA now describes this model, and hides both tables
-            let tables =
-                crate::xmla::discover::tmschema::get_tmschema_tables_response(&user, &config);
+            let tables = crate::xmla::discover::tmschema::get_tmschema_tables_response(
+                &crate::xmla::parser::Restrictions::default(),
+                &user,
+                &config,
+            );
             assert!(!tables.contains(&dim_table), "{tables}");
             for table in &fact_tables {
                 assert!(!tables.contains(table.as_str()), "{tables}");
@@ -1626,6 +1629,7 @@ mod tests {
             // the administrator still sees all of it
             let admin = UserContext::admin_default();
             let admin_tables = crate::xmla::discover::tmschema::get_tmschema_tables_response(
+                &crate::xmla::parser::Restrictions::default(),
                 &admin,
                 &project.config,
             );
@@ -1984,8 +1988,11 @@ mod tests {
                 "relationships touching {hidden_table} are hidden: {filtered}"
             );
             assert!(!filtered.contains(&hidden_table), "{filtered}");
-            let tables =
-                crate::xmla::discover::tmschema::get_tmschema_tables_response(&user, &config);
+            let tables = crate::xmla::discover::tmschema::get_tmschema_tables_response(
+                &crate::xmla::parser::Restrictions::default(),
+                &user,
+                &config,
+            );
             assert!(!tables.contains(&hidden_table), "{tables}");
         });
     }

@@ -53,6 +53,7 @@ pub fn get_hierarchies_response(
     // measure's table is visible.
     let measures_visible = super::measures_visible(model, config, user);
     if measures_visible
+        && super::name_matches(restrictions.hierarchy_name.as_deref(), &["Measures"])
         && super::coordinates_match(restrictions, "[Measures]", Some("[Measures]"), None)
     {
         rows.push_str(&format!(

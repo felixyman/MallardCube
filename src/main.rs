@@ -1248,9 +1248,9 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mallardcube::xmla_trace::trace_request("TmschemaModel", body, &resp, None, None);
             resp
         }
-        XmlaRequest::TmschemaTables { .. } => {
+        XmlaRequest::TmschemaTables { restrictions } => {
             println!("📥 TMSCHEMA_TABLES");
-            let resp = tmschema::get_tmschema_tables_response(user, config);
+            let resp = tmschema::get_tmschema_tables_response(restrictions, user, config);
             mallardcube::xmla_trace::trace_request("TmschemaTables", body, &resp, None, None);
             resp
         }

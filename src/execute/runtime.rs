@@ -75,18 +75,25 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     // Excel's Top-N / value filter arrives as a subselect; turn it into a
     // member filter before planning (measured 2026-09-25: the reference answers
     // the filtered set, we answered the whole set).
-    if let Some(idiom) = crate::mdx_semantic::excel_filter_subselect(mdx) {
-        match filter_members_for_subselect(&idiom, model, backend, user, config) {
+    let subselect_fault = |message: String| {
+        let timings = Timings::new(
+            RuntimePath::DirectSql,
+            "filter-subselect".to_string(),
+            mdx_parse_us,
+        );
+        crate::xmla::response::fault_response(&message)
+            .clone()
+            .into_bytes();
+        (crate::xmla::response::fault_response(&message), timings)
+    };
+    match crate::mdx_semantic::excel_filter_subselect(mdx) {
+        Err(message) => return subselect_fault(message),
+        Ok(None) => {}
+        Ok(Some(idiom)) => match filter_members_for_subselect(&idiom, model, backend, user, config)
+        {
             Ok(filter) => query.filters.push(filter),
-            Err(message) => {
-                let timings = Timings::new(
-                    RuntimePath::DirectSql,
-                    "filter-subselect".to_string(),
-                    mdx_parse_us,
-                );
-                return (crate::xmla::response::fault_response(&message), timings);
-            }
-        }
+            Err(message) => return subselect_fault(message),
+        },
     }
 
     if !user.is_administrator {

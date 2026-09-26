@@ -103,3 +103,36 @@ non-`NON EMPTY` drilldown axis from the member dictionary (the same one
 `MDSCHEMA_MEMBERS` enumerates, 4,019 here) with empty cells for the members that
 have no facts, instead of from the group rows. Left as the one known gap rather
 than half-landed in a renderer that every query depends on.
+
+### Review round over the sprint (2026-09-26)
+
+Fixed from the review: `MDSCHEMA_HIERARCHIES` now applies `HIERARCHY_NAME` to the
+`Measures` row too (the extra row that was misdiagnosed as a key-attribute
+hierarchy — an unknown name answers 0 rows); the subselect recognizer **fails
+closed** (presence of `XL_Filter_Set_` with any parse miss faults instead of
+answering the unfiltered set — one extra space used to fail open) and refuses a
+statement carrying more than one filter set rather than binding the wrong
+`BottomSum`; `MEASUREGROUP_NAME` filters `MDSCHEMA_MEASURES`; `TMSCHEMA_TABLES`
+honours the `Name` it advertises; and the secure default no longer breaks the
+repo's own scripts or docs (review-proxy, proxy-smoke, bench, rls-rollup-ab,
+two site examples and the Excel-test skill carry `MALLARDCUBE_ALLOW_ANONYMOUS=1`).
+
+Recorded, not fixed:
+
+- **Tabular + filters**: every filtered tabular request now faults (the Top-N
+  filter injects a member filter). The claim that the reference refuses those
+  shapes is unverified and probably wrong — its flattened rowset looks generic.
+  Probe first: the reference's column order, `sql:type` attributes, and whether
+  it answers a filtered / multi-measure / two-dimension Execute.
+- **`LEVEL_NAME`** is advertised and ignored (five level-row sites).
+- **The ranking SQL omits the measure's time-intelligence filter** (latent: the
+  `BottomSum` ranking uses unfiltered numbers for a YTD measure while the cells
+  use YTD), and the subselect path runs before the fallback and hidden-dimension
+  refusals.
+- **A hand-written `BottomSum` on the axis** answers a measure-as-member (no
+  fault, wrong set) — the mirror of the recognizer gap, pre-existing.
+- **`TMSCHEMA_TABLES` + `ID`** is advertised and ignored (`Name` is applied).
+- Reference probes outstanding: tabular shapes/order/types, `HIERARCHY_NAME`
+  unknown, `LEVEL_NAME`/`MEASUREGROUP_NAME` negatives, `TMSCHEMA_TABLES`
+  `Name=nonsense`, `*_VISIBILITY` values other than 0/1, `BottomSum` boundary /
+  negatives / ties, and a two-filter Excel capture.

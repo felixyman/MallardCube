@@ -782,15 +782,20 @@ Recorded differences from the reference's rowset: it carries an `(All)` row and
 G9 scientific values; ours carries the leaf groups and plain round-trippable
 values.
 
-### Test flake recorded (2026-09-26)
+### Test flake — fixed 2026-09-26
 
 `repeated_mdx_variants_are_served_from_the_result_cache` and
-`tabular_format_answers_a_rowset` fail in roughly one full run in four: the
-test fallback project (`project()`'s `OnceLock`) is the *built-in demo* while
-the shared `Backend::test_fixture()` serves project3, so a test that reaches a
-builder without installing its own project sees a mismatched model/backend pair
+`tabular_format_answers_a_rowset` failed in ~40% of parallel full runs (alone
+6/6, single-threaded 3/3, parallel 3/5). Mechanism: `Backend::test_fixture()`
+handed every test thread the *same* pooled connection, and the failure latch is
+per connection — so a query failure from one test (any test whose ambient model
+did not match the fixture, or one of the intentional bad-SQL tests) landed
+between another test's queries and faulted *its* request with a foreign message
 ("Table with name sales does not exist" against a `sales_fact` fixture).
-Aligning the fallback with project3 fixed the flake but broke three tests that
-legitimately depend on the demo, so it is recorded rather than forced: the real
-fix is that every builder-touching test installs its project (or the fixture
-grows per-project backends).
+
+Fix: the fixture hands out one connection per thread (same signature, no call
+sites changed). Six consecutive parallel runs are clean. The earlier note here
+blamed `project()`'s `OnceLock` versus the thread-local; that was wrong — the
+thread-local wins, the connection was shared. The real long-term fix is still
+the `Result`-typed engine API from 057-C, after which a failure cannot outlive
+its own call.

@@ -66,7 +66,11 @@ pub fn get_tmschema_model_response() -> String {
 }
 
 // -------- TMSCHEMA_TABLES: the model's own tables --------
-pub fn get_tmschema_tables_response(user: &UserContext, config: &ProxyConfig) -> String {
+pub fn get_tmschema_tables_response(
+    restrictions: &crate::xmla::parser::Restrictions,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> String {
     let row_fields = r#"                <xsd:element sql:field="ID" name="ID" type="xsd:long" minOccurs="0"/>
                 <xsd:element sql:field="ModelID" name="ModelID" type="xsd:long" minOccurs="0"/>
                 <xsd:element sql:field="Name" name="Name" type="xsd:string" minOccurs="0"/>
@@ -83,6 +87,9 @@ pub fn get_tmschema_tables_response(user: &UserContext, config: &ProxyConfig) ->
     let (tables, _) = visible_tables(&project.model, user, config);
     let mut rows = String::new();
     for (id, name, is_date) in tables {
+        if !super::name_matches(restrictions.tmschema_name.as_deref(), &[&name]) {
+            continue;
+        }
         let data_category = if is_date { "Time" } else { "" };
         rows.push_str(&format!(
             r#"          <row>

@@ -46,6 +46,9 @@ pub struct Restrictions {
     /// another database is refused: the reference faults it for Discover and
     /// Execute alike (measured 2026-09-25).
     pub property_catalog: Option<String>,
+    /// `TMSCHEMA_*` advertises `Name`; a request naming another object answers
+    /// nothing rather than everything.
+    pub tmschema_name: Option<String>,
     /// Exact name restrictions (`DIMENSION_NAME`, `HIERARCHY_NAME`,
     /// `LEVEL_NAME`, `MEASURE_NAME`, `MEASURE_UNIQUE_NAME`,
     /// `MEASUREGROUP_NAME`).
@@ -223,6 +226,7 @@ fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -
         b"MEASURE_NAME" => restrictions.measure_name = Some(text.to_string()),
         b"MEASURE_UNIQUE_NAME" => restrictions.measure_unique_name = Some(text.to_string()),
         b"MEASUREGROUP_NAME" => restrictions.measuregroup_name = Some(text.to_string()),
+        b"Name" => restrictions.tmschema_name = Some(text.to_string()),
         b"DIMENSION_VISIBILITY" => restrictions.dimension_visibility = text.parse().ok(),
         b"HIERARCHY_VISIBILITY" => restrictions.hierarchy_visibility = text.parse().ok(),
         b"LEVEL_VISIBILITY" => restrictions.level_visibility = text.parse().ok(),

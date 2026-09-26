@@ -44,7 +44,10 @@ pub fn get_measures_response(
         return discover_rowset_envelope(UUID_TYPE, MEASURE_ROW_FIELDS, "");
     }
     for (i, m) in model.measures.iter().enumerate() {
-        if !super::name_matches(restrictions.measure_name.as_deref(), &[&m.caption, &m.id])
+        if !super::name_matches(
+            restrictions.measuregroup_name.as_deref(),
+            &[&model.fact_table(m.fact_table_idx).measure_group_name],
+        ) || !super::name_matches(restrictions.measure_name.as_deref(), &[&m.caption, &m.id])
             || !super::name_matches(
                 restrictions.measure_unique_name.as_deref(),
                 &[&m.measure_unique_name(), &m.caption, &m.id],

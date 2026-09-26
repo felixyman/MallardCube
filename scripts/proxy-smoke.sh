@@ -21,7 +21,7 @@ if [ "${1:-}" = "serve" ]; then
   pkill -f 'target/debug/mallard' 2>/dev/null
   pkill -f 'target/debug/xmla_proxy' 2>/dev/null
   sleep 1
-  BIND_ADDRESS=0.0.0.0:8080 XMLA_TRACE=1 setsid nohup cargo run > /tmp/opencode/proxy.log 2>&1 < /dev/null &
+  BIND_ADDRESS=0.0.0.0:8080 MALLARDCUBE_ALLOW_ANONYMOUS=1 XMLA_TRACE=1 setsid nohup cargo run > /tmp/opencode/proxy.log 2>&1 < /dev/null &
   for _ in $(seq 1 30); do
     code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/xmla \
       -H "Content-Type: text/xml" \

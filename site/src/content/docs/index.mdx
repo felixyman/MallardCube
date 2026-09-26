@@ -37,7 +37,7 @@ in the PivotTable field list.
 To serve your own data, write a model file and point the server at it:
 
 ```bash
-PROXY_CONFIG=/path/to/proxy-config.json BIND_ADDRESS=0.0.0.0:8080 cargo run
+PROXY_CONFIG=/path/to/proxy-config.json BIND_ADDRESS=0.0.0.0:8080 MALLARDCUBE_ALLOW_ANONYMOUS=1 cargo run
 ```
 
 If you want to start before writing a model file, AutoModel can build one from

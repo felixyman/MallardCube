@@ -73,7 +73,7 @@ if [ "${AGG:-0}" = "1" ]; then
   rm -f "$BENCH_DIR/agg.duckdb"
   echo "==> aggregations enabled (sidecar: $BENCH_DIR/agg.duckdb)"
 fi
-echo "==> starting proxy on 0.0.0.0:8080"
+echo "==> starting proxy on 0.0.0.0:8080 (MALLARDCUBE_ALLOW_ANONYMOUS=1)"
 PROXY_CONFIG="$CFG" BIND_ADDRESS=0.0.0.0:8080 \
   setsid nohup env $AGG_ENV "$REPO_ROOT/target/release/mallard" serve \
   > "$BENCH_DIR/proxy.log" 2>&1 < /dev/null &

@@ -595,12 +595,32 @@ impl Backend {
     /// the demo model (project3) without a process-wide backend static.
     #[cfg(test)]
     pub fn test_fixture() -> &'static Backend {
-        static FIXTURE: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let path = std::env::temp_dir()
-                .join(format!("mallardcube-test-{}.duckdb", std::process::id()));
-            let _ = std::fs::remove_file(&path);
-            Backend::create_demo_file(&path).expect("seed test fixture")
+        // One connection per test thread. The single shared static let one
+        // test's query failure (or a mismatched ambient model) latch onto
+        // another test's request through the connection, which is the
+        // intermittent failure recorded in plan 051 (review F7).
+        thread_local! {
+            static FIXTURE: std::cell::RefCell<Option<&'static Arc<Backend>>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        FIXTURE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                static PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+                let path = PATH.get_or_init(|| {
+                    let path = std::env::temp_dir()
+                        .join(format!("mallardcube-test-{}.duckdb", std::process::id()));
+                    let _ = std::fs::remove_file(&path);
+                    Backend::create_demo_file(&path).expect("seed test fixture");
+                    path
+                });
+                let backend = BackendSource::file(path)
+                    .expect("open test fixture")
+                    .checkout();
+                *slot = Some(Box::leak(Box::new(backend)));
+            }
+            let leaked = slot.expect("fixture initialised");
+            &**leaked
         })
     }
 

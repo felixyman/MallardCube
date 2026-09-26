@@ -161,8 +161,9 @@ measure groups and measure-group dimensions. Verified live and pinned by twelve
 new parity cases — `dimensions-visibility-zero` lost its `known_gap`, so the
 catalogue is **36/36 with one known gap left**.
 
-Recorded: `LEVEL_NAME` filters one of the five level-row sites (a half-applied
-filter would silently drop rows, so it was reverted rather than half-done), and
-`HIERARCHY_NAME=Category` returns two rows on our model because it exposes a
-key-attribute hierarchy alongside the user one — a model-shape difference, not a
-filter bug.
+Recorded: `LEVEL_NAME` is advertised and parsed but applied at none of the five
+level-row sites (a half-applied filter would silently drop rows, so it was
+reverted rather than half-done — review F4). The earlier note here misdiagnosed
+`HIERARCHY_NAME=Category` returning two rows: the extra row is the special-cased
+`Measures` hierarchy, which the name filter never saw (the reference returns 0
+rows for an unknown `HIERARCHY_NAME`), not a key-attribute hierarchy. Fixed.
