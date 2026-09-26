@@ -382,6 +382,10 @@ pub(crate) fn render_tabular_rowset(
             let dimension = model.dim_def(&group_by[0]);
             columns.push(tabular_member_column(dimension));
             columns.push(model.meas_def(measure).measure_unique_name());
+            // The reference's rowset carries the (All) row first, with the
+            // measure only — its member column is absent (measured 2026-09-26).
+            let total: f64 = groups.iter().map(|(_, value)| value).sum();
+            rows.push(vec![String::new(), format_scalar(total)]);
             for (key, value) in groups {
                 rows.push(vec![key.clone(), format_scalar(*value)]);
             }
@@ -451,8 +455,11 @@ fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>) -> String {
     for row in &rows {
         body.push_str("          <row>");
         for (index, column) in columns.iter().enumerate() {
-            let name = escaped(column);
             let value = row.get(index).cloned().unwrap_or_default();
+            if value.is_empty() {
+                continue;
+            }
+            let name = escaped(column);
             body.push_str(&format!(
                 "<{name}>{}</{name}>",
                 crate::response::xml_escape(&value)

@@ -231,3 +231,13 @@ members with the reference's cells now).
 differences are the tabular `(All)` row and G9 formatting (ADODB-only), the
 date-member naming and the visibility outliers, none of which the catalogue
 gates yet.
+
+### The tabular (All) row (2026-09-26)
+
+Closed the first of the two recorded rowset differences: a grouped tabular
+request now carries the reference's `(All)` row first — the measure only, its
+member column absent, which the reference expresses by omitting the element, and
+so do we. The grouped test asserts 21 rows and the All row's shape. The
+remaining rowset difference is the value formatting (the reference writes G9,
+`5.21586767E8`; we write the plain round-trippable form — both parse as
+`xsd:double`, and ADODB is the only client that sees it).

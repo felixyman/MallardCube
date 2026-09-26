@@ -1774,9 +1774,13 @@ mod tests {
                 &user,
                 config,
             );
-            // The 20 leaf groups; the reference's rowset also carries an
-            // (All) row, which is a recorded difference (plan 051/060).
-            assert_eq!(grouped.matches("<row>").count(), 20, "{grouped}");
+            // The (All) row first, then the 20 leaf groups — 21 rows, the
+            // reference's shape (measured 2026-09-26).
+            assert_eq!(grouped.matches("<row>").count(), 21, "{grouped}");
+            assert!(
+                grouped.contains("<row><_x005B_Measures_x005D_._x005B_Revenue_x005D_>"),
+                "the (All) row carries the measure only: {grouped}"
+            );
             assert!(
                 grouped.contains(
                     "_x005B_Category_x005D_._x005B_Category_x005D_._x005B_Category_x005D_._x005B_MEMBER_CAPTION_x005D_"
