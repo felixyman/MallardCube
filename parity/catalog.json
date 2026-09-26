@@ -285,8 +285,7 @@
     "axis0_member_count": 4019,
     "axis0_first_member": "[Date].[Full Date].[All]"
    },
-   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: without NON EMPTY the mirror returns all 4019 members (All + 4018 dates)",
-   "known_gap": "the reference does not prune date members when the axis has no NON EMPTY (measured 2026-09-26: 4,019 members with and without it); the proxy prunes to the fact-covered dates (2,459). The Excel path always sends NON EMPTY and is unaffected; the fix is to render a non-NON-EMPTY drilldown axis from the member dictionary with empty cells for the dates that have no facts"
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24: without NON EMPTY the mirror returns all 4,019 members (All + 4,018 dates) and only the tuples with data carry cells (758 on a filtered axis, sparse ordinals). Closed 2026-09-26: the proxy renders the no-NON-EMPTY axis from the member dictionary in the key-attribute hierarchy's own namespace."
   },
   {
    "id": "restriction-unadvertised-faults",

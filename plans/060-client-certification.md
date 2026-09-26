@@ -216,3 +216,18 @@ unfiltered revenue while the outer cellset used the YTD window. It now builds it
 filters through `filters_with_time_flag`, the same helper the plan builder uses.
 The finding was latent (no fixture measure combined a filter idiom with a window),
 so it is a latent-wrong-answer fix rather than a behaviour change on the demos.
+
+### The last known gap is closed: zero known gaps (2026-09-26)
+
+`axis-date-key-drilldown` passes. The non-`NON EMPTY` axis is rendered from the
+member dictionary, and for the key-attribute hierarchy the members go through
+`apply_key_hierarchy_view`, so they carry the view's namespace
+(`[Date].[Full Date].&[2020-01-01]`) and its own `(All)`. The member keys then
+match the group keys, which is what makes the sparse cells line up — the piece
+the earlier half-landing missed (4,018 members with zero cells before; 4,019
+members with the reference's cells now).
+
+`parity/catalog.json`: **38/38 matched, no known gaps.** The remaining recorded
+differences are the tabular `(All)` row and G9 formatting (ADODB-only), the
+date-member naming and the visibility outliers, none of which the catalogue
+gates yet.
