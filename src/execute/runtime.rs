@@ -81,9 +81,6 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
             "filter-subselect".to_string(),
             mdx_parse_us,
         );
-        crate::xmla::response::fault_response(&message)
-            .clone()
-            .into_bytes();
         (crate::xmla::response::fault_response(&message), timings)
     };
     match crate::mdx_semantic::excel_filter_subselect(mdx) {
