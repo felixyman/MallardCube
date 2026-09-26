@@ -44,11 +44,14 @@ gestures.
    now cost the proxy 6 requests (they cost 2,418 until killed). Recorded
    differences: the reference also carries an `(All)` row and G9 scientific
    values.
-2. **Subselect / Top-N** — Excel sends the Top-5 filter as a server-side
-   subselect (`Generate` / `BottomSum` / `Except` / `DrilldownLevel`). Either
-   implement the idiom (or the general subselect semantics) or fault loudly;
-   what is not acceptable is today's silent full-set answer while the mirror
-   filters.
+2. **Subselect / Top-N — DONE 2026-09-26.** The idiom is recognised
+   (`[XL_Filter_Set_0]` + `BottomSum`,  the dimension from the `Generate`
+   helper, the limit and measure from the `BottomSum` arguments) and turned
+   into a member filter before planning: the measure's values over the
+   dimension's leaves, ascending, until the running total reaches the limit —
+   the reference's semantics, which is why the mirror answers `{All, Toys}` for
+   a Top-5 filter over revenue. An end-to-end test with the recorded statement
+   asserts exactly that, and a parity case pins it (37/37).
 3. **Sessions** — make one decision with plan 058-B7: documented statelessness
    (and a claim recording the divergence) or a bounded session registry. The
    reference faults an unknown session; today we echo it.

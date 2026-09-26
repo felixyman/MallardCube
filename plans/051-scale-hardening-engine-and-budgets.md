@@ -781,3 +781,16 @@ them from its own cache, and the script finishes with the right value.
 Recorded differences from the reference's rowset: it carries an `(All)` row and
 G9 scientific values; ours carries the leaf groups and plain round-trippable
 values.
+
+### Test flake recorded (2026-09-26)
+
+`repeated_mdx_variants_are_served_from_the_result_cache` and
+`tabular_format_answers_a_rowset` fail in roughly one full run in four: the
+test fallback project (`project()`'s `OnceLock`) is the *built-in demo* while
+the shared `Backend::test_fixture()` serves project3, so a test that reaches a
+builder without installing its own project sees a mismatched model/backend pair
+("Table with name sales does not exist" against a `sales_fact` fixture).
+Aligning the fallback with project3 fixed the flake but broke three tests that
+legitimately depend on the demo, so it is recorded rather than forced: the real
+fix is that every builder-touching test installs its project (or the fixture
+grows per-project backends).

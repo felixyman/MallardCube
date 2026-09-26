@@ -1705,6 +1705,39 @@ mod tests {
         );
     }
 
+    /// Excel's Top-5 filter idiom answers the filtered set the reference
+    /// returns — {All, Toys} with the filtered total — not the whole
+    /// hierarchy (measured 2026-09-25).
+    #[test]
+    fn excel_filter_subselect_answers_the_filtered_set() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS  FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], BottomSum(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0,INCLUDE_CALC_MEMBERS), [XL_Filter_HelperSet_0]), 5, [Measures].[Revenue])) ON COLUMNS  FROM [Sales] WHERE ([Measures].[Revenue])) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, LANGUAGE, BACK_COLOR, FORE_COLOR, FONT_FLAGS",
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                );
+            assert!(xml.contains("Axis0"), "response: {xml}");
+            assert_eq!(
+                axis_captions(&xml, "Axis0"),
+                vec!["All".to_string(), "Toys".to_string()],
+                "{xml}"
+            );
+            let values = cell_values(&xml);
+            assert_eq!(values.len(), 2, "{xml}");
+            assert!(
+                values
+                    .iter()
+                    .all(|value| (value - 24_440_800.0).abs() < 0.01),
+                "the All row carries the filtered total: {values:?}"
+            );
+        });
+    }
+
     /// `<Format>Tabular</Format>` answers the flattened rowset ADODB reads
     /// instead of a cellset (plan 051, the diagnosis of the ADODB field-read
     /// loop). Without the format the same query is still a cellset.

@@ -71,6 +71,24 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     // A dimension hidden by OLS must not appear there, and the Measures
     // hierarchy follows its measures (plan 051 RLS review).
     let mut query = query;
+
+    // Excel's Top-N / value filter arrives as a subselect; turn it into a
+    // member filter before planning (measured 2026-09-25: the reference answers
+    // the filtered set, we answered the whole set).
+    if let Some(idiom) = crate::mdx_semantic::excel_filter_subselect(mdx) {
+        match filter_members_for_subselect(&idiom, model, backend, user, config) {
+            Ok(filter) => query.filters.push(filter),
+            Err(message) => {
+                let timings = Timings::new(
+                    RuntimePath::DirectSql,
+                    "filter-subselect".to_string(),
+                    mdx_parse_us,
+                );
+                return (crate::xmla::response::fault_response(&message), timings);
+            }
+        }
+    }
+
     if !user.is_administrator {
         let hidden_dimensions = model
             .dimensions
@@ -248,6 +266,68 @@ pub fn mdx_cube_scope_fault(mdx: &str, config: &ProxyConfig) -> Option<String> {
     Some(crate::xmla::response::fault_response(&format!(
         "The {cube} cube does not exist."
     )))
+}
+
+/// The member set Excel's filter idiom selects: the dimension's leaf members
+/// sorted by the measure ascending, taken until the running total reaches the
+/// `BottomSum` limit (the reference's semantics — for a Top-5 filter over
+/// revenue that is the single lowest member, which is why the mirror answers
+/// `{All, Toys}`).
+fn filter_members_for_subselect<B: QueryBackend + ?Sized>(
+    idiom: &crate::mdx_semantic::ExcelFilterSubselect,
+    model: &crate::engine::model::SemanticModel,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+) -> Result<crate::mdx_semantic::DimensionFilter, String> {
+    let measure = model.lookup_measure(&idiom.measure).ok_or_else(|| {
+        format!(
+            "the filter subselect names measure '{}', which the model does not define",
+            idiom.measure
+        )
+    })?;
+    if model.dim_def_opt(&idiom.dimension).is_none() {
+        return Err(format!(
+            "the filter subselect names dimension '{}', which the model does not define",
+            idiom.dimension
+        ));
+    }
+    let plan = crate::engine::plan::QueryPlan::GroupBy {
+        measure: measure.id.clone(),
+        group_by: vec![idiom.dimension.clone()],
+        filters: Vec::new(),
+        group_levels: vec![None],
+        set_op: None,
+    };
+    let sql = crate::engine::sql::sql_for_query_plan_with_context(model, &plan, user, config);
+    if sql.trim().is_empty() {
+        return Err("the filter subselect could not be evaluated".to_string());
+    }
+    let _ = backend.take_failure();
+    let mut groups = backend.query_grouped_1d(&sql);
+    if let Some(failure) = backend.take_failure() {
+        return Err(format!("a query against the database failed: {failure}"));
+    }
+    groups.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut members = Vec::new();
+    let mut running = 0.0;
+    for (key, value) in groups {
+        members.push(key);
+        running += value;
+        if running >= idiom.limit {
+            break;
+        }
+    }
+
+    Ok(crate::mdx_semantic::DimensionFilter {
+        dimension: idiom.dimension.clone(),
+        members,
+        level: None,
+        range: None,
+        date_window: None,
+        label: None,
+    })
 }
 
 /// The reference's flattened rowset for `<Format>Tabular</Format>`: one row

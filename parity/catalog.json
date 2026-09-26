@@ -585,6 +585,24 @@
     "measure_name": "MEASURE_NAME"
    },
    "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-26: MEASURE_NAME=Revenue returns exactly that measure"
+  },
+  {
+   "id": "subselect-top5-filter-matches-the-reference",
+   "kind": "execute",
+   "request": {
+    "mdx": "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS  FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], BottomSum(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0,INCLUDE_CALC_MEMBERS), [XL_Filter_HelperSet_0]), 5, [Measures].[Revenue])) ON COLUMNS  FROM [{cube}] WHERE ([Measures].[Revenue])) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE, FORMAT_STRING, LANGUAGE, BACK_COLOR, FORE_COLOR, FONT_FLAGS"
+   },
+   "expect": {
+    "axis0_member_count": 2,
+    "axis0_first_member": "[Category].[Category].[All]",
+    "axis0_last_member": "[Category].[Category].&[Toys]",
+    "cell_count": 2,
+    "cell_values": [
+     "24440800",
+     "24440800"
+    ]
+   },
+   "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-25: the Top-5 filter idiom returns {All, Toys} with the filtered total on both cells"
   }
  ]
 }

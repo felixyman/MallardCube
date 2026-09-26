@@ -709,6 +709,73 @@ fn extract_strtomember_properties(mdx: &str) -> Vec<String> {
     props
 }
 
+/// Excel's Top-N / value filter arrives as a subselect that builds a helper
+/// set `[XL_Filter_Set_0]` and keeps `BottomSum(…, N, measure)` of it.
+///
+/// Measured on the reference (2026-09-25): the answer for the Top-5 idiom is
+/// the outer drilldown filtered to that set — `{All, <member>}` with the All
+/// row carrying the filtered total. Without this we answered the whole set,
+/// which is the one remaining Excel-visible wrong answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExcelFilterSubselect {
+    pub dimension: String,
+    /// The `BottomSum` value: members are added from the lowest upwards until
+    /// the running total reaches it.
+    pub limit: f64,
+    pub measure: String,
+}
+
+/// Recognise the idiom, or `None` for a query that does not contain it.
+pub fn excel_filter_subselect(mdx: &str) -> Option<ExcelFilterSubselect> {
+    if !mdx.contains("[XL_Filter_Set_0]") {
+        return None;
+    }
+    let marker = "Generate(Hierarchize({[";
+    let start = mdx.find(marker)? + marker.len();
+    let end = mdx[start..].find(']')? + start;
+    let dimension = mdx[start..end].to_string();
+
+    let open = mdx.find("BottomSum(")? + "BottomSum(".len();
+    let (limit, measure) = bottom_sum_args(&mdx[open..])?;
+    Some(ExcelFilterSubselect {
+        dimension,
+        limit,
+        measure,
+    })
+}
+
+/// The last two depth-zero arguments of a `BottomSum(` call: the limit and the
+/// measure.
+fn bottom_sum_args(args: &str) -> Option<(f64, String)> {
+    let mut depth = 0i32;
+    let mut commas: Vec<usize> = Vec::new();
+    let mut end = None;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '(' | '{' => depth += 1,
+            ')' | '}' => {
+                if depth == 0 {
+                    end = Some(index);
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 => commas.push(index),
+            _ => {}
+        }
+    }
+    let end = end?;
+    let last = commas.pop()?;
+    let previous = *commas.last()?;
+    let limit = args[previous + 1..last].trim().parse().ok()?;
+    let member = args[last + 1..end].trim();
+    let measure = member
+        .strip_prefix("[Measures].[")
+        .and_then(|rest| rest.strip_suffix(']'))?
+        .to_string();
+    Some((limit, measure))
+}
+
 pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     let parsed = crate::mdx_parser::parse_mdx(mdx);
 
@@ -1177,6 +1244,23 @@ fn parse_member_only_unames(mdx: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::excel_filter_subselect;
+
+    /// Excel's Top-5 filter idiom is recognised from the exact statement the
+    /// proxy recorded (and the mirror answered).
+    #[test]
+    fn excel_filter_subselect_is_recognised() {
+        let mdx = r#"SELECT NON EMPTY Hierarchize({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT Generate(Hierarchize({[Category].[Category].[All]}) AS [XL_Filter_Set_0], BottomSum(Except(DrilldownLevel([XL_Filter_Set_0].Current AS [XL_Filter_HelperSet_0], , 0,INCLUDE_CALC_MEMBERS), [XL_Filter_HelperSet_0]), 5, [Measures].[Revenue])) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])) WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"#;
+        let idiom = excel_filter_subselect(mdx).expect("recognised");
+        assert_eq!(idiom.dimension, "Category");
+        assert_eq!(idiom.measure, "Revenue");
+        assert_eq!(idiom.limit, 5.0);
+        assert!(
+            excel_filter_subselect("SELECT [Measures].[Revenue] ON 0 FROM [Sales]").is_none(),
+            "a plain query is not the idiom"
+        );
+    }
+
     use super::*;
 
     #[test]
