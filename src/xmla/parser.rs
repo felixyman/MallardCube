@@ -6,11 +6,11 @@ use quick_xml::reader::NsReader;
 /// prefixed elements bound to it and rejects foreign namespaces or undeclared
 /// prefixes (measured 2026-09-24) — the prefix is irrelevant, the resolved
 /// namespace is not.
-const XMLA_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:xml-analysis";
+const XMLA_NAMESPACE: &str = "urn:schemas-microsoft-com:xml-analysis";
 
 /// The reference accepts only SOAP 1.1 (measured 2026-09-24: SOAP 1.2, a
 /// foreign envelope and an XMLA-default envelope all fault).
-const SOAP_NAMESPACE: &[u8] = b"http://schemas.xmlsoap.org/soap/envelope/";
+const SOAP_NAMESPACE: &str = "http://schemas.xmlsoap.org/soap/envelope/";
 
 /// Values from a Discover request's `RestrictionList` (MS-SSAS). Discover
 /// responses must honour these: Excel asks for one hierarchy's member
@@ -210,29 +210,29 @@ pub enum XmlaRequest {
 /// `<RestrictionList>` form reaches this: the reference rejects every other
 /// child of `<Restrictions>` (verified 2026-09-24). Returns whether the name
 /// was recognised.
-fn apply_restriction(restrictions: &mut Restrictions, name: &[u8], text: &str) -> bool {
+fn apply_restriction(restrictions: &mut Restrictions, name: &str, text: &str) -> bool {
     match name {
-        b"CATALOG_NAME" => restrictions.catalog_name = Some(text.to_string()),
-        b"CUBE_NAME" => restrictions.cube_name = Some(text.to_string()),
-        b"DIMENSION_UNIQUE_NAME" => restrictions.dimension_unique_name = Some(text.to_string()),
-        b"HIERARCHY_UNIQUE_NAME" => restrictions.hierarchy_unique_name = Some(text.to_string()),
-        b"LEVEL_UNIQUE_NAME" => restrictions.level_unique_name = Some(text.to_string()),
-        b"PROPERTY_NAME" => restrictions.property_name = Some(text.to_string()),
-        b"ORIGIN" => restrictions.origin = text.parse().ok(),
-        b"MEMBER_TYPE" => restrictions.member_type = text.parse().ok(),
-        b"DIMENSION_NAME" => restrictions.dimension_name = Some(text.to_string()),
-        b"HIERARCHY_NAME" => restrictions.hierarchy_name = Some(text.to_string()),
-        b"LEVEL_NAME" => restrictions.level_name = Some(text.to_string()),
-        b"MEASURE_NAME" => restrictions.measure_name = Some(text.to_string()),
-        b"MEASURE_UNIQUE_NAME" => restrictions.measure_unique_name = Some(text.to_string()),
-        b"MEASUREGROUP_NAME" => restrictions.measuregroup_name = Some(text.to_string()),
-        b"Name" => restrictions.tmschema_name = Some(text.to_string()),
-        b"DIMENSION_VISIBILITY" => restrictions.dimension_visibility = text.parse().ok(),
-        b"HIERARCHY_VISIBILITY" => restrictions.hierarchy_visibility = text.parse().ok(),
-        b"LEVEL_VISIBILITY" => restrictions.level_visibility = text.parse().ok(),
-        b"MEASURE_VISIBILITY" => restrictions.measure_visibility = text.parse().ok(),
-        b"PROPERTY_VISIBILITY" => restrictions.property_visibility = text.parse().ok(),
-        b"SchemaName" => restrictions.schema_name = Some(text.to_string()),
+        "CATALOG_NAME" => restrictions.catalog_name = Some(text.to_string()),
+        "CUBE_NAME" => restrictions.cube_name = Some(text.to_string()),
+        "DIMENSION_UNIQUE_NAME" => restrictions.dimension_unique_name = Some(text.to_string()),
+        "HIERARCHY_UNIQUE_NAME" => restrictions.hierarchy_unique_name = Some(text.to_string()),
+        "LEVEL_UNIQUE_NAME" => restrictions.level_unique_name = Some(text.to_string()),
+        "PROPERTY_NAME" => restrictions.property_name = Some(text.to_string()),
+        "ORIGIN" => restrictions.origin = text.parse().ok(),
+        "MEMBER_TYPE" => restrictions.member_type = text.parse().ok(),
+        "DIMENSION_NAME" => restrictions.dimension_name = Some(text.to_string()),
+        "HIERARCHY_NAME" => restrictions.hierarchy_name = Some(text.to_string()),
+        "LEVEL_NAME" => restrictions.level_name = Some(text.to_string()),
+        "MEASURE_NAME" => restrictions.measure_name = Some(text.to_string()),
+        "MEASURE_UNIQUE_NAME" => restrictions.measure_unique_name = Some(text.to_string()),
+        "MEASUREGROUP_NAME" => restrictions.measuregroup_name = Some(text.to_string()),
+        "Name" => restrictions.tmschema_name = Some(text.to_string()),
+        "DIMENSION_VISIBILITY" => restrictions.dimension_visibility = text.parse().ok(),
+        "HIERARCHY_VISIBILITY" => restrictions.hierarchy_visibility = text.parse().ok(),
+        "LEVEL_VISIBILITY" => restrictions.level_visibility = text.parse().ok(),
+        "MEASURE_VISIBILITY" => restrictions.measure_visibility = text.parse().ok(),
+        "PROPERTY_VISIBILITY" => restrictions.property_visibility = text.parse().ok(),
+        "SchemaName" => restrictions.schema_name = Some(text.to_string()),
         _ => return false,
     }
     true
@@ -268,10 +268,7 @@ fn is_name_char(c: char) -> bool {
 /// qualified name character" for `Request&amp;Type` or `<1Bogus/>`, "A
 /// qualified name cannot contain multiple colons" for `<a:b:c/>` (measured
 /// 2026-09-24).
-fn is_qname(name: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(name) else {
-        return false;
-    };
+fn is_qname(text: &str) -> bool {
     let mut chars = text.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -302,9 +299,9 @@ fn is_qname(name: &[u8]) -> bool {
 /// 2026-09-24).
 fn default_namespace_attribute(element: &quick_xml::events::BytesStart<'_>) -> Option<bool> {
     element.attributes().flatten().find_map(|attribute| {
-        (attribute.key.as_ref() == b"xmlns").then(|| {
+        (attribute.key.as_ref() == "xmlns").then(|| {
             attribute
-                .unescape_value()
+                .normalized_value(quick_xml::XmlVersion::default())
                 .map(|value| !value.is_empty())
                 .unwrap_or(false)
         })
@@ -335,7 +332,7 @@ fn attribute_error(element: &quick_xml::events::BytesStart<'_>) -> Option<String
         if !is_qname(attribute.key.as_ref()) {
             return Some("request contains an invalid attribute name".to_string());
         }
-        match attribute.unescape_value() {
+        match attribute.normalized_value(quick_xml::XmlVersion::default()) {
             Ok(value) => {
                 if has_xml_invalid_control(&value) {
                     return Some(
@@ -349,25 +346,25 @@ fn attribute_error(element: &quick_xml::events::BytesStart<'_>) -> Option<String
     None
 }
 
-fn lexical_error(malformed: &mut Option<String>, bytes: &[u8]) {
-    if has_xml_invalid_control(&String::from_utf8_lossy(bytes)) {
+fn lexical_error(malformed: &mut Option<String>, text: &str) {
+    if has_xml_invalid_control(text) {
         malformed.get_or_insert_with(|| {
             "request text contains an XML-invalid control character".to_string()
         });
     }
 }
 
-fn parent_is_xmla_discover(open_elements: &[(Vec<u8>, bool, bool)]) -> bool {
+fn parent_is_xmla_discover(open_elements: &[(String, bool, bool)]) -> bool {
     open_elements
         .last()
-        .map(|(local, namespace_ok, _)| *namespace_ok && local.as_slice() == b"Discover")
+        .map(|(local, namespace_ok, _)| *namespace_ok && local == "Discover")
         .unwrap_or(false)
 }
 
-fn parent_is_soap_envelope(open_elements: &[(Vec<u8>, bool, bool)]) -> bool {
+fn parent_is_soap_envelope(open_elements: &[(String, bool, bool)]) -> bool {
     open_elements
         .last()
-        .map(|(local, _, soap_ok)| *soap_ok && local.as_slice() == b"Envelope")
+        .map(|(local, _, soap_ok)| *soap_ok && local == "Envelope")
         .unwrap_or(false)
 }
 
@@ -391,30 +388,27 @@ struct Structure {
     header_seen: bool,
 }
 
-fn structural_error(local: &[u8], state: Structure) -> Option<String> {
+fn structural_error(local: &str, state: Structure) -> Option<String> {
     // The SOAP skeleton is positional: `Envelope` is the root, `Body`/`Header`
     // are its direct children and SOAP-bound. A foreign element that merely
     // shares one of those names (a SOAP header entry, say) is not the skeleton
     // — the reference accepted one while faulting a body without an envelope
     // and a nested body (measured 2026-09-24).
-    if local == b"Envelope" && (!state.is_root || !state.soap_ok) {
+    if local == "Envelope" && (!state.is_root || !state.soap_ok) {
         return Some("<Envelope> must be the SOAP root element".to_string());
     }
-    if matches!(local, b"Body" | b"Header") && state.soap_ok {
+    if matches!(local, "Body" | "Header") && state.soap_ok {
         // Only a SOAP-bound element can be the skeleton container: a foreign
         // element that merely shares the name is an extension (SOAP header
         // entries are explicitly allowed) and is ignored.
         if !state.parent_is_soap_envelope {
             return Some(format!(
                 "<{}> must be a direct child of the SOAP envelope",
-                String::from_utf8_lossy(local)
+                local
             ));
         }
-        if (local == b"Body" && state.body_seen) || (local == b"Header" && state.header_seen) {
-            return Some(format!(
-                "<{}> appears more than once",
-                String::from_utf8_lossy(local)
-            ));
+        if (local == "Body" && state.body_seen) || (local == "Header" && state.header_seen) {
+            return Some(format!("<{}> appears more than once", local));
         }
     }
     // Every element the protocol interprets must be in the XMLA namespace: the
@@ -424,44 +418,40 @@ fn structural_error(local: &[u8], state: Structure) -> Option<String> {
     // checked.
     let semantic = matches!(
         local,
-        b"Discover"
-            | b"Execute"
-            | b"Command"
-            | b"Statement"
-            | b"RequestType"
-            | b"Restrictions"
-            | b"RestrictionList"
-            | b"PropertyName"
-            | b"Properties"
-            | b"PropertyList"
-            | b"BeginSession"
-            | b"BeginGetSessionToken"
-            | b"PROPERTY_TYPE"
-            | b"MEMBER_UNIQUE_NAME"
-            | b"TREE_OP"
+        "Discover"
+            | "Execute"
+            | "Command"
+            | "Statement"
+            | "RequestType"
+            | "Restrictions"
+            | "RestrictionList"
+            | "PropertyName"
+            | "Properties"
+            | "PropertyList"
+            | "BeginSession"
+            | "BeginGetSessionToken"
+            | "PROPERTY_TYPE"
+            | "MEMBER_UNIQUE_NAME"
+            | "TREE_OP"
     );
     if !state.namespace_ok && (semantic || state.in_restrictions || state.in_restriction_list) {
-        return Some(format!(
-            "<{}> is not in the XMLA namespace",
-            String::from_utf8_lossy(local)
-        ));
+        return Some(format!("<{}> is not in the XMLA namespace", local));
     }
     match local {
-        b"Restrictions" if !state.parent_is_xmla_discover || state.restrictions_seen => {
+        "Restrictions" if !state.parent_is_xmla_discover || state.restrictions_seen => {
             Some("<Restrictions> must be a direct child of <Discover>".to_string())
         }
-        b"RestrictionList"
+        "RestrictionList"
             if !state.in_restrictions
                 || state.in_restriction_list
                 || state.restriction_list_seen =>
         {
             Some("<RestrictionList> must be the only child of <Restrictions>".to_string())
         }
-        b"RestrictionList" => None,
-        _ if state.in_restrictions && !state.in_restriction_list => Some(format!(
-            "unexpected <{}> under <Restrictions>",
-            String::from_utf8_lossy(local)
-        )),
+        "RestrictionList" => None,
+        _ if state.in_restrictions && !state.in_restriction_list => {
+            Some(format!("unexpected <{}> under <Restrictions>", local))
+        }
         _ => None,
     }
 }
@@ -481,11 +471,13 @@ pub fn session_id(xml: &str) -> Option<String> {
                     &namespace,
                     ResolveResult::Bound(ns) if ns.as_ref() == XMLA_NAMESPACE
                 );
-                if in_xmla && matches!(e.local_name().as_ref(), b"Session" | b"EndSession") {
+                let local_name = e.local_name();
+                let local = local_name.as_ref();
+                if in_xmla && matches!(local, "Session" | "EndSession") {
                     for attribute in e.attributes().flatten() {
-                        if attribute.key.as_ref() == b"SessionId" {
+                        if attribute.key.as_ref() == "SessionId" {
                             return attribute
-                                .unescape_value()
+                                .normalized_value(quick_xml::XmlVersion::default())
                                 .ok()
                                 .map(|value| value.to_string());
                         }
@@ -510,7 +502,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     let mut in_member_unique_name = false;
     let mut in_tree_op = false;
     let mut in_restriction_list = false;
-    let mut restriction_name: Option<Vec<u8>> = None;
+    let mut restriction_name: Option<String> = None;
     let mut restrictions = Restrictions::default();
     // Text accumulates for the element currently open (Text and CDATA alike)
     // and is consumed when that element ends. Processing per text event lost
@@ -525,7 +517,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
     // Open elements as (local name, namespace ok), so structural checks can
     // require the right parent (e.g. `<Restrictions>` directly under
     // `<Discover>`, not inside a `<Command>`).
-    let mut open_elements: Vec<(Vec<u8>, bool, bool)> = Vec::new();
+    let mut open_elements: Vec<(String, bool, bool)> = Vec::new();
     let mut restrictions_seen = false;
     // Explicit `xmlns=""` (as opposed to no declaration at all) makes an
     // element invalid for the reference; the flag is inherited until a new
@@ -567,7 +559,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         };
         match event {
             Event::Start(ref e) => {
-                let name = e.local_name();
+                let local_name = e.local_name();
+                let name = local_name.as_ref();
                 let inherited = default_undeclared_stack.last().copied().unwrap_or(false);
                 let default_undeclared = match default_namespace_attribute(e) {
                     Some(declares) => !declares,
@@ -587,7 +580,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        name.as_ref(),
+                        name,
                         Structure {
                             namespace_ok,
                             soap_ok,
@@ -605,59 +598,59 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 {
                     malformed = Some(reason);
                 }
-                if in_property_name && !matches!(name.as_ref(), b"Value" | b"value") {
+                if in_property_name && !matches!(name, "Value" | "value") {
                     malformed
                         .get_or_insert_with(|| "unexpected child of <PropertyName>".to_string());
                 }
                 default_undeclared_stack.push(default_undeclared);
-                if name.as_ref() == b"Envelope" && soap_ok {
+                if name == "Envelope" && soap_ok {
                     envelope_seen = true;
                 }
                 if parent_is_soap_envelope(&open_elements) {
-                    if name.as_ref() == b"Body" {
+                    if name == "Body" {
                         body_seen = true;
                     }
-                    if name.as_ref() == b"Header" {
+                    if name == "Header" {
                         header_seen = true;
                     }
                 }
-                open_elements.push((name.as_ref().to_vec(), namespace_ok, soap_ok));
-                match name.as_ref() {
-                    b"RequestType" => in_request_type = true,
-                    b"PropertyName" => {
+                open_elements.push((name.to_string(), namespace_ok, soap_ok));
+                match name {
+                    "RequestType" => in_request_type = true,
+                    "PropertyName" => {
                         in_property_name = true;
                         if in_restriction_list {
                             restrictions.seen.push("PropertyName".into());
                         }
                     }
-                    b"Statement" => in_statement = true,
-                    b"BeginSession" | b"BeginGetSessionToken" => is_begin_session = true,
-                    b"Execute" => is_execute = true,
-                    b"Restrictions" => {
+                    "Statement" => in_statement = true,
+                    "BeginSession" | "BeginGetSessionToken" => is_begin_session = true,
+                    "Execute" => is_execute = true,
+                    "Restrictions" => {
                         in_restrictions = true;
                         restrictions_seen = true;
                     }
-                    b"PROPERTY_TYPE" => {
+                    "PROPERTY_TYPE" => {
                         in_property_type = true;
                         if in_restriction_list {
                             restrictions.seen.push("PROPERTY_TYPE".into());
                         }
                     }
-                    b"MEMBER_UNIQUE_NAME" => {
+                    "MEMBER_UNIQUE_NAME" => {
                         in_member_unique_name = true;
                         if in_restriction_list {
                             restrictions.seen.push("MEMBER_UNIQUE_NAME".into());
                         }
                     }
-                    b"TREE_OP" => {
+                    "TREE_OP" => {
                         in_tree_op = true;
                         if in_restriction_list {
                             restrictions.seen.push("TREE_OP".into());
                         }
                     }
-                    b"Catalog" if !in_restrictions => in_catalog_property = true,
-                    b"Format" if !in_restrictions => in_format_property = true,
-                    b"RestrictionList" => {
+                    "Catalog" if !in_restrictions => in_catalog_property = true,
+                    "Format" if !in_restrictions => in_format_property = true,
+                    "RestrictionList" => {
                         in_restriction_list = true;
                         restriction_list_seen = true;
                     }
@@ -667,15 +660,16 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                         // (`<PropertyName><Value>x</Value>`); on their own they
                         // are an unadvertised restriction name and must fault
                         // (plan 055 review).
-                        let nested_value = matches!(name, b"Value" | b"value") && in_property_name;
+                        let nested_value = matches!(name, "Value" | "value") && in_property_name;
                         if in_restriction_list && !nested_value {
-                            restriction_name = Some(name.to_vec());
+                            restriction_name = Some(name.to_string());
                         }
                     }
                 }
             }
             Event::Empty(ref e) => {
-                let name = e.local_name();
+                let local_name = e.local_name();
+                let name = local_name.as_ref();
                 let inherited = default_undeclared_stack.last().copied().unwrap_or(false);
                 let default_undeclared = match default_namespace_attribute(e) {
                     Some(declares) => !declares,
@@ -685,7 +679,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     namespace_ok = false;
                     soap_ok = false;
                 }
-                if name.as_ref() == b"Execute" {
+                if name == "Execute" {
                     is_execute = true;
                 }
                 if !is_qname(e.name().as_ref()) {
@@ -698,7 +692,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 }
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
-                        name.as_ref(),
+                        name,
                         Structure {
                             namespace_ok,
                             soap_ok,
@@ -716,20 +710,20 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 {
                     malformed = Some(reason);
                 }
-                if name.as_ref() == b"Restrictions" {
+                if name == "Restrictions" {
                     restrictions_seen = true;
                 }
-                if name.as_ref() == b"RestrictionList" {
+                if name == "RestrictionList" {
                     restriction_list_seen = true;
                 }
-                if name.as_ref() == b"Envelope" && soap_ok {
+                if name == "Envelope" && soap_ok {
                     envelope_seen = true;
                 }
                 if parent_is_soap_envelope(&open_elements) {
-                    if name.as_ref() == b"Body" {
+                    if name == "Body" {
                         body_seen = true;
                     }
-                    if name.as_ref() == b"Header" {
+                    if name == "Header" {
                         header_seen = true;
                     }
                 }
@@ -738,33 +732,27 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 // is empty, and ignores an advertised one (verified
                 // 2026-09-24). `<Value>` is only a value inside its naming
                 // element.
-                let nested_value = matches!(name.as_ref(), b"Value" | b"value") && in_property_name;
-                if in_restriction_list && !nested_value && name.as_ref() != b"RestrictionList" {
+                let nested_value = matches!(name, "Value" | "value") && in_property_name;
+                if in_restriction_list && !nested_value && name != "RestrictionList" {
                     restrictions
                         .seen
                         .push(String::from_utf8_lossy(name.as_ref()).to_string());
                 }
             }
-            Event::Text(e) => match e.unescape() {
-                Ok(decoded) => {
-                    if has_xml_invalid_control(&decoded) {
-                        malformed.get_or_insert_with(|| {
-                            "request text contains an XML-invalid control character".to_string()
-                        });
-                    }
-                    pending_text.push_str(&decoded);
-                }
-                Err(_) => {
+            // quick-xml 0.42 hands text events over already decoded: the
+            // deref target is `str`, and an entity the reader cannot resolve
+            // surfaces as a read error above.
+            Event::Text(e) => {
+                let decoded = e.into_inner();
+                if has_xml_invalid_control(&decoded) {
                     malformed.get_or_insert_with(|| {
-                        "request text contains an unparsable XML entity".to_string()
+                        "request text contains an XML-invalid control character".to_string()
                     });
                 }
-            },
-            // CDATA is literal text: .NET/PowerShell/Java SOAP clients wrap
-            // statements in it, and ignoring it answered them with an empty
-            // cellset (plan 051).
+                pending_text.push_str(&decoded);
+            }
             Event::CData(e) => {
-                let decoded = String::from_utf8_lossy(e.as_ref());
+                let decoded = e.as_ref().to_string();
                 if has_xml_invalid_control(&decoded) {
                     malformed.get_or_insert_with(|| {
                         "request text contains an XML-invalid control character".to_string()
@@ -773,7 +761,8 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 pending_text.push_str(&decoded);
             }
             Event::End(ref e) => {
-                let name = e.local_name();
+                let local_name = e.local_name();
+                let name = local_name.as_ref();
                 open_elements.pop();
                 default_undeclared_stack.pop();
                 let text = pending_text.trim().to_string();
@@ -786,18 +775,14 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     // (measured 2026-09-25), where ignoring it served the
                     // configured catalog.
                     if in_restriction_list && let Some(restriction) = restriction_name.as_deref() {
-                        restrictions
-                            .seen
-                            .push(String::from_utf8_lossy(restriction).to_string());
-                        if matches!(restriction, b"CATALOG_NAME" | b"CUBE_NAME") {
+                        restrictions.seen.push(restriction.to_string());
+                        if matches!(restriction, "CATALOG_NAME" | "CUBE_NAME") {
                             apply_restriction(&mut restrictions, restriction, "");
                         }
                     }
                 } else {
                     if in_restriction_list && let Some(restriction) = restriction_name.as_deref() {
-                        restrictions
-                            .seen
-                            .push(String::from_utf8_lossy(restriction).to_string());
+                        restrictions.seen.push(restriction.to_string());
                         apply_restriction(&mut restrictions, restriction, &text);
                     }
                     if in_request_type {
@@ -821,22 +806,41 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                     }
                 }
                 pending_text.clear();
-                match name.as_ref() {
-                    b"RequestType" => in_request_type = false,
-                    b"PropertyName" => in_property_name = false,
-                    b"Statement" => in_statement = false,
-                    b"PROPERTY_TYPE" => in_property_type = false,
-                    b"MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
-                    b"TREE_OP" => in_tree_op = false,
-                    b"Catalog" => in_catalog_property = false,
-                    b"Format" => in_format_property = false,
-                    b"Restrictions" => in_restrictions = false,
-                    b"RestrictionList" => {
+                match name {
+                    "RequestType" => in_request_type = false,
+                    "PropertyName" => in_property_name = false,
+                    "Statement" => in_statement = false,
+                    "PROPERTY_TYPE" => in_property_type = false,
+                    "MEMBER_UNIQUE_NAME" => in_member_unique_name = false,
+                    "TREE_OP" => in_tree_op = false,
+                    "Catalog" => in_catalog_property = false,
+                    "Format" => in_format_property = false,
+                    "Restrictions" => in_restrictions = false,
+                    "RestrictionList" => {
                         in_restriction_list = false;
                         restriction_name = None;
                     }
                     _ if in_restriction_list => restriction_name = None,
                     _ => {}
+                }
+            }
+            // quick-xml 0.42 yields predefined entities (`&amp;` in a SOAP
+            // body is the common one) as their own event; append their
+            // character. Anything else is the unparsable entity the reference
+            // faults (plan 051).
+            Event::GeneralRef(e) => {
+                let name: &str = e.as_ref();
+                match name {
+                    "amp" => pending_text.push('&'),
+                    "lt" => pending_text.push('<'),
+                    "gt" => pending_text.push('>'),
+                    "apos" => pending_text.push('\''),
+                    "quot" => pending_text.push('"'),
+                    _ => {
+                        malformed.get_or_insert_with(|| {
+                            "request text contains an unparsable XML entity".to_string()
+                        });
+                    }
                 }
             }
             Event::Eof => break,
