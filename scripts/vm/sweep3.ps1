@@ -47,7 +47,10 @@ foreach ($s in $specs) {
     }
     if ($s.page) {
       foreach ($cf in $script:PT.CubeFields()) { if ($cf.Name -eq $s.page) { $cf.Orientation = 3 } }
-      $pt.RefreshTable() | Out-Null
+      # Excel's OLAP filter refresh is asynchronous: reading the range too early
+    # shows the pre-filter grid (recorded 2026-09-26).
+    try { $conn.OLEDBConnection.BackgroundQuery = $false } catch {}
+    $pt.RefreshTable() | Out-Null
       foreach ($p in $pt.PivotFields()) {
         if ($p.Orientation -eq 3) {
           $items = @(); foreach ($it in $p.PivotItems()) { $items += $it.Name }

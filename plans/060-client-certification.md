@@ -193,3 +193,17 @@ the group keys (measured: 4,018 members, zero cells). That keeps
 `axis-date-key-drilldown` as the one known gap — now with its whole shape known:
 All + 4,018 dates, 758 sparse cells on a filtered axis, unique names carrying
 `T00:00:00` and locale captions (`1/1/2020`).
+
+### The sweep's top-5 line is harness-flaky (2026-09-26)
+
+After the level-set change, `sweep-diff` repeatedly reported `top5` as the
+unfiltered 22x2 grid, while the same spec run directly (`top5-probe.ps1`) showed
+the reference's `Toys | 24 440 800,00`. Capturing the sweep's own traffic through
+the relay settled it: the swept statement is byte-identical to the recorded
+idiom, the proxy answered `Axis0 = {All, Toys}` with two cells — the reference's
+shape — and *Excel* displayed the pre-filter grid because its OLAP filter
+refresh is asynchronous and the sweep reads `TableRange2` before it settles.
+
+So the product answer for the swept request is verified correct; the sweep's
+top-5 line needs a settle (or the relay capture) before it is trusted. The sweep
+now sets `BackgroundQuery = $false` as a mitigation.
