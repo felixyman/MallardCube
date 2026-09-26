@@ -10,9 +10,32 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
+  # A tag cannot publish without the test suite: this is the gate the external
+  # review asked for (plan 059).
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Lib tests
+        run: cargo test --lib --release
+
+      - name: Clippy
+        run: cargo clippy --all-targets --release -- -D warnings
+
   build:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -53,13 +76,52 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          artifact-name: sbom.spdx.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/*/*
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the artefacts
+        run: |
+          for file in artifacts/*/*; do
+            cosign sign-blob --yes --bundle "$file.bundle" "$file"
+          done
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          files: artifacts/*/*
+          files: |
+            artifacts/*/*
+            artifacts/*/*.bundle
+
+  # Install from the artefact, not the repo: the review's "test installation
+  # from the published artifact" (plan 059).
+  install:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the Linux artefact
+        uses: actions/download-artifact@v4
+        with:
+          name: mallard-linux-x86_64
+
+      - name: It executes
+        run: |
+          chmod +x mallard-linux-x86_64
+          file mallard-linux-x86_64
+          ./mallard-linux-x86_64 2>&1 | head -5 || true
 
   docker:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

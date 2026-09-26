@@ -6,6 +6,24 @@ description: Running MallardCube in production
 MallardCube is a single binary with no runtime dependencies. The two things to
 sort out for production are the reverse proxy and the data directory.
 
+## Upgrading and rolling back
+
+Releases are tags (`vX.Y.Z`) that publish signed binaries for Linux, macOS and
+Windows, a container image, an SBOM and a provenance attestation. Nothing in a
+release rewrites your model directory.
+
+To upgrade:
+
+1. Stop the service (it drains in-flight requests first).
+2. Point it at the new binary. The model directory — the config, the contract
+   and any fallback files — is separate and unchanged.
+3. Start it and check `/status`: the model version, `data.epoch` and the cache
+   counters tell you the new process is serving.
+
+To roll back, point the service back at the previous tag's binary. The release
+workflow supports the current and previous release; keep the previous binary
+until a pivot refresh and `/status` both look right.
+
 ## Reverse proxy
 
 :::caution[Secure by default]
