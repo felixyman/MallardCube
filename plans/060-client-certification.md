@@ -207,3 +207,12 @@ refresh is asynchronous and the sweep reads `TableRange2` before it settles.
 So the product answer for the swept request is verified correct; the sweep's
 top-5 line needs a settle (or the relay capture) before it is trusted. The sweep
 now sets `BackgroundQuery = $false` as a mitigation.
+
+### The subselect ranking uses the measure's time window (2026-09-26)
+
+Fixed from the review: `filter_members_for_subselect` hand-built a `GroupBy` with
+no filters, so a `BottomSum(…, N, [Measures].[Revenue YTD])` ranked its members on
+unfiltered revenue while the outer cellset used the YTD window. It now builds its
+filters through `filters_with_time_flag`, the same helper the plan builder uses.
+The finding was latent (no fixture measure combined a filter idiom with a window),
+so it is a latent-wrong-answer fix rather than a behaviour change on the demos.

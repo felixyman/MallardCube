@@ -296,10 +296,12 @@ fn filter_members_for_subselect<B: QueryBackend + ?Sized>(
             idiom.dimension
         ));
     }
+    // Rank with the same time window the outer query uses: a YTD measure's
+    // BottomSum must not rank on unfiltered numbers (review F9).
     let plan = crate::engine::plan::QueryPlan::GroupBy {
         measure: measure.id.clone(),
         group_by: vec![idiom.dimension.clone()],
-        filters: Vec::new(),
+        filters: crate::engine::plan::filters_with_time_flag(model, &measure.id, &[]),
         group_levels: vec![None],
         set_op: None,
     };
