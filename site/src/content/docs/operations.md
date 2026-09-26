@@ -1,4 +1,7 @@
-# Operations
+---
+title: Operations
+description: Configuration, refresh, performance, conversion, tests and the security model
+---
 
 The repo's operational detail: project structure and configuration, data
 refresh and reload, performance notes, sample projects, converting SSAS

@@ -25,8 +25,8 @@ Services**, server `http://localhost:8080/xmla`, catalog `SALES_ANALYTICS`,
 cube `Sales` — then drag a field into a PivotTable.
 
 The step-by-step version, including the optional `.odc` file for saving the
-connection, is in [docs/EXCEL-CONNECT.md](docs/EXCEL-CONNECT.md). For a
-container: `docker build -t mallardcube . && docker run -p 8080:8080 mallardcube`.
+connection, is on the docs site: [Connect Excel](https://felixyman.github.io/MallardCube/connect-excel/).
+For a container: `docker build -t mallardcube . && docker run -p 8080:8080 mallardcube`.
 
 ## What works
 
@@ -74,19 +74,17 @@ with its environment, method and reproduction.
 ## Documentation
 
 - [The site](https://felixyman.github.io/MallardCube/) — installation,
-  deployment, the Excel/SSAS behaviour reference.
+  [Connect Excel](https://felixyman.github.io/MallardCube/connect-excel/),
+  deployment, [Operations](https://felixyman.github.io/MallardCube/operations/)
+  (configuration, refresh, performance, conversion, tests, security) and the
+  Excel/SSAS behaviour reference.
 - [`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md) — build, environment
   variables, engine settings, architecture.
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — configuration walkthroughs, data
-  refresh and reload, performance and scale, converting SSAS Tabular models,
-  tests and gates, the security and role model.
-- [`docs/EXCEL-CONNECT.md`](docs/EXCEL-CONNECT.md) — connecting Excel, and the
-  optional `.odc` file.
 
 ## Contributing
 
 Issues and pull requests are welcome. The gates a change has to keep green are
 `cargo test`, `scripts/probe-fidelity.sh`, `scripts/probe-parity.sh`,
-`scripts/proxy-smoke.sh` and `scripts/trace-replay.sh` — see
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) for what each one covers. Licensed
-under MIT.
+`scripts/proxy-smoke.sh` and `scripts/trace-replay.sh` — the
+[Operations page](https://felixyman.github.io/MallardCube/operations/) says what
+each one covers. Licensed under MIT.

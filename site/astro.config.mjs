@@ -31,6 +31,7 @@ export default defineConfig({
 				{
 					label: 'Operations',
 					items: [
+						{ label: 'Operations', slug: 'operations' },
 						{ label: 'Aggregations', slug: 'aggregations' },
 						{ label: 'Deployment', slug: 'deployment' },
 					],
