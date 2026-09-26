@@ -681,21 +681,98 @@ fn plan_measures(plan: &crate::engine::plan::QueryPlan) -> Vec<&str> {
     }
 }
 
-/// Fault when a restricted user asks for a drillthrough. The drillthrough
-/// builder writes raw `SELECT *` SQL and applies no role predicates or OLS, so
-/// the honest answer is a refusal until it does — returning rows the role
-/// should not see is the one outcome a security feature must never produce
-/// (plan 051 review).
-pub fn drillthrough_fault(
+/// The role predicate a drillthrough can lower onto its own table, or the
+/// reason it cannot: `Ok(None)` means unrestricted, `Ok(Some(sql))` means the
+/// raw `SELECT *` must carry that predicate, `Err` means the honest answer is
+/// still a refusal.
+///
+/// A filter on a *dimension* table narrows the cube space through a join the
+/// drillthrough's `SELECT *` cannot make, a hidden table has no rows to show,
+/// and a hidden dimension reachable from the drilled table would have its
+/// columns and values returned by `SELECT *` — all refuse until drillthrough
+/// can express or project them (plan 058-C).
+///
+/// Callers must run [`unhonourable_filter_fault`] first: a DAX-only filter
+/// surfaces here as `Hidden` and faults, and the union semantics of
+/// `effective_table_filter` mean another role granting full access removes the
+/// restriction, exactly as the aggregate path does.
+pub fn drillthrough_row_predicate(
     config: &ProxyConfig,
     user: &crate::engine::model::UserContext,
-) -> Option<String> {
-    user_is_restricted(config, user).then(|| {
-        crate::xmla::response::fault_response(
-            "drillthrough is not available for a restricted role: it cannot apply \
-             row-level filters yet, and returning unfiltered rows would leak them",
-        )
-    })
+) -> Result<Option<String>, String> {
+    use crate::engine::model::{TableAccess, effective_table_filter};
+
+    if user.is_administrator {
+        return Ok(None);
+    }
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    let primary = model.primary_table_name().to_string();
+    let primary_fact_id = model
+        .fact_tables
+        .iter()
+        .find(|table| table.table_name == primary)
+        .map(|table| table.id.clone());
+
+    // OLS on a dimension reachable from the drilled table: `SELECT *` returns
+    // that dimension's key column (and, through the join, its values), so the
+    // role would read an object it was denied. Refuse until the projection can
+    // exclude hidden objects (review 2026-09-27).
+    for dim in &model.dimensions {
+        if crate::xmla::discover::dimension_visible(model, config, user, &dim.id) {
+            continue;
+        }
+        let flat_on_primary = model.dim_table_for_discovery(&dim.id) == primary;
+        let related_to_primary = model
+            .rel_for_dimension(&dim.id)
+            .is_some_and(|relationship| {
+                primary_fact_id
+                    .as_ref()
+                    .is_some_and(|id| relationship.fact_table_id == *id)
+            });
+        if flat_on_primary || related_to_primary {
+            return Err(format!(
+                "dimension '{}' is hidden for the requesting role, and a drillthrough's \
+                 SELECT * would return its columns",
+                dim.id
+            ));
+        }
+    }
+
+    for role in config
+        .roles
+        .iter()
+        .filter(|role| user.roles.iter().any(|name| name == &role.name))
+    {
+        for permission in &role.table_permissions {
+            if permission.table.trim().eq_ignore_ascii_case(primary.trim()) {
+                continue;
+            }
+            if matches!(
+                effective_table_filter(config, user, &permission.table),
+                TableAccess::Filtered(_)
+            ) {
+                return Err(format!(
+                    "the row filter on '{}' cannot be applied to a drillthrough of '{primary}'",
+                    permission.table
+                ));
+            }
+        }
+    }
+    match effective_table_filter(config, user, &primary) {
+        TableAccess::Full => Ok(None),
+        TableAccess::Filtered(sql) => Ok(Some(sql)),
+        TableAccess::Hidden => Err(format!(
+            "'{primary}' is hidden for the requesting role: there are no rows to drill through"
+        )),
+    }
+}
+
+/// The refusal for a drillthrough the role predicate cannot be lowered onto.
+pub fn drillthrough_refusal(reason: &str) -> String {
+    crate::xmla::response::fault_response(&format!(
+        "drillthrough is not available for a restricted role: {reason}"
+    ))
 }
 
 /// Fault when a role declares a DAX filter this proxy cannot lower to SQL. The
@@ -732,12 +809,6 @@ pub fn unhonourable_filter_fault(
     })
 }
 
-/// Does this user's access get narrowed by any of their roles? Administrators
-/// and users without roles are unrestricted.
-///
-/// The answer is about *effective* access: a second role granting full access
-/// to the same table wins (the documented union semantics), so a union user
-/// must not be refused (plan 051 RLS review).
 /// Member unique names a set expression names explicitly; generated sets and
 /// ranges carry none the renderer would echo, and their plans already empty
 /// out for a hidden source.
@@ -754,6 +825,12 @@ fn collect_set_member_targets(set: &crate::mdx_parser::SetExpr, out: &mut Vec<St
     }
 }
 
+/// Does this user's access get narrowed by any of their roles? Administrators
+/// and users without roles are unrestricted.
+///
+/// The answer is about *effective* access: a second role granting full access
+/// to the same table wins (the documented union semantics), so a union user
+/// must not be refused (plan 051 RLS review).
 fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserContext) -> bool {
     use crate::engine::model::{TableAccess, effective_table_filter};
 
@@ -1009,31 +1086,120 @@ mod tests {
     /// Drillthrough applies no role predicates, so a restricted user must be
     /// refused rather than served unfiltered rows.
     #[test]
-    fn drillthrough_fault_refuses_restricted_users() {
-        use super::drillthrough_fault;
+    fn drillthrough_lowers_primary_filters_and_refuses_the_rest() {
+        use super::drillthrough_row_predicate;
         use crate::engine::model::UserContext;
         use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
 
-        let mut config = crate::proxy_project::project().config.clone();
-        config.roles = vec![RoleConfig {
+        let project = crate::proxy_project::project();
+        let primary = project.model.primary_table_name().to_string();
+        let role = |table: &str, filter: &str, metadata: ModelPermission| RoleConfig {
             name: "EU".into(),
             description: String::new(),
             model_permission: ModelPermission::Read,
             members: vec![],
             table_permissions: vec![TablePermissionConfig {
-                table: "sales_fact".into(),
-                filter_expression: "territory = 'North'".into(),
+                table: table.into(),
+                filter_expression: filter.into(),
                 dax_filter: None,
-                metadata_permission: ModelPermission::Read,
+                metadata_permission: metadata,
             }],
-        }];
+        };
         let mut restricted = UserContext::deny_all();
         restricted.roles = vec!["EU".into()];
-        assert!(
-            drillthrough_fault(&config, &restricted).is_some(),
-            "a restricted role must not reach drillthrough"
+        let mut config = project.config.clone();
+
+        // A filter on the drilled table lowers into the SQL.
+        config.roles = vec![role(&primary, "territory = 'North'", ModelPermission::Read)];
+        assert_eq!(
+            drillthrough_row_predicate(&config, &restricted),
+            Ok(Some("territory = 'North'".into())),
+            "a filter on the drilled table must be applied, not refused"
         );
-        assert!(drillthrough_fault(&config, &UserContext::admin_default()).is_none());
+        // A filtered dimension table narrows the cube space through a join the
+        // raw SELECT * cannot make: refuse until it can.
+        config.roles = vec![role("date_dim", "year = 2024", ModelPermission::Read)];
+        assert!(
+            drillthrough_row_predicate(&config, &restricted).is_err(),
+            "a filter on another table cannot be lowered and must refuse"
+        );
+        // Effective union: another matched role that names nothing grants full
+        // access to every table, so the filter is not effective.
+        let mut both = role("date_dim", "year = 2024", ModelPermission::Read);
+        both.name = "ALL".into();
+        let mut union_user = UserContext::deny_all();
+        union_user.roles = vec!["EU".into(), "ALL".into()];
+        config.roles = vec![role("date_dim", "year = 2024", ModelPermission::Read), {
+            let mut full = role(&primary, "", ModelPermission::Read);
+            full.name = "ALL".into();
+            full
+        }];
+        assert_eq!(
+            drillthrough_row_predicate(&config, &union_user),
+            Ok(None),
+            "a role granting full access removes the restriction (union semantics)"
+        );
+        // A hidden table has no rows to drill through.
+        config.roles = vec![role(&primary, "", ModelPermission::None)];
+        assert!(
+            drillthrough_row_predicate(&config, &restricted).is_err(),
+            "a hidden table must refuse"
+        );
+        // The administrator is unrestricted.
+        assert_eq!(
+            drillthrough_row_predicate(&project.config, &UserContext::admin_default()),
+            Ok(None)
+        );
+    }
+
+    /// Closes the review's hijack of the newly served path: a dimension hidden
+    /// by OLS whose columns a `SELECT *` would return refuses the drillthrough
+    /// (the projection is a follow-up, plan 058-C).
+    #[test]
+    fn drillthrough_refuses_when_a_reachable_dimension_is_hidden() {
+        use super::drillthrough_row_predicate;
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        crate::tools::seed_projects_db::ensure_seeded();
+        let project = crate::proxy_project::ProxyProject::load(
+            "projects/generated_contoso/proxy-config.json",
+        )
+        .expect("load generated_contoso");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let relationship = project
+                .model
+                .relationships
+                .first()
+                .expect("the converted model has relationships");
+            let dim_id = relationship.dimension_id.clone();
+            let dim_table = relationship.dim_table.clone();
+
+            let mut config = project.config.clone();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: dim_table,
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            let reason = drillthrough_row_predicate(&config, &user)
+                .err()
+                .unwrap_or_default();
+            assert!(
+                reason.contains(&dim_id) && reason.contains("hidden"),
+                "a hidden reachable dimension must refuse and name itself: {reason}"
+            );
+        });
     }
 
     /// A role that narrows access marks its holders restricted — which is what

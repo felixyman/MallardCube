@@ -42,6 +42,9 @@ pub fn run(args: Vec<String>) -> i32 {
     let backend_source =
         crate::backend::init_backend_source(db_path.as_deref()).expect("open backend source");
     let config = p.config.clone();
+    // Replay is an administrator/development tool: the two-arg drillthrough
+    // builder it calls is equivalent to the predicate variant with `None`
+    // because of this context (plan 058-C).
     let user = UserContext::admin_default();
 
     eprintln!("Project: {} | Cube: {}", p.config.catalog, p.config.cube);

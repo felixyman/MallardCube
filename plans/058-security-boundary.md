@@ -65,6 +65,45 @@ Apply role predicates and OLS to drillthrough SQL, matching direct SQL for a
 filtered role's rows, instead of the current refusal. Keep the refusal as the
 fallback when a predicate cannot be lowered, and keep the fault text honest.
 
+### Implemented 2026-09-27
+
+`drillthrough_row_predicate(config, user)` decides the lowering: `Ok(None)` for
+an unrestricted user, `Ok(Some(sql))` when the drilled (primary) table itself
+is filtered, and `Err` for the restrictions a raw `SELECT *` cannot express —
+
+- a filter on another table (the cube-space narrowing needs a join),
+- a hidden primary table,
+- an OLS-hidden dimension reachable from the drilled table (flat on it, or
+  relationship-backed on it): `SELECT *` would return that dimension's columns
+  and key values. The column projection that would let these through is the
+  follow-up (review 2026-09-27).
+
+The decisions are *effective* ones: another matched role that grants full
+access removes a restriction (union semantics, same as the aggregate path).
+The request path faults on `Err` with the refusal text and otherwise passes the
+predicate into `get_execute_drillthrough_response_with_predicate`, which
+appends it to the statement's own slicer filters. The original entry point
+stays for tests and the trace replay tool (admin context, noted there).
+Callers must run `unhonourable_filter_fault` first: a DAX-only filter surfaces
+as `Hidden` and faults.
+
+Unit coverage: `drillthrough_lowers_primary_filters_and_refuses_the_rest`
+(primary filter lowered; a `date_dim` filter refused; the effective-union
+direction; hidden table refused; administrator unrestricted),
+`drillthrough_applies_the_role_predicate` (project3, role
+`territory = 'North' AND category = 'Jewelry'` — under the LIMIT, unlike the
+unfiltered case — row count equal to direct SQL and no other territory in the
+rowset) and `drillthrough_refuses_when_a_reachable_dimension_is_hidden`
+(Contoso, a hidden relationship-backed dimension). 622 tests in debug and
+release, fidelity 13/13, parity 38/38, smoke 8/8.
+
+Still open: lowering a filtered *dimension* table through its relationship
+(and projecting columns around hidden objects) instead of refusing, and the
+reference measurement for a row-filtered role's drillthrough (presumed filtered
+rows; not re-measured on the mirror). The parity catalogue has no restricted
+drillthrough case: no shipped project configures `auth`, so it needs one with
+roles first.
+
 ## D. Audit and redaction
 
 - Structured audit events (JSONL, opt-in path): auth decision, role resolution,

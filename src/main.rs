@@ -1146,12 +1146,16 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             {
                 (fault, None)
             } else if mdx_semantic::is_drillthrough(mdx) {
-                match execute::runtime::drillthrough_fault(config, user) {
-                    Some(fault) => (fault, None),
-                    None => (
-                        execute::dispatch::get_execute_drillthrough_response(mdx, backend),
+                match execute::runtime::drillthrough_row_predicate(config, user) {
+                    Ok(predicate) => (
+                        execute::dispatch::get_execute_drillthrough_response_with_predicate(
+                            mdx,
+                            backend,
+                            predicate.as_deref(),
+                        ),
                         None,
                     ),
+                    Err(reason) => (execute::runtime::drillthrough_refusal(&reason), None),
                 }
             } else {
                 let (r, t) = execute_builders::get_execute_response_with_format(

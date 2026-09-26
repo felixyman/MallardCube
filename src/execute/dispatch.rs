@@ -45,6 +45,17 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
     statement: &str,
     backend: &B,
 ) -> String {
+    get_execute_drillthrough_response_with_predicate(statement, backend, None)
+}
+
+/// A drillthrough whose rows are additionally restricted by a role predicate
+/// (plan 058-C): the raw `SELECT *` carries it, so a filtered role sees exactly
+/// the rows direct SQL would. `None` leaves the statement's own filters only.
+pub fn get_execute_drillthrough_response_with_predicate<B: QueryBackend + ?Sized>(
+    statement: &str,
+    backend: &B,
+    row_predicate: Option<&str>,
+) -> String {
     // Only this request's queries may fault it (review S1: drillthrough was
     // the one serving path that never observed the latch, so a failed query
     // rendered an empty rowset with a valid schema).
@@ -79,6 +90,14 @@ pub fn get_execute_drillthrough_response<B: QueryBackend + ?Sized>(
             }
             None => pos = abs + 3,
         }
+    }
+
+    // The role's row filter rides along with the statement's own slicer
+    // filters: a filtered role sees exactly the rows direct SQL would, and the
+    // caller refused any restriction this `SELECT *` cannot express (plan
+    // 058-C).
+    if let Some(predicate) = row_predicate.filter(|predicate| !predicate.trim().is_empty()) {
+        where_clauses.push(format!("({predicate})"));
     }
 
     let sql = if where_clauses.is_empty() {
@@ -3493,6 +3512,56 @@ mod tests {
             let (_, other) =
                 run("SELECT {[Measures].[Units]} ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE");
             assert!(!other.cache_hit, "a different query must not hit the entry");
+        });
+    }
+
+    /// A role that filters the drilled table sees only its rows: the predicate
+    /// is lowered into the SQL, matching what direct SQL would return
+    /// (plan 058-C).
+    #[test]
+    fn drillthrough_applies_the_role_predicate() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let primary = project.model.primary_table_name().to_string();
+            config.roles = vec![RoleConfig {
+                name: "EU".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: primary.clone(),
+                    filter_expression: "territory = 'North' AND category = 'Jewelry'".into(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::Read,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["EU".into()];
+
+            let backend = Backend::test_fixture();
+            let predicate = crate::execute::runtime::drillthrough_row_predicate(&config, &user)
+                .expect("lowerable")
+                .expect("filtered");
+            let xml = crate::execute::dispatch::get_execute_drillthrough_response_with_predicate(
+                "DRILLTHROUGH",
+                backend,
+                Some(&predicate),
+            );
+            let expected = backend.query_count(&format!(
+                "SELECT COUNT(*) FROM {primary} WHERE territory = 'North' AND category = 'Jewelry'"
+            ));
+            let total = backend.query_count(&format!("SELECT COUNT(*) FROM {primary}"));
+            assert!(expected < total, "the predicate must narrow the rows");
+            assert_eq!(
+                xml.matches("<row>").count(),
+                expected.min(1000) as usize,
+                "{xml}"
+            );
+            assert!(!xml.contains(">South<"), "{xml}");
         });
     }
 
