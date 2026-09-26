@@ -136,3 +136,29 @@ Recorded, not fixed:
   unknown, `LEVEL_NAME`/`MEASUREGROUP_NAME` negatives, `TMSCHEMA_TABLES`
   `Name=nonsense`, `*_VISIBILITY` values other than 0/1, `BottomSum` boundary /
   negatives / ties, and a two-filter Excel capture.
+
+### Probe results: the tabular rowset is generic, and the boundary is right (2026-09-26)
+
+Measured on the mirror, answering the review's outstanding probes:
+
+- **The flattened rowset is generic**, not a narrow shape: it answers a
+  multi-measure Execute (1 row, one column per measure), a two-dimension
+  crossjoin (105 rows; columns = each dimension's `MEMBER_CAPTION` then the
+  measure) and a measure×member crossjoin (one column per tuple,
+  `[Measures].[Revenue].[Channel].[Channel].&[Direct]`). Our blanket refusal for
+  everything but the lone measure and the single grouped dimension is therefore a
+  **limitation, not fidelity**. The multi-measure shape is implemented now; the
+  two-dimension and tuple shapes are recorded, with their measured shapes.
+- **`BottomSum` boundary**: with a limit of 30,000,000 over categories the mirror
+  returns `All | Baby | Toys` with values 49,141,416 (the filtered total) /
+  24,701,616 / 24,440,800 — the member that *crosses* the limit is included, so
+  our `running >= limit` is right.
+- **Negatives**: `HIERARCHY_NAME=nonsense` → 0 rows and `MEASUREGROUP_NAME`
+  nonsense on measures → 0 rows and `TMSCHEMA_TABLES Name=nonsense` → 0 rows —
+  all matching the fixes; `LEVEL_NAME=Category` → 1 row (still unimplemented).
+- **Visibility values other than 0/1 are not a simple no-op**: 
+  `DIMENSION_VISIBILITY=2` answers 1 row and `HIERARCHY_VISIBILITY=-1` faults
+  ("system error ... range"). Ours treats anything but 0 as visible — recorded.
+- A filtered tabular request still needs a *valid* probe (both attempts carried
+  invalid MDX: an unescaped `&` and a dimension on two axes); the reference's
+  rule for that shape is unmeasured.

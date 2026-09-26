@@ -1800,6 +1800,32 @@ mod tests {
         });
     }
 
+    /// Multi-measure tabular: one column per measure, one row (measured on the
+    /// reference 2026-09-26: 1 row, columns [Measures].[Revenue] and
+    /// [Measures].[Units]).
+    #[test]
+    fn tabular_multi_measure_answers_one_row_per_measure() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT {[Measures].[Revenue], [Measures].[Units]} ON 0 FROM [Sales]",
+                Some("Tabular"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(xml.contains("xml-analysis:rowset"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 1, "{xml}");
+            assert!(
+                xml.contains("_x005B_Measures_x005D_._x005B_Revenue_x005D_")
+                    && xml.contains("_x005B_Measures_x005D_._x005B_Units_x005D_"),
+                "{xml}"
+            );
+        });
+    }
+
     /// A failed drillthrough query faults instead of answering an empty
     /// rowset with a valid schema (review S1).
     #[test]

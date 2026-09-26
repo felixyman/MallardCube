@@ -356,6 +356,14 @@ pub(crate) fn render_tabular_rowset(
             columns.push(model.meas_def(measure).measure_unique_name());
             rows.push(vec![format_scalar(*value)]);
         }
+        (QueryPlan::MultiMeasure { measures, filters }, QueryResult::Multi(values))
+            if filters.is_empty() && measures.len() == values.len() =>
+        {
+            for measure in measures {
+                columns.push(model.meas_def(measure).measure_unique_name());
+            }
+            rows.push(values.iter().map(|value| format_scalar(*value)).collect());
+        }
         (
             QueryPlan::GroupBy {
                 measure,
@@ -378,8 +386,8 @@ pub(crate) fn render_tabular_rowset(
         }
         _ => {
             return Err(
-                "the tabular format is only supported for one measure grouped by at most one \
-                 dimension"
+                "this query shape is not supported in the tabular format yet; it is refused \
+                 rather than answered with a rowset that does not match the cells"
                     .to_string(),
             );
         }
