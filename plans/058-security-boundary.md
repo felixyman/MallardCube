@@ -210,3 +210,68 @@ member in these probes (fault vs omission) and the value shape of the measure
 measure name (`[Total Sales]`), and deciding fault-vs-omit from the reference
 needs role deployment there; the current choice is fail-closed and recorded
 here rather than assumed.
+
+### Filtered dimensions count under the role predicate (2026-09-27)
+
+The axis member builders served the static `cardinality_hint` to every role, so
+a row-filtered user could read the unfiltered cardinality (and saw counts that
+ignored their filter).
+
+- `DimCache` entries are now keyed by `(epoch, dimension, predicate)`.
+  `get_filtered` builds a dictionary under the role's RLS predicate, so one
+  role's members can never serve another's, and the steady state costs no
+  scans: a second request re-queries nothing (asserted with a counting
+  backend).
+- `AccessView.filtered_dims` carries, per filtered dimension, the predicate and
+  the per-level counts from the per-role dictionary. The member builders
+  (`all_member_for_*`, `leaf_member_for*`, the key-hierarchy All member) use
+  those counts instead of the hint, for both flat and leveled dimensions.
+- The drill builders read the *effective* dictionary
+  (`axis_members::effective_dictionary`): the no-`NON EMPTY` member list, the
+  per-member child counts and `drill_children_cardinalities` all come from the
+  filtered dictionary. That helper groups the dictionary's level paths instead
+  of issuing its own SQL, so a drill no longer queries at all once the
+  dictionary is warm (the first drill per role and epoch pays the build).
+- A failed dictionary build faults ("a dimension dictionary query failed: …")
+  and consumes the latch, so one transient error neither renders
+  `CHILDREN_CARDINALITY 0` nor poisons the pooled connection.
+- Administrator and unfiltered paths are unchanged: the access view is only
+  attached for restricted users, and the hint remains the fallback.
+
+Unit coverage: `filtered_dimension_counts_use_the_role_predicate` (project3, a
+role filtered to `territory = 'North'`) asserts the All member's children
+cardinality equals the filtered distinct count, that a second identical request
+adds no queries, that a *different* predicate gets its own entry (its count, and
+a rebuild), and that the no-`NON EMPTY` drilldown dictionary lists no member
+from outside the role's rows;
+`a_failed_dictionary_build_faults_and_clears_the_latch` pins the failure
+behaviour. 620 tests in debug and release, fidelity 13/13, parity 38/38,
+smoke 8/8.
+
+Still open from the review of this section (recorded, not hidden):
+
+- The per-member child counts a drill overwrites come from the filtered
+  dictionary now, but the *level-wide* value the builders place there first
+  (`per_level[level+1]`) is still a whole-level number used as one member's
+  children — the same shape as the old static hint, pre-existing.
+- The rewritten `drill_children_cardinalities` narrows to the requested
+  ancestor prefix where the old SQL (for a key shorter than the drilled level)
+  counted globally; that is a fix, but no test or catalogue case pins it.
+- `parity/catalog.json` has no `CHILDREN_CARDINALITY`/`DISPLAY_INFO` case, so
+  the emitted per-member counts are unguarded by the corpus; a `DrilldownLevel`
+  case with `DIMENSION PROPERTIES CHILDREN_CARDINALITY` needs a
+  mirror-recorded value.
+- A flat dimension's leaf members now report 0 children for a filtered role
+  where an unfiltered role keeps the hint, so the expand affordance differs by
+  role. Less capability revealed, but unmeasured against the reference.
+- Counts are computed for the dimensions whose *discovery table* is filtered;
+  a relationship-backed dimension reached through a filtered fact table keeps
+  the hint (the role may read all of the dimension table, so this is a fidelity
+  gap, not a leak).
+- The per-role entries are bounded by distinct predicates × dimensions and are
+  kept until the next reload; a deployment that filters per user, rather than
+  per role, should watch that map (`DimCache` has no eviction of its own).
+- Unmeasured against the reference: whether SSAS reports the filtered
+  cardinality for a row-filtered role, and the exact `DISPLAY_INFO` bit
+  pattern there. These counts follow the filtered cube space, which is the
+  fail-closed reading.

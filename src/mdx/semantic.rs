@@ -618,14 +618,26 @@ pub struct SemanticQuery {
     pub access: Option<AccessView>,
 }
 
-/// Hidden dimensions (OLS) and the measures a restricted user may see. Built
-/// by the runtime from the effective role filters.
+/// Hidden dimensions (OLS), the measures a restricted user may see, and the
+/// member counts of the dimensions their roles filter (RLS). Built by the
+/// runtime from the effective role filters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessView {
     pub hidden_dimensions: Vec<String>,
     /// The measure ids the user can see. `None` = unrestricted (the
     /// administrator path); `Some(empty)` = no measure is visible.
     pub visible_measures: Option<Vec<String>>,
+    /// Role-filtered dimensions: the predicate that scopes their rows and the
+    /// member counts under it, from the per-role dictionary (plan 058).
+    pub filtered_dims: std::collections::HashMap<String, FilteredDim>,
+}
+
+/// A role-filtered dimension: the SQL predicate that limits the rows the role
+/// may see, and the per-level member counts under it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredDim {
+    pub predicate: String,
+    pub per_level: Vec<u32>,
 }
 
 impl AccessView {

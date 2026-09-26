@@ -2163,6 +2163,249 @@ mod tests {
         });
     }
 
+    /// A failed dictionary build must fault (not render CHILDREN_CARDINALITY 0)
+    /// and must consume the latch, so one transient failure cannot poison the
+    /// pooled connection for every later request (plan 058).
+    #[test]
+    fn a_failed_dictionary_build_faults_and_clears_the_latch() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        #[derive(Default)]
+        struct LatchingFailure {
+            failure: std::sync::Mutex<Option<String>>,
+        }
+        impl LatchingFailure {
+            fn record(&self) {
+                if let Ok(mut slot) = self.failure.lock()
+                    && slot.is_none()
+                {
+                    *slot = Some("dictionary backend down".into());
+                }
+            }
+        }
+        impl crate::backend::QueryBackend for LatchingFailure {
+            fn query_scalar(&self, _sql: &str) -> f64 {
+                self.record();
+                0.0
+            }
+            fn query_grouped_1d(&self, _sql: &str) -> Vec<(String, f64)> {
+                self.record();
+                Vec::new()
+            }
+            fn query_pairs(&self, _sql: &str) -> Vec<(String, String, f64)> {
+                self.record();
+                Vec::new()
+            }
+            fn query_count(&self, _sql: &str) -> u32 {
+                self.record();
+                0
+            }
+            fn query_strings(&self, _sql: &str) -> Vec<String> {
+                self.record();
+                Vec::new()
+            }
+            fn query_rows(&self, _sql: &str) -> Vec<Vec<String>> {
+                self.record();
+                Vec::new()
+            }
+            fn query_column_names(&self, _sql: &str) -> Vec<String> {
+                self.record();
+                Vec::new()
+            }
+            fn take_failure(&self) -> Option<String> {
+                self.failure.lock().ok().and_then(|mut slot| slot.take())
+            }
+            fn failure_recorded(&self) -> bool {
+                self.failure
+                    .lock()
+                    .map(|slot| slot.is_some())
+                    .unwrap_or(false)
+            }
+        }
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let fact_table = project
+                .model
+                .fact_tables
+                .first()
+                .expect("project3 has a fact table")
+                .table_name
+                .clone();
+            config.roles = vec![RoleConfig {
+                name: "RLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: fact_table,
+                    filter_expression: "territory = 'North'".into(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::Read,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["RLS".into()];
+
+            let backend = LatchingFailure::default();
+            let (xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    "SELECT {[Category].[Category].Members} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                    &backend,
+                    &user,
+                    &config,
+                );
+            assert!(
+                xml.contains("a dimension dictionary query failed"),
+                "a failed build must fault: {xml}"
+            );
+            assert!(
+                !backend.failure_recorded(),
+                "the fault must consume the latch, or every later request on this connection faults"
+            );
+        });
+    }
+
+    /// A role that filters the fact table gets dimension counts under its
+    /// predicate instead of the unfiltered static hint, and the per-role
+    /// dictionary is cached so a second request re-queries nothing (plan 058).
+    #[test]
+    fn filtered_dimension_counts_use_the_role_predicate() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let fact_table = project
+                .model
+                .fact_tables
+                .first()
+                .expect("project3 has a fact table")
+                .table_name
+                .clone();
+            config.roles = vec![RoleConfig {
+                name: "RLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: fact_table.clone(),
+                    filter_expression: "territory = 'North'".into(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::Read,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["RLS".into()];
+            let admin = UserContext::admin_default();
+
+            let mdx = "SELECT {AddCalculatedMembers({[Category].[Category].[(All)].Members})} \
+                       DIMENSION PROPERTIES CHILDREN_CARDINALITY ON COLUMNS FROM [Sales] \
+                       CELL PROPERTIES CELL_ORDINAL";
+            let inner = Backend::test_fixture();
+            let backend = crate::test_support::counting::Counting::new(inner);
+            let (first, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx, &backend, &user, &config,
+                );
+            let after_first = backend.calls();
+            assert!(
+                after_first > 0,
+                "the first request builds dictionaries: {first}"
+            );
+
+            let expected = inner.query_count(
+                "SELECT COUNT(DISTINCT category) FROM sales_fact WHERE territory = 'North'",
+            );
+            let unfiltered = inner.query_count("SELECT COUNT(DISTINCT category) FROM sales_fact");
+            assert!(
+                expected < unfiltered,
+                "the predicate must narrow the count ({expected} vs {unfiltered})"
+            );
+            assert!(
+                first.contains(&format!(
+                    "<CHILDREN_CARDINALITY>{expected}</CHILDREN_CARDINALITY>"
+                )),
+                "filtered children cardinality {expected} not in: {first}"
+            );
+
+            let (second, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx, &backend, &user, &config,
+                );
+            assert_eq!(
+                backend.calls(),
+                after_first,
+                "the per-role dictionary is cached; the second request must not re-query: {second}"
+            );
+
+            // A different predicate gets its own entry: role Electronics sees
+            // one category, not the North slice, and building it costs queries
+            // again.
+            assert!(expected > 0, "the fixture must have North rows");
+            let mut south_config = config.clone();
+            south_config.roles[0].table_permissions[0].filter_expression =
+                "category = 'Electronics'".into();
+            let (south, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx,
+                    &backend,
+                    &user,
+                    &south_config,
+                );
+            let south_expected = inner.query_count(
+                "SELECT COUNT(DISTINCT category) FROM sales_fact WHERE category = 'Electronics'",
+            );
+            assert!(
+                south_expected > 0 && south_expected != expected,
+                "the fixture must discriminate the predicates ({south_expected} vs {expected})"
+            );
+            assert!(
+                south.contains(&format!(
+                    "<CHILDREN_CARDINALITY>{south_expected}</CHILDREN_CARDINALITY>"
+                )),
+                "the second role must get its own count: {south}"
+            );
+            assert!(
+                backend.calls() > after_first,
+                "a distinct predicate must build its own dictionary"
+            );
+
+            // The no-NON-EMPTY drilldown dictionary (and the per-member counts)
+            // stay inside the role's rows: a category with no North rows is
+            // absent for the filtered role and present for the administrator.
+            let outside = inner.query_strings(
+                "SELECT DISTINCT category FROM sales_fact \
+                 WHERE category NOT IN (SELECT DISTINCT category FROM sales_fact WHERE territory = 'North')",
+            );
+            let drill_mdx = "SELECT {[Category].[Category].Members} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL";
+            let (restricted_drill, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    drill_mdx, &backend, &user, &config,
+                );
+            let (admin_drill, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    drill_mdx,
+                    &backend,
+                    &admin,
+                    &project.config,
+                );
+            for name in outside.iter().take(3) {
+                assert!(
+                    !restricted_drill.contains(name.as_str()),
+                    "member '{name}' is outside the role's rows: {restricted_drill}"
+                );
+                assert!(
+                    admin_drill.contains(name.as_str()),
+                    "the administrator still sees '{name}': {admin_drill}"
+                );
+            }
+        });
+    }
+
     /// The cChildren builders name `[Measures].[cChildren]` on their axes; a
     /// user who can see no measure must not be told `[Measures]` exists even
     /// when the dimension count itself is serviceable (a star model keeps its
@@ -2178,6 +2421,7 @@ mod tests {
             query.access = Some(AccessView {
                 hidden_dimensions: vec![],
                 visible_measures: Some(vec![]),
+                filtered_dims: Default::default(),
             });
             let xml = crate::execute::render::build_cchildren_for_all(
                 &query,

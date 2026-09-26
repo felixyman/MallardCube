@@ -287,9 +287,9 @@ fn build_tuple_set<B: QueryBackend + ?Sized>(
                 }
                 for key in &f.members {
                     members.push(leaf_member_for_level(
+                        query,
                         &f.dimension,
                         key,
-                        &query.dim_props,
                         f.level.as_deref(),
                     ));
                 }
@@ -488,7 +488,7 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
                 .dims
                 .iter()
                 .zip(coord.iter())
-                .map(|(dim, value)| member_or_all(dim, value.as_deref(), &query.dim_props, backend))
+                .map(|(dim, value)| member_or_all(query, dim, value.as_deref(), backend))
                 .collect();
             if spec.measures.is_empty() {
                 tuples.push(cellset::TupleConfig { members });
@@ -568,14 +568,14 @@ fn build_multi_dim_pivot<B: QueryBackend + ?Sized>(
 }
 
 fn member_or_all<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
     dim: &str,
     value: Option<&str>,
-    dim_props: &[String],
     backend: &B,
 ) -> cellset::MemberConfig {
     match value {
-        Some(v) => leaf_members_from(dim, &[v.to_string()], dim_props, None, None).remove(0),
-        None => all_member_for_with_backend(dim, dim_props, backend),
+        Some(v) => leaf_members_from(query, dim, &[v.to_string()], None, None).remove(0),
+        None => all_member_for_with_backend(query, dim, backend),
     }
 }
 
@@ -653,17 +653,16 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
 
     let member_for = |dim: &str, value: &str| -> cellset::MemberConfig {
         leaf_members_from(
+            query,
             dim,
             std::slice::from_ref(&value.to_string()),
-            &query.dim_props,
             query.drilldown_level(),
             None,
         )
         .remove(0)
     };
-    let all_for = |dim: &str| -> cellset::MemberConfig {
-        all_member_for_with_backend(dim, &query.dim_props, backend)
-    };
+    let all_for =
+        |dim: &str| -> cellset::MemberConfig { all_member_for_with_backend(query, dim, backend) };
 
     // Axis 0: (All) + every dim0 member, with the measures when they belong here.
     let mut axis0_members = vec![all_for(&d0)];
@@ -907,7 +906,7 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
         QueryResult::Grouped(rows) => rows.clone(),
         _ => Vec::new(),
     };
-    let members = model.dim_cache.get(model, def, backend);
+    let members = crate::axis_members::effective_dictionary(query, def, backend);
     let key_view = query.key_hierarchy_view.is_some();
     let names: Vec<String> = if key_view {
         // The key-attribute level's paths carry their ancestors; the view it
@@ -937,12 +936,12 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
     // key-attribute view gets its own (All) from `apply_key_hierarchy_view`.
     let mut axis_members = Vec::new();
     if !query.level_drag && !key_view {
-        axis_members.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+        axis_members.push(all_member_for_with_backend(query, dim, backend));
     }
     axis_members.extend(leaf_members_from(
+        query,
         dim,
         &names,
-        &query.dim_props,
         query.drilldown_level(),
         None,
     ));
@@ -952,6 +951,7 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
             def,
             &query.dim_props,
             backend,
+            crate::axis_members::access_counts(query, &def.id),
         );
     }
     apply_member_display_info(&mut axis_members);
@@ -1042,9 +1042,9 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         Some(level_member_uname(dim_def, dl - 1, key))
     });
     let mut members = leaf_members_from(
+        query,
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        &query.dim_props,
         query.drilldown_level(),
         parent_uname.as_deref(),
     );
@@ -1060,14 +1060,14 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     // mismatched expand state on quarters.
     if let Some(dl) = query.drilldown_level() {
         let key_path = filter_keys.first().cloned().unwrap_or_default();
-        let cc_map = drill_children_cardinalities(backend, dim, dl, &key_path);
+        let cc_map = drill_children_cardinalities(query, backend, dim, dl, &key_path);
         for m in &mut members {
             // Path-labelled members aren't in the plain-value map; compute
             // their real count from the key path (a month shows ~30 day
             // children, not the static whole-level cardinality).
             let key = crate::axis_members::key_from_member_uname(&m.u_name);
             let cc = match key.as_deref() {
-                Some(k) if k.contains('|') => member_child_count(backend, dim, dl, k),
+                Some(k) if k.contains('|') => member_child_count(query, backend, dim, dl, k),
                 _ => match cc_map.get(&m.caption) {
                     Some(cc) => *cc,
                     None => continue,
@@ -1150,17 +1150,14 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
             // Level-0 members with their own aggregates (the input set).
             let mut roots = level0_member_values(query, dim, backend);
             roots.sort_by(|a, b| cmp_key_paths(&a.0, &b.0));
-            prefix.push((
-                all_member_for_with_backend(dim, &query.dim_props, backend),
-                total,
-            ));
+            prefix.push((all_member_for_with_backend(query, dim, backend), total));
             for (root_key, value) in &roots {
                 if root_key.split('|').count() != 1 {
                     continue;
                 }
                 let is_branch = *root_key == branch_year;
                 let u_name = level_member_uname(def, 0, root_key);
-                let cc = member_child_count(backend, dim, 0, root_key);
+                let cc = member_child_count(query, backend, dim, 0, root_key);
                 prefix.push((
                     cellset::MemberConfig {
                         hierarchy: def.hierarchy_unique_name(),
@@ -1197,9 +1194,9 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                 }
                 for (name, value) in &data {
                     let mut m = leaf_members_from(
+                        query,
                         dim,
                         std::slice::from_ref(name),
-                        &query.dim_props,
                         Some(dl),
                         parent_uname.as_deref(),
                     )
@@ -1209,7 +1206,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     // static whole-level value (e.g. 132 months for a quarter)
                     // corrupts its tree and the expand never renders.
                     m.children_cardinality =
-                        member_child_count(backend, dim, dl, &format!("{key}|{name}"));
+                        member_child_count(query, backend, dim, dl, &format!("{key}|{name}"));
                     prefix.push((m, *value));
                 }
             }
@@ -1223,16 +1220,11 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     prefix.push((m, total));
                 }
                 for (name, value) in &data {
-                    let mut m = leaf_members_from(
-                        dim,
-                        std::slice::from_ref(name),
-                        &query.dim_props,
-                        Some(dl),
-                        None,
-                    )
-                    .remove(0);
+                    let mut m =
+                        leaf_members_from(query, dim, std::slice::from_ref(name), Some(dl), None)
+                            .remove(0);
                     m.children_cardinality =
-                        member_child_count(backend, dim, dl, &format!("{key}|{name}"));
+                        member_child_count(query, backend, dim, dl, &format!("{key}|{name}"));
                     prefix.push((m, *value));
                 }
             }
@@ -1293,10 +1285,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
             .first()
             .is_none_or(|m| !m.u_name.ends_with(".[All]") && !m.u_name.ends_with(".[(All)]"))
     {
-        members.insert(
-            0,
-            all_member_for_with_backend(dim, &query.dim_props, backend),
-        );
+        members.insert(0, all_member_for_with_backend(query, dim, backend));
         num_ancestors += 1;
     }
 
@@ -1315,7 +1304,13 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     if key_view.is_some()
         && let Some(def) = crate::proxy_project::project().model.dim_def_opt(dim)
     {
-        crate::axis_members::apply_key_hierarchy_view(&mut members, def, &query.dim_props, backend);
+        crate::axis_members::apply_key_hierarchy_view(
+            &mut members,
+            def,
+            &query.dim_props,
+            backend,
+            crate::axis_members::access_counts(query, &def.id),
+        );
         // The (All) root is an ancestor: it carries the branch total and the
         // drilled-down display flag.
         num_ancestors = 1;
@@ -1566,10 +1561,7 @@ fn preorder_drill_members<B: QueryBackend + ?Sized>(
     order.sort_by(|&a, &b| cmp_key_paths(&labels[a], &labels[b]));
 
     let mut out: Vec<(cellset::MemberConfig, Option<usize>)> = Vec::new();
-    out.push((
-        all_member_for_with_backend(dim, &query.dim_props, backend),
-        None,
-    ));
+    out.push((all_member_for_with_backend(query, dim, backend), None));
 
     #[allow(clippy::too_many_arguments)]
     fn walk<B: QueryBackend + ?Sized>(
@@ -1596,15 +1588,15 @@ fn preorder_drill_members<B: QueryBackend + ?Sized>(
                     continue;
                 }
                 let mut m = leaf_members_from(
+                    query,
                     dim,
                     std::slice::from_ref(label),
-                    &query.dim_props,
                     Some(level_idx),
                     None,
                 )
                 .remove(0);
                 attach_parent_keys(std::slice::from_mut(&mut m), dim, Some(level_idx));
-                let cc = member_child_count(backend, dim, level_idx, label);
+                let cc = member_child_count(query, backend, dim, level_idx, label);
                 m.children_cardinality = cc;
                 m.display_info = if cc > 0 { 131075 } else { 3 };
                 out.push((m, Some(idx)));
@@ -1644,7 +1636,7 @@ fn preorder_drill_members<B: QueryBackend + ?Sized>(
             } else {
                 level_member_uname(def, level - 1, &parts[..level].join("|"))
             };
-            let cc = member_child_count(backend, dim, level, &key);
+            let cc = member_child_count(query, backend, dim, level, &key);
             out.push((
                 cellset::MemberConfig {
                     hierarchy: def.hierarchy_unique_name(),
@@ -1759,7 +1751,7 @@ fn ancestor_members_from_labels<B: QueryBackend + ?Sized>(
         }
     }
     let mut out: Vec<cellset::MemberConfig> = Vec::new();
-    out.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+    out.push(all_member_for_with_backend(query, dim, backend));
     for (i, keys) in keys_by_level.iter_mut().enumerate() {
         keys.sort();
         let Some(level) = def.levels.get(i) else {
@@ -1773,7 +1765,7 @@ fn ancestor_members_from_labels<B: QueryBackend + ?Sized>(
             } else {
                 level_member_uname(def, i - 1, &parts[..i].join("|"))
             };
-            let cc = member_child_count(backend, dim, i, key);
+            let cc = member_child_count(query, backend, dim, i, key);
             out.push(cellset::MemberConfig {
                 hierarchy: def.hierarchy_unique_name(),
                 u_name: level_member_uname(def, i, key),
@@ -1847,7 +1839,7 @@ fn ancestor_members<B: QueryBackend + ?Sized>(
     let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
     let mut out: Vec<cellset::MemberConfig> = Vec::new();
     // (All) at hierarchy level 0.
-    out.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+    out.push(all_member_for_with_backend(query, dim, backend));
     for i in 0..level_idx {
         if def.levels.get(i).is_none() || key_parts.len() < i + 1 {
             break;
@@ -1861,7 +1853,7 @@ fn ancestor_members<B: QueryBackend + ?Sized>(
         } else {
             level_member_uname(def, i - 1, &key_parts[..i].join("|"))
         };
-        let cc = member_child_count(backend, dim, i, &anc_key);
+        let cc = member_child_count(query, backend, dim, i, &anc_key);
         let dim_props = walk_dim_props(
             def,
             &caption,
@@ -1908,8 +1900,10 @@ fn level_member_uname(
 
 /// Per-member child count at `level_idx` of `dim`, scoped by the ancestor path
 /// in `key_path` (e.g. `2026` for quarters under year 2026). Returns the number
-/// of distinct values at the next level beneath each member.
+/// of distinct values at the next level beneath each member, under the query's
+/// role filter when it has one (plan 058).
 fn drill_children_cardinalities<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
     backend: &B,
     dim: &str,
     level_idx: usize,
@@ -1920,38 +1914,26 @@ fn drill_children_cardinalities<B: QueryBackend + ?Sized>(
     let Some(dim_def) = model.dim_def_opt(dim) else {
         return std::collections::HashMap::new();
     };
-    let Some(level) = dim_def.levels.get(level_idx) else {
+    // Flat dimensions have no deeper level to count.
+    if dim_def.levels.get(level_idx + 1).is_none() {
         return std::collections::HashMap::new();
-    };
-    let Some(next) = dim_def.levels.get(level_idx + 1) else {
-        return std::collections::HashMap::new();
-    };
-    let table = model.dim_table_for_discovery(dim);
-    let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
-    let mut wc = String::new();
-    if key_parts.len() == level_idx && level_idx > 0 {
-        let conds: Vec<String> = dim_def.levels[..level_idx]
-            .iter()
-            .zip(key_parts.iter())
-            .map(|(l, v)| {
-                format!(
-                    "CAST({} AS VARCHAR) = '{}'",
-                    l.column,
-                    v.replace('\'', "''")
-                )
-            })
-            .collect();
-        wc = format!(" WHERE {}", conds.join(" AND "));
     }
-    let sql = format!(
-        "SELECT CAST({} AS VARCHAR), COUNT(DISTINCT {}) FROM {}{} GROUP BY 1",
-        level.column, next.column, table, wc
-    );
-    backend
-        .query_grouped_1d(&sql)
-        .into_iter()
-        .map(|(name, count)| (name, count as u32))
-        .collect()
+    let members = crate::axis_members::effective_dictionary(query, dim_def, backend);
+    let Some(paths) = members.level_paths.get(level_idx + 1) else {
+        return std::collections::HashMap::new();
+    };
+    let key_parts: Vec<&str> = key_path.split('|').filter(|s| !s.is_empty()).collect();
+    let mut out = std::collections::HashMap::new();
+    for path in paths {
+        if path.len() < level_idx + 2 {
+            continue;
+        }
+        if path[..key_parts.len()] != key_parts[..] {
+            continue;
+        }
+        *out.entry(path[level_idx].clone()).or_insert(0u32) += 1;
+    }
+    out
 }
 
 /// Number of children of the member at `level_idx` (a `dim.levels` index:
@@ -1959,6 +1941,7 @@ fn drill_children_cardinalities<B: QueryBackend + ?Sized>(
 /// (e.g. `2025` for the year, `2025|3` for the quarter). Returns 0 when the
 /// level has no further level beneath it (a leaf).
 fn member_child_count<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
     backend: &B,
     dim: &str,
     level_idx: usize,
@@ -1973,10 +1956,8 @@ fn member_child_count<B: QueryBackend + ?Sized>(
         return 0;
     }
     // Cached dictionary (plan 031): one lookup instead of one query per axis
-    // member.
-    model
-        .dim_cache
-        .get(model, dim_def, backend)
+    // member — the role-filtered one when the query has a predicate (plan 058).
+    crate::axis_members::effective_dictionary(query, dim_def, backend)
         .child_count(level_idx, key_path)
 }
 
@@ -2090,8 +2071,10 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
 
     let d0_filter_key = filter_keys(d0).first().cloned().unwrap_or_default();
     let d1_filter_key = filter_keys(d1).first().cloned().unwrap_or_default();
-    let cc_map = lvl0.map(|dl| drill_children_cardinalities(backend, d0, dl, &d0_filter_key));
-    let cc_map1 = lvl1.map(|dl| drill_children_cardinalities(backend, d1, dl, &d1_filter_key));
+    let cc_map =
+        lvl0.map(|dl| drill_children_cardinalities(query, backend, d0, dl, &d0_filter_key));
+    let cc_map1 =
+        lvl1.map(|dl| drill_children_cardinalities(query, backend, d1, dl, &d1_filter_key));
 
     let slot_member = |slot: usize, value: &str| -> crate::cellset::MemberConfig {
         let (dim, lvl, parent, cc_map) = if slot == 0 {
@@ -2100,8 +2083,7 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
             (d1, lvl1, d1_parent_uname.as_deref(), cc_map1.as_ref())
         };
         let v = value.to_string();
-        let mut m = leaf_members_from(dim, std::slice::from_ref(&v), &query.dim_props, lvl, parent)
-            .remove(0);
+        let mut m = leaf_members_from(query, dim, std::slice::from_ref(&v), lvl, parent).remove(0);
         // Path-labelled members aren't in the plain-value cc map; compute their
         // real child count from the key path. Plain labels use the map.
         let label_key = value
@@ -2110,7 +2092,7 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
             .flatten();
         match (label_key, lvl) {
             (Some(k), Some(lv)) => {
-                let cc = member_child_count(backend, dim, lv, &k);
+                let cc = member_child_count(query, backend, dim, lv, &k);
                 m.children_cardinality = cc;
                 m.display_info = if cc > 0 { 131075 } else { 3 };
             }
@@ -2285,7 +2267,7 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     // whole-level value corrupts its tree.
     let roots_cc = |slot: usize| -> std::collections::HashMap<String, u32> {
         let dim = if slot == 0 { d0 } else { d1 };
-        drill_children_cardinalities(backend, dim, 0, "")
+        drill_children_cardinalities(query, backend, dim, 0, "")
     };
     let roots_cc0 = if target0.is_some() {
         roots_cc(0)
@@ -2307,14 +2289,8 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     let slot_member_at = |slot: usize, value: &str, level: usize| -> crate::cellset::MemberConfig {
         let dim = if slot == 0 { d0 } else { d1 };
         let v = value.to_string();
-        let mut m = leaf_members_from(
-            dim,
-            std::slice::from_ref(&v),
-            &query.dim_props,
-            Some(level),
-            None,
-        )
-        .remove(0);
+        let mut m =
+            leaf_members_from(query, dim, std::slice::from_ref(&v), Some(level), None).remove(0);
         let cc_map = if slot == 0 { &roots_cc0 } else { &roots_cc1 };
         if let Some(cc) = cc_map.get(value) {
             m.children_cardinality = *cc;
@@ -2750,9 +2726,9 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
     let root = ordered_pair(
         dims,
         d0,
-        all_member_for_with_backend(d0, &query.dim_props, backend),
+        all_member_for_with_backend(query, d0, backend),
         d1,
-        all_member_for_with_backend(d1, &query.dim_props, backend),
+        all_member_for_with_backend(query, d1, backend),
     );
     tuples.push(root);
     cells.push(measurement_cell_for_query(query, ordinal, grand_total));
@@ -2768,8 +2744,8 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
         let group = &all_data[start..i];
         let collapsed = excluded_d0.contains(parent.as_str());
         let parent_total: f64 = group.iter().map(|(_, _, v)| *v).sum();
-        let m0 = leaf_member_for(d0, &parent, &query.dim_props);
-        let m1 = all_member_for_with_backend(d1, &query.dim_props, backend);
+        let m0 = leaf_member_for(query, d0, &parent);
+        let m1 = all_member_for_with_backend(query, d1, backend);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
         cells.push(measurement_cell_for_query(query, ordinal, parent_total));
         ordinal += 1;
@@ -2780,16 +2756,16 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
             if excluded_d1.contains(second.as_str()) {
                 if seen_d1_col.insert(second.clone()) {
                     let total = col_d1_totals.get(second).copied().unwrap_or(0.0);
-                    let m0 = all_member_for_with_backend(d0, &query.dim_props, backend);
-                    let m1 = leaf_member_for(d1, second, &query.dim_props);
+                    let m0 = all_member_for_with_backend(query, d0, backend);
+                    let m1 = leaf_member_for(query, d1, second);
                     tuples.push(ordered_pair(dims, d0, m0, d1, m1));
                     cells.push(measurement_cell_for_query(query, ordinal, total));
                     ordinal += 1;
                 }
                 continue;
             }
-            let m0 = leaf_member_for(d0, &parent, &query.dim_props);
-            let m1 = leaf_member_for(d1, second, &query.dim_props);
+            let m0 = leaf_member_for(query, d0, &parent);
+            let m1 = leaf_member_for(query, d1, second);
             tuples.push(ordered_pair(dims, d0, m0, d1, m1));
             cells.push(measurement_cell_for_query(query, ordinal, *value));
             ordinal += 1;
@@ -2822,9 +2798,9 @@ pub(crate) fn build_measure_by_category<B: QueryBackend + ?Sized>(
         _ => unreachable!(),
     };
     let axis1_members = leaf_members_from(
+        query,
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        &query.dim_props,
         query.drilldown_level(),
         None,
     );
@@ -2885,9 +2861,9 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
     }
 
     let mut axis1_members = leaf_members_from(
+        query,
         dim,
         &merged.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        &query.dim_props,
         query.drilldown_level(),
         None,
     );
@@ -2898,7 +2874,7 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
     // Total column/row. Summing the groups is exact for the additive measures
     // the proxy serves (plan 049).
     if !query.level_drag {
-        let all = all_member_for_with_backend(dim, &query.dim_props, backend);
+        let all = all_member_for_with_backend(query, dim, backend);
         for (mi, measure_id) in measure_ids.iter().enumerate() {
             let total: f64 = merged
                 .iter()
@@ -2979,8 +2955,8 @@ fn build_multi_measure_crossjoin<B: QueryBackend + ?Sized>(
 
     let mut tuples = Vec::new();
     for (a, b, _values) in &merged {
-        let m0 = leaf_member_for(d0, a, &query.dim_props);
-        let m1 = leaf_member_for(d1, b, &query.dim_props);
+        let m0 = leaf_member_for(query, d0, a);
+        let m1 = leaf_member_for(query, d1, b);
         tuples.push(ordered_pair(dims, d0, m0, d1, m1));
     }
     apply_axis_display_info(&mut tuples);
@@ -3050,7 +3026,7 @@ pub(crate) fn build_all_level_members<B: QueryBackend + ?Sized>(
             single_member_axis(
                 "Axis0",
                 hierarchy_for(dim, &query.dim_props),
-                all_member_for_with_backend(dim, &query.dim_props, backend),
+                all_member_for_with_backend(query, dim, backend),
             ),
             full_slicer_axis_with_backend(query, backend),
         ],
@@ -3070,9 +3046,9 @@ pub(crate) fn build_leaf_level_members<B: QueryBackend + ?Sized>(
         _ => unreachable!(),
     };
     let members = leaf_members_from(
+        query,
         dim,
         &data.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        &query.dim_props,
         None,
         None,
     );
@@ -3150,7 +3126,7 @@ pub(crate) fn build_cchildren_for_all<B: QueryBackend + ?Sized>(
             single_member_axis(
                 "Axis0",
                 hierarchy_for(dim, &query.dim_props),
-                all_member_for_with_backend(dim, &query.dim_props, backend),
+                all_member_for_with_backend(query, dim, backend),
             ),
             single_member_axis("Axis1", measures_hierarchy(), cchildren_member()),
             full_slicer_axis_with_backend(query, backend),
@@ -3170,8 +3146,8 @@ pub(crate) fn build_cchildren_for_leaf_product<B: QueryBackend + ?Sized>(
         return empty_cellset(query, backend);
     }
     let dim = row_dim(query);
-    let leaf = leaf_member_for(dim, name, &query.dim_props);
-    let all = all_member_for_with_backend(dim, &query.dim_props, backend);
+    let leaf = leaf_member_for(query, dim, name);
+    let all = all_member_for_with_backend(query, dim, backend);
     let real_count = match result {
         QueryResult::Count(c) => *c,
         _ => unreachable!(),
@@ -3495,7 +3471,7 @@ fn build_set_members<B: QueryBackend + ?Sized>(
         (ms, hc)
     } else {
         let names: Vec<String> = entries.iter().map(|(_, c, _)| c.clone()).collect();
-        let ms = leaf_members_from(dim.as_str(), &names, &query.dim_props, group_level, None);
+        let ms = leaf_members_from(query, dim.as_str(), &names, group_level, None);
         let hc = hierarchy_for(dim.as_str(), &query.dim_props);
         (ms, hc)
     };

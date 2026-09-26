@@ -11,11 +11,12 @@
 //!
 //! - One cache per [`SemanticModel`], so tests that load different projects or
 //!   use different backends can never share entries.
-//! - Row-level-security users (filtered table access) bypass the cache and
-//!   query directly: cached values are unfiltered, and a per-role dictionary is
-//!   a follow-up.
+//! - Row-level-security roles get a dictionary per predicate
+//!   ([`DimCache::get_filtered`]), keyed alongside the epoch: a filtered role
+//!   never reads the unfiltered members or counts. The MDSCHEMA member rowsets
+//!   still query directly rather than through the cache.
 //! - A data reload must call [`DimCache::clear`], since paths and counts depend
-//!   on the data.
+//!   on the data. Entries per distinct predicate are kept until then.
 
 use crate::backend::QueryBackend;
 use crate::engine::model::{DimensionDef, SemanticModel};
@@ -66,14 +67,20 @@ impl DimMembers {
     }
 }
 
-/// Lazily built member dictionaries, one per dimension.
+/// Cache key: data epoch, dimension, and the role predicate (`None` for the
+/// unfiltered dictionary).
+type DictKey = (u64, DimId, Option<String>);
+
+/// Lazily built member dictionaries, one per dimension and role filter.
 ///
 /// Keyed by data epoch as well as dimension: a dictionary built before a
 /// reload must not be served after it, even if a late in-flight request inserts
-/// one (review S2).
+/// one (review S2). A row-level-security role gets its own entry keyed by the
+/// predicate — serving the unfiltered dictionary would leak the full
+/// cardinality and the members outside the role (plan 058).
 #[derive(Default)]
 pub struct DimCache {
-    entries: RwLock<HashMap<(u64, DimId), Arc<DimMembers>>>,
+    entries: RwLock<HashMap<DictKey, Arc<DimMembers>>>,
 }
 
 impl DimCache {
@@ -84,13 +91,43 @@ impl DimCache {
         dim: &DimensionDef,
         backend: &B,
     ) -> Arc<DimMembers> {
-        let key = (crate::execute::cache::data_epoch(), dim.id.clone());
+        self.get_with_filter(model, dim, backend, None)
+    }
+
+    /// Dictionary for `dim` under an RLS predicate, built on first use. The
+    /// predicate is part of the cache key: one role's members must never serve
+    /// another's.
+    pub fn get_filtered<B: QueryBackend + ?Sized>(
+        &self,
+        model: &SemanticModel,
+        dim: &DimensionDef,
+        backend: &B,
+        predicate: &str,
+    ) -> Arc<DimMembers> {
+        if predicate.is_empty() {
+            return self.get(model, dim, backend);
+        }
+        self.get_with_filter(model, dim, backend, Some(predicate))
+    }
+
+    fn get_with_filter<B: QueryBackend + ?Sized>(
+        &self,
+        model: &SemanticModel,
+        dim: &DimensionDef,
+        backend: &B,
+        predicate: Option<&str>,
+    ) -> Arc<DimMembers> {
+        let key = (
+            crate::execute::cache::data_epoch(),
+            dim.id.clone(),
+            predicate.map(str::to_string),
+        );
         if let Ok(entries) = self.entries.read()
             && let Some(hit) = entries.get(&key)
         {
             return hit.clone();
         }
-        let built = Arc::new(build(model, dim, backend));
+        let built = Arc::new(build(model, dim, backend, predicate.unwrap_or("")));
         // A dictionary built from a failed query is empty. Caching it would
         // serve an empty hierarchy for the process lifetime — no query runs on
         // later hits, so nothing would ever fault — while the request path
@@ -116,10 +153,11 @@ fn build<B: QueryBackend + ?Sized>(
     model: &SemanticModel,
     dim: &DimensionDef,
     backend: &B,
+    where_sql: &str,
 ) -> DimMembers {
     let table = model.dim_table_for_discovery(&dim.id);
     if dim.levels.is_empty() {
-        let leaf_values = query_leaf_values(backend, dim, table, "");
+        let leaf_values = query_leaf_values(backend, dim, table, where_sql);
         let all_cardinality = leaf_values.len() as u32;
         return DimMembers {
             all_cardinality,
@@ -127,7 +165,7 @@ fn build<B: QueryBackend + ?Sized>(
             level_paths: Vec::new(),
         };
     }
-    let level_paths = query_level_paths(backend, dim, table, "");
+    let level_paths = query_level_paths(backend, dim, table, where_sql);
     let all_cardinality = level_paths.first().map(|p| p.len() as u32).unwrap_or(0);
     DimMembers {
         all_cardinality,

@@ -170,6 +170,7 @@ fn leaf_member_for_dim(
     requested: &[String],
     drilldown_level: Option<usize>,
     parent_uname: Option<&str>,
+    counts: Option<&[u32]>,
 ) -> cellset::MemberConfig {
     // A member at a deeper level needs a key unique within the hierarchy, so
     // prefix its ancestor path (e.g. a quarter under 2026 is &[2026]&[1]).
@@ -219,7 +220,14 @@ fn leaf_member_for_dim(
                 1,
             )
         };
-    let cc = dim.children_cardinality_at(drilldown_level);
+    let cc = match counts {
+        // The role's dictionary supplies the filtered count per level; a leaf
+        // has no children.
+        Some(counts) => drilldown_level
+            .and_then(|level| counts.get(level + 1).copied())
+            .unwrap_or(0),
+        None => dim.children_cardinality_at(drilldown_level),
+    };
     let dim_props = dim_props_leaf(dim, &caption, &leaf_key, requested, parent_uname, l_num);
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
@@ -258,12 +266,51 @@ fn member_key_suffix(key: &str) -> String {
         .collect()
 }
 
+/// Per-level member counts for a dimension whose table a role filters, taken
+/// from the per-role dictionary. `None` means "not filtered for this user"
+/// (or no access view on the query), and callers keep their static values,
+/// which are only correct for unfiltered roles (plan 058).
+pub(crate) fn access_counts<'a>(query: &'a SemanticQuery, dim: &str) -> Option<&'a [u32]> {
+    query
+        .access
+        .as_ref()?
+        .filtered_dims
+        .get(dim)
+        .map(|filtered| filtered.per_level.as_slice())
+}
+
+/// The dimension dictionary this query must read: the role-filtered one when
+/// the query's access view carries a predicate for the dimension, the shared
+/// unfiltered one otherwise (plan 058). The drill builders use this so their
+/// member lists and per-member child counts stay inside the role's rows.
+pub(crate) fn effective_dictionary<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &crate::engine::model::DimensionDef,
+    backend: &B,
+) -> std::sync::Arc<crate::engine::dim_cache::DimMembers> {
+    let model = &crate::proxy_project::project().model;
+    match query
+        .access
+        .as_ref()
+        .and_then(|access| access.filtered_dims.get(&dim.id))
+    {
+        Some(filtered) => model
+            .dim_cache
+            .get_filtered(model, dim, backend, &filtered.predicate),
+        None => model.dim_cache.get(model, dim, backend),
+    }
+}
+
 fn all_member_for_dim<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
     backend: &B,
+    counts: Option<&[u32]>,
 ) -> cellset::MemberConfig {
-    let cc = dim.levels.first().map(|l| l.cardinality).unwrap_or(0);
+    let cc = match counts {
+        Some(counts) => counts.first().copied().unwrap_or(0),
+        None => dim.levels.first().map(|l| l.cardinality).unwrap_or(0),
+    };
     cellset::MemberConfig {
         hierarchy: dim.hierarchy_unique_name(),
         u_name: dim.all_member_unique_name(),
@@ -282,10 +329,13 @@ fn leaf_members_from_dim(
     requested: &[String],
     drilldown_level: Option<usize>,
     parent_uname: Option<&str>,
+    counts: Option<&[u32]>,
 ) -> Vec<cellset::MemberConfig> {
     names
         .iter()
-        .map(|name| leaf_member_for_dim(dim, name, requested, drilldown_level, parent_uname))
+        .map(|name| {
+            leaf_member_for_dim(dim, name, requested, drilldown_level, parent_uname, counts)
+        })
         .collect()
 }
 
@@ -541,21 +591,28 @@ pub(crate) fn row_dim(query: &SemanticQuery) -> &str {
 }
 
 pub(crate) fn leaf_member_for(
+    query: &SemanticQuery,
     dim: &str,
     name: &str,
-    requested: &[String],
 ) -> cellset::MemberConfig {
     match dim_def(dim) {
-        Some(d) => leaf_member_for_dim(d, name, requested, None, None),
+        Some(d) => leaf_member_for_dim(
+            d,
+            name,
+            &query.dim_props,
+            None,
+            None,
+            access_counts(query, &d.id),
+        ),
         None => unknown_dim_member(dim, name),
     }
 }
 
 /// Leaf member for a specific hierarchy level (e.g. `[Date].[Calendar].[Year].&[2024]`).
 pub(crate) fn leaf_member_for_level(
+    query: &SemanticQuery,
     dim: &str,
     name: &str,
-    requested: &[String],
     level_name: Option<&str>,
 ) -> cellset::MemberConfig {
     let d = match dim_def(dim) {
@@ -563,16 +620,23 @@ pub(crate) fn leaf_member_for_level(
         None => return unknown_dim_member(dim, name),
     };
     let level_idx = level_name.and_then(|ln| d.levels.iter().position(|l| l.name == ln));
-    leaf_member_for_dim(d, name, requested, level_idx, None)
+    leaf_member_for_dim(
+        d,
+        name,
+        &query.dim_props,
+        level_idx,
+        None,
+        access_counts(query, &d.id),
+    )
 }
 
 pub(crate) fn all_member_for_with_backend<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
     dim: &str,
-    requested: &[String],
     backend: &B,
 ) -> cellset::MemberConfig {
     match dim_def(dim) {
-        Some(d) => all_member_for_dim(d, requested, backend),
+        Some(d) => all_member_for_dim(d, &query.dim_props, backend, access_counts(query, &d.id)),
         None => unknown_dim_member(dim, "All"),
     }
 }
@@ -619,6 +683,7 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
     backend: &B,
+    counts: Option<&[u32]>,
 ) {
     let (Some(view), Some(level)) = (dim.key_hierarchy_unique_name(), dim.key_level()) else {
         return;
@@ -641,16 +706,20 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
             }
         }
     }
-    members.insert(0, key_hierarchy_all_member(dim, requested, backend));
+    members.insert(0, key_hierarchy_all_member(dim, requested, backend, counts));
 }
 
 fn key_hierarchy_all_member<B: QueryBackend + ?Sized>(
     dim: &crate::engine::model::DimensionDef,
     requested: &[String],
     backend: &B,
+    counts: Option<&[u32]>,
 ) -> cellset::MemberConfig {
     let view = dim.key_hierarchy_unique_name().unwrap_or_default();
-    let cc = dim.key_level().map(|l| l.cardinality).unwrap_or(0);
+    let cc = match counts {
+        Some(counts) => counts.last().copied().unwrap_or(0),
+        None => dim.key_level().map(|l| l.cardinality).unwrap_or(0),
+    };
     let mut props = dim_props_all(dim, requested, backend);
     for (tag, value) in props.iter_mut() {
         if tag == "HIERARCHY_UNIQUE_NAME" {
@@ -670,14 +739,21 @@ fn key_hierarchy_all_member<B: QueryBackend + ?Sized>(
 }
 
 pub(crate) fn leaf_members_from(
+    query: &SemanticQuery,
     dim: &str,
     names: &[String],
-    requested: &[String],
     drilldown_level: Option<usize>,
     parent_uname: Option<&str>,
 ) -> Vec<cellset::MemberConfig> {
     match dim_def(dim) {
-        Some(d) => leaf_members_from_dim(d, names, requested, drilldown_level, parent_uname),
+        Some(d) => leaf_members_from_dim(
+            d,
+            names,
+            &query.dim_props,
+            drilldown_level,
+            parent_uname,
+            access_counts(query, &d.id),
+        ),
         None => names.iter().map(|n| unknown_dim_member(dim, n)).collect(),
     }
 }
@@ -746,13 +822,14 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
 
         hierarchies.push(hierarchy_for_dim(dim, &[]));
 
+        let counts = access_counts(query, &dim.id);
         let slc = query.slicers.iter().find(|s| s.dimension == dim.id);
         if slc.map(|s| s.is_all).unwrap_or(true) {
-            members.push(all_member_for_dim(dim, &[], backend));
+            members.push(all_member_for_dim(dim, &[], backend, counts));
         } else {
             let dim_members = filter_members_for(&dim.id, &query.filters);
             for name in &dim_members {
-                members.push(leaf_member_for_dim(dim, name, &[], None, None));
+                members.push(leaf_member_for_dim(dim, name, &[], None, None, counts));
             }
         }
     }
@@ -794,13 +871,14 @@ pub(crate) fn dims_only_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
             continue;
         }
         hierarchies.push(hierarchy_for_dim(dim, &[]));
+        let counts = access_counts(query, &dim.id);
         let slc = query.slicers.iter().find(|s| s.dimension == dim.id);
         if slc.map(|s| s.is_all).unwrap_or(true) {
-            members.push(all_member_for_dim(dim, &[], backend));
+            members.push(all_member_for_dim(dim, &[], backend, counts));
         } else {
             let dim_members = filter_members_for(&dim.id, &query.filters);
             for name in &dim_members {
-                members.push(leaf_member_for_dim(dim, name, &[], None, None));
+                members.push(leaf_member_for_dim(dim, name, &[], None, None, counts));
             }
         }
     }
@@ -858,7 +936,7 @@ mod tests {
     #[test]
     fn leaf_member_di_drillable() {
         let d = date_dim_with_levels();
-        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None, None);
         assert_eq!(m.display_info, 131075);
         assert_eq!(m.children_cardinality, 44);
     }
@@ -866,7 +944,7 @@ mod tests {
     #[test]
     fn leaf_member_di_leaf() {
         let d = date_dim_with_levels();
-        let m = leaf_member_for_dim(&d, "1", &[], Some(2), None);
+        let m = leaf_member_for_dim(&d, "1", &[], Some(2), None, None);
         assert_eq!(m.display_info, 3);
         assert_eq!(m.children_cardinality, 0);
     }
@@ -874,14 +952,14 @@ mod tests {
     #[test]
     fn leaf_member_uname_level_qualified() {
         let d = date_dim_with_levels();
-        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None, None);
         assert_eq!(m.u_name, "[Date].[Calendar].[Year].&amp;[2020]");
     }
 
     #[test]
     fn leaf_member_lname_level_qualified() {
         let d = date_dim_with_levels();
-        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None);
+        let m = leaf_member_for_dim(&d, "2020", &[], Some(0), None, None);
         assert_eq!(m.l_name, "[Date].[Calendar].[Year]");
     }
 
@@ -895,6 +973,7 @@ mod tests {
             &req,
             Some(1),
             Some("[Date].[Calendar].[Year].&amp;[2024]"),
+            None,
         );
         let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
         assert!(pun.is_some(), "should have PARENT_UNIQUE_NAME prop");
@@ -909,7 +988,7 @@ mod tests {
     fn leaf_member_parent_uname_default() {
         let d = date_dim_with_levels();
         let req: Vec<String> = vec!["PARENT_UNIQUE_NAME".into()];
-        let m = leaf_member_for_dim(&d, "2020", &req, Some(0), None);
+        let m = leaf_member_for_dim(&d, "2020", &req, Some(0), None, None);
         let pun = m.dim_props.iter().find(|(k, _)| k == "PARENT_UNIQUE_NAME");
         assert!(pun.is_some());
         assert_eq!(pun.unwrap().1, "[Date].[Calendar].[All]");
@@ -920,7 +999,7 @@ mod tests {
         let d = date_dim_with_levels();
         let req: Vec<String> = vec!["PARENT_LEVEL".into()];
         // Year at hierarchy level 1: its parent (All) sits at level 0.
-        let y = leaf_member_for_dim(&d, "2026", &req, Some(0), None);
+        let y = leaf_member_for_dim(&d, "2026", &req, Some(0), None, None);
         let pl = y
             .dim_props
             .iter()
@@ -928,7 +1007,7 @@ mod tests {
             .expect("PARENT_LEVEL requested");
         assert_eq!(pl.1, "0");
         // Quarter at hierarchy level 2: its parent (the year) sits at level 1.
-        let q = leaf_member_for_dim(&d, "2", &req, Some(1), None);
+        let q = leaf_member_for_dim(&d, "2", &req, Some(1), None, None);
         let pl = q
             .dim_props
             .iter()

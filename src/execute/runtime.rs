@@ -137,9 +137,63 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
             })
             .map(|m| m.id.clone())
             .collect();
+        // Role-filtered dimensions: the axis and drill builders must not read
+        // the unfiltered dictionary or the static hint (plan 058). The
+        // per-role dictionary is cached by (epoch, dim, predicate), so this
+        // costs scans only on the first request for a role and data epoch.
+        let mut filtered_dims = std::collections::HashMap::new();
+        for dim in &model.dimensions {
+            if !crate::xmla::discover::dimension_visible(model, config, user, &dim.id) {
+                continue;
+            }
+            let table = model.dim_table_for_discovery(&dim.id);
+            if let crate::engine::model::TableAccess::Filtered(predicate) =
+                crate::engine::model::effective_table_filter(config, user, table)
+                && !predicate.is_empty()
+            {
+                let members = model
+                    .dim_cache
+                    .get_filtered(model, dim, backend, &predicate);
+                let per_level: Vec<u32> = if dim.levels.is_empty() {
+                    vec![members.all_cardinality]
+                } else {
+                    members
+                        .level_paths
+                        .iter()
+                        .map(|paths| paths.len() as u32)
+                        .collect()
+                };
+                filtered_dims.insert(
+                    dim.id.clone(),
+                    crate::mdx_semantic::FilteredDim {
+                        predicate,
+                        per_level,
+                    },
+                );
+            }
+        }
+        // A dictionary built from a failed query is empty (and deliberately
+        // uncached); rendering on it would answer CHILDREN_CARDINALITY 0 as if
+        // the dimension had no members. Fault instead — and consume the
+        // failure, otherwise the latch would poison this pooled connection for
+        // every later request (plan 058).
+        if let Some(failure) = backend.take_failure() {
+            let timings = Timings::new(
+                RuntimePath::DirectSql,
+                "dimension-dictionary-failed".to_string(),
+                mdx_parse_us,
+            );
+            return (
+                crate::xmla::response::fault_response(&format!(
+                    "a dimension dictionary query failed: {failure}"
+                )),
+                timings,
+            );
+        }
         query.access = Some(crate::mdx_semantic::AccessView {
             hidden_dimensions,
             visible_measures: Some(visible_measures),
+            filtered_dims,
         });
     }
     // A metadata probe (`strtomember`), a member-only probe, or a set probe

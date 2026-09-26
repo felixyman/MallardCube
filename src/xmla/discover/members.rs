@@ -484,7 +484,17 @@ fn build_key_member_rows<B: QueryBackend + ?Sized>(
         };
         let all_u = format!("{key_hier}.[All]");
         // (All) comes first, with the key level's cardinality as its child
-        // count — the axis reports the same DISPLAY_INFO for this member.
+        // count — the axis reports the same DISPLAY_INFO for this member. A
+        // role-filtered dimension counts its key members under the predicate
+        // instead of the static, unfiltered hint (plan 058).
+        let children_cardinality = if filter_sql.is_empty() {
+            dim.key_level().map(|l| l.cardinality).unwrap_or(0)
+        } else {
+            level_paths
+                .last()
+                .map(|paths| paths.len() as u32)
+                .unwrap_or(0)
+        };
         rows.push(MemberRow {
             dimension_id: dim.id.clone(),
             dimension_unique_name: dim_u.clone(),
@@ -498,7 +508,7 @@ fn build_key_member_rows<B: QueryBackend + ?Sized>(
             member_type: 2,
             member_guid: all_member_guid(&key_hier),
             member_caption: "All".into(),
-            children_cardinality: dim.key_level().map(|l| l.cardinality).unwrap_or(0),
+            children_cardinality,
             parent_level: 0,
             parent_count: 0,
             member_key: "All".into(),
