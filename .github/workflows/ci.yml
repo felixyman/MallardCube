@@ -21,6 +21,11 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # RUSTSEC-2026-0235 (rkyv archive validation) is not compiled into
+          # anything this project builds: the only reference is rust_decimal's
+          # optional `rkyv` feature, and `cargo tree --target all -i rkyv`
+          # prints nothing (recorded in plan 059, 2026-09-26).
+          ignore: RUSTSEC-2026-0235
 
   lint:
     runs-on: ubuntu-latest

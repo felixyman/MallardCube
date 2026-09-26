@@ -90,3 +90,22 @@ processes, autoscaling, hosted/cloud packaging.
   the CLI + files path must stand alone first.
 - No runtime extension downloads — if an extension is needed, it ships vendored
   and signed in the bundle.
+
+### The audit job's findings (2026-09-26)
+
+The dependency audit turned up five advisories on its first run. Four are fixed
+in the lock: `quick-xml` 0.37.5 → 0.42.0 (RUSTSEC-2026-0195, a DoS in
+`NsReader` — exactly this proxy's request parser, and there is no workaround
+below 0.41), `rustls` 0.23.40 → 0.23.45 (RUSTSEC-2026-0285),
+`anyhow` 1.0.102 → 1.0.104 (the unsound `downcast_mut` warning) and
+`quinn-proto` 0.11.14 → 0.11.18.
+
+The fifth, `rkyv` 0.7.46 (RUSTSEC-2026-0235), is **not compiled**: its only
+reference in the lock is `rust_decimal`'s optional `rkyv` feature, and
+`cargo tree --target all -i rkyv` prints nothing, so no target resolves it. The
+audit job carries an explicit `ignore` for it with that rationale rather than a
+silent pass.
+
+The upgrade also taught us one thing worth keeping: `cargo update` with no
+package filter re-resolved DuckDB and broke the build script — a security
+refresh needs one package at a time, with the gates as the arbiter.
