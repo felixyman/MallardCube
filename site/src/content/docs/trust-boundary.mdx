@@ -1,0 +1,106 @@
+---
+title: Trust boundary
+description: Where MallardCube sits in your network, what it protects, and what it leaves to you
+---
+
+MallardCube is an on-premises service that reads a DuckDB database and speaks
+XMLA to Excel. This page is the deployment contract: what the security boundary
+covers, and what you must provide around it. The role model itself is in
+[Security and roles](../security/).
+
+## What the boundary covers
+
+- **Identity** arrives either from your authenticating reverse proxy (a header,
+  `X-User` by default) or from an OIDC token MallardCube validates itself
+  (`issuer`, `audience`, JWKS discovery). Without an `auth` block every request
+  is an administrator, which is fine on loopback for the demo and never on a
+  shared host.
+- **A non-loopback bind with no configured mechanism refuses to start** unless
+  `MALLARDCUBE_ALLOW_ANONYMOUS=1` is set explicitly; `/status` then reports the
+  anonymous posture.
+- **Roles** enforce row filters (SQL expressions combined across the user's
+  roles) and table-level object security. A filter the proxy cannot lower to
+  SQL — a DAX expression — hides the table or refuses the request rather than
+  being silently ignored, and the audit stream records which rule decided.
+- **Drillthrough** applies the row filter when it belongs to the drilled table
+  and refuses what a raw `SELECT *` cannot express or project.
+- **An audit stream** (opt-in, `MALLARDCUBE_AUDIT_FILE`) records auth and role
+  resolution, refusals, and reloads as JSONL — identities and rules, never
+  request bodies or credentials. `/status` reports `audit.enabled`.
+
+## What is deliberately out of scope
+
+- **Column-level security.** Hide the table with OLS and mask the column
+  upstream (a view or a materialised column). `mallard qualify` prints a
+  `[NOTE]` when a role hides a table whose columns a measure still reads, so
+  the assumption is visible rather than implicit.
+- **TLS termination inside the proxy.** Front it with a reverse proxy; the
+  proxy itself serves HTTP and expects to be reached over loopback or a
+  private network.
+- **An identity provider.** Use your existing one through the proxy header or
+  OIDC; MallardCube does not store users or passwords.
+- **Multi-tenant isolation beyond roles.** One process serves one model; give
+  each tenant its own instance and database.
+
+## Deploy it behind TLS
+
+Terminate TLS in the reverse proxy and have it overwrite the identity header
+(a client-supplied header must never survive):
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name cube.example.com;
+
+  ssl_certificate     /etc/ssl/certs/cube.pem;
+  ssl_certificate_key /etc/ssl/private/cube.key;
+
+  location /xmla {
+    proxy_pass http://127.0.0.1:8080;
+    # Set by whatever authenticated the user (auth_request, oauth2-proxy, ...).
+    proxy_set_header X-User $remote_user;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+}
+```
+
+```caddyfile
+cube.example.com {
+  reverse_proxy 127.0.0.1:8080 {
+    header_up X-User {http.auth.user.id}
+  }
+}
+```
+
+Keep the proxy on loopback (`BIND_ADDRESS=127.0.0.1:8080`); only the reverse
+proxy should be able to reach it.
+
+## Service account and data
+
+- Run the proxy as a dedicated unprivileged account with read access to the
+  database, the project directory and the audit path — nothing else.
+- The data file belongs to your pipeline: the loader writes it, the proxy
+  serves it, and a reload (SIGHUP or a file change) swaps the pool without
+  dropping in-flight requests.
+- Generated loader scripts do not embed the source password: the ATTACH line
+  carries `Password=<REDACTED>` and a note to restore it from your secret
+  store. One known gap is recorded rather than hidden: an unparsed M expression
+  or a source URL copied into a script can itself carry credentials, so review
+  a generated script before committing it.
+- `XMLA_TRACE=1` writes raw request and response bodies to `xmla-trace.jsonl`
+  for debugging. It is opt-in, it is not the audit stream, and it should not be
+  left on in production.
+
+## Threat model
+
+| Surface | Treated as | Notes |
+|---|---|---|
+| XMLA requests | hostile | Parsed with a hardened XML reader; malformed or unsupported shapes fault instead of guessing. Request budgets bound cells, members and response size. |
+| Identity headers | trustworthy only from the proxy | A spoofed header on a directly reachable proxy is an administrator; bind to loopback. |
+| OIDC tokens | hostile until validated | Signature, issuer and audience are checked; a missing or invalid token denies the request. |
+| Project config and Tabular exports | build-time inputs | They are code: review generated fallback SQL and scripts like any other checked-in artifact. |
+| Data refresh | operator-controlled | Reloads swap the pool and clear caches; the proxy never writes to the data file. |
+
+Failure modes are designed the same way everywhere: when the proxy cannot
+answer faithfully or apply a restriction, it faults with a message naming the
+gap, rather than returning a plausible wrong number or unfiltered rows.

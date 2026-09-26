@@ -156,11 +156,28 @@ service-account guidance, read-only database and sidecar credentials by
 default, and a threat model for the XMLA parser, OIDC, converter inputs and
 data refresh. One page, with the failure modes and what is out of scope.
 
+*Implemented 2026-09-27: the Trust boundary page on the site states what the
+boundary covers (identity modes, the secure default, roles, drillthrough, the
+audit stream), what is deliberately out of scope (column security, TLS
+termination inside the proxy, the identity provider, multi-tenancy), gives
+nginx and Caddy examples that overwrite the identity header, the service
+account and data handling, and a threat-model table over the XMLA parser,
+identity headers, OIDC, converter inputs and refresh. It also records the
+`XMLA_TRACE` raw-body caveat and the loader-script redaction gap. Site build:
+18 pages, 525 internal links OK.*
+
 ## F. Column security stance
 
 Not implemented, and said out loud: column-level security belongs upstream
 (masked views/materialised columns). `qualify` warns when a role hides a table
 but a measure reads its columns, so the boundary is visible rather than assumed.
+
+*Implemented 2026-09-27: `qualify` prints a non-blocking `[NOTE]` per role and
+table — "role 'X' hides table 'T' from metadata, but N measure(s) read its
+columns (…); column-level hiding is not enforced by the proxy — mask the column
+upstream" — without changing the verdict, and the trust-boundary page states
+the stance. Test: `column_security_stance_is_reported` (project4, a role hiding
+`inventory_fact` names Stock and Cost; no hidden table, no note).*
 
 ## Scope
 

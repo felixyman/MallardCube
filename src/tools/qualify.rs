@@ -759,6 +759,50 @@ pub(crate) fn semantic_creep(p: &crate::proxy_project::ProxyProject) -> Vec<Stri
     findings
 }
 
+/// Non-blocking boundary notes: tables a role hides from metadata while a
+/// measure still reads their columns.
+///
+/// Column-level security is deliberately not implemented in the proxy — the
+/// operator enforces it upstream (a masked view or a materialised column), and
+/// this note makes that assumption visible rather than assumed (plan 058-F).
+pub(crate) fn column_security_warnings(p: &crate::proxy_project::ProxyProject) -> Vec<String> {
+    use crate::project::config::ModelPermission;
+
+    let mut warnings = Vec::new();
+    for role in &p.config.roles {
+        for permission in &role.table_permissions {
+            if permission.metadata_permission != ModelPermission::None {
+                continue;
+            }
+            let readers: Vec<&str> = p
+                .model
+                .measures
+                .iter()
+                .filter(|measure| {
+                    p.model
+                        .fact_table(measure.fact_table_idx)
+                        .table_name
+                        .eq_ignore_ascii_case(&permission.table)
+                })
+                .map(|measure| measure.caption.as_str())
+                .collect();
+            if readers.is_empty() {
+                continue;
+            }
+            warnings.push(format!(
+                "role '{role}' hides table '{table}' from metadata, but {count} measure(s) read \
+                 its columns ({readers}); column-level hiding is not enforced by the proxy — \
+                 mask the column upstream",
+                role = role.name,
+                table = permission.table,
+                count = readers.len(),
+                readers = readers.join(", "),
+            ));
+        }
+    }
+    warnings
+}
+
 /// Measures that are not a plain `SUM(column)`: ratios, counts, averages, or
 /// expressions. They are legitimate SQL, but they cannot use rollups and
 /// usually belong in an upstream mart at a declared grain (plan 044).
@@ -800,6 +844,13 @@ pub fn run(args: Vec<String>) -> i32 {
     println!("Verdict: {}", verdict.label());
     if verdict.reasons().is_empty() {
         println!("  No issues found.");
+    }
+    // Boundary notes are not findings: the project can be READY while a role
+    // hides a table whose columns a measure still reads (plan 058-F).
+    if let Ok(p) = crate::proxy_project::ProxyProject::load(config_path) {
+        for warning in column_security_warnings(&p) {
+            println!("  [NOTE] {warning}");
+        }
     }
 
     if strict {
@@ -1267,5 +1318,37 @@ mod tests {
             blocked.iter().any(|m| m.contains("NoSuchMeasure")),
             "{blocked:?}"
         );
+    }
+
+    /// A role that hides a table still has measures reading its columns: the
+    /// boundary is reported, not assumed (plan 058-F).
+    #[test]
+    fn column_security_stance_is_reported() {
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let mut p = crate::proxy_project::ProxyProject::load("projects/project4/proxy-config.json")
+            .expect("load project4");
+        p.config.roles = vec![RoleConfig {
+            name: "OLS".into(),
+            description: String::new(),
+            model_permission: ModelPermission::Read,
+            members: vec![],
+            table_permissions: vec![TablePermissionConfig {
+                table: "inventory_fact".into(),
+                filter_expression: String::new(),
+                dax_filter: None,
+                metadata_permission: ModelPermission::None,
+            }],
+        }];
+        let warnings = column_security_warnings(&p);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("inventory_fact"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("Stock") && warnings[0].contains("Cost"),
+            "{warnings:?}"
+        );
+
+        p.config.roles.clear();
+        assert!(column_security_warnings(&p).is_empty());
     }
 }

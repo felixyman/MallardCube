@@ -26,6 +26,7 @@ export default defineConfig({
 						{ label: 'Model reference', slug: 'model' },
 						{ label: 'AutoModel', slug: 'automodel' },
 						{ label: 'Security and roles', slug: 'security' },
+						{ label: 'Trust boundary', slug: 'trust-boundary' },
 					],
 				},
 				{
