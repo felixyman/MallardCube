@@ -102,6 +102,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # Only the release binaries: buildx's GHA cache shows up as an
+          # artifact named `<owner>~<repo>~<hash>.dockerbuild`, and downloading
+          # it through the artifacts API fails.
+          pattern: mallard-*
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -126,9 +130,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          files: |
-            artifacts/*/*
-            artifacts/*/*.bundle
+          # Each directory holds the binary and its cosign bundle; one glob,
+          # so no file is listed twice.
+          files: artifacts/*/*
 
   # Install from the artefact, not the repo: the review's "test installation
   # from the published artifact" (plan 059).
