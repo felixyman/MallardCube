@@ -34,6 +34,28 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> (String, Timings) {
+    let cache = if cache::enabled() {
+        Some(&*cache::RESULT_CACHE)
+    } else {
+        None
+    };
+    get_execute_response_with_format_and_cache(mdx, format, backend, user, config, cache)
+}
+
+/// [`get_execute_response_with_format`] against a caller-supplied result
+/// cache, `None` disabling it.
+///
+/// Tests pass their own instance: the production cache is process-wide, so
+/// parallel tests would otherwise populate (or evict) the entry a cache
+/// assertion is about to make.
+pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Sized>(
+    mdx: &str,
+    format: Option<&str>,
+    backend: &B,
+    user: &UserContext,
+    config: &ProxyConfig,
+    cache: Option<&cache::ResultCache>,
+) -> (String, Timings) {
     // Excel's pivot Refresh issues `REFRESH CUBE [<cube>]`; the data is live,
     // so answer with an empty success instead of a fault (plan 048).
     if let Some(resp) = crate::execute::builders::ddl_noop_response(mdx) {
@@ -152,14 +174,9 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     // request's own queries; plan 057-C).
     let _ = backend.take_failure();
 
-    let cache_enabled = cache::enabled();
     let cache_key = cache::cache_key(&key, &config.catalog, &config.cube, user, &config.roles);
     let t0 = Instant::now();
-    let cached = if cache_enabled {
-        cache::RESULT_CACHE.get(&cache_key)
-    } else {
-        None
-    };
+    let cached = cache.and_then(|cache| cache.get(&cache_key));
     let (result, cache_hit) = match cached {
         Some(hit) => (hit, true),
         None => {
@@ -181,8 +198,8 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
                     timings,
                 );
             }
-            if cache_enabled {
-                cache::RESULT_CACHE.insert(cache_key, std::sync::Arc::clone(&result));
+            if let Some(cache) = cache {
+                cache.insert(cache_key, std::sync::Arc::clone(&result));
             }
             (result, false)
         }

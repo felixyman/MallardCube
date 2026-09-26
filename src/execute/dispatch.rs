@@ -1651,13 +1651,16 @@ mod tests {
         use crate::engine::model::UserContext;
 
         with_project3(|| {
-            let (response, _) =
-                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
-                    "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
-                    &crate::test_support::counting::Failing,
-                    &UserContext::admin_default(),
-                    &crate::proxy_project::project().config,
-                );
+            // No result cache: this asserts the failure path, and a hit from
+            // the process-wide cache would skip execution (and the fault).
+            let (response, _) = crate::execute::runtime::get_execute_response_with_format_and_cache(
+                "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
+                None,
+                &crate::test_support::counting::Failing,
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+                None,
+            );
             assert!(
                 response.contains("faultstring")
                     && response.contains("a query against the database failed"),
@@ -2904,9 +2907,17 @@ mod tests {
             let backend = Backend::test_fixture();
             let user = crate::engine::model::UserContext::admin_default();
             let config = crate::proxy_project::project().config.clone();
+            // A private cache: the production one is process-wide, and other
+            // tests run concurrently with the same catalog/cube/plan keys.
+            let cache = crate::execute::cache::ResultCache::new();
             let run = |mdx: &str| {
-                crate::execute::runtime::get_execute_cellset_response_with_backend_and_context(
-                    mdx, backend, &user, &config,
+                crate::execute::runtime::get_execute_response_with_format_and_cache(
+                    mdx,
+                    None,
+                    backend,
+                    &user,
+                    &config,
+                    Some(&cache),
                 )
             };
 

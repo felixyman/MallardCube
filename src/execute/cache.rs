@@ -121,7 +121,7 @@ pub struct ResultCache {
 }
 
 impl ResultCache {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_byte_limit(TTL, CAPACITY, max_bytes_from_env())
     }
 
@@ -258,6 +258,13 @@ pub static RESULT_CACHE: LazyLock<ResultCache> = LazyLock::new(ResultCache::new)
 /// Bumped whenever the data source is opened or replaced. The cache key carries
 /// it, so a reload cannot serve pre-reload rows even if a clear were missed
 /// (plan 057-B); `/status` reports it so a log line and a cache key correlate.
+///
+/// Tests must not bump it: it is process-wide, and both caches keyed on it —
+/// the result cache and the per-dimension dictionaries — observe the value
+/// moving under parallel tests. That race made
+/// `dim_cache::tests::members_response_is_query_free_after_warmup` rebuild its
+/// dictionaries between the two responses and fail on CI. `bump_data_epoch`
+/// is consequently exercised only by the server's startup and reload paths.
 pub static DATA_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 pub fn bump_data_epoch() -> u64 {
@@ -293,6 +300,22 @@ pub fn cache_key(
     user: &UserContext,
     roles_config: &[RoleConfig],
 ) -> String {
+    cache_key_at(plan_key, catalog, cube, user, roles_config, data_epoch())
+}
+
+/// [`cache_key`] with the data epoch supplied by the caller.
+///
+/// A parameter rather than a global read so tests can prove the epoch is part
+/// of the key without bumping the process-wide [`DATA_EPOCH`] that parallel
+/// tests are asserting cache hits and query counts against.
+fn cache_key_at(
+    plan_key: &str,
+    catalog: &str,
+    cube: &str,
+    user: &UserContext,
+    roles_config: &[RoleConfig],
+    epoch: u64,
+) -> String {
     let mut roles = user.roles.clone();
     roles.sort();
     let mut groups = user.groups.clone();
@@ -308,7 +331,7 @@ pub fn cache_key(
         user.is_administrator,
         roles.join(","),
         groups.join(","),
-        data_epoch()
+        epoch
     )
 }
 
@@ -322,14 +345,27 @@ mod tests {
 
     /// A reload bumps the data epoch, and the key follows: an entry from
     /// before the reload can never be hit (plan 057-B).
+    ///
+    /// The epochs are passed in rather than produced by `bump_data_epoch()`:
+    /// the epoch is process-wide, and bumping it here invalidates caches other
+    /// tests are concurrently asserting are query-free.
     #[test]
     fn the_data_epoch_is_part_of_the_key() {
         let user = UserContext::admin_default();
-        let before = cache_key("p", "cat", "cube", &user, &[]);
-        let epoch = bump_data_epoch();
-        assert_eq!(data_epoch(), epoch);
-        let after = cache_key("p", "cat", "cube", &user, &[]);
+        let before = cache_key_at("p", "cat", "cube", &user, &[], 7);
+        let after = cache_key_at("p", "cat", "cube", &user, &[], 8);
         assert_ne!(before, after);
+    }
+
+    /// The public key embeds the *live* epoch, so a reload really does strand
+    /// every entry (plan 057-B) — asserted without bumping the global.
+    #[test]
+    fn the_public_key_embeds_the_live_data_epoch() {
+        let key = cache_key("p", "cat", "cube", &UserContext::admin_default(), &[]);
+        assert!(
+            key.ends_with(&format!("|data={}|cfg=[]", data_epoch())),
+            "{key}"
+        );
     }
 
     /// Two configs can reuse a role name with different permissions (the test
