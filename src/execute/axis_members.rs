@@ -713,12 +713,12 @@ pub(crate) fn full_slicer_axis_with_backend<B: QueryBackend + ?Sized>(
     let mut hierarchies: Vec<cellset::HierarchyConfig> = Vec::new();
     let mut members: Vec<cellset::MemberConfig> = Vec::new();
 
-    // Measures always appear first on the slicer axis, unless every measure's
-    // table is hidden from this user.
+    // Measures always appear first on the slicer axis, unless this user can
+    // see no measure at all.
     if query
         .access
         .as_ref()
-        .is_none_or(|access| access.measures_visible)
+        .is_none_or(|access| access.measures_any())
     {
         hierarchies.push(measures_hierarchy());
         members.push(measures_total_member_for_query(query));

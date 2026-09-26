@@ -3122,11 +3122,24 @@ pub(crate) fn build_measure_children_empty<B: QueryBackend + ?Sized>(
     )
 }
 
+/// The cChildren probes name `[Measures].[cChildren]` on their axes; a user
+/// whose roles hide every measure must not be told the hierarchy exists
+/// (plan 058).
+fn no_measures_visible(query: &SemanticQuery) -> bool {
+    query
+        .access
+        .as_ref()
+        .is_some_and(|access| !access.measures_any())
+}
+
 pub(crate) fn build_cchildren_for_all<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
     backend: &B,
 ) -> String {
+    if no_measures_visible(query) {
+        return empty_cellset(query, backend);
+    }
     let dim = row_dim(query);
     let count = match result {
         QueryResult::Count(c) => *c,
@@ -3153,6 +3166,9 @@ pub(crate) fn build_cchildren_for_leaf_product<B: QueryBackend + ?Sized>(
     result: &QueryResult,
     backend: &B,
 ) -> String {
+    if no_measures_visible(query) {
+        return empty_cellset(query, backend);
+    }
     let dim = row_dim(query);
     let leaf = leaf_member_for(dim, name, &query.dim_props);
     let all = all_member_for_with_backend(dim, &query.dim_props, backend);
@@ -3180,6 +3196,11 @@ pub(crate) fn build_cchildren_for_measures<B: QueryBackend + ?Sized>(
     _result: &QueryResult,
     backend: &B,
 ) -> String {
+    // The synthetic members below name `[Measures]`; a user who can see no
+    // measure at all must not be told the hierarchy exists (plan 058).
+    if no_measures_visible(query) {
+        return empty_cellset(query, backend);
+    }
     render_response(
         vec![
             single_member_axis("Axis0", measures_hierarchy(), measures_total_member()),
@@ -3373,10 +3394,22 @@ fn build_set_members<B: QueryBackend + ?Sized>(
     // Materialize (uname, caption, value) triples for the set's members.
     let is_measures = matches!(se, crate::mdx_parser::SetExpr::Measures);
     let mut entries: Vec<(String, String, f64)> = if is_measures {
-        crate::proxy_project::project()
-            .model
-            .measures
-            .iter()
+        let model = &crate::proxy_project::project().model;
+        // A restricted user's `[Measures]` set lists only the measures their
+        // roles can see (plan 058).
+        let visible: Vec<_> = match &query.access {
+            Some(access) => match &access.visible_measures {
+                Some(ids) => model
+                    .measures
+                    .iter()
+                    .filter(|m| ids.iter().any(|id| id == &m.id))
+                    .collect(),
+                None => model.measures.iter().collect(),
+            },
+            None => model.measures.iter().collect(),
+        };
+        visible
+            .into_iter()
             .enumerate()
             .map(|(i, m)| {
                 (

@@ -122,11 +122,84 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
             .filter(|d| !crate::xmla::discover::dimension_visible(model, config, user, &d.id))
             .map(|d| d.id.clone())
             .collect();
+        // Per-measure, not per-model: a role can see one fact table and be
+        // denied another, and the probes must not count or name the denied
+        // measures (plan 058).
+        let visible_measures: Vec<String> = model
+            .measures
+            .iter()
+            .filter(|m| {
+                crate::xmla::discover::table_visible(
+                    config,
+                    user,
+                    &model.fact_table(m.fact_table_idx).table_name,
+                )
+            })
+            .map(|m| m.id.clone())
+            .collect();
         query.access = Some(crate::mdx_semantic::AccessView {
             hidden_dimensions,
-            measures_visible: crate::xmla::discover::measures_visible(model, config, user),
+            visible_measures: Some(visible_measures),
         });
     }
+    // A metadata probe (`strtomember`), a member-only probe, or a set probe
+    // naming an object the requesting role cannot see must not resolve it: the
+    // renderers echo the set's members verbatim, so the answer would leak a
+    // hidden measure or dimension. Fail closed with a fault that names the
+    // class rather than repeating the hidden name (plan 058).
+    if let Some(access) = query.access.as_ref() {
+        let mut targets: Vec<String> = query.metadata_probe_targets.clone();
+        targets.extend(query.member_only_unames.iter().cloned());
+        if let Some(set) = &query.set_probe {
+            collect_set_member_targets(set, &mut targets);
+        }
+        if targets
+            .iter()
+            .any(|target| crate::engine::plan::member_hidden_by_access(target, model, access))
+        {
+            let timings = Timings::new(
+                RuntimePath::DirectSql,
+                "hidden-probe".to_string(),
+                mdx_parse_us,
+            );
+            return (
+                crate::xmla::response::fault_response(
+                    "a member named by this probe is not available to the requesting role; the \
+                     probe is refused rather than resolved against the full model",
+                ),
+                timings,
+            );
+        }
+    }
+    // The all-level-members probe renders its axis dimension directly from the
+    // query, so a relationship-backed dimension table hidden by OLS would be
+    // named and counted; Gate 2 only sees the measure's fact table. Its
+    // siblings carry the dimension through the plan's group-by (checked at
+    // plan time) or name no axis (plan 058).
+    if let Some(access) = query.access.as_ref()
+        && matches!(
+            query.kind,
+            crate::mdx_semantic::SemanticQueryKind::AllLevelMembers
+        )
+        && query
+            .axis_dimensions
+            .first()
+            .is_some_and(|dimension| access.dimension_hidden(dimension))
+    {
+        let timings = Timings::new(
+            RuntimePath::DirectSql,
+            "hidden-dimension-probe".to_string(),
+            mdx_parse_us,
+        );
+        return (
+            crate::xmla::response::fault_response(
+                "the dimension named by this probe is not available to the requesting role; the \
+                 probe is refused rather than rendered from the full model",
+            ),
+            timings,
+        );
+    }
+
     let plan = plan_from_semantic_with_model_and_context(&query, model, user, config);
     let plan_us = (Instant::now() - t0).as_micros() as u64;
 
@@ -611,6 +684,22 @@ pub fn unhonourable_filter_fault(
 /// The answer is about *effective* access: a second role granting full access
 /// to the same table wins (the documented union semantics), so a union user
 /// must not be refused (plan 051 RLS review).
+/// Member unique names a set expression names explicitly; generated sets and
+/// ranges carry none the renderer would echo, and their plans already empty
+/// out for a hidden source.
+fn collect_set_member_targets(set: &crate::mdx_parser::SetExpr, out: &mut Vec<String>) {
+    use crate::mdx_parser::SetExpr;
+    match set {
+        SetExpr::MemberList { unames } => {
+            out.extend(unames.iter().map(|name| name.replace("&amp;", "&")))
+        }
+        SetExpr::Head(inner, _) | SetExpr::Tail(inner, _) => {
+            collect_set_member_targets(inner, out);
+        }
+        _ => {}
+    }
+}
+
 fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserContext) -> bool {
     use crate::engine::model::{TableAccess, effective_table_filter};
 

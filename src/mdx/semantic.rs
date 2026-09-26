@@ -618,12 +618,39 @@ pub struct SemanticQuery {
     pub access: Option<AccessView>,
 }
 
-/// Hidden dimensions (OLS) and whether any measure is visible. Built by the
-/// runtime from the effective role filters.
+/// Hidden dimensions (OLS) and the measures a restricted user may see. Built
+/// by the runtime from the effective role filters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessView {
     pub hidden_dimensions: Vec<String>,
-    pub measures_visible: bool,
+    /// The measure ids the user can see. `None` = unrestricted (the
+    /// administrator path); `Some(empty)` = no measure is visible.
+    pub visible_measures: Option<Vec<String>>,
+}
+
+impl AccessView {
+    /// Are any measures visible at all? The `[Measures]` slicer hierarchy is
+    /// advertised only when this holds.
+    pub fn measures_any(&self) -> bool {
+        self.visible_measures
+            .as_ref()
+            .is_none_or(|ids| !ids.is_empty())
+    }
+
+    /// Is this measure visible under the view?
+    pub fn measure_visible(&self, measure_id: &str) -> bool {
+        match &self.visible_measures {
+            None => true,
+            Some(ids) => ids.iter().any(|id| id == measure_id),
+        }
+    }
+
+    /// Is this dimension hidden by OLS?
+    pub fn dimension_hidden(&self, dim_id: &str) -> bool {
+        self.hidden_dimensions
+            .iter()
+            .any(|hidden| hidden.eq_ignore_ascii_case(dim_id))
+    }
 }
 
 impl SemanticQuery {
@@ -887,10 +914,6 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     // view. Deriving it here — from the parsed axes in axis order — is what
     // stops the plan and the renderer from disagreeing (plan 051).
     let shape = crate::mdx::shape::QueryShape::from_axis_specs(&parsed.axis_specs);
-    if let Err(reason) = shape.validate() {
-        debug_assert!(false, "query shape invalid: {reason}");
-        eprintln!("!!! query shape invalid: {reason}");
-    }
     let axis_dims: Vec<String> = if matches!(
         kind,
         SemanticQueryKind::SlicerOnly | SemanticQueryKind::SlicerAllAndMeasure
@@ -1158,6 +1181,22 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     };
     if set_count.is_some() || set_probe.is_some() {
         kind = SemanticQueryKind::SetProbe;
+    }
+
+    // Probe shapes build their own axes from the probe expression, so the
+    // data-axis invariants do not apply to them. The check runs after the
+    // set-probe classification: `[Measures].Members` on an axis has no slots
+    // and would otherwise panic in debug builds even though its renderer
+    // handles it (plan 058).
+    if !matches!(
+        kind,
+        SemanticQueryKind::SetProbe
+            | SemanticQueryKind::MemberOnlyProbe
+            | SemanticQueryKind::MeasureMetadataProbe
+    ) && let Err(reason) = shape.validate()
+    {
+        debug_assert!(false, "query shape invalid: {reason}");
+        eprintln!("!!! query shape invalid: {reason}");
     }
 
     // A member range restricts the set (and the aggregate) to the level's

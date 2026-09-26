@@ -167,3 +167,46 @@ reverted rather than half-done — review F4). The earlier note here misdiagnose
 `HIERARCHY_NAME=Category` returning two rows: the extra row is the special-cased
 `Measures` hierarchy, which the name filter never saw (the reference returns 0
 rows for an unknown `HIERARCHY_NAME`), not a key-attribute hierarchy. Fixed.
+
+### Measure and member probes gated on the access view, per measure (2026-09-27)
+
+The recorded probe holes are closed: a restricted user no longer counts, names
+or resolves objects whose table their roles deny.
+
+- `AccessView.visible_measures: Option<Vec<String>>` replaces the coarse
+  `measures_visible` bool. The runtime fills it per measure from the effective
+  table filters; the renderer's `[Measures]` slicer hierarchy asks the view
+  whether any measure is visible at all.
+- `MetaCountLiteral` counts only visible measures: `COUNT([Measures].Members)`
+  answers 4 for the administrator and 2 for a role denied one of project4's two
+  fact tables, where it used to answer the full model count.
+  `COUNT(<member list>)` drops hidden measures and members of OLS-hidden
+  dimensions before counting.
+- The CUBESET `[Measures].Members` probe lists only the visible measures.
+- The runtime refuses probes that name a hidden object: `strtomember` and
+  member-only targets, plus set-probe member lists (`MemberList`, Head/Tail
+  wrapped, with `&amp;` decoding). The fault names the class, not the hidden
+  object. Value queries were already covered by plan-time Gate 2 (asserted now:
+  a denied measure's query returns no values while a visible one does).
+- All three cChildren builders suppress their synthetic `[Measures]` axes when
+  no measure is visible, and the all-level-members probe refuses a
+  relationship-backed dimension whose table OLS hides — the one probe that
+  builds its axis dimension outside the plan filters (found in review).
+- Probe shapes (`SetProbe`/`MemberOnlyProbe`/`MeasureMetadataProbe`) skip the
+  data-axis shape validation, which now runs after the set-probe
+  classification: `[Measures].Members` on an axis no longer panics in debug
+  builds while rendering fine in release.
+
+Unit coverage (618 tests, debug and release): four new tests —
+`hidden_fact_tables_disappear_from_measure_probes` (project4),
+`no_visible_measures_are_not_advertised_by_probes`,
+`cchildren_with_no_visible_measures_hides_the_measures_hierarchy`, and
+`all_level_members_probe_refuses_a_hidden_dimension` (Contoso, relationship
+backed) — plus 13/13 fidelity, 38/38 parity, 8/8 smoke.
+
+Still unmeasured against the reference: the exact answer for an inaccessible
+member in these probes (fault vs omission) and the value shape of the measure
+`cChildren` probe. The mirror's current model no longer carries the trace's
+measure name (`[Total Sales]`), and deciding fault-vs-omit from the reference
+needs role deployment there; the current choice is fail-closed and recorded
+here rather than assumed.

@@ -2026,6 +2026,305 @@ mod tests {
         });
     }
 
+    /// A role can see one fact table and be denied another; the probe plans
+    /// must neither count nor name the measures on the denied table, and a
+    /// `strtomember` naming a hidden object must fault instead of resolving it
+    /// (plan 058).
+    #[test]
+    fn hidden_fact_tables_disappear_from_measure_probes() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project =
+            ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
+        with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: "inventory_fact".into(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+            let admin = UserContext::admin_default();
+
+            let run =
+                |mdx: &str, user: &UserContext, config: &crate::project::config::ProxyConfig| {
+                    crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                        mdx,
+                        Backend::test_fixture(),
+                        user,
+                        config,
+                    )
+                };
+
+            // CUBECOUNT probe over [Measures]: four for the admin, only the two
+            // on the visible fact table for the restricted role.
+            let count_mdx = "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Measures].Members)' \
+                             SELECT {[Measures].[XL_SD]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let (admin_count, _) = run(count_mdx, &admin, &project.config);
+            let (restricted_count, _) = run(count_mdx, &user, &config);
+            assert_eq!(cell_values(&admin_count), vec![4.0], "{admin_count}");
+            assert_eq!(
+                cell_values(&restricted_count),
+                vec![2.0],
+                "{restricted_count}"
+            );
+
+            // CUBESET probe over [Measures]: the set lists only visible measures.
+            let list_mdx =
+                "SELECT {[Measures].Members} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let (admin_list, _) = run(list_mdx, &admin, &project.config);
+            let (restricted_list, _) = run(list_mdx, &user, &config);
+            assert!(
+                admin_list.contains("Stock") && admin_list.contains("Revenue"),
+                "{admin_list}"
+            );
+            assert!(
+                restricted_list.contains("Revenue")
+                    && restricted_list.contains("Units")
+                    && !restricted_list.contains("Stock")
+                    && !restricted_list.contains("Cost"),
+                "{restricted_list}"
+            );
+
+            // strtomember probes: visible members still resolve; hidden ones
+            // fault instead of echoing the hidden object.
+            let visible_probe = "WITH MEMBER [Measures].[XL_SD0] AS 'strtomember(\"[Measures].[Revenue]\").UniqueName' \
+                 SELECT {[Measures].[XL_SD0]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let hidden_measure_probe = "WITH MEMBER [Measures].[XL_SD0] AS 'strtomember(\"[Measures].[Stock]\").UniqueName' \
+                 SELECT {[Measures].[XL_SD0]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let hidden_dim_probe = "WITH MEMBER [Measures].[XL_SD0] AS 'strtomember(\"[Warehouse].[Warehouse].&[W1]\").UniqueName' \
+                 SELECT {[Measures].[XL_SD0]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let (visible, _) = run(visible_probe, &user, &config);
+            assert!(!visible.contains("faultstring"), "{visible}");
+            assert!(visible.contains("[Measures].[Revenue]"), "{visible}");
+            let (hidden_measure, _) = run(hidden_measure_probe, &user, &config);
+            assert!(hidden_measure.contains("faultstring"), "{hidden_measure}");
+            let (hidden_dim, _) = run(hidden_dim_probe, &user, &config);
+            assert!(hidden_dim.contains("faultstring"), "{hidden_dim}");
+            // The administrator is unaffected.
+            let (admin_hidden, _) = run(hidden_measure_probe, &admin, &project.config);
+            assert!(!admin_hidden.contains("faultstring"), "{admin_hidden}");
+
+            // A value query naming the hidden measure is emptied at plan time
+            // (Gate 2), never answered from the denied fact table; the visible
+            // measure still returns data.
+            let stock_mdx =
+                "SELECT {[Measures].[Stock]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let (stock_xml, _) = run(stock_mdx, &user, &config);
+            assert!(!stock_xml.contains("faultstring"), "{stock_xml}");
+            assert!(
+                cell_values(&stock_xml).is_empty(),
+                "the denied table's values must not be served: {stock_xml}"
+            );
+            let revenue_mdx =
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Operations] CELL PROPERTIES VALUE";
+            let (revenue_xml, _) = run(revenue_mdx, &user, &config);
+            assert!(!cell_values(&revenue_xml).is_empty(), "{revenue_xml}");
+
+            // A set probe listing members of a hidden dimension faults instead
+            // of echoing them. Category lives on the primary fact table, so a
+            // role that denies that table hides the dimension too.
+            let mut sales_hidden = project.config.clone();
+            sales_hidden.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: "sales_fact".into(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let member_list = "SELECT {[Category].[Category].&[Electronics],\
+                               [Category].[Category].&[Books]} ON 0 FROM [Operations] \
+                               CELL PROPERTIES CELL_ORDINAL";
+            let (leaked, _) = run(member_list, &user, &sales_hidden);
+            assert!(leaked.contains("faultstring"), "{leaked}");
+            assert!(!leaked.contains("Electronics"), "{leaked}");
+            // With a visible dimension the same list still answers.
+            let (listed, _) = run(member_list, &user, &config);
+            assert!(!listed.contains("faultstring"), "{listed}");
+            assert!(
+                listed.contains("Electronics") && listed.contains("Books"),
+                "{listed}"
+            );
+        });
+    }
+
+    /// The cChildren builders name `[Measures].[cChildren]` on their axes; a
+    /// user who can see no measure must not be told `[Measures]` exists even
+    /// when the dimension count itself is serviceable (a star model keeps its
+    /// dimension tables while every fact table is denied) — plan 058.
+    #[test]
+    fn cchildren_with_no_visible_measures_hides_the_measures_hierarchy() {
+        with_project3(|| {
+            let mdx = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Category].[Category].currentmember.children).count' \
+                       Set FilteredMembers As '{[Category].[Category].[(All)].Members}' Select {[Measures].cChildren} on ROWS, \
+                       Hierarchize(Generate(FilteredMembers, Ascendants([Category].[Category].currentmember))) ON COLUMNS \
+                       FROM [Sales] CELL PROPERTIES VALUE";
+            let mut query = semantic_query_from_mdx(mdx);
+            query.access = Some(AccessView {
+                hidden_dimensions: vec![],
+                visible_measures: Some(vec![]),
+            });
+            let xml = crate::execute::render::build_cchildren_for_all(
+                &query,
+                &crate::engine::plan::QueryResult::Count(5),
+                Backend::test_fixture(),
+            );
+            assert!(
+                !xml.contains("[Measures]"),
+                "no measure is visible, so the hierarchy must not be named: {xml}"
+            );
+        });
+    }
+
+    /// The all-level-members probe names its axis dimension directly, so a
+    /// relationship-backed dimension hidden by OLS must fault instead of being
+    /// rendered and counted. Flat models cannot show this: there the hidden
+    /// dimension resolves to the measure's fact table and Gate 2 empties the
+    /// plan already (plan 058).
+    #[test]
+    fn all_level_members_probe_refuses_a_hidden_dimension() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        crate::tools::seed_projects_db::ensure_seeded();
+        let project = ProxyProject::load("projects/generated_contoso/proxy-config.json")
+            .expect("load generated_contoso");
+        with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let model = &project.model;
+            let relationship = model
+                .relationships
+                .first()
+                .expect("the converted model has relationships");
+            let dim_id = relationship.dimension_id.clone();
+            let dim_table = relationship.dim_table.clone();
+            let hierarchy = model.dim_def(&dim_id).hierarchy_unique_name();
+
+            let mut config = project.config.clone();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: dim_table.clone(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+            let admin = UserContext::admin_default();
+
+            let mdx = format!(
+                "SELECT {{AddCalculatedMembers({{{hierarchy}.[(All)].Members}})}} DIMENSION PROPERTIES \
+                 MEMBER_TYPE ON COLUMNS FROM [{}] CELL PROPERTIES CELL_ORDINAL",
+                project.config.cube
+            );
+            let conn = duckdb::Connection::open("projects/generated_contoso/data/sales.db")
+                .expect("open contoso db");
+            let backend = FileQueryBackend(std::sync::Mutex::new(conn));
+
+            let (restricted, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    &mdx, &backend, &user, &config,
+                );
+            assert!(
+                restricted.contains("not available to the requesting role"),
+                "{restricted}"
+            );
+            assert!(!restricted.contains(&dim_id), "{restricted}");
+
+            let (admin_xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    &mdx,
+                    &backend,
+                    &admin,
+                    &project.config,
+                );
+            assert!(!admin_xml.contains("faultstring"), "{admin_xml}");
+        });
+    }
+
+    /// A user whose roles hide every fact table must not be told `[Measures]`
+    /// exists by the synthetic cChildren probe (plan 058).
+    #[test]
+    fn no_visible_measures_are_not_advertised_by_probes() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        let project =
+            ProxyProject::load("projects/project4/proxy-config.json").expect("load project4");
+        with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let permissions: Vec<TablePermissionConfig> = project
+                .model
+                .fact_tables
+                .iter()
+                .map(|ft| TablePermissionConfig {
+                    table: ft.table_name.clone(),
+                    filter_expression: String::new(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::None,
+                })
+                .collect();
+            config.roles = vec![RoleConfig {
+                name: "OLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: permissions,
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["OLS".into()];
+
+            let cchildren_mdx = "WITH MEMBER [Measures].cChildren As 'AddCalculatedMembers([Measures].currentmember.children).count' \
+                 Set FilteredMembers As '{[Measures].[Revenue]}' Select {[Measures].cChildren} on ROWS, \
+                 Hierarchize(Generate(FilteredMembers, Ascendants([Measures].currentmember))) ON COLUMNS \
+                 FROM [Operations] CELL PROPERTIES VALUE";
+            let (xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    cchildren_mdx,
+                    Backend::test_fixture(),
+                    &user,
+                    &config,
+                );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert!(
+                !xml.contains("[Measures]"),
+                "no measure is visible, so the hierarchy must not be advertised: {xml}"
+            );
+
+            // The administrator still gets the probe's synthetic answer.
+            let admin = UserContext::admin_default();
+            let (admin_xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    cchildren_mdx,
+                    Backend::test_fixture(),
+                    &admin,
+                    &project.config,
+                );
+            assert!(admin_xml.contains("[Measures]"), "{admin_xml}");
+        });
+    }
+
     /// A Discover naming another cube or catalog answers an empty rowset in
     /// the rowset's own shape, and scope names match case-insensitively
     /// (measured on the reference 2026-09-25).

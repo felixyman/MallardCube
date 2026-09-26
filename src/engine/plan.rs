@@ -421,6 +421,51 @@ pub fn plan_from_semantic_with_model(query: &SemanticQuery, model: &SemanticMode
     )
 }
 
+/// Is this member unique name hidden from the requesting role? A measure on a
+/// fact table the role cannot see, or a member of an OLS-hidden dimension.
+///
+/// Unknown names are left alone: the probe paths already handle them, and
+/// refusing on an unresolvable name would change behaviour for everyone.
+pub(crate) fn member_hidden_by_access(
+    uname: &str,
+    model: &SemanticModel,
+    access: &crate::mdx_semantic::AccessView,
+) -> bool {
+    let Some(rest) = uname.strip_prefix('[') else {
+        return false;
+    };
+    let Some((dim, rest)) = rest.split_once(']') else {
+        return false;
+    };
+    if dim.eq_ignore_ascii_case("Measures") {
+        let Some(rest) = rest.strip_prefix(".[") else {
+            return false;
+        };
+        let Some((name, _)) = rest.split_once(']') else {
+            return false;
+        };
+        return model
+            .measures
+            .iter()
+            .find(|m| {
+                m.id.eq_ignore_ascii_case(name)
+                    || m.caption.eq_ignore_ascii_case(name)
+                    || m.display_name.eq_ignore_ascii_case(name)
+            })
+            .is_some_and(|m| !access.measure_visible(&m.id));
+    }
+    access.dimension_hidden(dim)
+        || model
+            .dimensions
+            .iter()
+            .find(|d| {
+                d.hierarchy_unique_name()
+                    .to_ascii_lowercase()
+                    .starts_with(&format!("[{}]", dim.to_ascii_lowercase()))
+            })
+            .is_some_and(|d| access.dimension_hidden(&d.id))
+}
+
 /// Full variant: applies role-based gating on top of plan construction.
 ///
 /// Gating rules:
@@ -521,13 +566,29 @@ fn build_plan_inner(query: &SemanticQuery, model: &SemanticModel) -> QueryPlan {
         .unwrap_or("");
 
     // Excel CUBECOUNT probe: metadata count over a set's level — no fact
-    // table involved.
+    // table involved. A restricted user counts only what they can see: the
+    // full measure count leaked the existence of measures on hidden tables
+    // (plan 058).
     if let Some(cc) = &query.set_count {
         if let crate::mdx_parser::SetExpr::MemberList { unames } = &cc.set {
-            return QueryPlan::MetaCountLiteral(unames.len() as u32);
+            let count = match &query.access {
+                Some(access) => unames
+                    .iter()
+                    .filter(|name| !member_hidden_by_access(name, model, access))
+                    .count(),
+                None => unames.len(),
+            };
+            return QueryPlan::MetaCountLiteral(count as u32);
         }
         if matches!(cc.set, crate::mdx_parser::SetExpr::Measures) {
-            return QueryPlan::MetaCountLiteral(model.measures.len() as u32);
+            let count = match &query.access {
+                Some(access) => match &access.visible_measures {
+                    Some(ids) => ids.len(),
+                    None => model.measures.len(),
+                },
+                None => model.measures.len(),
+            };
+            return QueryPlan::MetaCountLiteral(count as u32);
         }
         let Some((dim_id, group_level)) = resolve_set_source(&cc.set, model, default_dim.clone())
         else {
