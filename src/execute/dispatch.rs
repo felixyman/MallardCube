@@ -1481,14 +1481,10 @@ mod tests {
                 "SELECT {[Measures].[Revenue]} ON COLUMNS, {[Date].[Calendar].[Quarter].AllMembers} ON ROWS FROM [Sales]",
             );
             let infos = axis_member_infos(&xml, "Axis1");
-            // Level listings are data-driven today: only members with facts
-            // are listed (a known gap vs SSAS, which also lists empty members).
-            assert_eq!(
-                infos.len(),
-                data_quarter_keys().len(),
-                "{:?}",
-                &infos[..2.min(infos.len())]
-            );
+            // Without NON EMPTY the axis lists the whole dictionary, as the
+            // reference does (measured 2026-09-26: 44 quarters, 132 months, 11
+            // years, with cells only where facts exist).
+            assert_eq!(infos.len(), 44, "{:?}", &infos[..2.min(infos.len())]);
             assert!(
                 infos[0]
                     .1
@@ -2177,11 +2173,7 @@ mod tests {
                 "SELECT {AddCalculatedMembers({[Date].[Calendar].[Year].Members})} DIMENSION PROPERTIES MEMBER_TYPE ON COLUMNS FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
-            assert_eq!(
-                infos.len(),
-                data_year_keys().len(),
-                "one row per year with data"
-            );
+            assert_eq!(infos.len(), 11, "every year of the calendar");
             assert!(
                 infos[0].1.contains("[Date].[Calendar].[Year].&amp;[2020]"),
                 "level-qualified year: {}",
@@ -2496,8 +2488,8 @@ mod tests {
             let quarters = data_quarter_keys();
             assert_eq!(
                 infos.len(),
-                quarters.len(),
-                "one member per quarter with facts"
+                44,
+                "every quarter of the calendar (the reference lists empty members too)"
             );
             assert_eq!(infos[0].0, "1", "caption is the level value");
             assert!(
@@ -2507,12 +2499,12 @@ mod tests {
                 "compound unique name: {}",
                 infos[0].1
             );
-            let last = quarters.last().expect("at least one quarter");
-            let parts: Vec<&str> = last.split('|').collect();
+            // The axis runs to the calendar's end (2030 Q4); only the quarters
+            // with facts carry cells, so `quarters` still sizes the CellData.
             let last_uname = &infos[infos.len() - 1].1;
             assert!(
-                last_uname.contains(&format!("&amp;[{}]&amp;[{}]", parts[0], parts[1])),
-                "last quarter: {last_uname}"
+                last_uname.contains("&amp;[2030]&amp;[4]"),
+                "last quarter of the calendar: {last_uname}"
             );
             assert_eq!(
                 cell_values(&xml).len(),
@@ -2530,11 +2522,7 @@ mod tests {
             );
             assert_eq!(axis0_member_infos(&xml).len(), 1, "measures axis");
             let infos = axis_member_infos(&xml, "Axis1");
-            assert_eq!(
-                infos.len(),
-                data_month_keys().len(),
-                "one member per month with facts"
-            );
+            assert_eq!(infos.len(), 132, "every month of the calendar");
             // Months order 1..12, not lexicographically ("1","10","11","12","2").
             assert!(
                 infos[11].1.contains("&amp;[12]"),

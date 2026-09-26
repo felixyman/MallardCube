@@ -867,6 +867,100 @@ fn build_axis_tuples(
     tuples
 }
 
+/// Is the axis carrying `dim` marked `NON EMPTY`? Defaults to true — the
+/// data-driven behaviour — when the axis cannot be found.
+fn axis_non_empty(query: &SemanticQuery, dim: &str) -> bool {
+    query
+        .axis_specs
+        .iter()
+        .find(|spec| spec.dims.iter().any(|d| d == dim))
+        .map(|spec| spec.non_empty)
+        .unwrap_or(true)
+}
+
+/// The no-`NON EMPTY` drilldown: every member the dictionary knows, in its
+/// order, with a cell only where the tuple has data.
+fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    result: &QueryResult,
+    backend: &B,
+) -> String {
+    let project = crate::proxy_project::project();
+    let model = &project.model;
+    let dim = query
+        .axis_dimensions
+        .first()
+        .map(|s| s.as_str())
+        .unwrap_or_default();
+    let Some(def) = model.dim_def_opt(dim) else {
+        return render_response(
+            finish_dim_axis(
+                query,
+                backend,
+                empty_member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props)),
+            ),
+            Vec::new(),
+            &query.cell_props,
+        );
+    };
+    let values: Vec<(String, f64)> = match result {
+        QueryResult::Grouped(rows) => rows.clone(),
+        _ => Vec::new(),
+    };
+    let members = model.dim_cache.get(model, def, backend);
+    // The grain the axis asked for: the key-attribute view is a single level
+    // (its deepest), a level set or drilldown names its level.
+    let level_index = if query.key_hierarchy_view.is_some() {
+        members.level_paths.len().saturating_sub(1)
+    } else {
+        query.drilldown_level().unwrap_or(0)
+    };
+    let names: Vec<String> = match members.level_paths.get(level_index) {
+        Some(paths) if !paths.is_empty() => paths.iter().map(|parts| parts.join("|")).collect(),
+        _ => members.leaf_values.clone(),
+    };
+
+    // A drilldown's input set includes (All); a level set does not.
+    let mut axis_members = Vec::new();
+    if !query.level_drag {
+        axis_members.push(all_member_for_with_backend(dim, &query.dim_props, backend));
+    }
+    axis_members.extend(leaf_members_from(
+        dim,
+        &names,
+        &query.dim_props,
+        query.drilldown_level(),
+        None,
+    ));
+    apply_member_display_info(&mut axis_members);
+
+    // Sparse cells: the ordinal indexes the full member list, and tuples
+    // without data simply have none (the reference's shape).
+    let total: f64 = values.iter().map(|(_, value)| *value).sum();
+    let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
+    for (index, member) in axis_members.iter().enumerate() {
+        let key = crate::axis_members::key_from_member_uname(&member.u_name).unwrap_or_default();
+        let value = if member.u_name.ends_with(".[All]") {
+            Some(total)
+        } else {
+            values
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| *value)
+        };
+        if let Some(value) = value {
+            cells.push(measurement_cell_for_query(query, index as u32, value));
+        }
+    }
+
+    let axis = member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), axis_members);
+    render_response(
+        finish_dim_axis(query, backend, axis),
+        cells,
+        &query.cell_props,
+    )
+}
+
 pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
@@ -875,6 +969,21 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     let dims = &query.axis_dimensions;
     if dims.len() >= 2 {
         return build_drilldown_multi(query, result, backend);
+    }
+    // Without NON EMPTY the axis lists the level's whole dictionary — the
+    // reference answers 4,019 members for the date key hierarchy — while only
+    // the tuples with data carry cells (its CellData is sparse: 758 cells for
+    // 4,019 members, the ordinals indexing the full list; measured 2026-09-26).
+    // Excel always sends NON EMPTY, so this exists for the other XMLA clients.
+    // Level sets only: the key-attribute hierarchy's view needs the members
+    // rowset's namespace plumbing (u_name `[Date].[Full Date].&[<date>]`), and
+    // without it the cells would not match the group keys — that case stays the
+    // recorded parity gap.
+    if query.axis_set_op.is_none()
+        && query.key_hierarchy_view.is_none()
+        && !axis_non_empty(query, dims.first().map(|s| s.as_str()).unwrap_or(""))
+    {
+        return build_drilldown_dictionary(query, result, backend);
     }
     let mut fallback_dim = String::new();
     let dim = dims.first().map(|s| s.as_str()).unwrap_or_else(|| {

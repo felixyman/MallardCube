@@ -545,6 +545,10 @@ pub fn axis_dimension_ids(sel: &Select) -> Vec<String> {
 pub struct AxisSpec {
     /// `ON COLUMNS` = 0, `ON ROWS` = 1.
     pub ordinal: u32,
+    /// The axis carried `NON EMPTY`: members without data are pruned, which is
+    /// every Excel query. Without it the axis lists the whole dictionary and
+    /// only the tuples with data carry cells (measured 2026-09-26).
+    pub non_empty: bool,
     /// Dimension ids on this axis, in member order.
     pub dims: Vec<String>,
     /// Measures on this axis, in member order.
@@ -581,6 +585,7 @@ pub fn axis_specs(sel: &Select) -> Vec<AxisSpec> {
     for axis in axes {
         let mut spec = AxisSpec {
             ordinal: axis.ordinal,
+            non_empty: axis.non_empty,
             ..AxisSpec::default()
         };
         for expr in &axis.exprs {

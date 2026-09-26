@@ -172,3 +172,24 @@ The fresh full run is now **byte-identical to the mirror baseline**, so
 `parity/sweep3-proxy-baseline.txt` is updated to it: every gesture in the sweep
 set produces the same Excel grid against both engines (the two specs that fail
 to build fail identically on both, a COM limitation of the harness).
+
+### Level sets list the dictionary; the key hierarchy still needs its view (2026-09-26)
+
+Measured on the mirror: without `NON EMPTY` a level set lists **every** member of
+the level (44 quarters, 132 months, 11 years), and only the tuples with data
+carry cells; `NON EMPTY` prunes the axis it is written on (my first probe put it
+on the measures axis and nothing changed — the keyword is per axis).
+
+The proxy's level listings were data-driven; the tests said so in a comment. Now
+level sets and non-key-hierarchy drilldowns without `NON EMPTY` list the
+dictionary in its order and emit sparse cells — the ordinals index the full
+member list, exactly the reference's shape. Three tests moved from the old
+data-driven counts to the reference's (11 / 44 / 132).
+
+The key-attribute hierarchy (`[Date].[Full Date]`) is deliberately excluded: its
+members need the view's namespace (`[Date].[Full Date].&[<date>]`), which the
+members rowset builds but the axis path does not, so the cells would not match
+the group keys (measured: 4,018 members, zero cells). That keeps
+`axis-date-key-drilldown` as the one known gap — now with its whole shape known:
+All + 4,018 dates, 758 sparse cells on a filtered axis, unique names carrying
+`T00:00:00` and locale captions (`1/1/2020`).
