@@ -51,12 +51,15 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset: mallard-linux-x86_64
+            binary: target/x86_64-unknown-linux-gnu/release/mallard
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: mallard-macos-arm64
+            binary: target/aarch64-apple-darwin/release/mallard
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: mallard-windows-x86_64.exe
+            binary: target/x86_64-pc-windows-msvc/release/mallard.exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -77,11 +80,19 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # cargo names the binary `mallard` (`mallard.exe` on Windows); the release
+      # asset carries the platform suffix, so stage it under that name.
+      - name: Stage the release artifact
+        shell: bash
+        run: cp "${{ matrix.binary }}" "${{ matrix.asset }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: target/${{ matrix.target }}/release/${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          # A path typo must fail the job, not publish a release with no files.
+          if-no-files-found: error
 
   publish:
     needs: build
