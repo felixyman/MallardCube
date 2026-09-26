@@ -1,0 +1,428 @@
+# Operations
+
+The repo's operational detail: project structure and configuration, data
+refresh and reload, performance notes, sample projects, converting SSAS
+Tabular models, tests and the compatibility gates, architecture, scope, and
+the security and role model.
+
+## Project structure
+
+Each project is a directory containing at minimum one file:
+
+| File | Purpose |
+|------|---------|
+| `proxy-config.json` | Maps your data to Excel/XMLA: dimensions, measures, captions, formatting |
+
+### Config walkthrough (`proxy-config.json`)
+
+```jsonc
+{
+  "catalog": "SALES_ANALYTICS",
+  "cube": "Sales",
+  "source_name": "sales_data",
+  "table_name": "sales_fact",
+  "dialect": "duckdb",
+  "db_path": null,
+  "dimensions": [
+    {
+      "id": "Category",
+      "physical_field": "category",
+      "caption": "Category",
+      "hierarchy_name": "Category",
+      "all_level_name": "(All)",
+      "leaf_level_name": "Category",
+      "ordinal": 1,
+      "visible": true,
+      "has_all": true,
+      "cardinality_hint": 50
+    }
+  ],
+  "measures": [
+    {
+      "id": "Revenue",
+      "sql_expr": "SUM(revenue)",
+      "caption": "Revenue",
+      "display_name": "Revenue (USD)",
+      "format_string": "#,##0.00",
+      "ordinal": 1,
+      "visible": true,
+      "measure_group_name": "Sales"
+    }
+  ]
+}
+```
+
+Key naming rules:
+
+- **`id`** - Internal identifier for `QueryPlan`, `plan_key`, filter routing. Must be unique.
+- **`caption`** - Excel-visible label. Can include spaces and Unicode.
+- **`sql_expr`** - DuckDB SQL expression for the measure. Direct SQL is the only runtime.
+
+### Formats, defaults, and large models
+
+The config can be JSON or YAML (detected by extension, then by content). YAML
+suits large hand-maintained models: comments, no escaped non-ASCII in captions,
+and readable diffs.
+
+Derived defaults keep configs small. Only these are required per entry:
+
+- dimension: `id`, `caption`
+- measure: `id`, `caption`
+
+Everything else falls back: captions cascade to `hierarchy_name`,
+`leaf_level_name`, and `display_name`; `all_level_name` is `(All)`; `ordinal`
+follows list order; `visible` is true; `physical_field` is the dimension id;
+`format_string` is `#,##0.00`; a measure's `measure_group_name` follows its
+fact table (or the cube), and a missing `fact_table` means the first one.
+
+Large models can split sections into their own files — each holds the same list
+format, inline entries come first, and paths resolve relative to the config:
+
+```yaml
+dimensions_file: dimensions.yaml
+measures_file: measures.yaml
+roles_file: roles.yaml
+```
+
+`mallard fmt` writes a config canonically (stable field order, defaults omitted
+again) and converts between formats:
+
+```bash
+mallard fmt my-project/proxy-config.yaml            # rewrite canonically
+mallard fmt --check my-project/proxy-config.yaml    # CI: non-zero when dirty
+mallard fmt --to yaml my-project/proxy-config.json  # print as YAML
+```
+
+A rewrite does not preserve YAML comments (serde has no comment model), so run
+`fmt` deliberately; `--to` prints to stdout and never writes.
+
+### Multi-fact-table config
+
+For projects with more than one fact table, use the `fact_tables` array and
+bind dimensions and measures to specific fact tables:
+
+```jsonc
+{
+  "fact_tables": [
+    { "id": "sales", "source_name": "sales_data", "table_name": "sales_fact",
+      "measure_group_name": "Sales" },
+    { "id": "inventory", "source_name": "inventory_data", "table_name": "inventory_fact",
+      "measure_group_name": "Inventory" }
+  ],
+  "dimensions": [
+    { "id": "Category", "shared": true, ... },
+    { "id": "Channel", "fact_table": "sales", ... },
+    { "id": "Warehouse", "fact_table": "inventory", ... }
+  ],
+  "measures": [
+    { "id": "Revenue", "fact_table": "sales", ... },
+    { "id": "Stock", "fact_table": "inventory", ... }
+  ]
+}
+```
+
+- `shared: true` dimensions apply to all fact tables.
+- `fact_table` on a dimension or measure scopes it to that fact table.
+- Unrelated dimension filters are silently ignored (SSAS-compatible).
+
+
+## Demo vs Real Data
+
+By default, the proxy runs in **demo mode**: a temporary DuckDB file seeded
+with synthetic data (20k `sales_fact` rows).
+
+To use your own DuckDB database, set `"db_path"` in `proxy-config.json` to a
+file path relative to the config file:
+
+```jsonc
+{ "db_path": "../data/my-sales.db" }
+```
+
+When `db_path` is `null` or omitted, demo mode is used.
+
+## Refreshing data
+
+MallardCube opens the DuckDB file through a pool of **read-only** connections
+and keeps them for the life of the process. DuckDB allows one writer or many
+readers on a file, never both, so:
+
+- A load job cannot write the file while the server is running (it fails with
+  `Could not set lock`); several MallardCube servers *can* share the file.
+- The server cannot start while a load job holds the file — startup says so
+  explicitly instead of failing with a raw lock error.
+- The server keeps serving the snapshot it opened until it restarts, so after
+  a load it must be restarted to pick up the new data.
+
+The refresh procedure:
+
+1. Build the new data into a **staging file** (`build.duckdb`) while the server
+   keeps serving.
+2. `mv build.duckdb live.duckdb` — an atomic rename; running servers keep
+   reading the old inode until they are restarted.
+3. Restart the service (`systemctl restart mallard`, `docker compose restart`),
+   or reload it in place: `kill -HUP <pid>` / `systemctl reload mallard` (see
+   *Hot reload* below). Aggregation rollups are rebuilt on restart only when
+   the source stamp (size + mtime) changed.
+
+### Freshness and liveness
+
+`GET /status` reports what the server is serving and since when:
+
+```bash
+curl -s http://localhost:8080/status
+# {"catalog":"SALES_ANALYTICS","cube":"Sales","pool_size":8,
+#  "started_at_unix":...,"result_cache":true,
+#  "data":{"path":"...","size_bytes":...,"mtime_unix":...,"loaded_at_unix":...}}
+```
+
+`GET /health` answers `200 ok` for liveness probes. Both endpoints are
+auth-gated when `auth` is configured (trusted header or bearer token).
+
+### Hot reload
+
+Reload the data file without restarting and without dropping requests:
+
+```bash
+kill -HUP <pid>            # or: systemctl reload mallard
+```
+
+New requests get a freshly opened pool; requests already in flight finish on
+the old one. The result cache is cleared, so nothing can serve pre-reload rows.
+If aggregation rollups are enabled and the data changed, routing falls back to
+the fact table until the next restart — the sidecar cannot be rebuilt while the
+live pool holds it, and the reload log says so.
+
+Where signals are awkward (Windows, or a loader that cannot signal the
+process), poll the file stamp instead:
+
+```bash
+MALLARDCUBE_RELOAD_WATCH=5 cargo run   # check size+mtime every 5 seconds
+```
+
+## Performance and scale
+
+Large fact tables are the point of the aggregation sidecar: set
+`MALLARDCUBE_AGG_CACHE` and MallardCube pre-computes rollups per hierarchy
+level, so coarse pivots read a few thousand rows instead of the whole fact.
+Row-level security no longer disables them: a role predicate is applied to the
+rollup when the rollup carries every column it references, and the fact path is
+used otherwise (never a silent bypass).
+
+Measured numbers for a 100M-row fact (latency by query shape, rollup benefit,
+concurrency, startup cost) are in `docs/SCALING.md`, with the reproduction
+harness in `scripts/bench.sh` and the RLS A/B in `scripts/rls-rollup-ab.sh`.
+
+## Sample projects
+
+Sample projects live at the repo root.
+
+| Project | Description |
+|---------|-------------|
+| `projects/project2/` | Renamed variant proving name independence. 2 dims, 1 measure. `proxy-config.yaml` + `dimensions.yaml` demonstrate YAML, defaults, and section files. |
+| `projects/project3/` | Default startup. 5 dims (incl. Date with multi-level hierarchy), 6 measures (Revenue, Units, YTD, Prior Year, QTD, MTD). |
+| `projects/project4/` | Multi-fact: 2 fact tables (Sales + Inventory), shared and scoped dimensions. |
+| `projects/upstream_marts/` | The boundary contract, runnable: semantic logic upstream (SQL models + marts), a thin projection here. |
+| `projects/generated_retail_analytics/` | Converted Tabular model: 1 fact, 5 dims, 1 date-role, 4 real measures. Qualifies READY. |
+| `projects/generated_contoso/` | Contoso retail model: 7,794 sales rows, 4 working measures, 34 helper stubs. Qualifies PARTIAL. |
+
+## Converting SSAS Tabular models
+
+Convert an existing Tabular Editor export (`.bim`/TMDL) into a DuckDB project:
+
+```bash
+cargo run --bin mallard -- convert-tabular path/to/tabulareditor_src output_dir
+```
+
+This produces a `proxy-config.json`, a `schema.sql`, fallback SQL for complex
+measures, and a conversion report. See `docs/converting-models.md` for the full
+migration intake loop (inventory → convert → bootstrap → qualify → replay) and
+the compatibility gate.
+
+## Running tests
+
+```bash
+cargo run --bin seed_projects_db                # once, seeds converted-project DBs
+cargo test --lib
+```
+
+Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
+does this automatically).
+
+Tests cover MDX parsing, semantic classification, plan generation, SQL
+emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,
+multi-level hierarchies, DRILLTHROUGH, Excel replay/oracle verification,
+time intelligence, security roles, AutoModel detection, and compatibility-gate
+assertions.
+
+## Compatibility gate
+
+Every converted project should pass a structural compatibility check before it
+is considered "Excel-safe." See `docs/converting-models.md` for the gate's
+three layers (discover handshake, execute shape, optional trace replay) and the
+`qualify` / `inventory` / `trace-replay` workflow.
+
+## Architecture
+
+For detailed documentation:
+
+| File | Description |
+|------|-------------|
+| [Published docs](https://felixyman.github.io/MallardCube/) | This documentation, rendered (GitHub Pages) |
+| `docs/DESIGN-INVARIANTS.md` | The boundary contract: what belongs upstream, and the five invariants |
+| `docs/SCALING.md` | 100M-row measurements and the reproduction harness |
+| `docs/DEVELOPER-GUIDE.md` | Developer onboarding: startup flow, request lifecycle, module map |
+| `docs/converting-models.md` | SSAS Tabular conversion: intake loop, qualify, compatibility gate |
+| `docs/config-reference.md` | Every `proxy-config` key, its default, and worked examples |
+| `docs/DIAGRAMS.md` | Mermaid diagrams (current, target, migration, collapse flow) |
+| `docs/cellset-reference.md` | XMLA cellset layout reference |
+
+## Current scope
+
+**Works:**
+- Full Excel discover/metadata handshake (all required rowsets)
+- PivotTable execution: filtering, drilldown, crossjoin, collapse
+- Multi-level date hierarchies (Year→Quarter→Month→Date expand/collapse, including one-step
+  "Expand to Month" / "Expand to Full Date")
+- Excel **Label Filters** (begins with / ends with / contains / equals / …) — lowered to
+  caption predicates on the dimension column, flat or relationship-backed
+- Excel **Date Filters** — Excel sends
+  `Filter(<key attribute>.Levels(1).AllMembers, CurrentMember.MemberValue <op> CDate("…"))`
+  in a subquery; the proxy lowers it to a date window on the role's full-date column
+  (verified end-to-end in Excel)
+- DRILLTHROUGH (double-click cell → filtered source rows)
+- Single or multiple fact tables with shared/scoped dimensions
+- Time intelligence through date-dimension flag columns: YTD, prior year, QTD, MTD
+- Direct SQL execution (single runtime, no intermediate engine)
+- Row-level security (RLS) via SQL predicates
+- Object-level security (OLS) via table hiding
+- Model-level permission gating (read / administrator / none)
+- Trusted-proxy auth boundary (IIS/nginx → X-User header)
+- Tabular `.bim` / TMDL → proxy config converter, including hierarchy levels
+  (Excel drill paths) and relationship columns resolved to the generated schema
+- Structured fallback SQL with capability gates (6 generic DAX-lowering patterns)
+- Qualify migration readiness gate (READY / PARTIAL / BLOCKED)
+- Compatibility gate: discover + execute + replay validation
+- AutoModel: zero-config semantic model from any DuckDB file (`MALLARDCUBE_DB` / `auto-model` CLI)
+
+**Partial:**
+- Fallback SQL for composite DAX — 6 mechanical patterns, labelled **bridge code**: the conversion report lists a suggested upstream artifact per measure, and `qualify --strict` fails while bridge code remains
+- SSAS converter — handles common model shapes; needs manual intervention for calculation groups and complex DAX
+
+**Not yet:**
+- Attached data sources (MSSQL, Postgres, S3) — DuckDB extensions exist, not wired
+- Calculation groups
+- Native Kerberos — reverse proxy in front is the documented boundary
+
+## Security and roles
+
+The proxy supports SSAS Tabular-style role-based security via a trusted-proxy
+auth boundary. Roles enforce **row-level security (RLS)** through SQL predicates,
+**object-level security (OLS)** by hiding tables, and **model-level permission**
+gating (read / administrator / none).
+
+### Auth boundary
+
+The proxy does not implement Windows Authentication (Kerberos/NTLM) natively.
+Instead, it reads the authenticated user identity from a configurable HTTP
+header set by a trusted reverse proxy (IIS, nginx, etc.).
+
+```jsonc
+{
+  "auth": {
+    "trusted_proxy": true,
+    "trusted_header": "X-User"    // default
+  }
+}
+```
+
+- **`trusted_proxy: true`** — the proxy reads the `X-User` header (or your
+  configured header name) and resolves roles against that user identity.
+- **Header missing** when `trusted_proxy` is enabled → the proxy returns a 401
+  (deny closed).
+- **`auth` absent** (or null) → no user context is built; all requests see all
+  data with administrator privileges (backward-compat mode). Roles are
+  informational only.
+
+Place IIS with Windows Authentication or nginx with a Kerberos module in front
+of the proxy. The reverse proxy terminates auth and sets the trusted header
+before forwarding requests.
+
+### Role configuration
+
+```jsonc
+{
+  "roles": [
+    {
+      "name": "EU_Sales_Managers",
+      "description": "EU region sales managers — read only",
+      "model_permission": "read",
+      "members": [
+        { "member_name": "DOMAIN\\jsmith", "member_type": "user" },
+        { "member_name": "DOMAIN\\EU-Sales", "member_type": "group" }
+      ],
+      "table_permissions": [
+        {
+          "table": "sales_fact",
+          "filter_expression": "f.region = 'EU'",
+          "dax_filter": "Sales[Region] = \"EU\"",
+          "metadata_permission": "read"
+        },
+        {
+          "table": "dim_territory",
+          "filter_expression": "_territory.region = 'EU'",
+          "metadata_permission": "read"
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "trusted_proxy": true
+  }
+}
+```
+
+### SQL filter contract
+
+`filter_expression` is a **raw DuckDB SQL fragment** placed in the WHERE
+clause of every query scanning that table. The table aliasing convention is:
+
+| Table role | Alias |
+|---|---|
+| Fact table | `f` |
+| Dimension table | `_<dimension_id>` (e.g. `_territory`, `_product`) |
+
+Examples:
+
+- `"f.region = 'EU'"` — filter directly on the fact table column
+- `"_territory.region = 'EU'"` — filter on a joined dimension; the proxy
+  cascades it through the active relationship
+
+When the converter emits role metadata, it leaves `filter_expression` empty
+and preserves the original DAX in `dax_filter`. Operators must manually
+translate DAX to SQL using the aliases above.
+
+### Semantics
+
+| Concept | Behavior |
+|---|---|
+| **Multiple roles** | Union (OR) — a user in multiple roles sees the union of all rows. |
+| **No matching role** (auth configured) | Deny all — empty query results, empty discover rowsets. |
+| **No auth configured** | Administrator default — all data visible, roles informational. |
+| **`model_permission: administrator`** | Bypasses RLS and OLS entirely. |
+| **`model_permission: none`** | Deny all — empty results for all queries. |
+| **No `table_permission` for a table** | Full access to that table (SSAS convention). |
+| **`metadata_permission: none`** | OLS — table hidden from metadata and queries (Empty plan). |
+
+### What is enforced
+
+| Feature | Enforced? | Notes |
+|---|---|---|
+| RLS via SQL predicates | Yes | Applied as WHERE clause on every fact/dimension scan |
+| Model-level read/deny | Yes | Plan returns Empty when permission is `none` |
+| OLS (table-level hide) | Yes | Table hidden via Empty plan / empty member list |
+| MDSCHEMA_MEMBERS filtering | Yes | Dimension table RLS applied to member enumeration |
+| DAX-to-SQL lowering | No | Converter emits DAX in `dax_filter`; `filter_expression` left empty for manual fill-in |
+| Column-level OLS | No | Only table-level `metadata_permission` is supported |
+| Dynamic `USERNAME()` | No | `USERNAME()` and `USERPRINCIPALNAME()` are not substituted at runtime |
+| Native Kerberos | No | Authentication must be terminated by a reverse proxy |
+
