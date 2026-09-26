@@ -2947,6 +2947,7 @@ mod tests {
     // table has 7,794 rows; the response is capped at the 1,000-row LIMIT.
     #[test]
     fn drillthrough_reads_the_backend_it_is_given() {
+        crate::tools::seed_projects_db::ensure_seeded();
         let project = ProxyProject::load("projects/generated_contoso/proxy-config.json")
             .expect("load generated_contoso");
         with_test_project(project, || {
@@ -4972,6 +4973,7 @@ mod tests {
 
     #[test]
     fn retail_analytics_total_revenue_is_fallback_returns_empty() {
+        crate::tools::seed_projects_db::ensure_seeded();
         // Total Revenue is no longer a stub — Plan 021 generated real SQL.
         // The fallback returns a real value (0 on empty DB).
         with_retail_analytics(|| {
@@ -5053,6 +5055,7 @@ mod tests {
 
     #[test]
     fn contoso_sales_amount_returns_data() {
+        crate::tools::seed_projects_db::ensure_seeded();
         use duckdb::Connection;
         let project = crate::project::project::ProxyProject::load(
             "projects/generated_contoso/proxy-config.json",

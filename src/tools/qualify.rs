@@ -845,6 +845,7 @@ mod tests {
 
     #[test]
     fn generated_retail_analytics_is_ready_after_plan_021() {
+        crate::tools::seed_projects_db::ensure_seeded();
         let v = qualify(
             "projects/generated_retail_analytics/proxy-config.json",
             None,
@@ -862,6 +863,7 @@ mod tests {
 
     #[test]
     fn generated_contoso_reports_missing_tables_and_roles() {
+        crate::tools::seed_projects_db::ensure_seeded();
         let v = qualify("projects/generated_contoso/proxy-config.json", None);
         // Roles defined without an auth config, measures needing manual review,
         // and — with the data-side checks (plan 057-B) — tables the model

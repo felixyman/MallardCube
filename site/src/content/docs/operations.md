@@ -244,12 +244,12 @@ the compatibility gate.
 ## Running tests
 
 ```bash
-cargo run --bin seed_projects_db                # once, seeds converted-project DBs
 cargo test --lib
 ```
 
-Some tests read the seeded DuckDB fixtures under `data/`; seed them first (CI
-does this automatically).
+Tests that read the converted projects (`projects/generated_*`) build their
+DuckDB fixtures on demand from tracked sources; `cargo run --bin
+seed_projects_db` regenerates them explicitly (useful before serving one).
 
 Tests cover MDX parsing, semantic classification, plan generation, SQL
 emission, metadata rowsets, multi-fact routing, end-to-end cellset rendering,

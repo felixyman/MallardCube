@@ -5,7 +5,13 @@
 ///
 /// - retail: `schema.sql` + `seed_date_dim.sql` (deterministic, empty fact)
 /// - contoso: load the tracked CSVs in `data/contoso/data/` via `read_csv_auto`
+///
+/// Tests and CI jobs that read the generated projects call [`ensure_seeded`],
+/// which builds only what is missing; `run` is the explicit regeneration.
 use std::path::Path;
+
+const RETAIL_DB: &str = "projects/generated_retail_analytics/data/sales.db";
+const CONTOSO_DB: &str = "projects/generated_contoso/data/sales.db";
 
 pub fn run(_args: Vec<String>) -> i32 {
     seed_retail();
@@ -13,23 +19,64 @@ pub fn run(_args: Vec<String>) -> i32 {
     0
 }
 
+/// Seed any generated-project database that is missing or empty.
+///
+/// The `.db` files are deliberately not in git and the tracked inputs are
+/// deterministic, so a clean checkout can rebuild them on demand. Callers that
+/// read the converted projects (the test suite, the CI test jobs) use this so
+/// no manual setup step is required; the work happens once per process.
+pub fn ensure_seeded() {
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+    SEEDED.call_once(|| {
+        if !is_seeded(RETAIL_DB) {
+            seed_retail();
+        }
+        if !is_seeded(CONTOSO_DB) {
+            seed_contoso();
+        }
+    });
+}
+
+/// A database file only counts as seeded when it actually holds tables: a
+/// plain `Connection::open` creates the file, so an empty one (left by some
+/// earlier run that opened it before seeding) must not stop the fixture from
+/// being rebuilt. A zero-byte placeholder is never a database, so it is
+/// rebuilt too; other unreadable files are left alone — the caller fails
+/// loudly rather than deleting a database it cannot inspect.
+fn is_seeded(db_path: &str) -> bool {
+    let Ok(metadata) = std::fs::metadata(db_path) else {
+        return false;
+    };
+    if metadata.len() == 0 {
+        return false;
+    }
+    let Ok(conn) = duckdb::Connection::open(db_path) else {
+        return true;
+    };
+    conn.query_row(
+        "SELECT count(*) FROM information_schema.tables",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|tables| tables > 0)
+    .unwrap_or(true)
+}
+
 fn seed_retail() {
-    let db_path = "projects/generated_retail_analytics/data/sales.db";
-    reset_db(db_path);
-    let db = duckdb::Connection::open(db_path).expect("open retail db");
+    reset_db(RETAIL_DB);
+    let db = duckdb::Connection::open(RETAIL_DB).expect("open retail db");
     for sql_path in [
         "projects/generated_retail_analytics/schema.sql",
         "projects/generated_retail_analytics/seed_date_dim.sql",
     ] {
         execute_sql_file(&db, sql_path);
     }
-    eprintln!("Created {db_path}");
+    eprintln!("Created {RETAIL_DB}");
 }
 
 fn seed_contoso() {
-    let db_path = "projects/generated_contoso/data/sales.db";
-    reset_db(db_path);
-    let db = duckdb::Connection::open(db_path).expect("open contoso db");
+    reset_db(CONTOSO_DB);
+    let db = duckdb::Connection::open(CONTOSO_DB).expect("open contoso db");
     for table in [
         "sales",
         "customer",
@@ -45,7 +92,7 @@ fn seed_contoso() {
         db.execute_batch(&sql)
             .unwrap_or_else(|e| panic!("load {csv_path}: {e}"));
     }
-    eprintln!("Created {db_path}");
+    eprintln!("Created {CONTOSO_DB}");
 }
 
 fn reset_db(db_path: &str) {

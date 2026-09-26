@@ -252,11 +252,14 @@ cargo test --lib
 ```
 
 - Tests live alongside code in `#[cfg(test)] mod tests {}` blocks.
-- 445 tests covering MDX parsing, semantic classification, plan generation,
+- The suite covers MDX parsing, semantic classification, plan generation,
   SQL emission, metadata rowsets, multi-fact routing, end-to-end cellset
   rendering, Excel replay/oracle verification, time intelligence, security
   roles, and compatibility-gate assertions.
 - Shared test fixtures: `src/test_support/fixtures.rs`.
+- Converted-project fixtures (`projects/generated_*`) keep their `.db` files
+  out of git; tests that read them seed them on demand from tracked sources
+  (`cargo run --bin seed_projects_db` regenerates them explicitly).
 - Test-only backends: `Backend::test_fixture()` (a temp-file copy of the demo
   database) and `FileQueryBackend` in `execute/dispatch.rs` (a file-backed
   project's own DB). Parameterless helpers such as
@@ -266,7 +269,6 @@ cargo test --lib
 - `project/project.rs` - Config parsing and model building.
 - `execute/dispatch.rs` - MDX parsing, classification, end-to-end responses,
   compatibility gate tests.
-- Benchmark: `cargo bench` runs `benches/pipeline.rs`.
 - Load/scale harness: `scripts/bench.sh` (100M-row numbers in
   `docs/SCALING.md`); RLS rollup A/B: `scripts/rls-rollup-ab.sh`.
 

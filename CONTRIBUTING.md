@@ -32,15 +32,16 @@ is only needed for end-to-end checks.
 
 ## Tests
 
-Seed the DuckDB fixtures once before running the suite:
+Run the suite:
 
 ```bash
-cargo run --bin seed_projects_db
 cargo test --lib
 ```
 
-Some tests read the seeded fixtures under `data/`; CI seeds them
-automatically. The suite is expected to be green and **date-relative** —
+Tests that read the converted projects (`projects/generated_*`) build their
+DuckDB fixtures on demand from tracked sources; `cargo run --bin
+seed_projects_db` regenerates them explicitly. The suite is expected to be
+green and **date-relative** —
 tests that depend on "today" (time intelligence, demo dates) must derive
 their expectations from the seeded data, never hardcode them.
 

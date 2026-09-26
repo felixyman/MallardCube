@@ -28,6 +28,11 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
+      # The converted-project databases are gitignored and regenerated from
+      # tracked sources, exactly as in ci.yml.
+      - name: Seed converted-project DBs
+        run: cargo run --release --bin seed_projects_db
+
       - name: Lib tests
         run: cargo test --lib --release
 
