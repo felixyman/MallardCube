@@ -115,6 +115,17 @@ fn reload_data(state: &AppState) -> Result<String, String> {
         Err(e) => *e.into_inner() = status,
     }
     mallardcube::execute::cache::RESULT_CACHE.clear();
+    mallardcube::audit::emit(
+        "reload",
+        &UserContext::admin_default(),
+        "data-reload",
+        &format!(
+            "{} ({} bytes, mtime {})",
+            path.display(),
+            size_bytes,
+            mtime_unix
+        ),
+    );
     // Member dictionaries depend on the data too (plan 031).
     mallardcube::proxy_project::project()
         .model
@@ -813,6 +824,24 @@ async fn handle_xmla(
 
     let config = proxy_project::project().config.clone();
     let user_context = build_user_context(&http_headers, &config);
+    // The audit stream is opt-in; setting the id is cheap and makes every
+    // decision event in this request correlate (plan 058-D). The worker runs
+    // on a blocking thread, so the id is set there too.
+    let audit_request_id = mallardcube::audit::new_request_id();
+    mallardcube::audit::set_request_id(&audit_request_id);
+    mallardcube::audit::emit(
+        "auth",
+        &user_context,
+        "role-resolution",
+        &format!(
+            "auth={}",
+            match &config.auth {
+                None => "none (administrator)",
+                Some(auth) if auth.oidc.is_some() => "oidc",
+                Some(_) => "trusted-proxy",
+            }
+        ),
+    );
     if !user_context.is_administrator && !user_context.roles.is_empty() {
         println!(
             "🔐 User '{}' authenticated as roles: {:?}",
@@ -857,7 +886,9 @@ async fn handle_xmla(
     let body_for_worker = body.clone();
     let user_ctx = user_context.clone();
     let cfg = config.clone();
+    let audit_id = audit_request_id.clone();
     let task = tokio::task::spawn_blocking(move || {
+        mallardcube::audit::set_request_id(&audit_id);
         // The permit is held for the whole request (released on return).
         let _permit = permit;
         mallardcube::xmla_trace::mark_request_start();
@@ -1024,6 +1055,12 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
         let resp = mallardcube::response::fault_response(
             "the user has no access to this model: no role grants read permission",
         );
+        mallardcube::audit::emit(
+            "refusal",
+            user,
+            "model-permission",
+            "no role grants read permission",
+        );
         mallardcube::xmla_trace::trace_request("NoModelPermission", body, &resp, None, None);
         return resp;
     }
@@ -1034,6 +1071,12 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
     if let Some(fault) =
         execute::runtime::catalog_scope_fault(request.property_catalog(), config, user)
     {
+        mallardcube::audit::emit(
+            "refusal",
+            user,
+            "catalog-scope",
+            request.property_catalog().unwrap_or("(empty)"),
+        );
         mallardcube::xmla_trace::trace_request("ScopeFault", body, &fault, None, None);
         return fault;
     }
@@ -1126,7 +1169,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
 
         XmlaRequest::ExecuteStatement {
             mdx,
-            catalog,
+            catalog: _,
             format,
         } => {
             println!("📥 MDX: {}", mdx);
@@ -1135,38 +1178,52 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             debug_write("REQUEST XML:");
             debug_write(body);
 
-            let (resp, timings) = if let Some(fault) =
-                execute::runtime::catalog_scope_fault(catalog.as_deref(), config, user)
-            {
-                (fault, None)
-            } else if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
-                (fault, None)
-            } else if mdx_semantic::is_drillthrough(mdx)
-                && let Some(fault) = execute::runtime::mdx_cube_scope_fault(mdx, config)
-            {
-                (fault, None)
-            } else if mdx_semantic::is_drillthrough(mdx) {
-                match execute::runtime::drillthrough_row_predicate(config, user) {
-                    Ok(predicate) => (
-                        execute::dispatch::get_execute_drillthrough_response_with_predicate(
-                            mdx,
-                            backend,
-                            predicate.as_deref(),
+            // `route_full` already refused a foreign <Catalog> property; the
+            // checks below are the ones it does not make (plan 058-D review).
+            let (resp, timings) =
+                if let Some(fault) = execute::runtime::unhonourable_filter_fault(config, user) {
+                    mallardcube::audit::emit(
+                        "refusal",
+                        user,
+                        "dax-filter-not-lowerable",
+                        "a role filter is a DAX expression this proxy cannot lower to SQL",
+                    );
+                    (fault, None)
+                } else if mdx_semantic::is_drillthrough(mdx)
+                    && let Some(fault) = execute::runtime::mdx_cube_scope_fault(mdx, config)
+                {
+                    mallardcube::audit::emit(
+                        "refusal",
+                        user,
+                        "cube-scope",
+                        "the statement names another cube",
+                    );
+                    (fault, None)
+                } else if mdx_semantic::is_drillthrough(mdx) {
+                    match execute::runtime::drillthrough_row_predicate(config, user) {
+                        Ok(predicate) => (
+                            execute::dispatch::get_execute_drillthrough_response_with_predicate(
+                                mdx,
+                                backend,
+                                predicate.as_deref(),
+                            ),
+                            None,
                         ),
-                        None,
-                    ),
-                    Err(reason) => (execute::runtime::drillthrough_refusal(&reason), None),
-                }
-            } else {
-                let (r, t) = execute_builders::get_execute_response_with_format(
-                    mdx,
-                    format.as_deref(),
-                    backend,
-                    user,
-                    config,
-                );
-                (r, Some(t))
-            };
+                        Err(reason) => {
+                            mallardcube::audit::emit("refusal", user, "drillthrough", &reason);
+                            (execute::runtime::drillthrough_refusal(&reason), None)
+                        }
+                    }
+                } else {
+                    let (r, t) = execute_builders::get_execute_response_with_format(
+                        mdx,
+                        format.as_deref(),
+                        backend,
+                        user,
+                        config,
+                    );
+                    (r, Some(t))
+                };
 
             debug_write("RESPONSE XML:");
             debug_write(&resp);

@@ -112,6 +112,43 @@ roles first.
 - Redact credentials from generated artifacts, logs and qualify output
   (connection strings, sidecar paths if sensitive).
 
+### Implemented 2026-09-27
+
+- `audit.rs`: opt-in JSONL stream (`MALLARDCUBE_AUDIT_FILE`), one event per
+  line with `ts_unix_ms`, `request_id`, `pid`, `event`, `user`, `admin`,
+  `roles`, `rule` and `detail` — identities and rules, never bodies or
+  credentials, and the detail is truncated so a caller-controlled value cannot
+  grow a record without bound. The request id is generated per request and set
+  on both the async handler and the blocking worker, so every decision in one
+  request correlates (verified live: a request's `auth` and `refusal` events
+  share an id). A record is one `write_all` under `O_APPEND`, so concurrent
+  workers cannot interleave halves of two lines; the file is created `0600`.
+- Emitted decisions: `auth` (auth mode and role resolution); refusals for the
+  model permission (both the streaming `MDSCHEMA_MEMBERS` route and Execute),
+  catalog scope, cube scope, a DAX filter that cannot be lowered, a
+  drillthrough, a hidden dimension on the plan path, a hidden probe, a
+  hidden-dimension probe, authored SQL for a restricted role; plus `error` for
+  a failed member dictionary; plus `reload`.
+- Fail-closed visibility of the control itself: when the audit file cannot be
+  written, the proxy warns once (rather than silently manufacturing false
+  assurance) and `/status` reports `audit.enabled`.
+- Redaction: the converter's generated load script never embeds the source
+  password — the ATTACH carries `Password=<REDACTED>` and a comment to restore
+  it from the operator's secret store.
+- Tests: the event schema is pinned (exact key set, no body field), long
+  details truncate, a detail containing a quote and a newline still lands as
+  one parsable line, and both the translation and the full rendered script are
+  asserted to contain neither the secret nor the raw connection string.
+  626 tests in debug and release, fidelity 13/13, parity 38/38, smoke 8/8.
+
+Still open, recorded: the load script also copies an unparsed M expression and
+a source URL verbatim, which can themselves carry credentials (`Odbc.DataSource`
+with an inline password, a basic-auth URL) — a `redact_secrets` pass over every
+string copied from the model is the follow-up. OIDC claim values are not
+audited (only the resolved user and roles); there is no live config reload, so
+"config change" is not an event; and `XMLA_TRACE` still records raw bodies by
+explicit opt-in and is a debugging trace rather than an audit stream.
+
 ## E. Trust boundary
 
 Publish the deployment contract: reverse-proxy/TLS examples (nginx/caddy),

@@ -141,6 +141,7 @@ impl StatusInfo {
                 "loaded_at_unix": self.data.loaded_at_unix,
                 "epoch": self.data_epoch,
             },
+            "audit": { "enabled": crate::audit::enabled() },
             "auth": {
                 "configured": self.auth.configured,
                 "roles": self.auth.roles,

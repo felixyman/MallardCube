@@ -79,6 +79,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
         && !cube.trim().eq_ignore_ascii_case(config.cube.trim())
     {
         let timings = Timings::new(RuntimePath::DirectSql, "scope".to_string(), 0);
+        crate::audit::emit(
+            "refusal",
+            user,
+            "cube-scope",
+            "the FROM clause names another cube",
+        );
         return (
             crate::xmla::response::fault_response(&format!("The {cube} cube does not exist.")),
             timings,
@@ -178,6 +184,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
         // failure, otherwise the latch would poison this pooled connection for
         // every later request (plan 058).
         if let Some(failure) = backend.take_failure() {
+            crate::audit::emit(
+                "error",
+                user,
+                "dimension-dictionary-failed",
+                "a dimension dictionary query failed",
+            );
             let timings = Timings::new(
                 RuntimePath::DirectSql,
                 "dimension-dictionary-failed".to_string(),
@@ -211,6 +223,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
             .iter()
             .any(|target| crate::engine::plan::member_hidden_by_access(target, model, access))
         {
+            crate::audit::emit(
+                "refusal",
+                user,
+                "hidden-probe",
+                "a probe names an object the role cannot see",
+            );
             let timings = Timings::new(
                 RuntimePath::DirectSql,
                 "hidden-probe".to_string(),
@@ -240,6 +258,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
             .first()
             .is_some_and(|dimension| access.dimension_hidden(dimension))
     {
+        crate::audit::emit(
+            "refusal",
+            user,
+            "hidden-dimension-probe",
+            "the probe names a dimension the role cannot see",
+        );
         let timings = Timings::new(
             RuntimePath::DirectSql,
             "hidden-dimension-probe".to_string(),
@@ -266,6 +290,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
             .into_iter()
             .find(|measure| model.classify_fallback(measure).is_some())
     {
+        crate::audit::emit(
+            "refusal",
+            user,
+            "restricted-fallback",
+            "a measure uses authored SQL that cannot carry role predicates",
+        );
         let timings = Timings::new(RuntimePath::DirectSql, "restricted-fallback".into(), 0);
         return (
             crate::xmla::response::fault_response(&format!(
@@ -281,6 +311,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     // members and values (plan 051 RLS review). Refusing is the fail-closed
     // answer where the reference faults for an inaccessible object.
     if let Some(dimension) = plan_hidden_dimension(&plan, model, user, config) {
+        crate::audit::emit(
+            "refusal",
+            user,
+            "hidden-dimension",
+            "a query reads a dimension the role cannot see",
+        );
         let timings = Timings::new(RuntimePath::DirectSql, "hidden-dimension".into(), 0);
         return (
             crate::xmla::response::fault_response(&format!(

@@ -886,6 +886,12 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
     if crate::engine::model::effective_model_permission(config, user)
         == crate::project::config::ModelPermission::None
     {
+        crate::audit::emit(
+            "refusal",
+            user,
+            "model-permission",
+            "no role grants read permission",
+        );
         return MemberResponse::Fault(
             "the user has no access to this model: no role grants read permission".to_string(),
         );
@@ -899,6 +905,15 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
         config,
         user,
     ) {
+        crate::audit::emit(
+            "refusal",
+            user,
+            "catalog-scope",
+            restrictions
+                .property_catalog
+                .as_deref()
+                .unwrap_or("(empty)"),
+        );
         return MemberResponse::Fault(message);
     }
     // Start clean: only this request's queries may fault it (plan 057-C).
@@ -912,6 +927,12 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
     // A failed dictionary query must fault, not answer with an empty
     // hierarchy (plan 057-C).
     if let Some(failure) = backend.take_failure() {
+        crate::audit::emit(
+            "error",
+            user,
+            "members-dictionary-failed",
+            "a query against the database failed",
+        );
         return MemberResponse::Fault(format!("a query against the database failed: {failure}"));
     }
     // Restrictions narrow the rowset before the member/tree-op selection: the

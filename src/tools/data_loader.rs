@@ -414,6 +414,9 @@ fn render_query_partition(
                 "ATTACH '{}' AS {} (TYPE mssql);\n",
                 attach_str, alias
             ));
+            if attach_str.contains("<REDACTED>") {
+                out.push_str("-- Replace <REDACTED> with the source password before running (the ATTACH line never embeds the source password).\n");
+            }
             attach_emitted.insert(dn.to_string());
             alias_map.insert(dn.to_string(), alias);
         }
@@ -572,6 +575,9 @@ fn render_m_connection(
                     "ATTACH '{}' AS {} (TYPE mssql);\n",
                     attach_str, alias
                 ));
+                if attach_str.contains("<REDACTED>") {
+                    out.push_str("-- Replace <REDACTED> with the source password before running (the ATTACH line never embeds the source password).\n");
+                }
                 attach_emitted.insert(dedup_key.clone());
                 alias_map.insert(dedup_key.clone(), alias);
             }
@@ -685,6 +691,12 @@ fn render_m_connection(
 }
 
 /// Translate an ADO.NET connection string to DuckDB ATTACH format.
+/// ATTACH string for a generated load script.
+///
+/// Credentials are redacted: the script is an artifact (typically committed
+/// with the project), and a secret belongs in the operator's environment or
+/// secret store, not in the file. The generated SQL carries a placeholder the
+/// user replaces before running (plan 058-D).
 pub fn translate_to_duckdb_attach(ds: &DataSourceInfo) -> String {
     let map = parse_ado_connection_string(&ds.connection_string);
     let server = ado_server(&map);
@@ -696,8 +708,8 @@ pub fn translate_to_duckdb_attach(ds: &DataSourceInfo) -> String {
     if let Some(u) = &user {
         conn.push_str(&format!(";User={}", u));
     }
-    if let Some(p) = &password {
-        conn.push_str(&format!(";Password={}", p));
+    if password.is_some() {
+        conn.push_str(";Password=<REDACTED>");
     }
     conn
 }
@@ -1318,6 +1330,68 @@ in
     }
 
     #[test]
+    fn test_render_load_script_redacts_the_source_password() {
+        let model = TabularModel {
+            name: "MTest".into(),
+            compatibility_level: 1200,
+            tables: vec![TableInfo {
+                name: "Orders".into(),
+                ssas_name: "Orders".into(),
+                description: String::new(),
+                columns: vec![ColumnInfo {
+                    name: "Order ID".into(),
+                    data_type: "int64".into(),
+                    source_column: "orderid".into(),
+                    is_hidden: false,
+                }],
+                measures: vec![],
+                partitions: vec![PartitionInfo {
+                    name: "m_part".into(),
+                    source_type: "m".into(),
+                    is_m: true,
+                    query: Some(
+                        r#"let
+    Source = Sql.Database("pg01", "sales_db"),
+    Table = Source{[Schema="public",Item="orders"]}[Data]
+in
+    Table"#
+                            .into(),
+                    ),
+                    data_source_name: Some("DS".into()),
+                    mode: None,
+                    schema: None,
+                    database: None,
+                }],
+                hierarchies: vec![],
+            }],
+            relationships: vec![],
+            roles: vec![],
+            data_sources: vec![DataSourceInfo {
+                name: "DS".into(),
+                provider: "System.Data.SqlClient".into(),
+                server: "pg01".into(),
+                database: "sales_db".into(),
+                connection_string:
+                    "data source=pg01;initial catalog=sales_db;user id=admin;password=secret123"
+                        .into(),
+            }],
+        };
+
+        let result = render_load_script(&model, &[], &[]);
+
+        assert!(result.contains("M partition, SQL Server"));
+        assert!(result.contains("INSTALL sqlserver_scanner"));
+        assert!(result.contains("ATTACH"));
+        assert!(result.contains("Server=pg01;Database=sales_db"));
+        assert!(result.contains("INSERT INTO orders"));
+        assert!(result.contains("src_1.public.\"orders\""));
+        // The generated artifact never carries the source password (plan 058-D).
+        assert!(!result.contains("secret123"), "{result}");
+        assert!(result.contains("Password=<REDACTED>"), "{result}");
+        assert!(result.contains("Replace <REDACTED>"), "{result}");
+    }
+
+    #[test]
     fn test_render_load_script_m_partition_csv() {
         let model = TabularModel {
             name: "CSVTest".into(),
@@ -1452,7 +1526,9 @@ in
         assert!(attach.contains("Server=MY-SERVER"));
         assert!(attach.contains("Database=MyDB"));
         assert!(attach.contains("User=admin"));
-        assert!(attach.contains("Password=secret123"));
+        // The secret never reaches the generated artifact (plan 058-D).
+        assert!(!attach.contains("secret123"), "{attach}");
+        assert!(attach.contains("Password=<REDACTED>"), "{attach}");
     }
 
     #[test]
