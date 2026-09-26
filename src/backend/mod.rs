@@ -525,7 +525,7 @@ fn value_to_f64(v: &duckdb::types::Value) -> Option<f64> {
         Value::UBigInt(i) => *i as f64,
         Value::Float(f) => *f as f64,
         Value::Double(f) => *f,
-        Value::Decimal(d) => d.mantissa() as f64 / 10f64.powi(d.scale() as i32),
+        Value::Decimal(d) => d.value() as f64 / 10f64.powi(d.scale() as i32),
         _ => return None,
     })
 }
@@ -1009,8 +1009,13 @@ pub(crate) fn val_to_string(v: duckdb::types::Value) -> String {
         duckdb::types::Value::SmallInt(i) => i.to_string(),
         duckdb::types::Value::Int(i) => i.to_string(),
         duckdb::types::Value::BigInt(i) => i.to_string(),
+        duckdb::types::Value::HugeInt(i) => i.to_string(),
+        duckdb::types::Value::UHugeInt(i) => i.to_string(),
         duckdb::types::Value::Float(f) => f.to_string(),
         duckdb::types::Value::Double(f) => f.to_string(),
+        // The native `Decimal` derives `Debug`, so without this arm a
+        // drillthrough cell falls into `{v:?}` and renders the debug struct.
+        duckdb::types::Value::Decimal(d) => d.to_string(),
         duckdb::types::Value::Text(s) => s,
         _ => format!("{v:?}"),
     }
@@ -1560,6 +1565,37 @@ mod tests {
         let grouped = backend.query_grouped_1d("SELECT 'x', SUM(d) FROM t GROUP BY 1");
         assert_eq!(grouped.len(), 1);
         assert!((grouped[0].1 - 18.01).abs() < 1e-9);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn decimal_and_huge_integer_values_render_as_numbers() {
+        let path = temp_db_path("value-rendering");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = duckdb::Connection::open(&path).expect("open temp db");
+            conn.execute_batch(
+                "CREATE TABLE t (d DECIMAL(10,2), z DECIMAL(9,0), h HUGEINT, u UHUGEINT);
+                 INSERT INTO t VALUES (123.45, 7, 9223372036854775808,
+                                       340282366920938463463374607431768211455);",
+            )
+            .expect("seed");
+        }
+        let backend = Backend::open(&path).expect("open backend");
+
+        // Drillthrough renders cells through `val_to_string`; numbers must come
+        // back as numbers, never as a Rust debug struct. Regression guard for
+        // the duckdb 1.10505 decimal carrier change.
+        let rows = backend.query_rows("SELECT d, z, h, u FROM t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], "123.45", "decimal must keep its fraction");
+        assert_eq!(rows[0][1], "7", "scale-zero decimal must render plainly");
+        assert_eq!(rows[0][2], "9223372036854775808", "HUGEINT must render");
+        assert_eq!(
+            rows[0][3], "340282366920938463463374607431768211455",
+            "UHUGEINT must render"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

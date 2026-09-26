@@ -106,6 +106,11 @@ reference in the lock is `rust_decimal`'s optional `rkyv` feature, and
 audit job carries an explicit `ignore` for it with that rationale rather than a
 silent pass.
 
+**Retired 2026-09-26:** the duckdb 1.10505.0 update dropped `rust_decimal` (and
+with it `rkyv`, `reqwest`, `quinn-proto`, `borsh`) from the dependency graph
+entirely — `cargo tree --target all -i rkyv` now reports that no such package
+exists — so the audit `ignore` was removed rather than kept as a blind spot.
+
 The upgrade also taught us one thing worth keeping: `cargo update` with no
 package filter re-resolved DuckDB and broke the build script — a security
 refresh needs one package at a time, with the gates as the arbiter.

@@ -64,6 +64,12 @@ cannot share one engine instance. The substitute now implemented is the
 plan 051-B semaphore plus a ceiling divided by the slot count — that is what
 makes the bound real. Revisit only if the binding grows a shared-handle API.*
 
+*Revisited 2026-09-26 on duckdb-rs 1.10505.0 (the update taken for the
+Windows/MSVC 14.51 build fix): there is still no safe shared-handle API — the
+`Database` type remains private and the only new door is
+`unsafe Connection::open_from_raw(ffi::duckdb_database)`, which presupposes an
+FFI-level handle we do not hold. The 051-B substitute above stands.*
+
 ### B. Backpressure and budgets
 
 *Increment 1 landed 2026-09-23 (semaphore + timeout + memory division).*
