@@ -1,5 +1,5 @@
 ﻿### page_terr ERROR: Unable to set the Orientation property of the PivotField class
-### top5 [top=1] (grid 22x2)| Row Labels | Revenue| Automotive | 25 102 648,00| Baby | 24 701 616,00| Beauty | 25 710 316,00| Books | 25 627 621,00| Clothing | 26 186 444,00| Electronics | 24 719 896,00| Food | 26 437 256,00| Furniture | 28 502 160,00| Garden | 26 809 024,00| Health | 26 859 572,00| Home | 26 242 108,00
+### top5 [top=1] (grid 3x2)| Row Labels | Revenue| Toys | 24 440 800,00| Grand Total | 24 440 800,00
 ### nested_value_filter [valueFilter=1] (grid 24x2)| Row Labels | Revenue| Clothing | | Direct | 26 186 444,00| Food | | Online | 26 437 256,00| Furniture | | Retail | 28 502 160,00| Garden | | Online | 26 809 024,00| Health | | Wholesale | 26 859 572,00| Home | 
 ### nested_label_filter [labelFilter=1] (grid 36x2)| Row Labels | Revenue| Automotive | | Retail | 25 102 648,00| Clothing | | Direct | 26 186 444,00| Electronics | | Wholesale | 24 719 896,00| Food | | Online | 26 437 256,00| Furniture | | Retail | 28 502 160,00| Garden | 
 ### page_multiselect ERROR: Unable to set the Orientation property of the PivotField class

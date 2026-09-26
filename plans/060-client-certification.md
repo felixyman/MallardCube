@@ -162,3 +162,13 @@ Measured on the mirror, answering the review's outstanding probes:
 - A filtered tabular request still needs a *valid* probe (both attempts carried
   invalid MDX: an unescaped `&` and a dimension on two axes); the reference's
   rule for that shape is unmeasured.
+
+### Excel-level confirmation (2026-09-26)
+
+`bash sweep-diff.ps1 -Source proxy` through real Excel, diffed against the
+versioned baseline: the only line that moved is `top5`, and it moved to the
+mirror's own grid — `grid 3x2 | Toys | 24 440 800,00 | Grand Total | 24 440 800,00`.
+The fresh full run is now **byte-identical to the mirror baseline**, so
+`parity/sweep3-proxy-baseline.txt` is updated to it: every gesture in the sweep
+set produces the same Excel grid against both engines (the two specs that fail
+to build fail identically on both, a COM limitation of the harness).
