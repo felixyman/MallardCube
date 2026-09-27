@@ -52,10 +52,12 @@ gestures.
    the reference's semantics, which is why the mirror answers `{All, Toys}` for
    a Top-5 filter over revenue. An end-to-end test with the recorded statement
    asserts exactly that, and a parity case pins it (37/37).
-3. **Sessions** — decided with plan 058-B7 (2026-09-27): the reference is
-   sessionless over the pump, so the proxy issues no session id, refuses any
-   header id, and faults `BeginSession`/`EndSession`; a certification claim
-   records that clients run sessionless against both.
+3. **Sessions** — decided with plan 058-B7 (2026-09-27): the reference
+   issues a session id for a `BeginSession` **header** (the shape MSOLAP
+   sends) and faults any id it did not issue; the proxy keeps a bounded,
+   expiring registry of its own ids. The ADODB probe (one Execute, 5,000
+   field reads) costs 6 requests against both engines and reads the
+   reference's five-column shape.
 4. **Date member naming** — locale short dates and `T00:00:00` unique names
    where we emit ISO; probe the reference, then match or record.
 

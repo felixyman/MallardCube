@@ -1,14 +1,33 @@
+thread_local! {
+    static CURRENT_SESSION_ID: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Set the session id to carry in this response's SOAP Header: the reference
+/// returns one only for a `BeginSession` request (a plain session-bound
+/// response has no header, measured 2026-09-27).
+pub fn set_session_id(sid: Option<String>) {
+    CURRENT_SESSION_ID.with(|current| *current.borrow_mut() = sid);
+}
+
 /// The SOAP envelope split into its opening and closing halves, so a large
 /// inner payload can be written incrementally (plan 051-C).
 ///
-/// The reference issues no session id over the pump — a sessionless request's
-/// response has no SOAP Header at all (measured 2026-09-27) — so the envelope
-/// carries none, and any `Session` header the request sent is refused.
+/// The Session header appears only when [`set_session_id`] set one — the
+/// reference issues no id for a sessionless request (measured 2026-09-27).
 pub fn soap_envelope_parts() -> (String, String) {
-    let open = r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-"#
-    .to_string();
+    let header = CURRENT_SESSION_ID
+        .with(|current| current.borrow().clone())
+        .map(|session_id| {
+            format!(
+                "  <soap:Header>\n    <Session xmlns=\"urn:schemas-microsoft-com:xml-analysis\" SessionId=\"{}\" />\n  </soap:Header>\n",
+                xml_escape_attr(&session_id)
+            )
+        })
+        .unwrap_or_default();
+    let open = format!(
+        "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\n{header}  <soap:Body>\n"
+    );
     let close = r#"  </soap:Body>
 </soap:Envelope>"#
         .to_string();
@@ -128,15 +147,22 @@ mod tests {
     /// XML-invalid controls become U+FFFD (plan 055 review).
     /// An attribute value must survive quotes too — the session id is echoed
     /// from client input.
-    /// The reference issues no session id over the pump (measured 2026-09-27),
-    /// so the envelope carries no SOAP Header at all.
+    /// The reference returns a Session header only for a `BeginSession`
+    /// request; a sessionless response has no SOAP Header at all (measured
+    /// 2026-09-27).
     #[test]
-    fn envelope_carries_no_session_header() {
+    fn envelope_carries_the_session_header_only_when_set() {
+        set_session_id(None);
         let (open, close) = soap_envelope_parts();
         assert!(!open.contains("<Session"), "{open}");
         assert!(!open.contains("soap:Header"), "{open}");
         assert!(open.contains("<soap:Body>"), "{open}");
         assert!(close.contains("</soap:Envelope>"), "{close}");
+
+        set_session_id(Some("abc-123".to_string()));
+        let (open, _) = soap_envelope_parts();
+        assert!(open.contains("SessionId=\"abc-123\""), "{open}");
+        set_session_id(None);
     }
 
     #[test]

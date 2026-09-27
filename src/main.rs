@@ -988,12 +988,10 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> XmlaBody {
-    // The reference issues no session id over the pump, so any `Session`
-    // header names an id it never issued and faults (measured 2026-09-27:
-    // "The '<id>' session ID cannot be found. Either the session does not
-    // exist or it has already expired."). The proxy is stateless and matches:
-    // a header id is refused rather than echoed.
-    if let Some(session) = mallardcube::xmla::parser::session_id(body) {
+    // Sessions ride in the SOAP Header (measured on the reference 2026-09-27):
+    // `BeginSession` issues an id the response carries; `Session`/`EndSession`
+    // name an id the proxy must have issued — any other id faults.
+    let session_fault = |session: &str| -> XmlaBody {
         let resp = mallardcube::xmla::response::fault_response(&format!(
             "The '{session}' session ID cannot be found. Either the session does not exist or it has already expired."
         ));
@@ -1004,7 +1002,26 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
             "a session id the proxy never issued",
         );
         mallardcube::xmla_trace::trace_request("SessionUnknown", body, &resp, None, None);
-        return XmlaBody::Full(resp);
+        XmlaBody::Full(resp)
+    };
+    match mallardcube::xmla::parser::session_header(body) {
+        Some(mallardcube::xmla::parser::SessionHeader::Begin) => {
+            let id = mallardcube::xmla::session::global().begin();
+            mallardcube::response::set_session_id(Some(id));
+        }
+        Some(mallardcube::xmla::parser::SessionHeader::Use(id)) => {
+            if !mallardcube::xmla::session::global().contains(&id) {
+                return session_fault(&id);
+            }
+            mallardcube::response::set_session_id(None);
+        }
+        Some(mallardcube::xmla::parser::SessionHeader::End(id)) => {
+            if !mallardcube::xmla::session::global().end(&id) {
+                return session_fault(&id);
+            }
+            mallardcube::response::set_session_id(None);
+        }
+        None => mallardcube::response::set_session_id(None),
     }
     if let XmlaRequest::MdschemaMembers {
         member_unique_name,

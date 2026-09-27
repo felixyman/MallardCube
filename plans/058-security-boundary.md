@@ -58,14 +58,18 @@ listed at the end of plan 051):
    Discover/Properties/PropertyList"); the parser rejects foreign-namespace
    property children.
 7. **Session catalog / session ids** — completed 2026-09-27. Measured on the
-   reference's pump: `BeginSession`/`EndSession` are rejected outright ("cannot
-   appear under Envelope/Body"), a sessionless response carries no SOAP Header
-   and no session id at all, and any `Session` header names an id it never
-   issued and faults ("The '<id>' session ID cannot be found. Either the
-   session does not exist or it has already expired."). The proxy now matches:
-   no session id is emitted, a header id is refused, and the session elements
-   are structural faults. Replayed benchmark traffic strips recorded session
-   headers (`--rewrite-session-ids`).
+   reference's pump with the shape MSOLAP actually sends (the earlier probe
+   used the Body form, which is a schema fault): a `BeginSession` **header**
+   riding with an Execute makes the response carry a fresh session id; a
+   `Session` header naming an id the server did not issue faults ("The '<id>'
+   session ID cannot be found. Either the session does not exist or it has
+   already expired."); `EndSession` invalidates the id; a sessionless response
+   has no SOAP Header; `BeginSession`/`EndSession` under the Body are schema
+   faults. The proxy keeps a bounded, expiring registry of the ids it issued
+   (1024 live, 30-minute TTL, process-local), returns the id only for
+   `BeginSession`, refuses unknown ids, and never emits a header otherwise.
+   The ADODB probe then costs 6 requests for one Execute plus 5,000 field
+   reads — the mirror's figure — with the reference's five-column shape.
 
 ## C. Drillthrough for restricted users
 

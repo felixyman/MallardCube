@@ -495,37 +495,109 @@ fn structural_error(local: &str, raw: &str, state: Structure) -> Option<String> 
     }
 }
 
-/// The session id carried by an XMLA `Session`/`EndSession` element, XML
-/// unescaped. Only the XMLA namespace counts: a foreign header entry named
-/// `Session` is ignored, exactly as the reference does (measured 2026-09-24).
-/// The proxy is stateless and only echoes the id, so no existence check is
-/// possible (the reference faults an unknown session; recorded as a
-/// divergence).
-pub fn session_id(xml: &str) -> Option<String> {
+/// The session action an XMLA request's SOAP Header carries.
+///
+/// Only the XMLA namespace counts (a foreign header entry named `Session` is
+/// ignored, exactly as the reference does) and only the SOAP Header:
+/// `BeginSession`/`EndSession` under the Body are schema faults. Measured on
+/// the reference 2026-09-27: a `BeginSession` header (riding with an Execute)
+/// makes the response carry a fresh session id; a `Session` header naming an
+/// id the server did not issue faults; an `EndSession` header invalidates the
+/// id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionHeader {
+    /// Start a session: the response carries the new id.
+    Begin,
+    /// Use this session id.
+    Use(String),
+    /// End this session id.
+    End(String),
+}
+
+/// The session action in `xml`, if any.
+pub fn session_header(xml: &str) -> Option<SessionHeader> {
+    fn xmla_element(namespace: &ResolveResult<'_>, local: &str, wanted: &str) -> bool {
+        local == wanted
+            && matches!(
+                namespace,
+                ResolveResult::Bound(ns) if ns.as_ref() == XMLA_NAMESPACE
+            )
+    }
+
+    fn session_id_attribute(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
+        e.attributes()
+            .flatten()
+            .find(|attribute| attribute.key.as_ref() == "SessionId")
+            .and_then(|attribute| {
+                attribute
+                    .normalized_value(quick_xml::XmlVersion::default())
+                    .ok()
+            })
+            .map(|value| value.to_string())
+    }
+
     let mut reader = NsReader::from_str(xml);
+    let mut in_header = false;
     loop {
         match reader.read_resolved_event() {
-            Ok((namespace, Event::Start(ref e))) | Ok((namespace, Event::Empty(ref e))) => {
-                let in_xmla = matches!(
-                    &namespace,
-                    ResolveResult::Bound(ns) if ns.as_ref() == XMLA_NAMESPACE
-                );
+            Ok((namespace, Event::Start(ref e))) => {
                 let local_name = e.local_name();
                 let local = local_name.as_ref();
-                if in_xmla && matches!(local, "Session" | "EndSession") {
-                    for attribute in e.attributes().flatten() {
-                        if attribute.key.as_ref() == "SessionId" {
-                            return attribute
-                                .normalized_value(quick_xml::XmlVersion::default())
-                                .ok()
-                                .map(|value| value.to_string());
-                        }
-                    }
+                let in_soap = matches!(
+                    &namespace,
+                    ResolveResult::Bound(ns) if ns.as_ref() == SOAP_NAMESPACE
+                );
+                if in_soap && local == "Header" {
+                    in_header = true;
+                    continue;
+                }
+                if !in_header {
+                    continue;
+                }
+                if xmla_element(&namespace, local, "BeginSession") {
+                    return Some(SessionHeader::Begin);
+                }
+                if xmla_element(&namespace, local, "Session") {
+                    return Some(SessionHeader::Use(session_id_attribute(e)?));
+                }
+                if xmla_element(&namespace, local, "EndSession") {
+                    return Some(SessionHeader::End(session_id_attribute(e)?));
+                }
+            }
+            Ok((namespace, Event::Empty(ref e))) => {
+                if !in_header {
+                    continue;
+                }
+                let local_name = e.local_name();
+                let local = local_name.as_ref();
+                if xmla_element(&namespace, local, "BeginSession") {
+                    return Some(SessionHeader::Begin);
+                }
+                if xmla_element(&namespace, local, "Session") {
+                    return Some(SessionHeader::Use(session_id_attribute(e)?));
+                }
+                if xmla_element(&namespace, local, "EndSession") {
+                    return Some(SessionHeader::End(session_id_attribute(e)?));
+                }
+            }
+            Ok((_, Event::End(ref e))) => {
+                if e.local_name().as_ref() == "Header" {
+                    in_header = false;
                 }
             }
             Ok((_, Event::Eof)) | Err(_) => return None,
             _ => {}
         }
+    }
+}
+
+/// The session id carried by an XMLA `Session`/`EndSession` header element,
+/// XML unescaped (a thin wrapper over [`session_header`] for callers that
+/// only need the id).
+pub fn session_id(xml: &str) -> Option<String> {
+    match session_header(xml) {
+        Some(SessionHeader::Use(id)) | Some(SessionHeader::End(id)) => Some(id),
+        _ => None,
     }
 }
 

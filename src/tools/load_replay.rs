@@ -444,10 +444,10 @@ fn validate_response(kind: &str, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Strip the recorded `Session` header from a replayed request. The proxy is
-/// sessionless like the reference: it issues no id and refuses any it did not
-/// issue, so a captured id must not ride along. The flag keeps its name for
-/// the benchmark scripts.
+/// Strip the recorded `Session` header from a replayed request. Sessions are
+/// process-local: a captured id names a session this process never issued
+/// (the reference faults those), so it must not ride along. The flag keeps
+/// its name for the benchmark scripts.
 fn rewrite_session_id(xml: &str, _worker_id: usize) -> String {
     let mut out = String::with_capacity(xml.len());
     let mut rest = xml;

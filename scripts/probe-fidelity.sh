@@ -159,11 +159,26 @@ report "a sessionless response carries no session id" \
   "$([[ "$out" != *"<Session"* ]] && echo 1 || echo 0)" \
   "the reference issues no session id over the pump"
 
-begin='<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><BeginSession xmlns="urn:schemas-microsoft-com:xml-analysis"/></soap:Body></soap:Envelope>'
-out="$(post "$begin")"
-report "BeginSession faults like the reference" \
-  "$([[ "$out" == *"cannot appear under Envelope/Body"* ]] && echo 1 || echo 0)" \
-  "answered without the reference's refusal"
+begin_session() {
+  cat <<EOF
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Header><BeginSession xmlns="urn:schemas-microsoft-com:xml-analysis"/></soap:Header><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command><Statement>SELECT {[Measures].[Revenue]} ON COLUMNS FROM [${CUBE}]</Statement></Command><Properties><PropertyList><Catalog>${CATALOG}</Catalog></PropertyList></Properties></Execute></soap:Body></soap:Envelope>
+EOF
+}
+
+out="$(post "$(begin_session)")"
+report "a BeginSession header issues a session id" \
+  "$([[ "$out" == *'SessionId="'* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" \
+  "the reference returns a fresh id for the header form"
+
+sid="$(printf '%s' "$out" | grep -o 'SessionId="[^"]*"' | head -1 | cut -d'"' -f2)"
+if [ -n "$sid" ]; then
+  out2="$(post "$(session_probe "$sid")")"
+  report "the issued session id is accepted" \
+    "$([[ "$out2" != *"faultstring"* ]] && echo 1 || echo 0)" \
+    "the proxy must know the ids it issued"
+else
+  report "the issued session id is accepted" 0 "no id in the BeginSession response"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then
