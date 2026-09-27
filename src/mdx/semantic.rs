@@ -1246,6 +1246,19 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         vec![]
     };
 
+    // Member keys arrive in the timestamp form the metadata advertises for
+    // dates (`&[2020-01-01T00:00:00]`); the engine keys and stores the date
+    // (plan 048 follow-up, measured 2026-09-27).
+    for filter in &mut filters {
+        for member in &mut filter.members {
+            *member = crate::engine::model::strip_date_member_time(member).to_string();
+        }
+        if let Some((from, to)) = &mut filter.range {
+            *from = crate::engine::model::strip_date_member_time(from).to_string();
+            *to = crate::engine::model::strip_date_member_time(to).to_string();
+        }
+    }
+
     SemanticQuery {
         access: None,
         kind,

@@ -160,9 +160,9 @@
       "expect": {
         "row_count": 4019,
         "member_first": "[Date].[Full Date].[All]",
-        "member_last": "[Date].[Full Date].&[2030-12-31]"
+        "member_last": "[Date].[Full Date].&[2030-12-31T00:00:00]"
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24 (the key attribute hierarchy returned 0 rows before)"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, re-measured 2026-09-27 after the mirror model was redeployed: the key members carry the timestamp form (&[YYYY-MM-DDT00:00:00]) and the hierarchy answers 4019 rows (All + 4018); the earlier note recorded &[2030-12-31] without it"
     },
     {
       "id": "hier-measures",

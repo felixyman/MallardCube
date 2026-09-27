@@ -696,6 +696,35 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
         m.u_name = m.u_name.replace(&user_level_prefix, &view);
         m.l_name = level_uname.clone();
         m.l_num = 1;
+        // Date members keep the reference's naming: `&[<iso>T00:00:00]` and
+        // the short-date caption (measured 2026-09-27).
+        let date_value = m
+            .u_name
+            .rsplit(".&amp;[")
+            .next()
+            .or_else(|| m.u_name.rsplit(".&[").next())
+            .and_then(|rest| rest.strip_suffix(']'))
+            .filter(|value| crate::xmla::discover::is_iso_date(value))
+            .map(str::to_string);
+        if let Some(value) = date_value {
+            let named = crate::xmla::discover::date_member_key(&value);
+            let raw = format!("&[{value}]");
+            let escaped = format!("&amp;[{value}]");
+            if m.u_name.contains(&escaped) {
+                m.u_name = m.u_name.replace(&escaped, &format!("&amp;[{named}]"));
+            } else {
+                m.u_name = m.u_name.replace(&raw, &format!("&[{named}]"));
+            }
+            let caption = crate::xmla::discover::date_member_caption(&value);
+            m.caption = caption.clone();
+            for (tag, prop) in m.dim_props.iter_mut() {
+                match tag.as_str() {
+                    "MEMBER_UNIQUE_NAME" => *prop = m.u_name.clone(),
+                    "MEMBER_CAPTION" => *prop = caption.clone(),
+                    _ => {}
+                }
+            }
+        }
         for (tag, value) in m.dim_props.iter_mut() {
             match tag.as_str() {
                 "HIERARCHY_UNIQUE_NAME" => *value = view.clone(),

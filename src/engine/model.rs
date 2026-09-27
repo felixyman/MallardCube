@@ -282,6 +282,17 @@ pub struct FactTable {
 }
 
 /// A relationship between a fact table and a dimension table.
+/// Strip the `T00:00:00` suffix the metadata advertises on date member keys
+/// (`&[2020-01-01T00:00:00]`): the engine keys and stores the date itself
+/// (plan 048 follow-up, measured 2026-09-27).
+pub fn strip_date_member_time(key: &str) -> &str {
+    if key.len() == 19 && key.as_bytes()[10] == b'T' && key.ends_with("00:00:00") {
+        &key[..10]
+    } else {
+        key
+    }
+}
+
 pub struct RelationshipDef {
     pub fact_table_id: String,
     pub fact_column: String,

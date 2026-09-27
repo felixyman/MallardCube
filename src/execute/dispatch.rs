@@ -176,6 +176,8 @@ fn parse_member_ref(text: &str) -> Option<(DrillMember, usize)> {
 fn member_filter_sql(model: &SemanticModel, m: &DrillMember) -> Option<String> {
     let dim = model.dim_def_opt(&m.dim)?;
     let rel = model.rel_for_dimension(&m.dim);
+    // Date keys advertise a `T00:00:00` suffix; the stored value is the date.
+    let date_value = |v: &str| crate::xmla::discover::date_member_value(v).to_string();
     let esc = |v: &str| v.replace('\'', "''");
 
     if !dim.levels.is_empty() {
@@ -197,7 +199,7 @@ fn member_filter_sql(model: &SemanticModel, m: &DrillMember) -> Option<String> {
                     format!(
                         "CAST({} AS VARCHAR) = '{}'",
                         dim.levels[start + i].column,
-                        esc(key)
+                        esc(&date_value(key))
                     )
                 })
                 .collect();
@@ -211,11 +213,11 @@ fn member_filter_sql(model: &SemanticModel, m: &DrillMember) -> Option<String> {
         }
     }
 
-    let key = m.keys.last()?;
+    let key = date_value(m.keys.last()?);
     let col = rel
         .map(|r| r.fact_column.as_str())
         .unwrap_or(dim.physical_field.as_str());
-    Some(format!("CAST({col} AS VARCHAR) = '{}'", esc(key)))
+    Some(format!("CAST({col} AS VARCHAR) = '{}'", esc(&key)))
 }
 
 fn build_drillthrough_rowset(
@@ -3562,6 +3564,57 @@ mod tests {
                 "{xml}"
             );
             assert!(!xml.contains(">South<"), "{xml}");
+        });
+    }
+
+    /// The key-hierarchy axis names date members the way the reference does:
+    /// timestamp keys and short-date captions (measured 2026-09-27).
+    #[test]
+    fn key_hierarchy_axis_uses_reference_date_naming() {
+        with_project3(|| {
+            let backend = Backend::test_fixture();
+            let user = crate::engine::model::UserContext::admin_default();
+            let config = crate::proxy_project::project().config.clone();
+            let (xml, _) = crate::execute::runtime::get_execute_response_with_format_and_cache(
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) \
+                 ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
+                None,
+                backend,
+                &user,
+                &config,
+                None,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert!(
+                xml.contains("&amp;[2020-01-01T00:00:00]"),
+                "date keys carry the timestamp form"
+            );
+            assert!(xml.contains(">1/1/2020<"), "date captions are short dates");
+        });
+    }
+
+    /// A date filter arriving in the reference's key form (`T00:00:00`)
+    /// resolves to the stored date (plan 048 follow-up, measured 2026-09-27).
+    #[test]
+    fn date_filter_accepts_the_timestamp_key_form() {
+        with_project3(|| {
+            let backend = Backend::test_fixture();
+            let user = crate::engine::model::UserContext::admin_default();
+            let config = crate::proxy_project::project().config.clone();
+            let run = |mdx: &str| {
+                crate::execute::runtime::get_execute_response_with_format_and_cache(
+                    mdx, None, backend, &user, &config, None,
+                )
+            };
+            let named = "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] \
+                         WHERE ([Date].[Full Date].&[2020-01-01T00:00:00]) CELL PROPERTIES VALUE";
+            let plain = "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] \
+                         WHERE ([Date].[Full Date].&[2020-01-01]) CELL PROPERTIES VALUE";
+            let (named_xml, _) = run(named);
+            let (plain_xml, _) = run(plain);
+            assert!(!named_xml.contains("faultstring"), "{named_xml}");
+            assert!(!cell_values(&named_xml).is_empty(), "{named_xml}");
+            assert_eq!(cell_values(&named_xml), cell_values(&plain_xml));
         });
     }
 

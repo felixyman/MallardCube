@@ -593,3 +593,37 @@ reported `LEVEL_ORIGIN=1`; they are attribute hierarchies, so they now report
   every click a no-op); check for a dialog before concluding a gesture failed.
 - `pkill -f 'target/debug/[m]allard'` must not appear in the same shell command
   as the plain binary path, or it kills its own shell (self-kill trap).
+
+### Date-member naming (2026-09-27)
+
+Measured on the mirror (`MallardDemo/Model`): a `[Date].[Full Date]` member's
+unique name carries the timestamp form (`&[2020-01-01T00:00:00]`) and its
+name/caption is the session's short date (`1/1/2020`); the key-view drilldown
+(`…DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)…`) answers
+All first, then the same naming.
+
+Implemented: `xmla::discover` formats date keys/captions
+(`date_member_key`/`date_member_caption`, en-US) and strips the timestamp in
+`engine::model::strip_date_member_time`; `MDSCHEMA_MEMBERS`' key-hierarchy rows
+and `apply_key_hierarchy_view` (the axis) use the form; and every parsed filter
+member/range is normalised before planning, so a filter arriving as
+`&[2020-01-01T00:00:00]` resolves to the stored date (regression test:
+`date_filter_accepts_the_timestamp_key_form`). Tests:
+`full_date_members_use_reference_naming`, `key_hierarchy_axis_uses_reference_date_naming`,
+the formatter unit test, and the filter round-trip.
+
+Found while measuring, recorded for the next slice:
+
+- A set probe `{[Date].[Full Date].Members}` expands the *Calendar* hierarchy
+  (2467 members) where the reference expands the key hierarchy (All + 4018
+  dates, 4025 member elements); the set-probe path does not carry the key view.
+- `MDSCHEMA_MEMBERS` with `MEMBER_UNIQUE_NAME=[Date].[Full Date].[All]` and
+  `TREE_OP=1` answers 4019 rows including the All row; the mirror answers the
+  4018 children only.
+- The `NON EMPTY` drilldown count is 2468 (All + 2467 dates) against the
+  mirror's 2462 (All + 2461): six `NON EMPTY`-visible dates differ, most likely
+  zero-revenue dates we keep and the reference drops.
+- Captions are en-US only; the request's language property is ignored.
+- The parity checker observes row and axis-member counts but not member
+  names, so the naming is pinned by the unit tests and live probes above
+  rather than a catalogue case; the count differences block a count case.

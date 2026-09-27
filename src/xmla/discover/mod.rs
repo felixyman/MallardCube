@@ -66,6 +66,55 @@ pub(crate) fn measures_visible(
         .any(|ft| table_visible(config, user, &ft.table_name))
 }
 
+/// Whether a value is a date-only ISO string (`2020-01-01`).
+pub(crate) fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
+}
+
+/// The unique-name key the reference gives a date member: an ISO date gains a
+/// `T00:00:00` suffix (`[Date].[Full Date].&[2020-01-01T00:00:00]`, measured
+/// 2026-09-27).
+pub(crate) fn date_member_key(value: &str) -> String {
+    if is_iso_date(value) {
+        format!("{value}T00:00:00")
+    } else {
+        value.to_string()
+    }
+}
+
+/// The short-date caption the reference gives a date member in an en-US
+/// session (`1/1/2020`, measured 2026-09-27).
+pub(crate) fn date_member_caption(value: &str) -> String {
+    if !is_iso_date(value) {
+        return value.to_string();
+    }
+    let mut parts = value.split('-');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(year), Some(month), Some(day)) => {
+            format!(
+                "{}/{}/{}",
+                month.trim_start_matches('0'),
+                day.trim_start_matches('0'),
+                year
+            )
+        }
+        _ => value.to_string(),
+    }
+}
+
+/// The value behind a date member's `T00:00:00` key form; anything else is
+/// unchanged. Filters arrive with the key the metadata advertised.
+pub(crate) fn date_member_value(key: &str) -> &str {
+    crate::engine::model::strip_date_member_time(key)
+}
+
 /// The `*_VISIBILITY` restrictions: `0` answers the empty rowset, `1` (or
 /// absent) answers everything (measured 2026-09-26).
 pub(crate) fn hidden_by_visibility(value: Option<i32>) -> bool {
@@ -119,7 +168,22 @@ pub(crate) fn coordinates_match(
 
 #[cfg(test)]
 mod tests {
-    use super::in_scope;
+    use super::*;
+
+    #[test]
+    fn date_member_naming_matches_the_reference() {
+        assert!(is_iso_date("2020-01-01"));
+        assert!(!is_iso_date("2020-1-1"));
+        assert!(!is_iso_date("North"));
+        assert_eq!(date_member_key("2020-01-01"), "2020-01-01T00:00:00");
+        assert_eq!(date_member_key("North"), "North");
+        assert_eq!(date_member_caption("2020-01-01"), "1/1/2020");
+        assert_eq!(date_member_caption("2020-11-30"), "11/30/2020");
+        assert_eq!(date_member_caption("North"), "North");
+        assert_eq!(date_member_value("2020-01-01T00:00:00"), "2020-01-01");
+        assert_eq!(date_member_value("2020-01-01"), "2020-01-01");
+        assert_eq!(date_member_value("North"), "North");
+    }
     use crate::xmla::parser::Restrictions;
 
     /// Scope names match case-insensitively, from the restriction list and the

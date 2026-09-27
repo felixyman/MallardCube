@@ -521,19 +521,21 @@ fn build_key_member_rows<B: QueryBackend + ?Sized>(
         };
         for (ordinal, tuple) in leaves.iter().enumerate() {
             let value = tuple.last().cloned().unwrap_or_default();
+            // Date members carry the reference's `T00:00:00` key and its
+            // short-date caption (measured 2026-09-27).
             rows.push(MemberRow {
                 dimension_id: dim.id.clone(),
                 dimension_unique_name: dim_u.clone(),
                 hierarchy_unique_name: key_hier.clone(),
                 level_unique_name: key_level_u.clone(),
-                member_unique_name: format!("{key_hier}.&[{}]", value),
+                member_unique_name: format!("{key_hier}.&[{}]", super::date_member_key(&value)),
                 parent_unique_name: Some(all_u.clone()),
                 level_num: 1,
                 member_ordinal: ordinal as u32 + 1,
-                member_name: value.clone(),
+                member_name: super::date_member_caption(&value),
                 member_type: 1,
                 member_guid: leaf_member_guid(&key_hier, &value),
-                member_caption: value.clone(),
+                member_caption: super::date_member_caption(&value),
                 children_cardinality: 0,
                 parent_level: 0,
                 parent_count: 1,
@@ -1044,6 +1046,39 @@ pub fn get_members_response_with_backend<B: QueryBackend + ?Sized>(
 mod tests {
     use super::*;
     use crate::project::project::with_test_project;
+
+    /// The full-date key hierarchy names its members the way the reference
+    /// does: `&[2020-01-01T00:00:00]` with the short-date caption (measured
+    /// 2026-09-27).
+    #[test]
+    fn full_date_members_use_reference_naming() {
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let restrictions = Restrictions {
+                hierarchy_unique_name: Some("[Date].[Full Date]".into()),
+                ..Default::default()
+            };
+            let response = super::get_members_response_with_backend(
+                None,
+                None,
+                &restrictions,
+                crate::backend::Backend::test_fixture(),
+                &crate::engine::model::UserContext::admin_default(),
+                &project.config,
+            );
+            assert!(
+                response.contains(".&amp;[2020-01-01T00:00:00]"),
+                "date keys carry the timestamp form: {response}"
+            );
+            assert!(
+                response.contains("<MEMBER_CAPTION>1/1/2020</MEMBER_CAPTION>"),
+                "date captions are short dates: {response}"
+            );
+        });
+    }
 
     fn all_rows() -> Vec<MemberRow> {
         let project = proxy_project::project();
