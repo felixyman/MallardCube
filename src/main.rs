@@ -1068,8 +1068,16 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
     // A `<Catalog>` property naming another database is refused the way the
     // reference refuses it, for Discover and Execute alike (measured
     // 2026-09-25). A mismatched *restriction* gets the empty rowset instead.
-    if let Some(fault) =
-        execute::runtime::catalog_scope_fault(request.property_catalog(), config, user)
+    // `DISCOVER_LITERALS` and `DISCOVER_SCHEMA_ROWSETS` ignore the catalog
+    // entirely — the reference answers their rows for any value (measured
+    // 2026-09-27: 19 literals and 132 schema rowsets).
+    let catalog_scoped = !matches!(
+        request,
+        XmlaRequest::DiscoverLiterals | XmlaRequest::DiscoverSchemaRowsets { .. }
+    );
+    if catalog_scoped
+        && let Some(fault) =
+            execute::runtime::catalog_scope_fault(request.property_catalog(), config, user)
     {
         mallardcube::audit::emit(
             "refusal",
@@ -1094,7 +1102,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             resp
         }
 
-        XmlaRequest::DiscoverProperties { property_names } => {
+        XmlaRequest::DiscoverProperties { property_names, .. } => {
             let resp = if property_names.len() == 1 && property_names[0] == "Catalog" {
                 println!("Excel asking for Catalog");
                 properties::get_single_property_response(

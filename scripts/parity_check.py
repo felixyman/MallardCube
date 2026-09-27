@@ -28,14 +28,20 @@ ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "parity" / "catalog.json"
 
 
-def soap_discover(catalog: str, request_type: str, restrictions: dict[str, str]) -> str:
+def soap_discover(
+    catalog: str,
+    request_type: str,
+    restrictions: dict[str, str],
+    properties: str | None = None,
+) -> str:
     items = "".join(f"<{key}>{value}</{key}>" for key, value in restrictions.items())
+    props = properties if properties is not None else f"<Catalog>{catalog}</Catalog>"
     return (
         '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>'
         '<Discover xmlns="urn:schemas-microsoft-com:xml-analysis">'
         f"<RequestType>{request_type}</RequestType>"
         f"<Restrictions><RestrictionList>{items}</RestrictionList></Restrictions>"
-        f"<Properties><PropertyList><Catalog>{catalog}</Catalog></PropertyList></Properties>"
+        f"<Properties><PropertyList>{props}</PropertyList></Properties>"
         "</Discover></soap:Body></soap:Envelope>"
     )
 
@@ -152,7 +158,9 @@ def main() -> int:
                 key: value.replace("{catalog}", catalog_name).replace("{cube}", cube)
                 for key, value in request.get("restrictions", {}).items()
             }
-            body = soap_discover(catalog_name, request["type"], restrictions)
+            body = soap_discover(
+                catalog_name, request["type"], restrictions, request.get("properties")
+            )
         else:
             body = soap_execute(catalog_name, request["mdx"].replace("{cube}", cube))
 

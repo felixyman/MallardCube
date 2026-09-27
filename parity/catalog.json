@@ -933,6 +933,73 @@
         "member_last": "[Date].[Calendar].[Year].&[2030].&[4].&[12]"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: every member is qualified with the hierarchy's first level and its full key path \u2014 a quarter is [Date].[Calendar].[Year].&[2020].&[1], a month appends .&[M]"
+    },
+    {
+      "id": "properties-foreign-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "DISCOVER_PROPERTIES",
+        "restrictions": {},
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
+    },
+    {
+      "id": "tables-foreign-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "DBSCHEMA_TABLES",
+        "restrictions": {},
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
+    },
+    {
+      "id": "foreign-namespace-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "DISCOVER_PROPERTIES",
+        "restrictions": {},
+        "properties": "<x:Catalog xmlns:x=\"urn:foreign\">SALES_ANALYTICS</x:Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
+    },
+    {
+      "id": "literals-foreign-catalog-ignored",
+      "kind": "discover",
+      "request": {
+        "type": "DISCOVER_LITERALS",
+        "restrictions": {},
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "row_count": 19
+      },
+      "known_gap": "the reference answers its 19 literals for any catalog value; the proxy's literal list is shorter (5 rows) \u2014 the behaviour (no fault) is pinned by probe-fidelity",
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
+    },
+    {
+      "id": "schema-rowsets-foreign-catalog-ignored",
+      "kind": "discover",
+      "request": {
+        "type": "DISCOVER_SCHEMA_ROWSETS",
+        "restrictions": {},
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "row_count": 132
+      },
+      "known_gap": "the reference lists 132 schema rowsets for any catalog value; the proxy's list is shorter (63 rows) \u2014 the behaviour (no fault) is pinned by probe-fidelity",
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
     }
   ]
 }

@@ -115,6 +115,33 @@ report "raw child under <Restrictions> faults like the reference" "$([[ "$out" =
 out="$(post "$(discover '<RestrictionList><BOGUS_NAME/></RestrictionList>')")"
 report "self-closing unknown restriction faults" "$([[ "$out" == *"faultstring"* ]] && echo 1 || echo 0)" "answered without a fault"
 
+# --- the catalog property's treatment is per rowset (measured 2026-09-27) ----
+catalog_probe() { # request_type property_list_xml
+  cat <<EOF
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Discover xmlns="urn:schemas-microsoft-com:xml-analysis"><RequestType>$1</RequestType><Restrictions><RestrictionList></RestrictionList></Restrictions><Properties><PropertyList>$2</PropertyList></Properties></Discover></soap:Body></soap:Envelope>
+EOF
+}
+
+out="$(post "$(catalog_probe DISCOVER_LITERALS '<Catalog>WrongCatalog</Catalog>')")"
+report "DISCOVER_LITERALS ignores a foreign catalog (like the reference)" \
+  "$([[ "$out" == *"DBLITERAL_CATALOG_NAME"* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" \
+  "the reference answers its literals for any catalog value"
+
+out="$(post "$(catalog_probe DISCOVER_SCHEMA_ROWSETS '<Catalog>WrongCatalog</Catalog>')")"
+report "DISCOVER_SCHEMA_ROWSETS ignores a foreign catalog (like the reference)" \
+  "$([[ "$out" == *"MDSCHEMA_MEMBERS"* && "$out" != *"faultstring"* ]] && echo 1 || echo 0)" \
+  "the reference answers its rowsets for any catalog value"
+
+out="$(post "$(catalog_probe DISCOVER_PROPERTIES '<Catalog>WrongCatalog</Catalog>')")"
+report "DISCOVER_PROPERTIES faults on a foreign catalog" \
+  "$([[ "$out" == *"does not have access"* ]] && echo 1 || echo 0)" \
+  "answered without the reference's refusal"
+
+out="$(post "$(catalog_probe DISCOVER_PROPERTIES '<x:Catalog xmlns:x="urn:foreign">WrongCatalog</x:Catalog>')")"
+report "a foreign-namespace property faults like the reference" \
+  "$([[ "$out" == *"cannot appear under"* ]] && echo 1 || echo 0)" \
+  "answered without a fault"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "FIDELITY OK: ${pass}/${pass} probes passed"

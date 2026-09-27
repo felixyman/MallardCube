@@ -76,6 +76,7 @@ impl XmlaRequest {
     pub fn property_catalog(&self) -> Option<&str> {
         match self {
             XmlaRequest::ExecuteStatement { catalog, .. } => catalog.as_deref(),
+            XmlaRequest::DiscoverProperties { catalog, .. } => catalog.as_deref(),
             XmlaRequest::MdschemaHierarchies { restrictions }
             | XmlaRequest::MdschemaLevels { restrictions }
             | XmlaRequest::MdschemaFunctions { restrictions }
@@ -107,6 +108,9 @@ impl XmlaRequest {
 pub enum XmlaRequest {
     DiscoverProperties {
         property_names: Vec<String>,
+        /// The `<Properties><PropertyList><Catalog>` value (the rowset is
+        /// catalog-scoped: a foreign value faults).
+        catalog: Option<String>,
     },
     DiscoverSchemaRowsets {
         /// `SchemaName` restriction: return only this rowset's entry.
@@ -364,6 +368,13 @@ fn parent_is_xmla_discover(open_elements: &[(String, bool, bool)]) -> bool {
         .unwrap_or(false)
 }
 
+fn parent_is_property_list(open_elements: &[(String, bool, bool)]) -> bool {
+    open_elements
+        .last()
+        .map(|(local, namespace_ok, _)| *namespace_ok && local == "PropertyList")
+        .unwrap_or(false)
+}
+
 fn parent_is_soap_envelope(open_elements: &[(String, bool, bool)]) -> bool {
     open_elements
         .last()
@@ -382,6 +393,7 @@ struct Structure {
     soap_ok: bool,
     parent_is_xmla_discover: bool,
     parent_is_soap_envelope: bool,
+    parent_is_property_list: bool,
     is_root: bool,
     restrictions_seen: bool,
     in_restrictions: bool,
@@ -391,7 +403,7 @@ struct Structure {
     header_seen: bool,
 }
 
-fn structural_error(local: &str, state: Structure) -> Option<String> {
+fn structural_error(local: &str, raw: &str, state: Structure) -> Option<String> {
     // The SOAP skeleton is positional: `Envelope` is the root, `Body`/`Header`
     // are its direct children and SOAP-bound. A foreign element that merely
     // shares one of those names (a SOAP header entry, say) is not the skeleton
@@ -437,6 +449,15 @@ fn structural_error(local: &str, state: Structure) -> Option<String> {
             | "MEMBER_UNIQUE_NAME"
             | "TREE_OP"
     );
+    // A property in a foreign namespace is rejected under PropertyList: the
+    // reference faults `<x:Catalog xmlns:x="urn:foreign">` with "The x:Catalog
+    // element ... cannot appear under Envelope/Body/Discover/Properties/
+    // PropertyList" (measured 2026-09-27).
+    if state.parent_is_property_list && !state.namespace_ok {
+        return Some(format!(
+            "The {raw} element cannot appear under Envelope/Body/Discover/Properties/PropertyList"
+        ));
+    }
     if !state.namespace_ok && (semantic || state.in_restrictions || state.in_restriction_list) {
         return Some(format!("<{}> is not in the XMLA namespace", local));
     }
@@ -586,11 +607,13 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
                         name,
+                        e.name().as_ref(),
                         Structure {
                             namespace_ok,
                             soap_ok,
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
                             parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
+                            parent_is_property_list: parent_is_property_list(&open_elements),
                             is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
@@ -699,11 +722,13 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                 if malformed.is_none()
                     && let Some(reason) = structural_error(
                         name,
+                        e.name().as_ref(),
                         Structure {
                             namespace_ok,
                             soap_ok,
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
                             parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
+                            parent_is_property_list: parent_is_property_list(&open_elements),
                             is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
@@ -895,6 +920,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
         "DISCOVER_PROPERTIES" => {
             return XmlaRequest::DiscoverProperties {
                 property_names: requested_properties,
+                catalog: properties_catalog.clone(),
             };
         }
         "DISCOVER_SCHEMA_ROWSETS" => {
@@ -1114,6 +1140,18 @@ mod tests {
 
     /// Unreadable text must fault: a blanked statement hid the problem, and a
     /// dropped restriction silently returned the unrestricted rowset.
+    /// A property in a foreign namespace is rejected under PropertyList, the
+    /// way the reference rejects `<x:Catalog xmlns:x="urn:foreign">`
+    /// (measured 2026-09-27).
+    #[test]
+    fn foreign_namespace_property_is_malformed() {
+        let body = "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><Discover xmlns=\"urn:schemas-microsoft-com:xml-analysis\"><RequestType>DISCOVER_PROPERTIES</RequestType><Restrictions><RestrictionList></RestrictionList></Restrictions><Properties><PropertyList><x:Catalog xmlns:x=\"urn:foreign\">Model</x:Catalog></PropertyList></Properties></Discover></soap:Body></soap:Envelope>";
+        match parse_xmla(body) {
+            XmlaRequest::Malformed(reason) => assert!(reason.contains("cannot appear"), "{reason}"),
+            other => panic!("expected malformed, got {other:?}"),
+        }
+    }
+
     #[test]
     fn unparsable_entity_is_malformed() {
         let statement = r#"<Envelope><Body><Execute><Command>
@@ -1283,7 +1321,7 @@ mod tests {
             <Restrictions><RestrictionList><PropertyName><Value>Catalog</Value></PropertyName></RestrictionList></Restrictions>
         </Discover></Body></Envelope>"#;
         match parse_xmla(nested) {
-            XmlaRequest::DiscoverProperties { property_names } => {
+            XmlaRequest::DiscoverProperties { property_names, .. } => {
                 assert_eq!(property_names, vec!["Catalog".to_string()]);
             }
             other => panic!("expected properties, got {other:?}"),

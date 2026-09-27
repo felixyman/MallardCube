@@ -518,7 +518,7 @@ fn render_m_partition(
             }
             out.push_str(&format!(
                 "-- M expression (first 200 chars): {}\n",
-                truncate_m(m_expr, 200)
+                redact_secrets(&truncate_m(m_expr, 200))
             ));
         }
     }
@@ -606,12 +606,16 @@ fn render_m_connection(
             if let Some(path) = &conn.file_path {
                 out.push_str(&format!(
                     "INSERT INTO {} SELECT * FROM read_csv_auto('{}');\n",
-                    table_name_ident, path
+                    table_name_ident,
+                    redact_secrets(path)
                 ));
             } else if let Some(rel_path) = &conn.relative_path {
-                out.push_str(&format!("-- CSV source: relative path '{}'\n", rel_path));
+                out.push_str(&format!(
+                    "-- CSV source: relative path '{}'\n",
+                    redact_secrets(rel_path)
+                ));
                 if let Some(url) = &conn.url {
-                    out.push_str(&format!("-- URL: {}\n", url));
+                    out.push_str(&format!("-- URL: {}\n", redact_secrets(url)));
                 } else {
                     out.push_str("-- The CSV is served from a Web.Contents source with a parameterized URL that cannot be resolved.\n");
                 }
@@ -633,7 +637,8 @@ fn render_m_connection(
             out.push_str("-- Requires: INSTALL postgres_scanner; LOAD postgres_scanner;\n");
             out.push_str(&format!(
                 "-- ATTACH 'host={} dbname={}' AS src (TYPE postgres);\n",
-                server, database
+                redact_secrets(server),
+                redact_secrets(database)
             ));
         }
         SourceKind::MySQL => {
@@ -646,7 +651,8 @@ fn render_m_connection(
             out.push_str("-- Requires: INSTALL mysql_scanner; LOAD mysql_scanner;\n");
             out.push_str(&format!(
                 "-- ATTACH 'host={} database={}' AS src (TYPE mysql);\n",
-                server, database
+                redact_secrets(server),
+                redact_secrets(database)
             ));
         }
         SourceKind::Web => {
@@ -656,10 +662,10 @@ fn render_m_connection(
             ));
             out.push_str(&format!(
                 "-- URL: {}\n",
-                conn.url.as_deref().unwrap_or("(unknown)")
+                redact_secrets(conn.url.as_deref().unwrap_or("(unknown)"))
             ));
             if let Some(rel_path) = &conn.relative_path {
-                out.push_str(&format!("-- Relative path: {}\n", rel_path));
+                out.push_str(&format!("-- Relative path: {}\n", redact_secrets(rel_path)));
             }
             out.push_str("-- Manual download required.\n");
         }
@@ -711,7 +717,97 @@ pub fn translate_to_duckdb_attach(ds: &DataSourceInfo) -> String {
     if password.is_some() {
         conn.push_str(";Password=<REDACTED>");
     }
-    conn
+    // A URL-style server or database can carry userinfo of its own.
+    redact_secrets(&conn)
+}
+
+/// Redact credential material that may ride along inside a string copied from
+/// the model: `key=value` credentials (`password`, `pwd`, `passwd`,
+/// `accountkey`, `sharedaccesssignature`) and URL userinfo
+/// (`https://user:secret@host`). The generated script is an artifact
+/// (typically committed with the project); a secret belongs in the operator's
+/// environment or secret store, not in the file (plan 058-D).
+pub fn redact_secrets(text: &str) -> String {
+    let mut out = redact_url_userinfo(text);
+    for key in [
+        "password",
+        "pwd",
+        "passwd",
+        "accountkey",
+        "sharedaccesssignature",
+    ] {
+        out = redact_key_value(&out, key);
+    }
+    out
+}
+
+/// `https://user:secret@host/path` → `https://user:<REDACTED>@host/path`.
+fn redact_url_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        out.push_str(&rest[..scheme_end + 3]);
+        let after = &rest[scheme_end + 3..];
+        let end = after
+            .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
+            .unwrap_or(after.len());
+        let authority = &after[..end];
+        if let Some(at) = authority.rfind('@')
+            && let Some(colon) = authority[..at].find(':')
+        {
+            out.push_str(&authority[..colon + 1]);
+            out.push_str("<REDACTED>");
+            out.push_str(&authority[at..]);
+        } else {
+            out.push_str(authority);
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `password=secret`, `password="secret"`, `PWD=secret;` → the value becomes
+/// `<REDACTED>` (quotes kept). Matching is case-insensitive and the key must
+/// start a token.
+fn redact_key_value(text: &str, key: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let needle = format!("{key}=");
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let Some(at) = lower.find(&needle) else {
+            out.push_str(rest);
+            return out;
+        };
+        let boundary = at == 0 || !rest.as_bytes()[at - 1].is_ascii_alphanumeric();
+        if !boundary {
+            out.push_str(&rest[..at + needle.len()]);
+            rest = &rest[at + needle.len()..];
+            continue;
+        }
+        out.push_str(&rest[..at + needle.len()]);
+        let value = &rest[at + needle.len()..];
+        let (quote, value) = match value.chars().next() {
+            Some(q @ ('"' | '\'')) => (Some(q), &value[q.len_utf8()..]),
+            _ => (None, value),
+        };
+        let end = value
+            .find(|c: char| c == ';' || c == '&' || c.is_whitespace() || c == '"' || c == '\'')
+            .unwrap_or(value.len());
+        let secret = &value[..end];
+        if secret.is_empty() || secret.eq_ignore_ascii_case("<REDACTED>") {
+            out.push_str(secret);
+        } else {
+            out.push_str("<REDACTED>");
+        }
+        if let Some(q) = quote {
+            out.push(q);
+            rest = &value[end + q.len_utf8()..];
+        } else {
+            rest = &value[end..];
+        }
+    }
 }
 
 /// Truncate an M expression to `max_chars` for display in comments.
@@ -1389,6 +1485,63 @@ in
         assert!(!result.contains("secret123"), "{result}");
         assert!(result.contains("Password=<REDACTED>"), "{result}");
         assert!(result.contains("Replace <REDACTED>"), "{result}");
+    }
+
+    /// `key=value` credentials and URL userinfo inside strings copied from the
+    /// model are redacted; benign text and already-redacted values are left
+    /// alone (plan 058-D).
+    #[test]
+    fn redact_secrets_covers_credentials_and_url_userinfo() {
+        assert_eq!(
+            redact_secrets("Server=x;Password=s3cret;Database=db"),
+            "Server=x;Password=<REDACTED>;Database=db"
+        );
+        assert_eq!(
+            redact_secrets(r#"Odbc.DataSource("dsn=pg;PWD=hunter2")"#),
+            r#"Odbc.DataSource("dsn=pg;PWD=<REDACTED>")"#
+        );
+        assert_eq!(
+            redact_secrets("AccountKey=abc123&SharedAccessSignature=sig456"),
+            "AccountKey=<REDACTED>&SharedAccessSignature=<REDACTED>"
+        );
+        assert_eq!(
+            redact_secrets("https://alice:s3cret@example.com/data.csv"),
+            "https://alice:<REDACTED>@example.com/data.csv"
+        );
+        // Idempotent, and a no-op without secrets.
+        assert_eq!(
+            redact_secrets("https://alice:<REDACTED>@example.com/x"),
+            "https://alice:<REDACTED>@example.com/x"
+        );
+        assert_eq!(
+            redact_secrets("Server=pg01;Database=db"),
+            "Server=pg01;Database=db"
+        );
+    }
+
+    /// An M expression copied into a comment must not carry its credentials.
+    #[test]
+    fn test_render_load_script_redacts_m_expression_secrets() {
+        let mut model = make_minimal_model();
+        model.tables[0].partitions[0] = PartitionInfo {
+            name: "m_part".into(),
+            source_type: "m".into(),
+            is_m: true,
+            query: Some(
+                r#"let Source = Odbc.DataSource("dsn=pg;uid=svc;Password=hunter2") in Source"#
+                    .into(),
+            ),
+            data_source_name: None,
+            mode: None,
+            schema: None,
+            database: None,
+        };
+        let script = render_load_script(&model, &[], &[]);
+        assert!(
+            !script.contains("hunter2"),
+            "the secret must not appear: {script}"
+        );
+        assert!(script.contains("Password=<REDACTED>"), "{script}");
     }
 
     #[test]

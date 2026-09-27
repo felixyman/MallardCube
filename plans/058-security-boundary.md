@@ -141,10 +141,13 @@ roles first.
   asserted to contain neither the secret nor the raw connection string.
   626 tests in debug and release, fidelity 13/13, parity 38/38, smoke 8/8.
 
-Still open, recorded: the load script also copies an unparsed M expression and
-a source URL verbatim, which can themselves carry credentials (`Odbc.DataSource`
-with an inline password, a basic-auth URL) — a `redact_secrets` pass over every
-string copied from the model is the follow-up. OIDC claim values are not
+**`redact_secrets` completed 2026-09-27**: every string copied from the model
+now passes through one redactor — `key=value` credentials (`password`, `pwd`,
+`passwd`, `AccountKey`, `SharedAccessSignature`, case-insensitive, quoted or
+not) and URL userinfo (`https://user:secret@host` → `https://user:<REDACTED>@host`).
+It is applied to the M-expression comments, CSV/Web URLs and relative paths,
+the scanner ATTACH hints, and the translated connection string. Tests cover
+the redactor itself and an M expression with an inline password. OIDC claim values are not
 audited (only the resolved user and roles); there is no live config reload, so
 "config change" is not an event; and `XMLA_TRACE` still records raw bodies by
 explicit opt-in and is a debugging trace rather than an audit stream.
@@ -232,9 +235,20 @@ Five parity cases were added (`members-wrong-cube-is-empty`,
 `dimensions-empty-cube-restriction-is-empty`, `drillthrough-unknown-cube-faults`)
 → 24/24 matched with the two known gaps.
 
-Still open in this section: the empty/absent `<Catalog>` default-catalog
-divergence above, and the same probe treatment for `DISCOVER_PROPERTIES`,
-`DISCOVER_LITERALS` and `DBSCHEMA_TABLES` (`TABLE_CATALOG`).
+**Catalog treatment completed 2026-09-27**: measured on the reference — the
+`<Catalog>` property's treatment is per rowset. `DISCOVER_PROPERTIES`,
+`DBSCHEMA_TABLES` and `DBSCHEMA_CATALOGS` fault a foreign value ("Either the
+user, '…', does not have access to the 'WrongCatalog' database, or the
+database does not exist."); `DISCOVER_LITERALS` and `DISCOVER_SCHEMA_ROWSETS`
+ignore it (19 literals, 132 schema rowsets for any value); an absent property
+is the default catalog. A property in a foreign XML namespace
+(`<x:Catalog xmlns:x="urn:foreign">`) faults structurally ("The x:Catalog
+element … cannot appear under Envelope/Body/Discover/Properties/PropertyList").
+The gate now exempts the two catalog-independent rowsets, the parser rejects
+foreign-namespace property children, and `DiscoverProperties` carries its
+catalog so `property_catalog()` sees it. Four fidelity probes (17/17) pin the
+behaviour; five parity cases carry the reference's values (60/60, two known
+gaps for the shorter literal/schema-rowset lists).
 
 ### Advertised restrictions are now applied (2026-09-26)
 
