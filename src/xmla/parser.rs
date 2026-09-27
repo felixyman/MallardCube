@@ -368,6 +368,13 @@ fn parent_is_xmla_discover(open_elements: &[(String, bool, bool)]) -> bool {
         .unwrap_or(false)
 }
 
+fn parent_is_soap_body(open_elements: &[(String, bool, bool)]) -> bool {
+    open_elements
+        .last()
+        .map(|(local, _, soap_ok)| *soap_ok && local == "Body")
+        .unwrap_or(false)
+}
+
 fn parent_is_property_list(open_elements: &[(String, bool, bool)]) -> bool {
     open_elements
         .last()
@@ -394,6 +401,7 @@ struct Structure {
     parent_is_xmla_discover: bool,
     parent_is_soap_envelope: bool,
     parent_is_property_list: bool,
+    parent_is_soap_body: bool,
     is_root: bool,
     restrictions_seen: bool,
     in_restrictions: bool,
@@ -449,6 +457,13 @@ fn structural_error(local: &str, raw: &str, state: Structure) -> Option<String> 
             | "MEMBER_UNIQUE_NAME"
             | "TREE_OP"
     );
+    // The reference's pump rejects session management outright: `BeginSession`
+    // and `EndSession` cannot appear under the Body (measured 2026-09-27).
+    if state.parent_is_soap_body && matches!(local, "BeginSession" | "EndSession") {
+        return Some(format!(
+            "The {raw} element cannot appear under Envelope/Body"
+        ));
+    }
     // A property in a foreign namespace is rejected under PropertyList: the
     // reference faults `<x:Catalog xmlns:x="urn:foreign">` with "The x:Catalog
     // element ... cannot appear under Envelope/Body/Discover/Properties/
@@ -614,6 +629,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
                             parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
                             parent_is_property_list: parent_is_property_list(&open_elements),
+                            parent_is_soap_body: parent_is_soap_body(&open_elements),
                             is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
@@ -729,6 +745,7 @@ pub fn parse_xmla(xml: &str) -> XmlaRequest {
                             parent_is_xmla_discover: parent_is_xmla_discover(&open_elements),
                             parent_is_soap_envelope: parent_is_soap_envelope(&open_elements),
                             parent_is_property_list: parent_is_property_list(&open_elements),
+                            parent_is_soap_body: parent_is_soap_body(&open_elements),
                             is_root: open_elements.is_empty(),
                             restrictions_seen,
                             in_restrictions,
@@ -1140,6 +1157,22 @@ mod tests {
 
     /// Unreadable text must fault: a blanked statement hid the problem, and a
     /// dropped restriction silently returned the unrestricted rowset.
+    /// Session management cannot appear under the Body: the reference's pump
+    /// rejects `BeginSession`/`EndSession` outright (measured 2026-09-27).
+    #[test]
+    fn begin_session_under_body_is_malformed() {
+        let body = "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><BeginSession xmlns=\"urn:schemas-microsoft-com:xml-analysis\"/></soap:Body></soap:Envelope>";
+        match parse_xmla(body) {
+            XmlaRequest::Malformed(reason) => {
+                assert!(
+                    reason.contains("cannot appear under Envelope/Body"),
+                    "{reason}"
+                )
+            }
+            other => panic!("expected malformed, got {other:?}"),
+        }
+    }
+
     /// A property in a foreign namespace is rejected under PropertyList, the
     /// way the reference rejects `<x:Catalog xmlns:x="urn:foreign">`
     /// (measured 2026-09-27).

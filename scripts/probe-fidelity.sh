@@ -142,6 +142,29 @@ report "a foreign-namespace property faults like the reference" \
   "$([[ "$out" == *"cannot appear under"* ]] && echo 1 || echo 0)" \
   "answered without a fault"
 
+# --- sessions: the reference is sessionless over the pump (measured 2026-09-27) --
+session_probe() { # session_id
+  cat <<EOF
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Header><Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="$1"/></soap:Header><soap:Body><Execute xmlns="urn:schemas-microsoft-com:xml-analysis"><Command><Statement>SELECT {[Measures].[Revenue]} ON COLUMNS FROM [${CUBE}]</Statement></Command><Properties><PropertyList><Catalog>${CATALOG}</Catalog></PropertyList></Properties></Execute></soap:Body></soap:Envelope>
+EOF
+}
+
+out="$(post "$(session_probe 00000000-0000-0000-0000-000000000000)")"
+report "an unknown session id faults like the reference" \
+  "$([[ "$out" == *"session ID cannot be found"* ]] && echo 1 || echo 0)" \
+  "answered without the reference's session refusal"
+
+out="$(post "$(envelope "$MDX")")"
+report "a sessionless response carries no session id" \
+  "$([[ "$out" != *"<Session"* ]] && echo 1 || echo 0)" \
+  "the reference issues no session id over the pump"
+
+begin='<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><BeginSession xmlns="urn:schemas-microsoft-com:xml-analysis"/></soap:Body></soap:Envelope>'
+out="$(post "$begin")"
+report "BeginSession faults like the reference" \
+  "$([[ "$out" == *"cannot appear under Envelope/Body"* ]] && echo 1 || echo 0)" \
+  "answered without the reference's refusal"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "FIDELITY OK: ${pass}/${pass} probes passed"

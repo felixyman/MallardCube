@@ -53,11 +53,19 @@ listed at the end of plan 051):
    dimensions.
 5. **`STRTO_MEMBER`/member-only probes** must refuse or omit hidden dimensions
    and members.
-6. **Foreign-namespace `<foo:Catalog>`** currently counts as the XMLA property;
-   probe the mirror first, then match.
-7. **Session catalog / session ids**: decide once — documented statelessness
-   (the current divergence) or a bounded session registry. Probe the reference's
-   `BeginSession`/unknown-session fault before choosing.
+6. **Foreign-namespace `<foo:Catalog>`** — completed 2026-09-27: the reference
+   faults it ("The x:Catalog element … cannot appear under Envelope/Body/
+   Discover/Properties/PropertyList"); the parser rejects foreign-namespace
+   property children.
+7. **Session catalog / session ids** — completed 2026-09-27. Measured on the
+   reference's pump: `BeginSession`/`EndSession` are rejected outright ("cannot
+   appear under Envelope/Body"), a sessionless response carries no SOAP Header
+   and no session id at all, and any `Session` header names an id it never
+   issued and faults ("The '<id>' session ID cannot be found. Either the
+   session does not exist or it has already expired."). The proxy now matches:
+   no session id is emitted, a header id is refused, and the session elements
+   are structural faults. Replayed benchmark traffic strips recorded session
+   headers (`--rewrite-session-ids`).
 
 ## C. Drillthrough for restricted users
 

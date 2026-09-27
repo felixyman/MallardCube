@@ -892,13 +892,6 @@ async fn handle_xmla(
         // The permit is held for the whole request (released on return).
         let _permit = permit;
         mallardcube::xmla_trace::mark_request_start();
-        // The session id comes from an XMLA `Session`/`EndSession` element
-        // only — a foreign header entry named `Session` is ignored, exactly as
-        // the reference does — and it is echoed as an escaped attribute rather
-        // than filtered, so well-formed ids survive (plan 055 review). The
-        // proxy is stateless: the id is not checked for existence.
-        let session_id = mallardcube::xmla::parser::session_id(&body_for_worker);
-        mallardcube::response::set_session_id(session_id);
         let backend = request_backend;
         // A panic in request handling must not take the whole server down:
         // log it (see install_panic_diagnostics) and answer with a SOAP fault
@@ -995,6 +988,24 @@ fn route_request<B: backend::QueryBackend + ?Sized>(
     user: &UserContext,
     config: &ProxyConfig,
 ) -> XmlaBody {
+    // The reference issues no session id over the pump, so any `Session`
+    // header names an id it never issued and faults (measured 2026-09-27:
+    // "The '<id>' session ID cannot be found. Either the session does not
+    // exist or it has already expired."). The proxy is stateless and matches:
+    // a header id is refused rather than echoed.
+    if let Some(session) = mallardcube::xmla::parser::session_id(body) {
+        let resp = mallardcube::xmla::response::fault_response(&format!(
+            "The '{session}' session ID cannot be found. Either the session does not exist or it has already expired."
+        ));
+        mallardcube::audit::emit(
+            "refusal",
+            user,
+            "session-unknown",
+            "a session id the proxy never issued",
+        );
+        mallardcube::xmla_trace::trace_request("SessionUnknown", body, &resp, None, None);
+        return XmlaBody::Full(resp);
+    }
     if let XmlaRequest::MdschemaMembers {
         member_unique_name,
         tree_op,

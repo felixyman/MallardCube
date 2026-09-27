@@ -1,31 +1,14 @@
-use std::cell::RefCell;
-
-thread_local! {
-    static CURRENT_SESSION_ID: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-/// Set the session id to echo back in the SOAP response header.
-pub fn set_session_id(sid: Option<String>) {
-    CURRENT_SESSION_ID.with(|c| *c.borrow_mut() = sid);
-}
-
 /// The SOAP envelope split into its opening and closing halves, so a large
 /// inner payload can be written incrementally (plan 051-C).
+///
+/// The reference issues no session id over the pump — a sessionless request's
+/// response has no SOAP Header at all (measured 2026-09-27) — so the envelope
+/// carries none, and any `Session` header the request sent is refused.
 pub fn soap_envelope_parts() -> (String, String) {
-    let session_id = CURRENT_SESSION_ID.with(|c| {
-        c.borrow()
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().to_uppercase())
-    });
-    let open = format!(
-        r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Header>
-    <Session xmlns="urn:schemas-microsoft-com:xml-analysis" SessionId="{}" />
-  </soap:Header>
+    let open = r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body>
-"#,
-        xml_escape_attr(&session_id)
-    );
+"#
+    .to_string();
     let close = r#"  </soap:Body>
 </soap:Envelope>"#
         .to_string();
@@ -145,6 +128,17 @@ mod tests {
     /// XML-invalid controls become U+FFFD (plan 055 review).
     /// An attribute value must survive quotes too — the session id is echoed
     /// from client input.
+    /// The reference issues no session id over the pump (measured 2026-09-27),
+    /// so the envelope carries no SOAP Header at all.
+    #[test]
+    fn envelope_carries_no_session_header() {
+        let (open, close) = soap_envelope_parts();
+        assert!(!open.contains("<Session"), "{open}");
+        assert!(!open.contains("soap:Header"), "{open}");
+        assert!(open.contains("<soap:Body>"), "{open}");
+        assert!(close.contains("</soap:Envelope>"), "{close}");
+    }
+
     #[test]
     fn xml_escape_attr_escapes_quotes() {
         assert_eq!(

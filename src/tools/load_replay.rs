@@ -444,16 +444,19 @@ fn validate_response(kind: &str, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn rewrite_session_id(xml: &str, worker_id: usize) -> String {
-    let mut out = String::with_capacity(xml.len() + 16);
+/// Strip the recorded `Session` header from a replayed request. The proxy is
+/// sessionless like the reference: it issues no id and refuses any it did not
+/// issue, so a captured id must not ride along. The flag keeps its name for
+/// the benchmark scripts.
+fn rewrite_session_id(xml: &str, _worker_id: usize) -> String {
+    let mut out = String::with_capacity(xml.len());
     let mut rest = xml;
-    let replacement = format!("SessionId=\"LOAD-USER-{worker_id}\"");
-    while let Some(start) = rest.find("SessionId=\"") {
+    while let Some(start) = rest.find("<Session ") {
         out.push_str(&rest[..start]);
-        let after_start = start + "SessionId=\"".len();
-        if let Some(end) = rest[after_start..].find('"') {
-            out.push_str(&replacement);
-            rest = &rest[after_start + end + 1..];
+        if let Some(end) = rest[start..].find("/>") {
+            rest = &rest[start + end + 2..];
+        } else if let Some(end) = rest[start..].find("</Session>") {
+            rest = &rest[start + end + "</Session>".len()..];
         } else {
             out.push_str(&rest[start..]);
             return out;
@@ -574,11 +577,15 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_session_ids_replaces_all_instances() {
-        let xml = r#"<Session SessionId="RUST"/><Session SessionId="RUST2"/>"#;
-        let rewritten = rewrite_session_id(xml, 7);
-        assert_eq!(rewritten.matches("LOAD-USER-7").count(), 2);
-        assert!(!rewritten.contains("RUST"));
+    fn rewrite_session_ids_strips_every_instance() {
+        let xml = r#"<Header><Session SessionId="RUST"/></Header><Body/>"#;
+        let stripped = rewrite_session_id(xml, 7);
+        assert!(!stripped.contains("Session"), "{stripped}");
+        assert!(!stripped.contains("RUST"), "{stripped}");
+        assert!(stripped.contains("<Body/>"), "{stripped}");
+        // The non-self-closing spelling goes too.
+        let open_close = r#"<Session SessionId="A"></Session>"#;
+        assert_eq!(rewrite_session_id(open_close, 1), "");
     }
 
     #[test]

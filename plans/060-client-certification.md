@@ -52,9 +52,10 @@ gestures.
    the reference's semantics, which is why the mirror answers `{All, Toys}` for
    a Top-5 filter over revenue. An end-to-end test with the recorded statement
    asserts exactly that, and a parity case pins it (37/37).
-3. **Sessions** — make one decision with plan 058-B7: documented statelessness
-   (and a claim recording the divergence) or a bounded session registry. The
-   reference faults an unknown session; today we echo it.
+3. **Sessions** — decided with plan 058-B7 (2026-09-27): the reference is
+   sessionless over the pump, so the proxy issues no session id, refuses any
+   header id, and faults `BeginSession`/`EndSession`; a certification claim
+   records that clients run sessionless against both.
 4. **Date member naming** — locale short dates and `T00:00:00` unique names
    where we emit ISO; probe the reference, then match or record.
 
