@@ -176,10 +176,11 @@ fn leaf_member_for_dim(
     // prefix its ancestor path (e.g. a quarter under 2026 is &[2026]&[1]).
     // Compound path labels ("2026|1") show only their own segment as caption.
     let raw_leaf = name.rsplit('|').next().unwrap_or(name).to_string();
-    // A date leaf keeps the reference's `T00:00:00` key form and its
-    // short-date caption in the user hierarchy too (measured 2026-09-27);
-    // MEMBER_KEY stays the stored value.
-    let date_leaf = dim.is_date_role && crate::xmla::discover::is_iso_date(&raw_leaf);
+    // The advertised key carries `T00:00:00`; the caption and MEMBER_KEY use
+    // the stored date (`[Full Date].&[2020-01-01T00:00:00]` captions
+    // `1/1/2020`, measured 2026-09-27).
+    let stored_leaf = crate::engine::model::strip_date_member_time(&raw_leaf).to_string();
+    let date_leaf = dim.is_date_role && crate::xmla::discover::is_iso_date(&stored_leaf);
     let mut member_key = parent_uname
         .and_then(key_from_member_uname)
         .map(|path| format!("{path}|{name}"))
@@ -187,7 +188,7 @@ fn leaf_member_for_dim(
     if date_leaf {
         let mut parts: Vec<String> = member_key.split('|').map(str::to_string).collect();
         if let Some(last) = parts.last_mut() {
-            *last = crate::xmla::discover::date_member_key(&raw_leaf);
+            *last = crate::xmla::discover::date_member_key(&stored_leaf);
         }
         member_key = parts.join("|");
     }
@@ -195,9 +196,13 @@ fn leaf_member_for_dim(
     // SSAS reports the leaf key for compound members, and the pipe key made
     // Excel refuse to add hierarchy fields to a pivot built against the proxy
     // (plan 048 bisect).
-    let leaf_key = raw_leaf.clone();
+    let leaf_key = if date_leaf {
+        stored_leaf.clone()
+    } else {
+        raw_leaf.clone()
+    };
     let caption = if date_leaf {
-        crate::xmla::discover::date_member_caption(&raw_leaf)
+        crate::xmla::discover::date_member_caption(&stored_leaf)
     } else {
         raw_leaf.clone()
     };
@@ -747,7 +752,6 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
     let level_uname = dim.key_level_unique_name().unwrap_or_default();
     let all_uname = format!("{view}.[All]");
     for m in members.iter_mut() {
-        m.hierarchy = view.clone();
         // The view is single-level: keep the path's last key segment and
         // render it in the key hierarchy's own namespace (the member may carry
         // the full ancestor path, `[Year].&[2020].&[1].&[1].&[2020-01-01]`).
@@ -759,8 +763,11 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
             (None, false)
         };
         let Some(leaf) = leaf else {
+            // No key to rewrite: leave the member in its own hierarchy rather
+            // than switch the namespace under it.
             continue;
         };
+        m.hierarchy = view.clone();
         m.u_name = if escaped {
             format!("{view}.&amp;[{leaf}]")
         } else {

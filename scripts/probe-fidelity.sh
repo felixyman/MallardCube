@@ -149,6 +149,16 @@ session_probe() { # session_id
 EOF
 }
 
+# --- an advertised date member scopes the same rows as the stored form -------
+# The metadata advertises `&[2020-01-01T00:00:00]`; the raw key used to match
+# no stored date and silently answered 0 (review finding, 2026-09-27).
+value_of() { printf '%s' "$1" | grep -oE '<Value xsi:type="xsd:double">[^<]*' | head -1 | sed 's/.*>//'; }
+advertised="$(post "$(envelope "SELECT {[Measures].[Revenue]} ON 0 FROM [${CUBE}] WHERE ([Date].[Calendar].[Year].&amp;[2020].&amp;[1].&amp;[1].&amp;[2020-01-01T00:00:00])")")"
+stored="$(post "$(envelope "SELECT {[Measures].[Revenue]} ON 0 FROM [${CUBE}] WHERE ([Date].[Calendar].[Year].&amp;[2020].&amp;[1].&amp;[1].&amp;[2020-01-01])")")"
+report "an advertised date member scopes the same rows as the stored form" \
+  "$([[ -n "$(value_of "$advertised")" && "$(value_of "$advertised")" == "$(value_of "$stored")" ]] && echo 1 || echo 0)" \
+  "advertised=$(value_of "$advertised") stored=$(value_of "$stored")"
+
 out="$(post "$(session_probe 00000000-0000-0000-0000-000000000000)")"
 report "an unknown session id faults like the reference" \
   "$([[ "$out" == *"session ID cannot be found"* ]] && echo 1 || echo 0)" \

@@ -735,6 +735,10 @@ pub fn redact_secrets(text: &str) -> String {
         "passwd",
         "accountkey",
         "sharedaccesssignature",
+        "apikey",
+        "api_key",
+        "access_token",
+        "authorization",
     ] {
         out = redact_key_value(&out, key);
     }
@@ -752,10 +756,9 @@ fn redact_url_userinfo(text: &str) -> String {
             .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
             .unwrap_or(after.len());
         let authority = &after[..end];
-        if let Some(at) = authority.rfind('@')
-            && let Some(colon) = authority[..at].find(':')
-        {
-            out.push_str(&authority[..colon + 1]);
+        if let Some(at) = authority.rfind('@') {
+            // Any userinfo may be a credential: a basic-auth password, or a
+            // bare token used as the user name. The host stays.
             out.push_str("<REDACTED>");
             out.push_str(&authority[at..]);
         } else {
@@ -773,25 +776,49 @@ fn redact_url_userinfo(text: &str) -> String {
 fn redact_key_value(text: &str, key: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    let needle = format!("{key}=");
     loop {
         let lower = rest.to_ascii_lowercase();
-        let Some(at) = lower.find(&needle) else {
+        let Some(at) = lower.find(key) else {
             out.push_str(rest);
             return out;
         };
         let boundary = at == 0 || !rest.as_bytes()[at - 1].is_ascii_alphanumeric();
         if !boundary {
-            out.push_str(&rest[..at + needle.len()]);
-            rest = &rest[at + needle.len()..];
+            out.push_str(&rest[..at + key.len()]);
+            rest = &rest[at + key.len()..];
             continue;
         }
-        out.push_str(&rest[..at + needle.len()]);
-        let value = &rest[at + needle.len()..];
-        let (quote, value) = match value.chars().next() {
-            Some(q @ ('"' | '\'')) => (Some(q), &value[q.len_utf8()..]),
-            _ => (None, value),
+        // The key must be followed by optional whitespace, `=`, optional
+        // whitespace, then the value (`Password = "secret"` is as common as
+        // `password=secret`).
+        // An M field name may be quoted before the `=`:
+        // `["api_key"="abc"]`.
+        let after_key = &rest[at + key.len()..];
+        let (key_quote, after_key) = match after_key.strip_prefix('"') {
+            Some(rest) => ("\"", rest),
+            None => ("", after_key),
         };
+        let trimmed = after_key.trim_start();
+        let key_spaces = after_key.len() - trimmed.len();
+        if !trimmed.starts_with('=') {
+            out.push_str(&rest[..at + key.len()]);
+            rest = &rest[at + key.len()..];
+            continue;
+        }
+        let after_eq = &trimmed[1..];
+        let value_trimmed = after_eq.trim_start();
+        let value_spaces = after_eq.len() - value_trimmed.len();
+        out.push_str(&rest[..at + key.len()]);
+        out.push_str(key_quote);
+        out.push_str(&after_key[..key_spaces + 1]);
+        out.push_str(&after_eq[..value_spaces]);
+        let (quote, value) = match value_trimmed.chars().next() {
+            Some(q @ ('"' | '\'')) => (Some(q), &value_trimmed[q.len_utf8()..]),
+            _ => (None, value_trimmed),
+        };
+        if let Some(q) = quote {
+            out.push(q);
+        }
         let end = value
             .find(|c: char| c == ';' || c == '&' || c.is_whitespace() || c == '"' || c == '\'')
             .unwrap_or(value.len());
@@ -1506,12 +1533,26 @@ in
         );
         assert_eq!(
             redact_secrets("https://alice:s3cret@example.com/data.csv"),
-            "https://alice:<REDACTED>@example.com/data.csv"
+            "https://<REDACTED>@example.com/data.csv"
+        );
+        // A bare token userinfo is a credential too.
+        assert_eq!(
+            redact_secrets("https://ghp_token123@example.com/x"),
+            "https://<REDACTED>@example.com/x"
+        );
+        // Spacing around `=` and the wider key list are covered.
+        assert_eq!(
+            redact_secrets("Password = s3cret;"),
+            "Password = <REDACTED>;"
+        );
+        assert_eq!(
+            redact_secrets(r#"["api_key"="abc", "Authorization: Bearer xyz"]"#),
+            r#"["api_key"="<REDACTED>", "Authorization: Bearer xyz"]"#
         );
         // Idempotent, and a no-op without secrets.
         assert_eq!(
-            redact_secrets("https://alice:<REDACTED>@example.com/x"),
-            "https://alice:<REDACTED>@example.com/x"
+            redact_secrets("https://<REDACTED>@example.com/x"),
+            "https://<REDACTED>@example.com/x"
         );
         assert_eq!(
             redact_secrets("Server=pg01;Database=db"),

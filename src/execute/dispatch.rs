@@ -2053,6 +2053,55 @@ mod tests {
         });
     }
 
+    /// The advertised date uname (`…&[2020-01-01T00:00:00]`) scopes the same
+    /// rows as the stored form; before the normalisation the raw key silently
+    /// returned 0 (review finding, 2026-09-27).
+    #[test]
+    fn advertised_date_uname_scopes_the_same_rows_as_the_stored_form() {
+        with_project3(|| {
+            let advertised = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE \
+                 ([Date].[Calendar].[Year].&[2020].&[1].&[1].&[2020-01-01T00:00:00])",
+            );
+            let stored = get_execute_statement_response(
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE \
+                 ([Date].[Calendar].[Year].&[2020].&[1].&[1].&[2020-01-01])",
+            );
+            assert_eq!(
+                cell_values(&advertised),
+                cell_values(&stored),
+                "both key forms scope the same member"
+            );
+            assert!(
+                cell_values(&advertised)[0] > 0.0,
+                "the member has revenue: {advertised}"
+            );
+            assert!(
+                advertised.contains("<Caption>1/1/2020</Caption>"),
+                "the slicer caption is the short date, not the key: {advertised}"
+            );
+        });
+    }
+
+    /// A time-intelligence set beside another axis referencing the same
+    /// dimension is refused rather than answered with a plausible axis
+    /// (measured 2026-09-27: both axes answered `All + Year`; the reference
+    /// faults).
+    #[test]
+    fn time_window_set_beside_the_same_dimension_is_refused() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {YTD([Date].[Calendar].[Year].&[2024])} ON 0, \
+                 [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
+            );
+            assert!(xml.contains("faultstring"), "{xml}");
+            assert!(
+                xml.contains("not supported yet") && xml.contains("more than one axis"),
+                "the refusal names the shape: {xml}"
+            );
+        });
+    }
+
     /// A multi-level grouping carries one caption column per level up to the
     /// grouped level, with the member's caption at each level — the
     /// reference's ragged rows (measured 2026-09-27).

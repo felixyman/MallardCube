@@ -558,10 +558,17 @@ pub fn session_header(xml: &str) -> Option<SessionHeader> {
                     return Some(SessionHeader::Begin);
                 }
                 if xmla_element(&namespace, local, "Session") {
-                    return Some(SessionHeader::Use(session_id_attribute(e)?));
+                    // A missing SessionId is the empty id, which no registry
+                    // holds: it faults like any unknown id (the reference
+                    // answers "The '' session ID cannot be found").
+                    return Some(SessionHeader::Use(
+                        session_id_attribute(e).unwrap_or_default(),
+                    ));
                 }
                 if xmla_element(&namespace, local, "EndSession") {
-                    return Some(SessionHeader::End(session_id_attribute(e)?));
+                    return Some(SessionHeader::End(
+                        session_id_attribute(e).unwrap_or_default(),
+                    ));
                 }
             }
             Ok((namespace, Event::Empty(ref e))) => {
@@ -574,10 +581,14 @@ pub fn session_header(xml: &str) -> Option<SessionHeader> {
                     return Some(SessionHeader::Begin);
                 }
                 if xmla_element(&namespace, local, "Session") {
-                    return Some(SessionHeader::Use(session_id_attribute(e)?));
+                    return Some(SessionHeader::Use(
+                        session_id_attribute(e).unwrap_or_default(),
+                    ));
                 }
                 if xmla_element(&namespace, local, "EndSession") {
-                    return Some(SessionHeader::End(session_id_attribute(e)?));
+                    return Some(SessionHeader::End(
+                        session_id_attribute(e).unwrap_or_default(),
+                    ));
                 }
             }
             Ok((_, Event::End(ref e))) => {
@@ -1229,6 +1240,15 @@ mod tests {
 
     /// Unreadable text must fault: a blanked statement hid the problem, and a
     /// dropped restriction silently returned the unrestricted rowset.
+    /// A `Session`/`EndSession` header element without a SessionId is the
+    /// empty id — it must fault like any unknown id, not be skipped (review
+    /// finding, 2026-09-27).
+    #[test]
+    fn a_session_header_without_an_id_is_an_empty_id() {
+        let xml = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Header><Session xmlns="urn:schemas-microsoft-com:xml-analysis"/></s:Header><s:Body/></s:Envelope>"#;
+        assert_eq!(session_header(xml), Some(SessionHeader::Use(String::new())));
+    }
+
     /// Session management cannot appear under the Body: the reference's pump
     /// rejects `BeginSession`/`EndSession` outright (measured 2026-09-27).
     #[test]

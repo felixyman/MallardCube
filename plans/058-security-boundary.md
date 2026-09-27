@@ -71,6 +71,15 @@ listed at the end of plan 051):
    The ADODB probe then costs 6 requests for one Execute plus 5,000 field
    reads — the mirror's figure — with the reference's five-column shape.
 
+**Review round 2026-09-27** (five-commit range): a `Session`/`EndSession`
+header element without a SessionId is the empty id and faults like any
+unknown id (it was silently skipped, and a later bogus id was never scanned);
+`redact_secrets` now tolerates spaces and M-quoted keys around `=`, covers
+`apikey`/`api_key`/`access_token`/`authorization`, and redacts any URL
+userinfo (a bare token is a credential); `apply_key_hierarchy_view` leaves a
+member without a key in its own hierarchy instead of switching the namespace
+under it.
+
 ## C. Drillthrough for restricted users
 
 Apply role predicates and OLS to drillthrough SQL, matching direct SQL for a

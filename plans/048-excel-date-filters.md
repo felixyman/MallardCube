@@ -621,6 +621,15 @@ where the mirror answers 4,018) and ignored `16`/`32` entirely. Eight measured
 parity cases carry the values (20/21/19/20/1/4018/4/382); the catalogue is
 50/50.
 
+**Review round 2026-09-27** (five-commit range, findings fixed): an advertised
+date member used in a WHERE/slicer (`…&[2020-01-01T00:00:00]`) matched no
+stored date and silently answered 0 — every member-key-to-SQL site now strips
+the `T00:00:00` form (`sql.rs::stored_member_value`), the slicer caption and
+MEMBER_KEY use the stored date, and a fidelity probe pins that both key forms
+scope the same rows. A time-intelligence set beside another axis referencing
+the same dimension (measured: both axes answered `All + Year`; the reference
+faults) is now refused loudly via `shape_refusal` instead of answered.
+
 Found while measuring, recorded for the next slice:
 
 **Set probes completed 2026-09-27**: `.Members`/`.Children` now enumerate the

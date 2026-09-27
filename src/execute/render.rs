@@ -3212,11 +3212,26 @@ pub(crate) fn dispatch(query: &SemanticQuery, result: &QueryResult) -> String {
     dispatch_with_backend(query, result, crate::backend::Backend::test_fixture())
 }
 
+/// A time-intelligence set beside another axis referencing the same dimension
+/// is a shape the planner cannot serve faithfully — the window's level leaks
+/// into the other reference (measured 2026-09-27: both axes answered
+/// `All + Year`; the reference faults). Refused rather than answered with a
+/// plausible-but-wrong axis.
+pub(crate) fn time_window_shape_fault(query: &SemanticQuery) -> Option<String> {
+    query
+        .shape_refusal
+        .as_ref()
+        .map(|reason| crate::xmla::response::fault_response(reason))
+}
+
 pub(crate) fn dispatch_with_backend<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
     backend: &B,
 ) -> String {
+    if let Some(fault) = time_window_shape_fault(query) {
+        return fault;
+    }
     if matches!(result, QueryResult::Empty)
         && !matches!(
             query.kind,

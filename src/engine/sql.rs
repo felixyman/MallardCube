@@ -11,6 +11,15 @@ use crate::project::config::ProxyConfig;
 use std::collections::{HashMap, HashSet};
 
 /// Legacy: generate SQL for a plan with an admin-default (no role filtering) context.
+/// A member key segment as the stored value: the advertised date form carries
+/// `T00:00:00` (`&[2020-01-01T00:00:00]`), while the column holds the date
+/// (measured 2026-09-27). Every other segment passes through unchanged, so a
+/// filter written with either the advertised or the stored form scopes the
+/// same rows.
+fn stored_member_value(segment: &str) -> &str {
+    crate::engine::model::strip_date_member_time(segment)
+}
+
 pub fn sql_for_query_plan(model: &SemanticModel, plan: &QueryPlan) -> String {
     sql_for_query_plan_with_context(model, plan, &UserContext::admin_default(), &empty_config())
 }
@@ -896,7 +905,7 @@ fn sql_where_with_cols(
                             pins.push(format!(
                                 "CAST({} AS VARCHAR) = '{}'",
                                 l.column,
-                                value.replace('\'', "''")
+                                stored_member_value(value).replace('\'', "''")
                             ));
                         }
                     }
@@ -984,7 +993,7 @@ fn sql_where_with_cols(
                         preds.push(format!(
                             "CAST({} AS VARCHAR) = '{}'",
                             l.column,
-                            v.replace('\'', "''")
+                            stored_member_value(v).replace('\'', "''")
                         ));
                     }
                 }
@@ -993,8 +1002,8 @@ fn sql_where_with_cols(
                     preds.push(format!(
                         "{} BETWEEN '{}' AND '{}'",
                         l.column,
-                        last(from).replace('\'', "''"),
-                        last(to).replace('\'', "''")
+                        stored_member_value(&last(from)).replace('\'', "''"),
+                        stored_member_value(&last(to)).replace('\'', "''")
                     ));
                 }
                 if !preds.is_empty() {
@@ -1029,7 +1038,7 @@ fn sql_where_with_cols(
                         ands.push(format!(
                             "CAST({} AS VARCHAR) = '{}'",
                             l.column,
-                            v.replace('\'', "''")
+                            stored_member_value(v).replace('\'', "''")
                         ));
                     }
                 }
@@ -1110,7 +1119,7 @@ fn date_window_predicate(
                 out.push(format!(
                     "CAST({} AS VARCHAR) = '{}'",
                     l.column,
-                    value.replace('\'', "''")
+                    stored_member_value(value).replace('\'', "''")
                 ));
             }
         }

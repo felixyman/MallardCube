@@ -639,6 +639,13 @@ pub struct SemanticQuery {
     pub axis_tuples: Vec<AxisTuple>,
     /// A CUBESET-style set expression on the SELECT axis (`SetProbe`).
     pub set_probe: Option<SetExpr>,
+    /// The dimension a time-intelligence set (`YTD`/`PeriodsToDate`) was
+    /// rewritten for: another axis referencing the same dimension cannot be
+    /// served faithfully, so the runtime refuses the shape.
+    pub time_window_set_dim: Option<String>,
+    /// A shape the planner cannot serve faithfully: the renderers answer this
+    /// refusal instead of a plausible-but-wrong axis.
+    pub shape_refusal: Option<String>,
     /// A calculated `COUNT(<set>)` member referenced by the axis (`SetProbe`).
     pub set_count: Option<CalculatedCount>,
     /// Members named by a `DrilldownMember(...)` expansion, per dimension.
@@ -876,6 +883,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             kind: SemanticQueryKind::MeasureMetadataProbe,
             cube: parsed.cube_name.clone(),
             set_probe: None,
+            time_window_set_dim: None,
+            shape_refusal: None,
             set_count: None,
             drill_members: vec![],
             dim_props: vec![],
@@ -1256,6 +1265,22 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         }
         source
     });
+    // A time window (YTD/QTD/PeriodsToDate) whose dimension is referenced more
+    // than once across the axes is a shape the planner cannot serve
+    // faithfully — the window's level leaks into the other reference (measured
+    // 2026-09-27: both axes answered `All + Year`; the reference faults). The
+    // runtime refuses it rather than answer a plausible-but-wrong axis.
+    let time_window_set_dim = window_levels.iter().find_map(|(dim, _)| {
+        // Count per axis spec, not the deduped axis_dimensions: the broken
+        // shape references the dimension once per axis.
+        (parsed
+            .axis_specs
+            .iter()
+            .filter(|spec| spec.dims.iter().any(|axis| axis == dim))
+            .count()
+            > 1)
+        .then(|| dim.clone())
+    });
     if set_count.is_some() || set_probe.is_some() {
         kind = SemanticQueryKind::SetProbe;
     }
@@ -1265,6 +1290,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     // set-probe classification: `[Measures].Members` on an axis has no slots
     // and would otherwise panic in debug builds even though its renderer
     // handles it (plan 058).
+    let mut shape_refusal: Option<String> = None;
     if !matches!(
         kind,
         SemanticQueryKind::SetProbe
@@ -1272,8 +1298,19 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             | SemanticQueryKind::MeasureMetadataProbe
     ) && let Err(reason) = shape.validate()
     {
-        debug_assert!(false, "query shape invalid: {reason}");
-        eprintln!("!!! query shape invalid: {reason}");
+        if time_window_set_dim.is_some() {
+            // The shape is invalid and we cannot serve it faithfully: refuse
+            // loudly rather than answer a plausible axis (measured 2026-09-27:
+            // the reference faults; the proxy answered `All + Year` on both
+            // axes before this).
+            shape_refusal = Some(format!(
+                "this query shape is not supported yet: {reason}; it is refused rather than \
+                 answered with a plausible axis"
+            ));
+        } else {
+            debug_assert!(false, "query shape invalid: {reason}");
+            eprintln!("!!! query shape invalid: {reason}");
+        }
     }
 
     // A member range restricts the set (and the aggregate) to the level's
@@ -1328,6 +1365,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         access: None,
         kind,
         dim_props: parsed.dim_props.clone(),
+        time_window_set_dim,
+        shape_refusal,
         cell_props: parsed.cell_props.clone(),
         filters,
         cchildren_leaf_name,

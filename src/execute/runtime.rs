@@ -538,6 +538,9 @@ pub(crate) fn render_tabular_rowset(
 ) -> Result<String, String> {
     use crate::engine::plan::{QueryPlan, QueryResult};
 
+    if let Some(fault) = crate::execute::render::time_window_shape_fault(query) {
+        return Err(fault);
+    }
     let mut columns: Vec<(String, bool)> = Vec::new();
     let mut rows_out: Vec<Vec<String>> = Vec::new();
 
