@@ -228,9 +228,11 @@ the earlier half-landing missed (4,018 members with zero cells before; 4,019
 members with the reference's cells now).
 
 `parity/catalog.json`: **38/38 matched, no known gaps.** The remaining recorded
-differences are the tabular `(All)` row and G9 formatting (ADODB-only), the
-date-member naming and the visibility outliers, none of which the catalogue
-gates yet.
+differences were the tabular `(All)` row and G9 formatting (ADODB-only), the
+date-member naming and the visibility outliers. The tabular rowset and G9 are
+now closed for the shapes ADODB sends (see plan 051: row counts and normalized
+rows match the mirror exactly); the date-member naming and the visibility
+outliers remain, and the catalogue gates neither yet.
 
 ### The tabular (All) row (2026-09-26)
 

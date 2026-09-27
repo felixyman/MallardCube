@@ -21,7 +21,7 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
     user: &UserContext,
     config: &ProxyConfig,
 ) -> (String, Timings) {
-    get_execute_response_with_format(mdx, None, backend, user, config)
+    get_execute_response_with_format(mdx, None, None, backend, user, config)
 }
 
 /// The same execution, rendered as the flattened rowset when the request asked
@@ -30,6 +30,7 @@ pub fn get_execute_cellset_response_with_backend_and_context<B: QueryBackend + ?
 pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     mdx: &str,
     format: Option<&str>,
+    content: Option<&str>,
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
@@ -39,7 +40,7 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
     } else {
         None
     };
-    get_execute_response_with_format_and_cache(mdx, format, backend, user, config, cache)
+    get_execute_response_with_format_and_cache(mdx, format, content, backend, user, config, cache)
 }
 
 /// [`get_execute_response_with_format`] against a caller-supplied result
@@ -51,6 +52,7 @@ pub fn get_execute_response_with_format<B: QueryBackend + ?Sized>(
 pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Sized>(
     mdx: &str,
     format: Option<&str>,
+    content: Option<&str>,
     backend: &B,
     user: &UserContext,
     config: &ProxyConfig,
@@ -376,8 +378,12 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
 
     let t0 = Instant::now();
     let tabular = format.is_some_and(|format| format.eq_ignore_ascii_case("tabular"));
+    // The reference includes the rowset schema only when the request asks for
+    // `Content=SchemaData`; ADODB's `Data` is schema-less (measured
+    // 2026-09-27).
+    let schema_data = content.is_some_and(|content| content.eq_ignore_ascii_case("schemadata"));
     let xml = if tabular {
-        match render_tabular_rowset(&plan, &result, model) {
+        match render_tabular_rowset(&query, &plan, &result, model, schema_data) {
             Ok(rowset) => rowset,
             Err(message) => {
                 timings.finish();
@@ -517,57 +523,122 @@ fn filter_members_for_subselect<B: QueryBackend + ?Sized>(
 }
 
 /// The reference's flattened rowset for `<Format>Tabular</Format>`: one row
-/// per result row, one column per grouped member plus one per measure. The
-/// shapes ADODB sends are covered (a lone measure, or one measure grouped by
-/// one dimension); anything else faults rather than answering a rowset that
-/// does not match the cells (plan 051).
+/// per axis tuple, one column per grouped member plus one per measure. A
+/// member column is omitted when that coordinate is `(All)` — the grand total
+/// row carries measures only (measured 2026-09-27). Filters do not change the
+/// columns; the rows already reflect them. Shapes the reference does not
+/// cover (explicit multi-member tuples, three or more grouped dimensions)
+/// fault rather than answering a rowset that does not match the cells.
 pub(crate) fn render_tabular_rowset(
+    query: &crate::mdx_semantic::SemanticQuery,
     plan: &crate::engine::plan::QueryPlan,
     result: &crate::engine::plan::QueryResult,
     model: &crate::engine::model::SemanticModel,
+    schema_data: bool,
 ) -> Result<String, String> {
     use crate::engine::plan::{QueryPlan, QueryResult};
 
     let mut columns: Vec<String> = Vec::new();
-    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut rows_out: Vec<Vec<String>> = Vec::new();
+    let _ = query;
 
     match (plan, result) {
-        (QueryPlan::Total { measure, filters }, QueryResult::Scalar(value))
-            if filters.is_empty() =>
-        {
+        (QueryPlan::Total { measure, .. }, QueryResult::Scalar(value)) => {
             columns.push(model.meas_def(measure).measure_unique_name());
-            rows.push(vec![format_scalar(*value)]);
+            rows_out.push(vec![format_g9(*value)]);
         }
-        (QueryPlan::MultiMeasure { measures, filters }, QueryResult::Multi(values))
-            if filters.is_empty() && measures.len() == values.len() =>
+        (QueryPlan::MultiMeasure { measures, .. }, QueryResult::Multi(values))
+            if measures.len() == values.len() =>
         {
             for measure in measures {
                 columns.push(model.meas_def(measure).measure_unique_name());
             }
-            rows.push(values.iter().map(|value| format_scalar(*value)).collect());
+            rows_out.push(values.iter().map(|value| format_g9(*value)).collect());
         }
         (
             QueryPlan::GroupBy {
-                measure,
-                group_by,
-                group_levels,
-                filters,
-                ..
+                measure, group_by, ..
             },
             QueryResult::Grouped(groups),
-        ) if filters.is_empty()
-            && group_by.len() == 1
-            && group_levels.iter().all(Option::is_none) =>
-        {
+        ) if group_by.len() == 1 => {
             let dimension = model.dim_def(&group_by[0]);
             columns.push(tabular_member_column(dimension));
             columns.push(model.meas_def(measure).measure_unique_name());
-            // The reference's rowset carries the (All) row first, with the
-            // measure only — its member column is absent (measured 2026-09-26).
             let total: f64 = groups.iter().map(|(_, value)| value).sum();
-            rows.push(vec![String::new(), format_scalar(total)]);
+            rows_out.push(vec![String::new(), format_g9(total)]);
             for (key, value) in groups {
-                rows.push(vec![key.clone(), format_scalar(*value)]);
+                rows_out.push(vec![key.clone(), format_g9(*value)]);
+            }
+        }
+        (
+            QueryPlan::GroupBy {
+                measure, group_by, ..
+            },
+            QueryResult::Pairs(pairs),
+        ) if group_by.len() == 2 => {
+            let (d0, d1) = (model.dim_def(&group_by[0]), model.dim_def(&group_by[1]));
+            columns.push(tabular_member_column(d0));
+            columns.push(tabular_member_column(d1));
+            columns.push(model.meas_def(measure).measure_unique_name());
+            for (k0, k1, value) in tabular_two_dim_rows(pairs) {
+                rows_out.push(vec![
+                    k0.unwrap_or_default(),
+                    k1.unwrap_or_default(),
+                    format_g9(value),
+                ]);
+            }
+        }
+        (
+            QueryPlan::MultiGroupBy {
+                measures, group_by, ..
+            },
+            QueryResult::MultiGrouped(rows),
+        ) if group_by.len() == 1
+            && rows
+                .iter()
+                .all(|(_, values)| values.len() == measures.len()) =>
+        {
+            columns.push(tabular_member_column(model.dim_def(&group_by[0])));
+            for measure in measures {
+                columns.push(model.meas_def(measure).measure_unique_name());
+            }
+            let n = measures.len();
+            let mut totals = vec![0.0f64; n];
+            for (_, values) in rows {
+                for (total, value) in totals.iter_mut().zip(values) {
+                    *total += value;
+                }
+            }
+            let mut all = vec![String::new()];
+            all.extend(totals.iter().map(|value| format_g9(*value)));
+            rows_out.push(all);
+            for (label, values) in rows {
+                let mut row = vec![label.clone()];
+                row.extend(values.iter().map(|value| format_g9(*value)));
+                rows_out.push(row);
+            }
+        }
+        (
+            QueryPlan::MultiGroupBy {
+                measures, group_by, ..
+            },
+            QueryResult::MultiGrouped2(pairs),
+        ) if group_by.len() == 2
+            && pairs
+                .iter()
+                .all(|(_, _, values)| values.len() == measures.len()) =>
+        {
+            columns.push(tabular_member_column(model.dim_def(&group_by[0])));
+            columns.push(tabular_member_column(model.dim_def(&group_by[1])));
+            for measure in measures {
+                columns.push(model.meas_def(measure).measure_unique_name());
+            }
+            for (k0, k1, values) in tabular_two_dim_rows_n(pairs) {
+                let mut row = Vec::with_capacity(2 + measures.len());
+                row.push(k0.unwrap_or_default());
+                row.push(k1.unwrap_or_default());
+                row.extend(values.iter().map(|value| format_g9(*value)));
+                rows_out.push(row);
             }
         }
         _ => {
@@ -579,7 +650,104 @@ pub(crate) fn render_tabular_rowset(
         }
     }
 
-    Ok(tabular_rowset(columns, rows))
+    Ok(tabular_rowset(columns, rows_out, schema_data))
+}
+
+/// The reference's two-dimension rowset order: the grand total, then each
+/// coordinate with `(All)` on one side, then the pairs that carry data. A
+/// `None` coordinate means the `(All)` member and its column is omitted.
+fn tabular_two_dim_rows(
+    pairs: &[(String, String, f64)],
+) -> Vec<(Option<String>, Option<String>, f64)> {
+    let mut rows: Vec<(Option<String>, Option<String>, f64)> = Vec::new();
+    let mut firsts: Vec<&str> = pairs.iter().map(|(k, _, _)| k.as_str()).collect();
+    firsts.sort_unstable();
+    firsts.dedup();
+    let mut seconds: Vec<&str> = pairs.iter().map(|(_, k, _)| k.as_str()).collect();
+    seconds.sort_unstable();
+    seconds.dedup();
+    let total: f64 = pairs.iter().map(|(_, _, v)| v).sum();
+    rows.push((None, None, total));
+    for second in &seconds {
+        let sum: f64 = pairs
+            .iter()
+            .filter(|(_, k, _)| k == second)
+            .map(|(_, _, v)| v)
+            .sum();
+        rows.push((None, Some((*second).to_string()), sum));
+    }
+    for first in &firsts {
+        let sum: f64 = pairs
+            .iter()
+            .filter(|(k, _, _)| k == first)
+            .map(|(_, _, v)| v)
+            .sum();
+        rows.push((Some((*first).to_string()), None, sum));
+        for second in &seconds {
+            if let Some((_, _, value)) =
+                pairs.iter().find(|(k0, k1, _)| k0 == first && k1 == second)
+            {
+                rows.push((
+                    Some((*first).to_string()),
+                    Some((*second).to_string()),
+                    *value,
+                ));
+            }
+        }
+    }
+    rows
+}
+
+/// [`tabular_two_dim_rows`] for several measures per coordinate.
+fn tabular_two_dim_rows_n(
+    triples: &[(String, String, Vec<f64>)],
+) -> Vec<(Option<String>, Option<String>, Vec<f64>)> {
+    let n = triples.first().map(|(_, _, v)| v.len()).unwrap_or(0);
+    let mut rows: Vec<(Option<String>, Option<String>, Vec<f64>)> = Vec::new();
+    let mut firsts: Vec<&str> = triples.iter().map(|(k, _, _)| k.as_str()).collect();
+    firsts.sort_unstable();
+    firsts.dedup();
+    let mut seconds: Vec<&str> = triples.iter().map(|(_, k, _)| k.as_str()).collect();
+    seconds.sort_unstable();
+    seconds.dedup();
+    let mut total = vec![0.0f64; n];
+    for (_, _, values) in triples {
+        for (slot, value) in total.iter_mut().zip(values) {
+            *slot += value;
+        }
+    }
+    rows.push((None, None, total));
+    for second in &seconds {
+        let mut sum = vec![0.0f64; n];
+        for (_, _, values) in triples.iter().filter(|(_, k, _)| k == second) {
+            for (slot, value) in sum.iter_mut().zip(values) {
+                *slot += value;
+            }
+        }
+        rows.push((None, Some((*second).to_string()), sum));
+    }
+    for first in &firsts {
+        let mut sum = vec![0.0f64; n];
+        for (_, _, values) in triples.iter().filter(|(k, _, _)| k == first) {
+            for (slot, value) in sum.iter_mut().zip(values) {
+                *slot += value;
+            }
+        }
+        rows.push((Some((*first).to_string()), None, sum));
+        for second in &seconds {
+            if let Some((_, _, values)) = triples
+                .iter()
+                .find(|(k0, k1, _)| k0 == first && k1 == second)
+            {
+                rows.push((
+                    Some((*first).to_string()),
+                    Some((*second).to_string()),
+                    values.clone(),
+                ));
+            }
+        }
+    }
+    rows
 }
 
 /// `[Dim].[Hier].[Level].[MEMBER_CAPTION]` — the reference's column for a
@@ -600,15 +768,21 @@ fn tabular_member_column(dimension: &crate::engine::model::DimensionDef) -> Stri
 /// A value the rowset can carry: plain and round-trippable (the reference
 /// writes G9 scientific notation; both parse as `xsd:double`, and the plain
 /// form is what our cellsets already use).
-fn format_scalar(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{value:.0}")
-    } else {
-        format!("{value}")
+/// The reference writes doubles in a 9-significant-digit scientific form
+/// (`5.21586767E8`, `4.93164E6`): trailing zeros trimmed, exponent without a
+/// sign or padding (measured 2026-09-27).
+fn format_g9(value: f64) -> String {
+    let formatted = format!("{value:.8E}");
+    match formatted.split_once('E') {
+        Some((mantissa, exponent)) => {
+            let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+            format!("{mantissa}E{exponent}")
+        }
+        None => formatted,
     }
 }
 
-fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>) -> String {
+fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>, schema_data: bool) -> String {
     fn escaped(name: &str) -> String {
         name.replace('[', "_x005B_").replace(']', "_x005D_")
     }
@@ -630,6 +804,10 @@ fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>) -> String {
         ));
     }
     schema.push_str("                  </xsd:sequence>\n                </xsd:complexType>\n              </xsd:schema>\n");
+    // `Content=Data` (what ADODB sends) carries no schema, like the reference.
+    if !schema_data {
+        schema.clear();
+    }
 
     let mut body = String::new();
     for row in &rows {
@@ -640,8 +818,16 @@ fn tabular_rowset(columns: Vec<String>, rows: Vec<Vec<String>>) -> String {
                 continue;
             }
             let name = escaped(column);
+            // Measures are the typed columns; the reference tags their values
+            // `xsi:type="xsd:double"` in both content modes (measured
+            // 2026-09-27).
+            let typed = if column.starts_with("[Measures].") {
+                " xsi:type=\"xsd:double\""
+            } else {
+                ""
+            };
             body.push_str(&format!(
-                "<{name}>{}</{name}>",
+                "<{name}{typed}>{}</{name}>",
                 crate::response::xml_escape(&value)
             ));
         }
@@ -885,7 +1071,22 @@ fn user_is_restricted(config: &ProxyConfig, user: &crate::engine::model::UserCon
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::engine::model::{default_model, resolve_user_context};
+
+    #[test]
+    fn g9_formatting_matches_the_reference() {
+        assert_eq!(format_g9(521_586_767.0), "5.21586767E8");
+        assert_eq!(format_g9(4_931_640.0), "4.93164E6");
+        assert_eq!(format_g9(232_966.0), "2.32966E5");
+        assert_eq!(format_g9(25_102_648.0), "2.5102648E7");
+        assert_eq!(format_g9(-1_305.5), "-1.3055E3");
+        assert_eq!(format_g9(0.0), "0E0");
+        // The reference was only observed at E5..E8; the same rule is applied
+        // below that range (recorded as unprobed in plan 051).
+        assert_eq!(format_g9(18.01), "1.801E1");
+        assert_eq!(format_g9(0.5), "5E-1");
+    }
     use crate::engine::plan::QueryPlan;
     use crate::engine::sql::sql_for_query_plan_with_context;
     use crate::project::config::ProxyConfig;

@@ -1171,6 +1171,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
             mdx,
             catalog: _,
             format,
+            content,
         } => {
             println!("📥 MDX: {}", mdx);
             debug_write("===== EXECUTE REQUEST =====");
@@ -1218,6 +1219,7 @@ fn route_full<B: backend::QueryBackend + ?Sized>(
                     let (r, t) = execute_builders::get_execute_response_with_format(
                         mdx,
                         format.as_deref(),
+                        content.as_deref(),
                         backend,
                         user,
                         config,

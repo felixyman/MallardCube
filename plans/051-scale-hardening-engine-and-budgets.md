@@ -786,7 +786,35 @@ them from its own cache, and the script finishes with the right value.
 
 Recorded differences from the reference's rowset: it carries an `(All)` row and
 G9 scientific values; ours carries the leaf groups and plain round-trippable
-values.
+values. *(Both closed 2026-09-27 — see below.)*
+
+### Tabular shapes and G9 — closed 2026-09-27
+
+Measured on the mirror (`Format=Tabular`) and matched exactly: for five probes
+(two measures; one grouped dimension; two grouped dimensions; a filtered
+group; two measures by one dimension) the row counts and the normalized-row
+SHA256 are identical between the proxy and the mirror.
+
+- Multiple measures: one column per measure, one row.
+- Two grouped dimensions: one column per hierarchy, a member column omitted
+  when that coordinate is `(All)` (so the grand total is the measure only),
+  one row per non-empty coordinate — Category x Channel answers the
+  reference's 45 rows.
+- Filters: the rows reflect them (North answers 6 rows).
+- Measures by one dimension: member column + measure columns, the `(All)` row
+  carrying the measure totals.
+- Values are G9: nine significant digits, trailing zeros trimmed, `E` with no
+  sign or padding (`5.21586767E8`, `4.93164E6`); zero and sub-E5 magnitudes
+  follow the same rule but were not observed on the reference.
+- Content: `Content=Data` (what ADODB sends) has no schema and tags measure
+  values `xsi:type="xsd:double"`; `Content=SchemaData` includes the schema.
+  The request parser now captures `<Content>`.
+
+Still refused, deliberately: three or more grouped dimensions, and explicit
+multi-member tuples (the probed shape answered 0 rows on the reference, so
+there is no rowset semantics to match). The ADODB probe should be re-run once
+against this now reference-identical shape; it was verified against the
+earlier schema-bearing rowset.
 
 ### Test flake — fixed 2026-09-26
 

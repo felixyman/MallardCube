@@ -1677,6 +1677,7 @@ mod tests {
             let (response, _) = crate::execute::runtime::get_execute_response_with_format_and_cache(
                 "SELECT {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
                 None,
+                None,
                 &crate::test_support::counting::Failing,
                 &UserContext::admin_default(),
                 &crate::proxy_project::project().config,
@@ -1778,6 +1779,7 @@ mod tests {
             let (plain, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
                 Some("Tabular"),
+                None,
                 backend,
                 &user,
                 config,
@@ -1789,11 +1791,15 @@ mod tests {
             );
             assert!(!plain.contains("<Axis"), "{plain}");
             assert_eq!(plain.matches("<row>").count(), 1, "{plain}");
-            assert!(plain.contains(">521586767<"), "{plain}");
+            assert!(
+                plain.contains(">5.21586767E8<"),
+                "the reference's G9 form: {plain}"
+            );
 
             let (grouped, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0, [Category].[Category].Members ON 1 FROM [Sales]",
                 Some("Tabular"),
+                None,
                 backend,
                 &user,
                 config,
@@ -1802,9 +1808,23 @@ mod tests {
             // reference's shape (measured 2026-09-26).
             assert_eq!(grouped.matches("<row>").count(), 21, "{grouped}");
             assert!(
-                grouped.contains("<row><_x005B_Measures_x005D_._x005B_Revenue_x005D_>"),
-                "the (All) row carries the measure only: {grouped}"
+                grouped.contains(
+                    "<row><_x005B_Measures_x005D_._x005B_Revenue_x005D_ xsi:type=\"xsd:double\">"
+                ),
+                "the (All) row carries the typed measure only: {grouped}"
             );
+            // Content=Data (what ADODB sends, and the default here) has no
+            // schema; Content=SchemaData includes it (measured 2026-09-27).
+            assert!(!plain.contains("<xsd:schema"), "{plain}");
+            let (with_schema, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
+                Some("Tabular"),
+                Some("SchemaData"),
+                backend,
+                &user,
+                config,
+            );
+            assert!(with_schema.contains("<xsd:schema"), "{with_schema}");
             assert!(
                 grouped.contains(
                     "_x005B_Category_x005D_._x005B_Category_x005D_._x005B_Category_x005D_._x005B_MEMBER_CAPTION_x005D_"
@@ -1815,12 +1835,120 @@ mod tests {
             let (cellset, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
                 None,
+                None,
                 backend,
                 &user,
                 config,
             );
             assert!(cellset.contains("<Axis"), "{cellset}");
             assert!(!cellset.contains("xml-analysis:rowset"), "{cellset}");
+        });
+    }
+
+    /// Two measures grouped by one dimension: the member column plus one
+    /// column per measure; the (All) row carries both totals (measured on the
+    /// reference 2026-09-27: 21 rows).
+    #[test]
+    fn tabular_multi_measure_grouped_answers_member_and_measures() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT {[Measures].[Revenue], [Measures].[Units]} ON 0, \
+                 [Category].[Category].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                None,
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 21, "{xml}");
+            let rows: Vec<&str> = xml.split("<row>").skip(1).collect();
+            assert!(
+                rows[0].contains(">5.21586767E8<") && rows[0].contains(">4.93164E6<"),
+                "the (All) row carries both measures: {}",
+                rows[0]
+            );
+            assert!(!rows[0].contains("MEMBER_CAPTION"), "{}", rows[0]);
+            assert!(
+                rows[1].contains(">Automotive<")
+                    && rows[1].contains(">2.5102648E7<")
+                    && rows[1].contains(">2.32966E5<"),
+                "{}",
+                rows[1]
+            );
+        });
+    }
+
+    /// Two grouped dimensions: one column per hierarchy, the (All) coordinate
+    /// omitting its member column, and one row per non-empty coordinate
+    /// (measured on the reference 2026-09-27: 45 rows for Category x Channel).
+    #[test]
+    fn tabular_two_dimensions_flatten_each_coordinate() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, NON EMPTY \
+                 CrossJoin([Category].[Category].Members, [Channel].[Channel].Members) ON 1 \
+                 FROM [Sales]",
+                Some("Tabular"),
+                None,
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 45, "{xml}");
+            let rows: Vec<&str> = xml.split("<row>").skip(1).collect();
+            assert!(
+                rows[0].contains(">5.21586767E8<") && !rows[0].contains("MEMBER_CAPTION"),
+                "the grand total carries the measure only: {}",
+                rows[0]
+            );
+            assert!(
+                rows[1].contains(">Direct<") && rows[1].contains(">1.30516005E8<"),
+                "the first channel total: {}",
+                rows[1]
+            );
+            assert!(
+                rows.iter().any(|row| row.contains(">Automotive<")
+                    && row.contains(">Retail<")
+                    && row.contains(">2.5102648E7<")),
+                "the Automotive x Retail coordinate is present"
+            );
+            assert!(
+                rows.iter().any(|row| row.contains(">Automotive<")
+                    && !row.contains(">Retail<")
+                    && row.contains(">2.5102648E7<")),
+                "the Automotive category total is present"
+            );
+        });
+    }
+
+    /// A filtered query answers a rowset whose rows reflect the filter
+    /// (measured on the reference 2026-09-27: 6 rows for North).
+    #[test]
+    fn tabular_filtered_group_is_answered() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, NON EMPTY [Category].[Category].Members ON 1 \
+                 FROM [Sales] WHERE [Territory].[Territory].&[North]",
+                Some("Tabular"),
+                None,
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 6, "{xml}");
+            assert!(xml.contains(">6.5850256E7<"), "{xml}");
         });
     }
 
@@ -1836,6 +1964,7 @@ mod tests {
             let (xml, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT {[Measures].[Revenue], [Measures].[Units]} ON 0 FROM [Sales]",
                 Some("Tabular"),
+                None,
                 Backend::test_fixture(),
                 &UserContext::admin_default(),
                 &crate::proxy_project::project().config,
@@ -3478,6 +3607,7 @@ mod tests {
                 crate::execute::runtime::get_execute_response_with_format_and_cache(
                     mdx,
                     None,
+                    None,
                     backend,
                     &user,
                     &config,
@@ -3579,6 +3709,7 @@ mod tests {
                 "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Full Date].[All]},,,INCLUDE_CALC_MEMBERS)}) \
                  ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
                 None,
+                None,
                 backend,
                 &user,
                 &config,
@@ -3603,7 +3734,7 @@ mod tests {
             let config = crate::proxy_project::project().config.clone();
             let run = |mdx: &str| {
                 crate::execute::runtime::get_execute_response_with_format_and_cache(
-                    mdx, None, backend, &user, &config, None,
+                    mdx, None, None, backend, &user, &config, None,
                 )
             };
             let named = "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] \
