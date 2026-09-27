@@ -612,14 +612,28 @@ member/range is normalised before planning, so a filter arriving as
 `full_date_members_use_reference_naming`, `key_hierarchy_axis_uses_reference_date_naming`,
 the formatter unit test, and the filter round-trip.
 
+**`TREE_OP` completed 2026-09-27**: measured on the mirror — `TREE_OP` is a
+bitmask: `1` children only (the member itself is `8` SELF), `2` siblings
+without the member, `4` parent, `8` self, `16` descendants at every depth,
+`32` ancestors; combined flags union and the response keeps member order. The
+proxy used to answer `1` as member + children (4,019 for the key All member
+where the mirror answers 4,018) and ignored `16`/`32` entirely. Eight measured
+parity cases carry the values (20/21/19/20/1/4018/4/382); the catalogue is
+50/50.
+
 Found while measuring, recorded for the next slice:
 
 - A set probe `{[Date].[Full Date].Members}` expands the *Calendar* hierarchy
   (2467 members) where the reference expands the key hierarchy (All + 4018
   dates, 4025 member elements); the set-probe path does not carry the key view.
-- `MDSCHEMA_MEMBERS` with `MEMBER_UNIQUE_NAME=[Date].[Full Date].[All]` and
-  `TREE_OP=1` answers 4019 rows including the All row; the mirror answers the
-  4018 children only.
+- Multi-level hierarchies name their members differently: the reference's
+  non-top members are `[Dim].[Hier].[first-level].&[k1].&[k2]...` (a quarter is
+  `[Date].[Calendar].[Year].&[2020].&[1]`), while the proxy emits the member's
+  own level with concatenated keys (`[Date].[Calendar].[Quarter].&[2020]&[1]`).
+  The reference faults on the proxy's form ("The unique name '&[2020]&[1]' is
+  based on a compound key format, which is not supported in Tabular models"),
+  so the proxy should emit and resolve the reference's form; MDSCHEMA_MEMBERS
+  rows, axis members, and the parser's member lookup are all affected.
 - The `NON EMPTY` drilldown count is 2468 (All + 2467 dates) against the
   mirror's 2462 (All + 2461): six `NON EMPTY`-visible dates differ, most likely
   zero-revenue dates we keep and the reference drops.

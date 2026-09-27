@@ -662,6 +662,170 @@
         "fault": true
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the visibility restriction is a bitmask (1 visible, 2 hidden, 3 both, 4 none); a negative value faults \"Out of present range\""
+    },
+    {
+      "id": "members-tree-op-children-excludes-self",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+          "MEMBER_UNIQUE_NAME": "[Category].[Category].[All]",
+          "TREE_OP": "1"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 20,
+        "member_first": "[Category].[Category].&[Automotive]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-tree-op-self-and-children",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+          "MEMBER_UNIQUE_NAME": "[Category].[Category].[All]",
+          "TREE_OP": "9"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 21,
+        "member_first": "[Category].[Category].[All]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-tree-op-siblings-exclude-self",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+          "MEMBER_UNIQUE_NAME": "[Category].[Category].&amp;[Automotive]",
+          "TREE_OP": "2"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 19
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-tree-op-descendants",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+          "MEMBER_UNIQUE_NAME": "[Category].[Category].[All]",
+          "TREE_OP": "16"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 20
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-tree-op-ancestors",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]",
+          "MEMBER_UNIQUE_NAME": "[Category].[Category].&amp;[Automotive]",
+          "TREE_OP": "32"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 1,
+        "member_first": "[Category].[Category].[All]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-date-key-tree-op-children",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Date].[Full Date]",
+          "MEMBER_UNIQUE_NAME": "[Date].[Full Date].[All]",
+          "TREE_OP": "1"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 4018,
+        "member_first": "[Date].[Full Date].&[2020-01-01T00:00:00]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-calendar-year-tree-op-children",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]",
+          "MEMBER_UNIQUE_NAME": "[Date].[Calendar].[Year].&amp;[2024]",
+          "TREE_OP": "1"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 4
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "members-calendar-year-tree-op-descendants",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]",
+          "MEMBER_UNIQUE_NAME": "[Date].[Calendar].[Year].&amp;[2024]",
+          "TREE_OP": "16"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 382
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
     }
   ]
 }

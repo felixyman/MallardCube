@@ -12,6 +12,7 @@ use crate::proxy_project;
 use crate::response::xml_escape;
 use crate::xmla::parser::Restrictions;
 use futures_core::Stream;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 const MEMBER_ROW_FIELDS: &str = r#"                <xsd:element sql:field="CATALOG_NAME" name="CATALOG_NAME" type="xsd:string"/>
@@ -945,39 +946,88 @@ pub fn get_members_response_body<B: QueryBackend + ?Sized>(
         .filter(|row| row_matches(restrictions, row))
         .collect();
 
+    // `TREE_OP` is a bitmask (measured on the reference 2026-09-27):
+    // 0x01 CHILDREN (direct children only — the member itself is SELF),
+    // 0x02 SIBLINGS (children of the parent, excluding the member),
+    // 0x04 PARENT, 0x08 SELF, 0x10 DESCENDANTS (every depth below, excluding
+    // the member), 0x20 ANCESTORS. Combined flags union and the response keeps
+    // member order. A filter with no flags returns just the matching member.
     let selected: Vec<usize> = match (member_filter, tree_op) {
-        (Some(filter), Some(8)) => {
-            // 0x08 = SELF — return only the member itself, no children
-            find_member_index(&rows, filter).into_iter().collect()
-        }
-        (Some(filter), Some(1)) => {
-            // 0x01 = CHILDREN — the member plus its direct children. The
-            // rowset now enumerates every hierarchy level up front, so both
-            // are always present in the static set.
-            let mut result: Vec<usize> = Vec::new();
-            if let Some(parent) = find_member_index(&rows, filter) {
-                result.push(parent);
+        (Some(filter), Some(op)) => {
+            let mut keep = vec![false; rows.len()];
+            if let Some(anchor) = find_member_index(&rows, filter) {
+                let anchor_name = rows[anchor].member_unique_name.clone();
+                if op & 0x08 != 0 {
+                    // SELF
+                    keep[anchor] = true;
+                }
+                if op & 0x04 != 0 {
+                    // PARENT
+                    if let Some(parent) = rows[anchor].parent_unique_name.clone()
+                        && let Some(index) = find_member_index(&rows, &parent)
+                    {
+                        keep[index] = true;
+                    }
+                }
+                if op & 0x02 != 0 {
+                    // SIBLINGS — children of the parent, the member excluded
+                    if let Some(parent) = rows[anchor].parent_unique_name.as_deref() {
+                        for index in find_children_indices(&rows, parent) {
+                            if index != anchor {
+                                keep[index] = true;
+                            }
+                        }
+                    }
+                }
+                if op & 0x01 != 0 {
+                    // CHILDREN — direct children only
+                    for index in find_children_indices(&rows, &anchor_name) {
+                        keep[index] = true;
+                    }
+                }
+                if op & 0x10 != 0 {
+                    // DESCENDANTS — walk the child links at every depth
+                    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+                    for (index, row) in rows.iter().enumerate() {
+                        if let Some(parent) = row.parent_unique_name.as_deref() {
+                            children.entry(parent).or_default().push(index);
+                        }
+                    }
+                    let mut visited = vec![false; rows.len()];
+                    visited[anchor] = true;
+                    let mut stack = vec![anchor_name.as_str()];
+                    while let Some(node) = stack.pop() {
+                        let Some(kids) = children.get(node) else {
+                            continue;
+                        };
+                        for &kid in kids {
+                            if !visited[kid] {
+                                visited[kid] = true;
+                                keep[kid] = true;
+                                stack.push(rows[kid].member_unique_name.as_str());
+                            }
+                        }
+                    }
+                }
+                if op & 0x20 != 0 {
+                    // ANCESTORS — walk the parent chain
+                    let mut parent = rows[anchor].parent_unique_name.clone();
+                    while let Some(name) = parent {
+                        let Some(index) = find_member_index(&rows, &name) else {
+                            break;
+                        };
+                        keep[index] = true;
+                        parent = rows[index].parent_unique_name.clone();
+                    }
+                }
+                if op == 0 {
+                    // No flags: just the matching member
+                    keep[anchor] = true;
+                }
             }
-            result.extend(find_children_indices(&rows, filter));
-            result
+            (0..rows.len()).filter(|index| keep[*index]).collect()
         }
-        (Some(filter), Some(2)) => {
-            // 0x02 = SIBLINGS — children of the parent of the filtered member
-            match find_member_index(&rows, filter).and_then(|i| rows[i].parent_unique_name.clone())
-            {
-                Some(parent) => find_children_indices(&rows, &parent),
-                None => Vec::new(),
-            }
-        }
-        (Some(filter), Some(4)) => {
-            // 0x04 = PARENT — parent of the filtered member
-            match find_member_index(&rows, filter).and_then(|i| rows[i].parent_unique_name.clone())
-            {
-                Some(parent) => find_member_index(&rows, &parent).into_iter().collect(),
-                None => Vec::new(),
-            }
-        }
-        (Some(filter), _) => {
+        (Some(filter), None) => {
             // No tree_op: return just the matching member(s)
             find_member_index(&rows, filter).into_iter().collect()
         }
@@ -1209,12 +1259,64 @@ mod tests {
             "SELF must not include children"
         );
 
-        // 0x01 = CHILDREN keeps returning member + children.
+        // 0x01 = CHILDREN returns the children only — the member itself is
+        // SELF (measured on the reference 2026-09-27).
         let xml = get_members_response(Some("[Region].[Region].[All]"), Some(1));
         assert!(
             xml.contains("&amp;[North]"),
             "CHILDREN returns the child rows, got: {xml}"
         );
+        assert!(
+            !xml.contains("<MEMBER_UNIQUE_NAME>[Region].[Region].[All]</MEMBER_UNIQUE_NAME>"),
+            "CHILDREN must not include the member itself: {xml}"
+        );
+    }
+
+    /// `TREE_OP` is a bitmask (measured on the reference 2026-09-27): 0x01
+    /// children only, 0x02 siblings without the member, 0x04 parent, 0x08
+    /// self, 0x10 descendants, 0x20 ancestors; combined flags union.
+    #[test]
+    fn tree_op_is_a_bitmask() {
+        let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+            .expect("load project3");
+        with_test_project(p, || {
+            let project = proxy_project::project();
+            let rows = |member: &'static str, tree_op: i32| {
+                get_members_response_with_backend(
+                    Some(member),
+                    Some(tree_op),
+                    &Restrictions::default(),
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &project.config,
+                )
+                .matches("<row>")
+                .count()
+            };
+            let all = "[Category].[Category].[All]";
+            let leaf = "[Category].[Category].&[Automotive]";
+
+            // 20 categories under the All member (the parity catalogue pins
+            // 21 rows for the whole hierarchy).
+            assert_eq!(rows(all, 1), 20, "children of All");
+            assert_eq!(rows(all, 8), 1, "self");
+            assert_eq!(rows(all, 9), 21, "self plus children");
+            assert_eq!(rows(all, 16), 20, "descendants of All");
+            assert_eq!(rows(all, 2), 0, "All has no siblings");
+            assert_eq!(rows(all, 32), 0, "All has no ancestors");
+
+            assert_eq!(rows(leaf, 2), 19, "siblings exclude the member");
+            assert_eq!(rows(leaf, 10), 20, "self plus siblings");
+            assert_eq!(rows(leaf, 1), 0, "a leaf has no children");
+            assert_eq!(rows(leaf, 4), 1, "parent of a leaf");
+            assert_eq!(rows(leaf, 32), 1, "ancestors of a leaf");
+
+            // The key hierarchy behaves the same way: the All member is not
+            // a child of itself (4,019 was the old self-inclusive answer).
+            let date_all = "[Date].[Full Date].[All]";
+            assert_eq!(rows(date_all, 1), 4018, "children of the key All member");
+            assert_eq!(rows(date_all, 9), 4019, "self plus children");
+        });
     }
 
     #[test]
@@ -1365,7 +1467,8 @@ mod tests {
                 "self row is the level-qualified year: {xml}"
             );
 
-            // CHILDREN on a year: self + 4 quarters.
+            // CHILDREN on a year: the four quarters, no self (the reference
+            // measured 4 on the mirror's Year 2024, 2026-09-27).
             let xml = get_members_response_with_backend(
                 Some(year_u),
                 Some(1),
@@ -1374,7 +1477,7 @@ mod tests {
                 &UserContext::admin_default(),
                 &project.config,
             );
-            assert_eq!(xml.matches("<row>").count(), 5, "CHILDREN year: {xml}");
+            assert_eq!(xml.matches("<row>").count(), 4, "CHILDREN year: {xml}");
 
             // SELF on a compound quarter.
             let xml = get_members_response_with_backend(
@@ -1387,7 +1490,8 @@ mod tests {
             );
             assert_eq!(xml.matches("<row>").count(), 1, "SELF quarter: {xml}");
 
-            // SIBLINGS of a quarter: all four under 2024.
+            // SIBLINGS of a quarter: the other three under 2024 — the member
+            // itself is SELF (measured on the reference 2026-09-27).
             let xml = get_members_response_with_backend(
                 Some(quarter_u),
                 Some(2),
@@ -1396,7 +1500,7 @@ mod tests {
                 &UserContext::admin_default(),
                 &project.config,
             );
-            assert_eq!(xml.matches("<row>").count(), 4, "SIBLINGS quarter: {xml}");
+            assert_eq!(xml.matches("<row>").count(), 3, "SIBLINGS quarter: {xml}");
 
             // PARENT of a quarter: the year row itself.
             let xml = get_members_response_with_backend(
