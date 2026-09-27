@@ -646,6 +646,10 @@ pub struct SemanticQuery {
     /// A shape the planner cannot serve faithfully: the renderers answer this
     /// refusal instead of a plausible-but-wrong axis.
     pub shape_refusal: Option<String>,
+    /// Dimensions whose axes carry a bare dimension member set
+    /// (`[Dim].[Hier].Members`): the tabular renderer enumerates every level's
+    /// members for those (the reference's rows; measured 2026-09-27).
+    pub dimension_member_sets: Vec<String>,
     /// A calculated `COUNT(<set>)` member referenced by the axis (`SetProbe`).
     pub set_count: Option<CalculatedCount>,
     /// Members named by a `DrilldownMember(...)` expansion, per dimension.
@@ -885,6 +889,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             set_probe: None,
             time_window_set_dim: None,
             shape_refusal: None,
+            dimension_member_sets: Vec::new(),
             set_count: None,
             drill_members: vec![],
             dim_props: vec![],
@@ -1367,6 +1372,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         dim_props: parsed.dim_props.clone(),
         time_window_set_dim,
         shape_refusal,
+        dimension_member_sets: parsed.axis_dimension_members.clone(),
         cell_props: parsed.cell_props.clone(),
         filters,
         cchildren_leaf_name,

@@ -742,6 +742,10 @@ pub struct ParsedMdx {
     /// Explicit level-set sources on the axes: `(dim, level)` pairs from
     /// `[Dim].[Hier].[Level].Members` (Excel's field-list level drag).
     pub axis_level_members: Vec<(String, String)>,
+    /// Dimensions whose axes carry a bare dimension member set
+    /// (`[Dim].[Hier].Members`, no level token): the reference enumerates
+    /// every level's members for those.
+    pub axis_dimension_members: Vec<String>,
     /// Member ranges on the axes: `(dim, level, from_key, to_key)`.
     pub axis_member_ranges: Vec<(String, String, String, String)>,
     /// Member ranges in the slicer (`WHERE ({a : b})`).
@@ -890,6 +894,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
     let (
         axis_dimension_ids,
         axis_level_members,
+        axis_dimension_members,
         axis_member_ranges,
         where_member_ranges,
         axis_set_expr,
@@ -897,11 +902,19 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         Ok(sel) => (
             crate::mdx::frontend::axis_dimension_ids(sel),
             crate::mdx::frontend::axis_level_members(sel),
+            crate::mdx::frontend::axis_dimension_members(sel),
             crate::mdx::frontend::axis_member_ranges(sel),
             crate::mdx::frontend::where_member_ranges(sel),
             crate::mdx::frontend::set_probe_expr(sel),
         ),
-        Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
+        Err(_) => (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        ),
     };
 
     // The `cChildren`/`FilteredMembers` bodies are quoted MDX: the AST gives
@@ -1044,6 +1057,7 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         axis_set_expr,
         calculated_counts,
         axis_level_members,
+        axis_dimension_members,
         axis_member_ranges,
         where_member_ranges,
         parse_error,

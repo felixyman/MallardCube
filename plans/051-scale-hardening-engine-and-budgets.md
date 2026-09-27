@@ -865,10 +865,18 @@ months, 81 of them carrying the measure, exactly the reference's rows — while
 `NON EMPTY` and date-window sets keep the fact-driven rows. A test pins the
 132/81 split.
 
-Recorded, still open from that round: a *dimension-named* set
-(`[Date].[Calendar].Members`) still answers the leaf grain rather than every
-level's members (the reference's 4,206 rows) — the level-named case is done;
-the `SchemaData` schema is not XSD-valid (pre-existing
+**Dimension-named sets completed 2026-09-27**: `[Date].[Calendar].Members`
+now enumerates every level's members with their aggregates — the demo calendar
+answers 4,206 rows (All + years + quarters + months + dates), a year row
+carrying its rolled-up total and the All row the measure only — while
+`NON EMPTY` keeps the fact-driven rows (2,463). The axis signal
+(`axis_dimension_members`) rides the parsed request into the query
+(`dimension_member_sets`); a flat dimension falls back to `leaf_values`.
+
+Recorded, still open from that round: the *cellset* shape of the same
+two-axis dimension set (measures on one axis, `[Dim].[Hier].Members` on the
+other) is unmeasured — the tabular shape is pinned; the `SchemaData` schema is
+not XSD-valid (pre-existing
 text); the
 `(All)` row is the sum of the returned rows rather than the `(All)` member's
 own value (our cellset agrees, so both diverge from SSAS for ranked sets); the

@@ -841,6 +841,51 @@ pub fn axis_level_members(sel: &Select) -> Vec<(String, String)> {
     out
 }
 
+/// The dimensions whose axes carry a bare dimension member set
+/// (`[Dim].[Hier].Members`, no level token). The reference enumerates every
+/// level's members for those (measured 2026-09-27).
+pub fn axis_dimension_members(sel: &Select) -> Vec<String> {
+    fn collect(expr: &Expr, out: &mut Vec<String>) {
+        match expr {
+            Expr::Members(inner) => {
+                if let Some(m) = inner.as_member()
+                    && m.level().is_none()
+                    && m.key.is_none()
+                    && !m.dim().eq_ignore_ascii_case("Measures")
+                    && !out.iter().any(|dim| dim == m.dim())
+                {
+                    out.push(m.dim().to_string());
+                }
+                collect(inner, out);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    collect(arg, out);
+                }
+            }
+            Expr::Set(items) | Expr::Tuple(items) => {
+                for item in items {
+                    collect(item, out);
+                }
+            }
+            Expr::Range(a, b) => {
+                collect(a, out);
+                collect(b, out);
+            }
+            Expr::Children(inner) => collect(inner, out),
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for axis in &sel.axes {
+        for expr in &axis.exprs {
+            collect(expr, &mut out);
+        }
+    }
+    out
+}
+
 fn collect_level_members(expr: &Expr, out: &mut Vec<(String, String)>) {
     match expr {
         Expr::Members(inner) => {

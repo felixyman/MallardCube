@@ -2143,6 +2143,48 @@ mod tests {
         });
     }
 
+    /// A dimension-named set enumerates every level's members with their
+    /// aggregates: the demo calendar answers 4,206 rows (All + years +
+    /// quarters + months + dates), the All row carrying the measure only
+    /// (measured on the reference 2026-09-27).
+    #[test]
+    fn tabular_dimension_set_enumerates_every_level() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Date].[Calendar].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(
+                xml.matches("<row>").count(),
+                4206,
+                "All + every level's members"
+            );
+            let first = xml.split("<row>").nth(1).expect("a row");
+            assert!(
+                first.contains("xsi:type=\"xsd:double\""),
+                "the (All) row carries the total: {first}"
+            );
+            assert!(
+                !first.contains("MEMBER_CAPTION"),
+                "the (All) row has no member cell: {first}"
+            );
+            // The year and quarter levels carry their aggregates.
+            assert!(xml.contains(">2020<"), "year members are present");
+            assert!(
+                xml.contains("_x005B_Quarter_x005D_._x005B_MEMBER_CAPTION_x005D_"),
+                "quarter captions are present"
+            );
+        });
+    }
+
     /// A multi-level grouping carries one caption column per level up to the
     /// grouped level, with the member's caption at each level — the
     /// reference's ragged rows (measured 2026-09-27).

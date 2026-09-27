@@ -584,23 +584,27 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
             columns.push((model.meas_def(measure).measure_unique_name(), true));
             // A `.Members` set enumerates the dictionary with sparse measures;
             // a drilldown or aggregate stays fact-driven (measured 2026-09-27).
-            let members: Vec<(String, Option<f64>)> =
-                match tabular_set_member_paths(query, dimension, backend) {
-                    Some(paths) => paths
-                        .into_iter()
-                        .map(|path| {
-                            let value = groups
-                                .iter()
-                                .find(|(key, _)| *key == path)
-                                .map(|(_, value)| *value);
-                            (path, value)
-                        })
-                        .collect(),
-                    None => groups
-                        .iter()
-                        .map(|(key, value)| (key.clone(), Some(*value)))
-                        .collect(),
-                };
+            let members: Vec<(String, Option<f64>)> = if let Some(members) =
+                tabular_dimension_set_members(query, dimension, backend, groups)
+            {
+                members
+            } else if let Some(paths) = tabular_set_member_paths(query, dimension, backend) {
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let value = groups
+                            .iter()
+                            .find(|(key, _)| *key == path)
+                            .map(|(_, value)| *value);
+                        (path, value)
+                    })
+                    .collect()
+            } else {
+                groups
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Some(*value)))
+                    .collect()
+            };
             // A dimension member set includes the (All) member — its row
             // carries the measure only; a level set has no total row
             // (measured 2026-09-27).
@@ -959,6 +963,85 @@ fn tabular_set_member_paths<B: QueryBackend + ?Sized>(
             .filter(|paths| !paths.is_empty())
             .map(|paths| paths.iter().map(|path| path.join("|")).collect())
             .unwrap_or_else(|| dictionary.leaf_values.clone()),
+    )
+}
+
+/// The member rows a dimension-named set (`[Dim].[Hier].Members`) enumerates:
+/// every level's members with their aggregates, or `None` for a fact-driven
+/// shape. The grouped rows are leaf-grain, so a mid-level member sums its
+/// descendants — the reference's rows for the calendar carry year and quarter
+/// totals (measured 2026-09-27). `NON EMPTY` keeps the fact-driven rows.
+fn tabular_dimension_set_members<B: QueryBackend + ?Sized>(
+    query: &crate::mdx_semantic::SemanticQuery,
+    dimension: &crate::engine::model::DimensionDef,
+    backend: &B,
+    groups: &[(String, f64)],
+) -> Option<Vec<(String, Option<f64>)>> {
+    if !query
+        .dimension_member_sets
+        .iter()
+        .any(|dim| dim == &dimension.id)
+        || crate::execute::render::axis_non_empty(query, &dimension.id)
+    {
+        return None;
+    }
+    let dictionary = crate::axis_members::effective_dictionary(query, dimension, backend);
+    let leaf_index = dimension.levels.len().saturating_sub(1);
+    let leaf_path_by_key: std::collections::HashMap<String, String> = dictionary
+        .level_paths
+        .get(leaf_index)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| Some((path.last()?.clone(), path.join("|"))))
+                .collect()
+        })
+        .unwrap_or_default();
+    let keyed: Vec<(String, f64)> = groups
+        .iter()
+        .map(|(name, value)| {
+            (
+                leaf_path_by_key
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone()),
+                *value,
+            )
+        })
+        .collect();
+    let value_for = |name: &str| -> Option<f64> {
+        if let Some((_, value)) = keyed.iter().find(|(key, _)| key == name) {
+            return Some(*value);
+        }
+        let prefix = format!("{name}|");
+        let mut sum = 0.0;
+        let mut found = false;
+        for (key, value) in &keyed {
+            if key.starts_with(&prefix) {
+                sum += value;
+                found = true;
+            }
+        }
+        found.then_some(sum)
+    };
+    // A flat dimension carries no level paths: its keys live in `leaf_values`.
+    let paths: Vec<String> = if dictionary.level_paths.is_empty() {
+        dictionary.leaf_values.clone()
+    } else {
+        dictionary
+            .level_paths
+            .iter()
+            .flat_map(|paths| paths.iter().map(|path| path.join("|")))
+            .collect()
+    };
+    Some(
+        paths
+            .into_iter()
+            .map(|path| {
+                let value = value_for(&path);
+                (path, value)
+            })
+            .collect(),
     )
 }
 
