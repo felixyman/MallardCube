@@ -632,6 +632,36 @@
         "row_count": 0
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: LEVEL_NAME=Category returns exactly that level, the match is case-insensitive, and an unknown name returns 0 rows"
+    },
+    {
+      "id": "dimensions-visibility-none-is-empty",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_DIMENSIONS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "DIMENSION_VISIBILITY": "4"
+        }
+      },
+      "expect": {
+        "row_count": 0
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the visibility restriction is a bitmask (1 visible, 2 hidden, 3 both, 4 none); a negative value faults \"Out of present range\""
+    },
+    {
+      "id": "dimensions-visibility-negative-faults",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_DIMENSIONS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "DIMENSION_VISIBILITY": "-1"
+        }
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the visibility restriction is a bitmask (1 visible, 2 hidden, 3 both, 4 none); a negative value faults \"Out of present range\""
     }
   ]
 }

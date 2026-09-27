@@ -40,8 +40,15 @@ pub fn get_dimensions_response(
 
     // Measures system dimension (special case); hidden when no measure's table
     // is visible.
+    let visibility = super::visibility(restrictions.dimension_visibility);
+    match visibility {
+        super::Visibility::None => return discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, ""),
+        super::Visibility::Invalid => return super::visibility_fault(),
+        _ => {}
+    }
     let measures_visible = super::measures_visible(model, config, user);
     if measures_visible
+        && super::visibility_selects(visibility, true)
         && super::name_matches(restrictions.dimension_name.as_deref(), &["Measures"])
     {
         rows.push_str(&format!(
@@ -68,10 +75,10 @@ pub fn get_dimensions_response(
         ));
     }
 
-    if super::hidden_by_visibility(restrictions.dimension_visibility) {
-        return discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, "");
-    }
     for (i, d) in model.dimensions.iter().enumerate() {
+        if !super::visibility_selects(visibility, d.visible) {
+            continue;
+        }
         if !super::dimension_visible(model, config, user, &d.id) {
             continue;
         }
@@ -115,4 +122,51 @@ pub fn get_dimensions_response(
     }
 
     discover_rowset_envelope(UUID_TYPE, DIM_ROW_FIELDS, &rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::xmla::parser::Restrictions;
+
+    /// The `*_VISIBILITY` restriction is a bitmask: 1 visible, 2 hidden, 3
+    /// both, 4 nothing; a negative value faults like the reference (measured
+    /// 2026-09-27).
+    #[test]
+    fn dimension_visibility_is_a_bitmask() {
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let project = crate::proxy_project::project();
+            let admin = crate::engine::model::UserContext::admin_default();
+            let rows = |value: Option<i32>| {
+                let restrictions = Restrictions {
+                    dimension_visibility: value,
+                    ..Default::default()
+                };
+                super::get_dimensions_response(&restrictions, &admin, &project.config)
+                    .matches("<row>")
+                    .count()
+            };
+
+            let all = rows(None);
+            assert!(all > 0);
+            assert_eq!(rows(Some(1)), all, "1 selects the visible objects");
+            assert_eq!(rows(Some(3)), all, "3 selects both classes");
+            assert_eq!(rows(Some(5)), all, "higher bits select nothing extra");
+            assert_eq!(rows(Some(0)), 0, "0 selects nothing");
+            assert_eq!(rows(Some(2)), 0, "this model has no hidden dimensions");
+            assert_eq!(rows(Some(4)), 0, "no object carries bit 2");
+
+            let restrictions = Restrictions {
+                dimension_visibility: Some(-1),
+                ..Default::default()
+            };
+            let fault = super::get_dimensions_response(&restrictions, &admin, &project.config);
+            assert!(
+                fault.contains("Out of present range"),
+                "a negative visibility faults like the reference: {fault}"
+            );
+        });
+    }
 }

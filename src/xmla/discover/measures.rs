@@ -40,10 +40,18 @@ pub fn get_measures_response(
     let catalog = &project.config.catalog;
     let cube = &project.config.cube;
     let mut rows = String::new();
-    if super::hidden_by_visibility(restrictions.measure_visibility) {
-        return discover_rowset_envelope(UUID_TYPE, MEASURE_ROW_FIELDS, "");
+    let visibility = super::visibility(restrictions.measure_visibility);
+    match visibility {
+        super::Visibility::None => {
+            return discover_rowset_envelope(UUID_TYPE, MEASURE_ROW_FIELDS, "");
+        }
+        super::Visibility::Invalid => return super::visibility_fault(),
+        _ => {}
     }
     for (i, m) in model.measures.iter().enumerate() {
+        if !super::visibility_selects(visibility, m.visible) {
+            continue;
+        }
         if !super::name_matches(
             restrictions.measuregroup_name.as_deref(),
             &[&model.fact_table(m.fact_table_idx).measure_group_name],

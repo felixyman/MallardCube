@@ -254,6 +254,16 @@ measure groups and measure-group dimensions. Verified live and pinned by twelve
 new parity cases — `dimensions-visibility-zero` lost its `known_gap`, so the
 catalogue is **36/36 with one known gap left**.
 
+**Visibility bitmask completed 2026-09-27**: measured on the mirror — the
+`*_VISIBILITY` value is a bitmask, not a boolean: `1` selects visible objects,
+`2` hidden ones, `3` both, `4` neither, `5` visible again (higher bits select
+nothing), absent means visible, and a negative value faults "The following
+system error occurred:  Out of present range." The six rowsets now select by
+the object's own `visible` flag (`Visibility`/`visibility_selects`), including
+the `[Measures]` system rows; the demo models are all-visible, so `=2` answers
+0 rows. Two parity cases carry the mirror's values (`=4` empty, `-1` faults);
+the catalogue is 42/42.
+
 Recorded: `LEVEL_NAME` is advertised and parsed but applied at none of the five
 level-row sites (a half-applied filter would silently drop rows, so it was
 reverted rather than half-done — review F4). The earlier note here misdiagnosed

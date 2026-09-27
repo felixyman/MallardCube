@@ -115,10 +115,48 @@ pub(crate) fn date_member_value(key: &str) -> &str {
     crate::engine::model::strip_date_member_time(key)
 }
 
-/// The `*_VISIBILITY` restrictions: `0` answers the empty rowset, `1` (or
-/// absent) answers everything (measured 2026-09-26).
-pub(crate) fn hidden_by_visibility(value: Option<i32>) -> bool {
-    value == Some(0)
+/// The `*_VISIBILITY` restriction is a bitmask, not a boolean: bit 0 selects
+/// visible objects, bit 1 hidden ones, and higher bits select nothing. Absent
+/// means visible; negative values fault like the reference (measured
+/// 2026-09-27: `1` visible, `2` hidden, `3` both, `4` none, `5` visible, `-1`
+/// "Out of present range").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Visibility {
+    Visible,
+    Hidden,
+    Both,
+    None,
+    Invalid,
+}
+
+pub(crate) fn visibility(value: Option<i32>) -> Visibility {
+    match value {
+        None => Visibility::Visible,
+        Some(value) if value < 0 => Visibility::Invalid,
+        Some(value) => match (value & 1 != 0, value & 2 != 0) {
+            (true, true) => Visibility::Both,
+            (true, false) => Visibility::Visible,
+            (false, true) => Visibility::Hidden,
+            (false, false) => Visibility::None,
+        },
+    }
+}
+
+/// Does an object with this visibility belong in the response?
+pub(crate) fn visibility_selects(mode: Visibility, is_visible: bool) -> bool {
+    match mode {
+        Visibility::Visible => is_visible,
+        Visibility::Hidden => !is_visible,
+        Visibility::Both => true,
+        Visibility::None | Visibility::Invalid => false,
+    }
+}
+
+/// The reference's fault for a negative `*_VISIBILITY` value.
+pub(crate) fn visibility_fault() -> String {
+    crate::xmla::response::fault_response(
+        "The following system error occurred:  Out of present range.",
+    )
 }
 
 /// An exact name restriction (`*_NAME`) matches case-insensitively; absent

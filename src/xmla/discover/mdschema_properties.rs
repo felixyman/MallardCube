@@ -188,6 +188,7 @@ fn hierarchy_property_rows(
     restrictions: &Restrictions,
     user: &crate::engine::model::UserContext,
     config: &crate::project::config::ProxyConfig,
+    visibility: super::Visibility,
 ) -> String {
     let project = proxy_project::project();
     if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
@@ -203,6 +204,9 @@ fn hierarchy_property_rows(
     let mut out = String::new();
 
     for d in &model.dimensions {
+        if !super::visibility_selects(visibility, d.visible) {
+            continue;
+        }
         if !super::dimension_visible(model, config, user, &d.id) {
             continue;
         }
@@ -267,6 +271,7 @@ fn hierarchy_property_rows(
         level: "[Measures].[MeasuresLevel]",
     };
     if super::measures_visible(model, config, user)
+        && super::visibility_selects(visibility, true)
         && matches_restrictions(
             restrictions,
             measures_coords.dim,
@@ -339,6 +344,7 @@ fn member_value_rows(
     restrictions: &Restrictions,
     user: &crate::engine::model::UserContext,
     config: &crate::project::config::ProxyConfig,
+    visibility: super::Visibility,
 ) -> String {
     let project = proxy_project::project();
     let model = &project.model;
@@ -351,6 +357,9 @@ fn member_value_rows(
     // [Measures] first made every hierarchy inherit its type (plan 048).
     let mut targets: Vec<(String, String, String, i32, u32)> = Vec::new();
     for d in &model.dimensions {
+        if !super::visibility_selects(visibility, d.visible) {
+            continue;
+        }
         if !super::dimension_visible(model, config, user, &d.id) {
             continue;
         }
@@ -390,6 +399,7 @@ fn member_value_rows(
     // [Measures] last, as the reference does, and typed WSTR there. Hidden
     // with the last measure when no measure's table is visible.
     if super::measures_visible(model, config, user)
+        && super::visibility_selects(visibility, true)
         && property_requested(restrictions, "MEMBER_VALUE")
         && matches_restrictions(
             restrictions,
@@ -447,8 +457,11 @@ pub fn get_mdschema_properties_response(
     if !super::in_scope(restrictions, &project.config.catalog, &project.config.cube) {
         return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
     }
-    if super::hidden_by_visibility(restrictions.property_visibility) {
-        return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, "");
+    let visibility = super::visibility(restrictions.property_visibility);
+    match visibility {
+        super::Visibility::None => return discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, ""),
+        super::Visibility::Invalid => return super::visibility_fault(),
+        _ => {}
     }
     let cube_scoped = restrictions.cube_name.is_some()
         || restrictions.dimension_unique_name.is_some()
@@ -463,14 +476,14 @@ pub fn get_mdschema_properties_response(
         // rows (KEY0 / NAME / MEMBER_VALUE), never a standard member-property
         // list. That list made Excel request 38 properties in its pivot MDX
         // where the reference is asked for two.
-        Some(5) => hierarchy_property_rows(restrictions, user, config),
+        Some(5) => hierarchy_property_rows(restrictions, user, config, visibility),
         // A request that names one hierarchy gets only that hierarchy's rows;
         // mixing the cell properties in is what Excel rejects (plan 048).
-        _ if cube_scoped => hierarchy_property_rows(restrictions, user, config),
+        _ if cube_scoped => hierarchy_property_rows(restrictions, user, config, visibility),
         _ => format!(
             "{}\n{}",
             system_property_rows(restrictions),
-            member_value_rows(restrictions, user, config)
+            member_value_rows(restrictions, user, config, visibility)
         ),
     };
     discover_rowset_envelope("", PROPERTIES_ROW_FIELDS, &rows)

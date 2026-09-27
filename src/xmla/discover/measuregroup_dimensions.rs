@@ -29,8 +29,11 @@ pub fn get_measuregroup_dimensions_response(
     let mut rows = String::new();
 
     let mut seen_groups = std::collections::BTreeSet::new();
-    if super::hidden_by_visibility(restrictions.dimension_visibility) {
-        return discover_rowset_envelope("", MG_DIM_ROW_FIELDS, "");
+    let visibility = super::visibility(restrictions.dimension_visibility);
+    match visibility {
+        super::Visibility::None => return discover_rowset_envelope("", MG_DIM_ROW_FIELDS, ""),
+        super::Visibility::Invalid => return super::visibility_fault(),
+        _ => {}
     }
     for ft in &model.fact_tables {
         if !super::name_matches(
@@ -66,6 +69,9 @@ pub fn get_measuregroup_dimensions_response(
         ));
 
         for d in &model.dimensions {
+            if !super::visibility_selects(visibility, d.visible) {
+                continue;
+            }
             if !super::dimension_visible(model, config, user, &d.id) {
                 continue;
             }

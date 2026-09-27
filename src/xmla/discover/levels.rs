@@ -74,8 +74,13 @@ pub fn get_levels_response(
     }
 
     let model = &project.model;
-    if super::hidden_by_visibility(restrictions.level_visibility) {
-        return discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, "");
+    let visibility = super::visibility(restrictions.level_visibility);
+    match visibility {
+        super::Visibility::None => {
+            return discover_rowset_envelope(UUID_TYPE, LEVEL_ROW_FIELDS, "");
+        }
+        super::Visibility::Invalid => return super::visibility_fault(),
+        _ => {}
     }
     let mut rows = String::new();
 
@@ -83,6 +88,7 @@ pub fn get_levels_response(
     // table is visible.
     let measures_visible = super::measures_visible(model, config, user);
     if measures_visible
+        && super::visibility_selects(visibility, true)
         && super::coordinates_match(
             restrictions,
             "[Measures]",
@@ -119,6 +125,9 @@ pub fn get_levels_response(
     }
 
     for (i, d) in model.dimensions.iter().enumerate() {
+        if !super::visibility_selects(visibility, d.visible) {
+            continue;
+        }
         if !super::dimension_visible(model, config, user, &d.id) {
             continue;
         }
