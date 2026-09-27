@@ -2102,6 +2102,47 @@ mod tests {
         });
     }
 
+    /// A level set enumerates the dimension dictionary with sparse measures:
+    /// the demo calendar answers 132 months, 81 of them carrying the measure
+    /// (measured on the reference 2026-09-27); NON EMPTY keeps the fact-driven
+    /// 81 rows.
+    #[test]
+    fn tabular_level_set_enumerates_the_dictionary_with_sparse_measures() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let run = |non_empty: &str| {
+                let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                    &format!(
+                        "SELECT [Measures].[Revenue] ON 0, {non_empty}[Date].[Calendar].[Month].Members \
+                         ON 1 FROM [Sales]"
+                    ),
+                    Some("Tabular"),
+                    Some("Data"),
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                );
+                assert!(!xml.contains("faultstring"), "{xml}");
+                xml
+            };
+            let all = run("");
+            assert_eq!(all.matches("<row>").count(), 132, "every month is a row");
+            assert_eq!(
+                all.matches("xsi:type=\"xsd:double\"").count(),
+                81,
+                "only the months with facts carry the measure"
+            );
+            let non_empty = run("NON EMPTY ");
+            assert_eq!(
+                non_empty.matches("<row>").count(),
+                81,
+                "NON EMPTY keeps the fact-driven rows"
+            );
+        });
+    }
+
     /// A multi-level grouping carries one caption column per level up to the
     /// grouped level, with the member's caption at each level — the
     /// reference's ragged rows (measured 2026-09-27).

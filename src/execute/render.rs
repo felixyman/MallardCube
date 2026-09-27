@@ -868,7 +868,7 @@ fn build_axis_tuples(
 
 /// Is the axis carrying `dim` marked `NON EMPTY`? Defaults to true — the
 /// data-driven behaviour — when the axis cannot be found.
-fn axis_non_empty(query: &SemanticQuery, dim: &str) -> bool {
+pub(crate) fn axis_non_empty(query: &SemanticQuery, dim: &str) -> bool {
     query
         .axis_specs
         .iter()

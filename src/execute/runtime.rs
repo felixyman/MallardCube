@@ -383,7 +383,7 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     // (measured 2026-09-27).
     let rowset_content = RowsetContent::from_property(content);
     let xml = if tabular {
-        match render_tabular_rowset(&query, &plan, &result, model, rowset_content) {
+        match render_tabular_rowset(&query, &plan, &result, model, rowset_content, backend) {
             Ok(rowset) => rowset,
             Err(message) => {
                 timings.finish();
@@ -529,12 +529,13 @@ fn filter_members_for_subselect<B: QueryBackend + ?Sized>(
 /// no `(All)` row, and only a genuine cross-join axis may flatten two
 /// dimensions — a member list or explicit tuple is refused rather than
 /// answered with the unfiltered grid (measured 2026-09-27; plan 051 review).
-pub(crate) fn render_tabular_rowset(
+pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
     query: &crate::mdx_semantic::SemanticQuery,
     plan: &crate::engine::plan::QueryPlan,
     result: &crate::engine::plan::QueryResult,
     model: &crate::engine::model::SemanticModel,
     content: RowsetContent,
+    backend: &B,
 ) -> Result<String, String> {
     use crate::engine::plan::{QueryPlan, QueryResult};
 
@@ -581,6 +582,25 @@ pub(crate) fn render_tabular_rowset(
                 columns.push((tabular_member_column(dimension, Some(index)), false));
             }
             columns.push((model.meas_def(measure).measure_unique_name(), true));
+            // A `.Members` set enumerates the dictionary with sparse measures;
+            // a drilldown or aggregate stays fact-driven (measured 2026-09-27).
+            let members: Vec<(String, Option<f64>)> =
+                match tabular_set_member_paths(query, dimension, backend) {
+                    Some(paths) => paths
+                        .into_iter()
+                        .map(|path| {
+                            let value = groups
+                                .iter()
+                                .find(|(key, _)| *key == path)
+                                .map(|(_, value)| *value);
+                            (path, value)
+                        })
+                        .collect(),
+                    None => groups
+                        .iter()
+                        .map(|(key, value)| (key.clone(), Some(*value)))
+                        .collect(),
+                };
             // A dimension member set includes the (All) member — its row
             // carries the measure only; a level set has no total row
             // (measured 2026-09-27).
@@ -590,9 +610,12 @@ pub(crate) fn render_tabular_rowset(
                 row.push(g9_checked(total)?);
                 rows_out.push(row);
             }
-            for (key, value) in groups {
-                let mut row = tabular_member_captions(dimension, key, last);
-                row.push(g9_checked(*value)?);
+            for (key, value) in members {
+                let mut row = tabular_member_captions(dimension, &key, last);
+                match value {
+                    Some(value) => row.push(g9_checked(value)?),
+                    None => row.push(String::new()),
+                }
                 rows_out.push(row);
             }
         }
@@ -643,6 +666,25 @@ pub(crate) fn render_tabular_rowset(
                 columns.push((model.meas_def(measure).measure_unique_name(), true));
             }
             let n = measures.len();
+            // A `.Members` set enumerates the dictionary with sparse measures;
+            // a drilldown or aggregate stays fact-driven (measured 2026-09-27).
+            let members: Vec<(String, Option<Vec<f64>>)> =
+                match tabular_set_member_paths(query, dimension, backend) {
+                    Some(paths) => paths
+                        .into_iter()
+                        .map(|path| {
+                            let values = rows
+                                .iter()
+                                .find(|(key, _)| *key == path)
+                                .map(|(_, values)| values.clone());
+                            (path, values)
+                        })
+                        .collect(),
+                    None => rows
+                        .iter()
+                        .map(|(key, values)| (key.clone(), Some(values.clone())))
+                        .collect(),
+                };
             if level.is_none() {
                 let mut totals = vec![0.0f64; n];
                 for (_, values) in rows {
@@ -659,14 +701,17 @@ pub(crate) fn render_tabular_rowset(
                 );
                 rows_out.push(all);
             }
-            for (label, values) in rows {
-                let mut row = tabular_member_captions(dimension, label, last);
-                row.extend(
-                    values
-                        .iter()
-                        .map(|value| g9_checked(*value))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+            for (label, values) in members {
+                let mut row = tabular_member_captions(dimension, &label, last);
+                match values {
+                    Some(values) => row.extend(
+                        values
+                            .iter()
+                            .map(|value| g9_checked(*value))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ),
+                    None => row.extend(std::iter::repeat_n(String::new(), n)),
+                }
                 rows_out.push(row);
             }
         }
@@ -873,6 +918,48 @@ fn tabular_member_captions(
                 .unwrap_or_default()
         })
         .collect()
+}
+
+/// The dictionary member paths a `.Members` set enumerates, or `None` for a
+/// fact-driven shape (a drilldown or an aggregate). The reference lists the
+/// dimension's members — every level for a dimension set — with a sparse
+/// measure (a dataless member still has its row, without the measure element;
+/// measured 2026-09-27).
+fn tabular_set_member_paths<B: QueryBackend + ?Sized>(
+    query: &crate::mdx_semantic::SemanticQuery,
+    dimension: &crate::engine::model::DimensionDef,
+    backend: &B,
+) -> Option<Vec<String>> {
+    // A level drag (`[Dim].[Hier].[Level].Members` or a `DrilldownLevel`
+    // level target) enumerates the dictionary; a dimension-named set and a
+    // fact-driven shape do not (recorded).
+    if !query.level_drag {
+        return None;
+    }
+    // A date-window set (`YTD`) is scoped by its window: keep the fact-driven
+    // rows, like the cellset path.
+    if query
+        .filters
+        .iter()
+        .any(|filter| filter.dimension == dimension.id && filter.date_window.is_some())
+    {
+        return None;
+    }
+    // NON EMPTY keeps the fact-driven rows: the reference drops dataless
+    // members there (measured 2026-09-27).
+    if crate::execute::render::axis_non_empty(query, &dimension.id) {
+        return None;
+    }
+    let index = query.drilldown_level()?;
+    let dictionary = crate::axis_members::effective_dictionary(query, dimension, backend);
+    Some(
+        dictionary
+            .level_paths
+            .get(index)
+            .filter(|paths| !paths.is_empty())
+            .map(|paths| paths.iter().map(|path| path.join("|")).collect())
+            .unwrap_or_else(|| dictionary.leaf_values.clone()),
+    )
 }
 
 /// The reference writes doubles in a 9-significant-digit scientific form

@@ -858,11 +858,17 @@ per-level captions) — the cellset picks up the reference's leaf unames as a
 side effect. Parity grew three shape cases (`tabular-*-shape`, 63/63) and the
 checker observes tabular rowsets and unescapes `_xHHHH_`.
 
-Recorded, still open from that round: a `.Members` level set's tabular rows
-are data-driven (81 months with facts) where the reference enumerates the
-dictionary (132 months, sparse measures) — the same dictionary-vs-fact class
-as the cellset set probes, and the dimension-set rows likewise omit the
-intermediate levels; the `SchemaData` schema is not XSD-valid (pre-existing
+**Dictionary-driven tabular rows completed 2026-09-27**: a level drag (a
+`.Members` level set or a `DrilldownLevel` level target) now enumerates the
+RLS-filtered dictionary with sparse measures — the demo calendar answers 132
+months, 81 of them carrying the measure, exactly the reference's rows — while
+`NON EMPTY` and date-window sets keep the fact-driven rows. A test pins the
+132/81 split.
+
+Recorded, still open from that round: a *dimension-named* set
+(`[Date].[Calendar].Members`) still answers the leaf grain rather than every
+level's members (the reference's 4,206 rows) — the level-named case is done;
+the `SchemaData` schema is not XSD-valid (pre-existing
 text); the
 `(All)` row is the sum of the returned rows rather than the `(All)` member's
 own value (our cellset agrees, so both diverge from SSAS for ranked sets); the
