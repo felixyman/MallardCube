@@ -743,9 +743,9 @@ pub struct ParsedMdx {
     /// `[Dim].[Hier].[Level].Members` (Excel's field-list level drag).
     pub axis_level_members: Vec<(String, String)>,
     /// Dimensions whose axes carry a bare dimension member set
-    /// (`[Dim].[Hier].Members`, no level token): the reference enumerates
-    /// every level's members for those.
-    pub axis_dimension_members: Vec<String>,
+    /// (`[Dim].[Hier].Members`, no level token), with the named hierarchy:
+    /// the reference enumerates every level's members for those.
+    pub axis_dimension_members: Vec<(String, String)>,
     /// Member ranges on the axes: `(dim, level, from_key, to_key)`.
     pub axis_member_ranges: Vec<(String, String, String, String)>,
     /// Member ranges in the slicer (`WHERE ({a : b})`).

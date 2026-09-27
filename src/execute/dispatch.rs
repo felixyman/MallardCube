@@ -2185,6 +2185,156 @@ mod tests {
         });
     }
 
+    /// A set function scopes the row set: the tabular rows stay fact-driven
+    /// rather than listing the whole dictionary (review finding, 2026-09-27).
+    #[test]
+    fn tabular_pruned_dimension_set_stays_fact_driven() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, TOPCOUNT([Date].[Calendar].Members, 3) \
+                 ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert!(
+                xml.matches("<row>").count() < 100,
+                "the pruned set, not the 4,206-member dictionary"
+            );
+        });
+    }
+
+    /// A multi-measure dimension set carries every level's captions and each
+    /// measure sparsely (review finding, 2026-09-27).
+    #[test]
+    fn tabular_multi_measure_dimension_set_carries_every_level() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT {[Measures].[Revenue], [Measures].[Units]} ON 0, \
+                 [Date].[Calendar].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 4206, "every level's members");
+            let first = xml.split("<row>").nth(1).expect("a row");
+            assert!(
+                !first.contains("MEMBER_CAPTION"),
+                "the (All) row has no member cell: {first}"
+            );
+            assert!(
+                xml.contains("_x005B_Year_x005D_._x005B_MEMBER_CAPTION_x005D_>2020<"),
+                "a year row carries its caption in the Year column"
+            );
+        });
+    }
+
+    /// The key-attribute hierarchy is single-level: a bare `.Members` on it
+    /// must not enumerate the user hierarchy's levels (review finding,
+    /// 2026-09-27).
+    #[test]
+    fn tabular_key_hierarchy_members_stay_fact_driven() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Date].[Full Date].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(
+                xml.matches("<row>").count(),
+                2463,
+                "the key hierarchy's fact-driven rows, not the calendar levels"
+            );
+        });
+    }
+
+    /// A filtered role's tabular `.Members` read: the dictionary build applies
+    /// the role predicate to the dimension table (review finding, 2026-09-27).
+    #[test]
+    fn tabular_dimension_members_under_a_filtered_role() {
+        use crate::engine::model::UserContext;
+        use crate::project::config::{ModelPermission, RoleConfig, TablePermissionConfig};
+
+        with_project3(|| {
+            let project = crate::proxy_project::project();
+            let mut config = project.config.clone();
+            let fact_table = project
+                .model
+                .fact_tables
+                .first()
+                .expect("project3 has a fact table")
+                .table_name
+                .clone();
+            config.roles = vec![RoleConfig {
+                name: "RLS".into(),
+                description: String::new(),
+                model_permission: ModelPermission::Read,
+                members: vec![],
+                table_permissions: vec![TablePermissionConfig {
+                    table: fact_table,
+                    filter_expression: "territory = 'North'".into(),
+                    dax_filter: None,
+                    metadata_permission: ModelPermission::Read,
+                }],
+            }];
+            let mut user = UserContext::deny_all();
+            user.roles = vec!["RLS".into()];
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Date].[Calendar].[Month].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                crate::backend::Backend::test_fixture(),
+                &user,
+                &config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            // A fact-table predicate does not restrict the dimension's members
+            // (every calendar month is still a member); it scopes the measures.
+            assert_eq!(xml.matches("<row>").count(), 132, "every month is a member");
+            let first_value = |doc: &str| -> f64 {
+                let row = doc.split("<row>").nth(1).unwrap_or_default();
+                row.split("xsd:double\">")
+                    .nth(1)
+                    .and_then(|rest| rest.split('<').next())
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0)
+            };
+            let (admin, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Date].[Calendar].[Month].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                crate::backend::Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &config,
+            );
+            let role_total = first_value(&xml);
+            let admin_total = first_value(&admin);
+            assert!(
+                role_total > 0.0 && role_total < admin_total,
+                "the role's total ({role_total}) is scoped below the admin's ({admin_total})"
+            );
+        });
+    }
+
     /// A multi-level grouping carries one caption column per level up to the
     /// grouped level, with the member's caption at each level — the
     /// reference's ragged rows (measured 2026-09-27).

@@ -647,9 +647,10 @@ pub struct SemanticQuery {
     /// refusal instead of a plausible-but-wrong axis.
     pub shape_refusal: Option<String>,
     /// Dimensions whose axes carry a bare dimension member set
-    /// (`[Dim].[Hier].Members`): the tabular renderer enumerates every level's
-    /// members for those (the reference's rows; measured 2026-09-27).
-    pub dimension_member_sets: Vec<String>,
+    /// (`[Dim].[Hier].Members`), with the named hierarchy: the tabular
+    /// renderer enumerates every level's members for those (the reference's
+    /// rows; measured 2026-09-27).
+    pub dimension_member_sets: Vec<(String, String)>,
     /// A calculated `COUNT(<set>)` member referenced by the axis (`SetProbe`).
     pub set_count: Option<CalculatedCount>,
     /// Members named by a `DrilldownMember(...)` expansion, per dimension.

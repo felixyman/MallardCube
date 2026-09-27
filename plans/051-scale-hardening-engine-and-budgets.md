@@ -873,6 +873,30 @@ carrying its rolled-up total and the All row the measure only — while
 (`axis_dimension_members`) rides the parsed request into the query
 (`dimension_member_sets`); a flat dimension falls back to `leaf_values`.
 
+**Review round 2026-09-27** (tabular dictionary rows) found and closed three
+silent wrong answers: a set function (`TOPCOUNT`/`ORDER`/`FILTER`) or a
+`HEAD`/`TAIL` wrapper scoped the set but the enumeration listed the whole
+dictionary (and mis-totalled the pruned facts) — the arms now keep the
+fact-driven rows for those; the dimension-set case was wired only into the
+single-measure arm, so the same MDX answered 4,206 rows for one measure and
+2,463 mislabelled rows for two — the multi-measure arm now enumerates too;
+and a bare `.Members` on the *key* hierarchy enumerated the user hierarchy's
+levels — it keeps the fact-driven rows now.
+
+Checked from that round, not an issue: a filtered role's tabular `.Members`
+read does not apply a fact-table predicate to the dimension table — only dims
+whose own table is filtered get a filtered dictionary — so the role read
+answers the dimension's members with scoped measures
+(`tabular_dimension_members_under_a_filtered_role` pins 132 months and a
+total below the admin's).
+
+Recorded, still open from that round: the enumeration is quadratic in members
+(`value_for` linear scans) with no `max_members` check before it (the
+response-size guard is downstream); a repeating leaf key collapses in
+`leaf_path_by_key` (shared with the cellset builder); the two-dimension
+crossjoin tabular arm is fact-driven and writes raw ISO dates into a
+`MEMBER_CAPTION` column (pre-existing; needs a mirror measurement).
+
 Recorded, still open from that round: the *cellset* shape of the same
 two-axis dimension set (measures on one axis, `[Dim].[Hier].Members` on the
 other) is unmeasured — the tabular shape is pinned; the `SchemaData` schema is

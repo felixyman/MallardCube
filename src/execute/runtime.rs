@@ -672,23 +672,26 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
             let n = measures.len();
             // A `.Members` set enumerates the dictionary with sparse measures;
             // a drilldown or aggregate stays fact-driven (measured 2026-09-27).
-            let members: Vec<(String, Option<Vec<f64>>)> =
-                match tabular_set_member_paths(query, dimension, backend) {
-                    Some(paths) => paths
-                        .into_iter()
-                        .map(|path| {
-                            let values = rows
-                                .iter()
-                                .find(|(key, _)| *key == path)
-                                .map(|(_, values)| values.clone());
-                            (path, values)
-                        })
-                        .collect(),
-                    None => rows
-                        .iter()
-                        .map(|(key, values)| (key.clone(), Some(values.clone())))
-                        .collect(),
-                };
+            let members: Vec<(String, Option<Vec<f64>>)> = if let Some(members) =
+                tabular_dimension_set_members_n(query, dimension, backend, rows)
+            {
+                members
+            } else if let Some(paths) = tabular_set_member_paths(query, dimension, backend) {
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let values = rows
+                            .iter()
+                            .find(|(key, _)| *key == path)
+                            .map(|(_, values)| values.clone());
+                        (path, values)
+                    })
+                    .collect()
+            } else {
+                rows.iter()
+                    .map(|(key, values)| (key.clone(), Some(values.clone())))
+                    .collect()
+            };
             if level.is_none() {
                 let mut totals = vec![0.0f64; n];
                 for (_, values) in rows {
@@ -940,6 +943,16 @@ fn tabular_set_member_paths<B: QueryBackend + ?Sized>(
     if !query.level_drag {
         return None;
     }
+    // A set function (TopCount/Order/Filter) or a Head/Tail wrapper scopes the
+    // set: keep the fact-driven rows rather than enumerate the whole
+    // dictionary (the cellset applies the prune; these arms do not).
+    if query.axis_set_op.is_some()
+        || query.set_probe.as_ref().is_some_and(|source| {
+            !matches!(source, crate::mdx_parser::SetExpr::LevelMembers { .. })
+        })
+    {
+        return None;
+    }
     // A date-window set (`YTD`) is scoped by its window: keep the fact-driven
     // rows, like the cellset path.
     if query
@@ -977,10 +990,24 @@ fn tabular_dimension_set_members<B: QueryBackend + ?Sized>(
     backend: &B,
     groups: &[(String, f64)],
 ) -> Option<Vec<(String, Option<f64>)>> {
-    if !query
+    let named_hierarchy = query
         .dimension_member_sets
         .iter()
-        .any(|dim| dim == &dimension.id)
+        .find(|(dim, _)| dim == &dimension.id)
+        .map(|(_, hierarchy)| hierarchy.as_str())?;
+    // The key-attribute hierarchy is single-level: the user hierarchy's levels
+    // are not its members. The tabular path keeps the fact-driven rows for it
+    // (recorded).
+    if dimension.key_hierarchy_name() == Some(named_hierarchy) {
+        return None;
+    }
+    // A set function (TopCount/Order/Filter) or a Head/Tail wrapper scopes the
+    // set: keep the fact-driven rows rather than enumerate the whole
+    // dictionary (the cellset applies the prune; these arms do not).
+    if query.axis_set_op.is_some()
+        || query.set_probe.as_ref().is_some_and(|source| {
+            !matches!(source, crate::mdx_parser::SetExpr::LevelMembers { .. })
+        })
         || crate::execute::render::axis_non_empty(query, &dimension.id)
     {
         return None;
@@ -1040,6 +1067,87 @@ fn tabular_dimension_set_members<B: QueryBackend + ?Sized>(
             .map(|path| {
                 let value = value_for(&path);
                 (path, value)
+            })
+            .collect(),
+    )
+}
+
+/// [`tabular_dimension_set_members`] for several measures per coordinate.
+fn tabular_dimension_set_members_n<B: QueryBackend + ?Sized>(
+    query: &crate::mdx_semantic::SemanticQuery,
+    dimension: &crate::engine::model::DimensionDef,
+    backend: &B,
+    rows: &[(String, Vec<f64>)],
+) -> Option<Vec<(String, Option<Vec<f64>>)>> {
+    let named_hierarchy = query
+        .dimension_member_sets
+        .iter()
+        .find(|(dim, _)| dim == &dimension.id)
+        .map(|(_, hierarchy)| hierarchy.as_str())?;
+    if dimension.key_hierarchy_name() == Some(named_hierarchy)
+        || query.axis_set_op.is_some()
+        || query.set_probe.as_ref().is_some_and(|source| {
+            !matches!(source, crate::mdx_parser::SetExpr::LevelMembers { .. })
+        })
+        || crate::execute::render::axis_non_empty(query, &dimension.id)
+    {
+        return None;
+    }
+    let dictionary = crate::axis_members::effective_dictionary(query, dimension, backend);
+    let leaf_index = dimension.levels.len().saturating_sub(1);
+    let leaf_path_by_key: std::collections::HashMap<String, String> = dictionary
+        .level_paths
+        .get(leaf_index)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| Some((path.last()?.clone(), path.join("|"))))
+                .collect()
+        })
+        .unwrap_or_default();
+    let keyed: Vec<(String, Vec<f64>)> = rows
+        .iter()
+        .map(|(name, values)| {
+            (
+                leaf_path_by_key
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone()),
+                values.clone(),
+            )
+        })
+        .collect();
+    let value_for = |name: &str| -> Option<Vec<f64>> {
+        if let Some((_, values)) = keyed.iter().find(|(key, _)| key == name) {
+            return Some(values.clone());
+        }
+        let prefix = format!("{name}|");
+        let mut sums: Option<Vec<f64>> = None;
+        for (key, values) in &keyed {
+            if key.starts_with(&prefix) {
+                let sums = sums.get_or_insert_with(|| vec![0.0; values.len()]);
+                for (slot, value) in sums.iter_mut().zip(values) {
+                    *slot += value;
+                }
+            }
+        }
+        sums
+    };
+    let paths: Vec<String> = if dictionary.level_paths.is_empty() {
+        dictionary.leaf_values.clone()
+    } else {
+        dictionary
+            .level_paths
+            .iter()
+            .flat_map(|paths| paths.iter().map(|path| path.join("|")))
+            .collect()
+    };
+    Some(
+        paths
+            .into_iter()
+            .map(|path| {
+                let values = value_for(&path);
+                (path, values)
             })
             .collect(),
     )
