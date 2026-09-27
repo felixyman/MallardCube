@@ -108,6 +108,14 @@ pub fn empty_discover_response() -> String {
 /// the row elements start, and the closing tags. Callers that write rows
 /// incrementally (plan 051-C) avoid building a second full copy of the payload.
 pub fn discover_rowset_parts(extra_schema: &str, row_fields: &str) -> (String, String) {
+    // Every reference rowset schema carries the `uuid` and `xmlDocument`
+    // helper types (measured 2026-09-28). A caller-supplied `uuid` — the
+    // `UUID_TYPE` constant some rowsets pass — is kept rather than duplicated.
+    let uuid = if extra_schema.contains("name=\"uuid\"") {
+        String::new()
+    } else {
+        format!("{UUID_TYPE}\n")
+    };
     let open = format!(
         r#"    <DiscoverResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
       <return>
@@ -116,7 +124,8 @@ pub fn discover_rowset_parts(extra_schema: &str, row_fields: &str) -> (String, S
             <xsd:element name="root">
               <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
             </xsd:element>
-{extra_schema}
+{uuid}{extra_schema}
+            <xsd:complexType name="xmlDocument"><xsd:sequence><xsd:any/></xsd:sequence></xsd:complexType>
             <xsd:complexType name="row">
               <xsd:sequence>
 {row_fields}
@@ -147,6 +156,23 @@ mod tests {
     /// XML-invalid controls become U+FFFD (plan 055 review).
     /// An attribute value must survive quotes too — the session id is echoed
     /// from client input.
+    /// Every rowset schema carries the reference's `uuid` and `xmlDocument`
+    /// helper types; a caller-supplied `uuid` is not duplicated (measured
+    /// 2026-09-28).
+    #[test]
+    fn rowset_schema_carries_the_helper_types() {
+        let (open, _) = discover_rowset_parts("", "<xsd:element name=\"A\"/>");
+        assert_eq!(open.matches("name=\"uuid\"").count(), 1, "{open}");
+        assert_eq!(open.matches("name=\"xmlDocument\"").count(), 1, "{open}");
+        let (open, _) = discover_rowset_parts(UUID_TYPE, "<xsd:element name=\"A\"/>");
+        assert_eq!(
+            open.matches("name=\"uuid\"").count(),
+            1,
+            "no duplicate uuid"
+        );
+        assert_eq!(open.matches("name=\"xmlDocument\"").count(), 1, "{open}");
+    }
+
     /// The reference returns a Session header only for a `BeginSession`
     /// request; a sessionless response has no SOAP Header at all (measured
     /// 2026-09-27).

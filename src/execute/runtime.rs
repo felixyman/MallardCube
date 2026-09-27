@@ -1239,9 +1239,23 @@ fn tabular_rowset(
                   <xsd:sequence>
 "#,
         );
-        for (column, _) in &columns {
+        // The reference's schema preamble (measured 2026-09-27): the `uuid`
+        // and `xmlDocument` helper types ride along even when unused.
+        schema.push_str(
+            r#"                <xsd:simpleType name="uuid"><xsd:restriction base="xsd:string"><xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/></xsd:restriction></xsd:simpleType>
+                <xsd:complexType name="xmlDocument"><xsd:sequence><xsd:any/></xsd:sequence></xsd:complexType>
+"#,
+        );
+        for (column, is_measure) in &columns {
+            // A member column is typed `xsd:string`; a measure carries no type
+            // (its cells tag `xsi:type="xsd:double"`), as the reference does.
+            let column_type = if *is_measure {
+                String::new()
+            } else {
+                " type=\"xsd:string\"".to_string()
+            };
             schema.push_str(&format!(
-                "                    <xsd:element sql:field=\"{}\" name=\"{}\" minOccurs=\"0\"/>\n",
+                "                    <xsd:element sql:field=\"{}\" name=\"{}\"{column_type} minOccurs=\"0\"/>\n",
                 crate::response::xml_escape(column),
                 escaped(column)
             ));

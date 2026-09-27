@@ -901,6 +901,14 @@ with a multi-level dimension emits one caption column per level
 columns); the two-dimension arm writes one raw-key column per dimension, so
 that shape is refused too.
 
+**Rowset schemas (2026-09-28)**: the reference's own schema is not strictly
+XSD-valid either (`type="row"` references no-namespace components — `xmllint`
+rejects the mirror's schema identically), so the contract is its *content*:
+every rowset schema carries the `uuid` and `xmlDocument` helper types, member
+columns are typed `xsd:string`, and measures are untyped. The tabular schema
+and the shared Discover preamble now match (a caller-supplied `uuid` is not
+duplicated); a test pins the helper types.
+
 Recorded, still open from that round: the per-level crossjoin columns (the
 measured shape above) and the ranked dimension-set members (the refusal is
 the stopgap until the members' own aggregates are planned); the enumeration is
