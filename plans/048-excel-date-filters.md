@@ -623,9 +623,18 @@ parity cases carry the values (20/21/19/20/1/4018/4/382); the catalogue is
 
 Found while measuring, recorded for the next slice:
 
-- A set probe `{[Date].[Full Date].Members}` expands the *Calendar* hierarchy
-  (2467 members) where the reference expands the key hierarchy (All + 4018
-  dates, 4025 member elements); the set-probe path does not carry the key view.
+- Set probes are fact-filtered and lose the named hierarchy (measured
+  2026-09-27): the mirror's `{[Date].[Full Date].Members}` answers All + 4018
+  key members (timestamp keys, short captions), `{[Date].[Calendar].[Full
+  Date].Members}` answers 4018 path-named members with no All row (a level
+  probe has no All), and `{[Date].[Calendar].[Month].Members}` answers 132
+  months through 2030-12-31 — `.Members` is not NON EMPTY, so the expansion
+  comes from the dimension dictionary. The proxy answers 2462/2462/81 (only
+  members with data): `set_expr_from_ast` drops the hierarchy name when
+  `.Members` names a key hierarchy, and `LeafLevelMembers` plans a
+  `QueryPlan::GroupBy` over the fact table. The fix needs the hierarchy
+  carried through the planner and a dictionary-driven plan (RLS-filtered,
+  like the drilldown path) plus the reference's member naming below.
 - Multi-level hierarchies name their members differently: the reference's
   non-top members are `[Dim].[Hier].[first-level].&[k1].&[k2]...` (a quarter is
   `[Date].[Calendar].[Year].&[2020].&[1]`), while the proxy emits the member's
