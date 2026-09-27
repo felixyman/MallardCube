@@ -890,12 +890,23 @@ answers the dimension's members with scoped measures
 (`tabular_dimension_members_under_a_filtered_role` pins 132 months and a
 total below the admin's).
 
-Recorded, still open from that round: the enumeration is quadratic in members
-(`value_for` linear scans) with no `max_members` check before it (the
-response-size guard is downstream); a repeating leaf key collapses in
-`leaf_path_by_key` (shared with the cellset builder); the two-dimension
-crossjoin tabular arm is fact-driven and writes raw ISO dates into a
-`MEMBER_CAPTION` column (pre-existing; needs a mirror measurement).
+**Ranked sets and crossjoin captions (2026-09-27)**: measured — a set function
+over a *dimension* member set ranks the members by their own aggregates and
+the (All) row carries the grand total (`TOPCOUNT([Date].[Calendar].Members,3)`
+answers All + 2020 + Q1-2020); the fact-driven plan answered the top leaves
+with a summed (All), so that shape is refused loudly now (a level set's
+`TOPCOUNT` stays fact-driven and matches the reference's ranking). A crossjoin
+with a multi-level dimension emits one caption column per level
+(`Year | Quarter | Month | Category | measure`, the (All) side omitting its
+columns); the two-dimension arm writes one raw-key column per dimension, so
+that shape is refused too.
+
+Recorded, still open from that round: the per-level crossjoin columns (the
+measured shape above) and the ranked dimension-set members (the refusal is
+the stopgap until the members' own aggregates are planned); the enumeration is
+quadratic in members (`value_for` linear scans) with no `max_members` check
+before it (the response-size guard is downstream); a repeating leaf key
+collapses in `leaf_path_by_key` (shared with the cellset builder).
 
 Recorded, still open from that round: the *cellset* shape of the same
 two-axis dimension set (measures on one axis, `[Dim].[Hier].Members` on the

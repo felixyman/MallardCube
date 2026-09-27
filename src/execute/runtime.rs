@@ -542,6 +542,43 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
     if let Some(fault) = crate::execute::render::time_window_shape_fault(query) {
         return Err(fault);
     }
+    // A crossjoin that includes a multi-level dimension needs per-level caption
+    // columns (measured 2026-09-27: `Year | Quarter | Month | Category |
+    // measure`, the (All) side omitting its columns); the two-dimension arm
+    // writes one raw-key column per dimension. Refused rather than answered
+    // with the wrong shape.
+    if query.crossjoin_axis
+        && query.axis_dimensions.len() == 2
+        && query.axis_dimensions.iter().any(|dim| {
+            model
+                .dim_def_opt(dim)
+                .is_some_and(|def| def.levels.len() > 1)
+        })
+    {
+        return Err(
+            "this query shape is not supported yet: a crossjoin with a multi-level dimension is              refused rather than answered with leaf-key captions"
+                .to_string(),
+        );
+    }
+    // A set function (TopCount/Order/Filter) over a *dimension* member set
+    // ranks members by their own aggregates — which the fact-driven plan
+    // cannot provide (measured 2026-09-27: the reference answers the top
+    // members with their totals and the (All) row with the grand total; the
+    // proxy answered the top leaves and a summed (All)). Refused rather than
+    // answered with the wrong members.
+    if query.axis_set_op.is_some()
+        && query.axis_dimensions.iter().any(|dim| {
+            query
+                .dimension_member_sets
+                .iter()
+                .any(|(set_dim, _)| set_dim == dim)
+        })
+    {
+        return Err(
+            "this query shape is not supported yet: a set function over a dimension member set              is refused rather than answered with the leaf members and a summed (All)"
+                .to_string(),
+        );
+    }
     let mut columns: Vec<(String, bool)> = Vec::new();
     let mut rows_out: Vec<Vec<String>> = Vec::new();
 

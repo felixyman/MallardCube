@@ -2185,10 +2185,12 @@ mod tests {
         });
     }
 
-    /// A set function scopes the row set: the tabular rows stay fact-driven
-    /// rather than listing the whole dictionary (review finding, 2026-09-27).
+    /// A set function over a *dimension* member set ranks members by their own
+    /// aggregates, which the fact-driven plan cannot provide: refused rather
+    /// than answered with the top leaves and a summed (All) (measured
+    /// 2026-09-27).
     #[test]
-    fn tabular_pruned_dimension_set_stays_fact_driven() {
+    fn tabular_dimension_set_with_a_set_function_is_refused() {
         use crate::backend::Backend;
         use crate::engine::model::UserContext;
 
@@ -2202,11 +2204,34 @@ mod tests {
                 &UserContext::admin_default(),
                 &crate::proxy_project::project().config,
             );
-            assert!(!xml.contains("faultstring"), "{xml}");
+            assert!(xml.contains("faultstring"), "{xml}");
             assert!(
-                xml.matches("<row>").count() < 100,
-                "the pruned set, not the 4,206-member dictionary"
+                xml.contains("set function over a dimension member set"),
+                "the refusal names the shape: {xml}"
             );
+        });
+    }
+
+    /// A set function over a *level* set stays fact-driven: the reference
+    /// ranks the level's members by the measure (measured 2026-09-27), and the
+    /// pruned plan provides exactly those rows.
+    #[test]
+    fn tabular_level_set_with_a_set_function_stays_fact_driven() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, TOPCOUNT([Date].[Calendar].[Month].Members, 3) \
+                 ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 3, "the top three months");
         });
     }
 
@@ -2331,6 +2356,33 @@ mod tests {
             assert!(
                 role_total > 0.0 && role_total < admin_total,
                 "the role's total ({role_total}) is scoped below the admin's ({admin_total})"
+            );
+        });
+    }
+
+    /// A crossjoin with a multi-level dimension needs per-level caption
+    /// columns (measured 2026-09-27): refused rather than answered with
+    /// leaf-key captions.
+    #[test]
+    fn tabular_multi_level_crossjoin_is_refused() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, \
+                 CROSSJOIN([Date].[Calendar].Members, [Category].[Category].Members) ON 1 \
+                 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(xml.contains("faultstring"), "{xml}");
+            assert!(
+                xml.contains("multi-level dimension"),
+                "the refusal names the shape: {xml}"
             );
         });
     }
