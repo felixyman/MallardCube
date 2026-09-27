@@ -1218,14 +1218,43 @@ mod tests {
                 "SELECT {TAIL([Date].[Calendar].[Year].Members,2)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             let infos = axis0_member_infos(&xml);
-            let years = data_year_keys();
+            // `TAIL` prunes the hierarchy's members, not the members with
+            // data: the reference's year level carries 2020-2030, so the last
+            // two are 2029 and 2030 (measured 2026-09-27).
             assert_eq!(infos.len(), 2, "TAIL(...,2) yields two tuples: {infos:?}");
-            let (last, prev) = (
-                years[years.len() - 1].clone(),
-                years[years.len() - 2].clone(),
+            for (info, year) in infos.iter().zip(["2029", "2030"]) {
+                assert!(
+                    info.1.contains(&format!("&amp;[{year}]")),
+                    "expected {year}: {infos:?}"
+                );
+            }
+        });
+    }
+
+    /// The sparse-cell lookup must match a date member's stored key: the uname
+    /// carries `T00:00:00` while the aggregation groups by `2020-01-01`
+    /// (measured 2026-09-27 — before the fix the key probe carried only the
+    /// (All) cell).
+    #[test]
+    fn key_members_probe_carries_sparse_date_cells() {
+        with_project3(|| {
+            let xml = get_execute_statement_response(
+                "SELECT {[Date].[Full Date].Members} ON 0 FROM [Sales] CELL PROPERTIES VALUE",
             );
-            assert!(infos[0].1.contains(&format!("&amp;[{prev}]")), "{infos:?}");
-            assert!(infos[1].1.contains(&format!("&amp;[{last}]")), "{infos:?}");
+            let values = cell_values(&xml);
+            assert!(
+                values.len() > 1000,
+                "one cell per date with data plus (All), got {}",
+                values.len()
+            );
+            // The (All) cell is the total of the per-date cells.
+            let total: f64 = values[1..].iter().sum();
+            assert!(
+                (values[0] - total).abs() < 1.0,
+                "(All) {} vs dates {}",
+                values[0],
+                total
+            );
         });
     }
 

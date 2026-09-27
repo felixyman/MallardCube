@@ -260,6 +260,19 @@ pub(crate) fn key_from_member_uname(uname: &str) -> Option<String> {
     Some(parts.join("|"))
 }
 
+/// The key a fact aggregation groups by, from a member UName: the key path
+/// with the date members' `T00:00:00` naming stripped (`[Date].[Full
+/// Date].&[2020-01-01T00:00:00]` is stored as `2020-01-01`). Without this the
+/// sparse-cell lookup finds no per-member cell for any date member.
+pub(crate) fn value_key_from_uname(uname: &str) -> String {
+    key_from_member_uname(uname)
+        .unwrap_or_default()
+        .split('|')
+        .map(crate::engine::model::strip_date_member_time)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 fn member_key_suffix(key: &str) -> String {
     key.split('|')
         .map(|part| format!("&amp;[{}]", part))

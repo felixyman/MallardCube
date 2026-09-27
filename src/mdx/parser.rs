@@ -598,8 +598,14 @@ pub enum SetExpr {
     /// `[Measures].Members` — every defined measure.
     Measures,
     /// `[Dim].[Hier].[Level].Members` — level None means the leaf/physical
-    /// grain (`[Dim].[Hier].Members`).
-    LevelMembers { dim: String, level: Option<String> },
+    /// grain (`[Dim].[Hier].Members`). `hierarchy` carries the named second
+    /// component so a key-attribute hierarchy (`[Date].[Full Date].Members`)
+    /// is not confused with the user hierarchy's leaf level of the same name.
+    LevelMembers {
+        dim: String,
+        level: Option<String>,
+        hierarchy: Option<String>,
+    },
     /// `[Dim].[Hier].[(All)].Members` / `[Dim].[Hier].[All].Children` — the
     /// first-level members under All.
     AllMembers { dim: String },
@@ -1377,7 +1383,8 @@ mod set_expr_tests {
             cc.set,
             SetExpr::LevelMembers {
                 dim: "Date".into(),
-                level: Some("Year".into())
+                level: Some("Year".into()),
+                hierarchy: Some("Calendar".into()),
             }
         );
     }

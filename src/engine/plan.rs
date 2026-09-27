@@ -349,7 +349,10 @@ fn resolve_set_source(
         // Measures sets are planned as MeasuresList before this runs.
         crate::mdx_parser::SetExpr::Measures => return Some((default.clone(), None)),
         crate::mdx_parser::SetExpr::AllMembers { dim } => (dim.clone(), None),
-        crate::mdx_parser::SetExpr::LevelMembers { dim, level } => (dim.clone(), level.clone()),
+        // A key-attribute hierarchy (`.Members` with no level) plans at the
+        // physical grain — the leaf key — so the renderer's key view matches
+        // the fact keys (`2020-01-01`, not the full ancestor path).
+        crate::mdx_parser::SetExpr::LevelMembers { dim, level, .. } => (dim.clone(), level.clone()),
         // A member range groups by the endpoints' level.
         crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
             let (dim, level, _) = crate::mdx_parser::parse_level_member(from)?;

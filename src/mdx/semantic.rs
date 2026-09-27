@@ -1374,7 +1374,8 @@ mod tests {
             cc.set,
             crate::mdx_parser::SetExpr::LevelMembers {
                 dim: "Date".into(),
-                level: Some("Year".into())
+                level: Some("Year".into()),
+                hierarchy: Some("Calendar".into()),
             }
         );
     }

@@ -826,6 +826,68 @@
         "row_count": 382
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: TREE_OP is a bitmask \u2014 1 = children only (the member itself is SELF, 8), 2 = siblings without the member, 4 = parent, 8 = self, 16 = descendants, 32 = ancestors; combined flags union and the response keeps member order"
+    },
+    {
+      "id": "set-probe-date-key-members",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Date].[Full Date].Members} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "axis0_member_count": 4019,
+        "axis0_first_member": "[Date].[Full Date].[All]",
+        "axis0_last_member": "[Date].[Full Date].&[2030-12-31T00:00:00]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
+    },
+    {
+      "id": "set-probe-calendar-month-members",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Date].[Calendar].[Month].Members} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "axis0_member_count": 132
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
+    },
+    {
+      "id": "set-probe-category-members",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Category].[Category].Members} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "axis0_member_count": 21,
+        "axis0_first_member": "[Category].[Category].[All]",
+        "axis0_last_member": "[Category].[Category].&[Toys]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
+    },
+    {
+      "id": "set-probe-calendar-members",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Date].[Calendar].Members} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "axis0_member_count": 4206,
+        "axis0_first_member": "[Date].[Calendar].[All]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
+    },
+    {
+      "id": "set-probe-calendar-all-children",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Date].[Calendar].[All].Children} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "axis0_member_count": 11,
+        "axis0_first_member": "[Date].[Calendar].[Year].&[2020]",
+        "axis0_last_member": "[Date].[Calendar].[Year].&[2030]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
     }
   ]
 }

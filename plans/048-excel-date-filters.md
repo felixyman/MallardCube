@@ -623,18 +623,21 @@ parity cases carry the values (20/21/19/20/1/4018/4/382); the catalogue is
 
 Found while measuring, recorded for the next slice:
 
-- Set probes are fact-filtered and lose the named hierarchy (measured
-  2026-09-27): the mirror's `{[Date].[Full Date].Members}` answers All + 4018
-  key members (timestamp keys, short captions), `{[Date].[Calendar].[Full
-  Date].Members}` answers 4018 path-named members with no All row (a level
-  probe has no All), and `{[Date].[Calendar].[Month].Members}` answers 132
-  months through 2030-12-31 — `.Members` is not NON EMPTY, so the expansion
-  comes from the dimension dictionary. The proxy answers 2462/2462/81 (only
-  members with data): `set_expr_from_ast` drops the hierarchy name when
-  `.Members` names a key hierarchy, and `LeafLevelMembers` plans a
-  `QueryPlan::GroupBy` over the fact table. The fix needs the hierarchy
-  carried through the planner and a dictionary-driven plan (RLS-filtered,
-  like the drilldown path) plus the reference's member naming below.
+**Set probes completed 2026-09-27**: `.Members`/`.Children` now enumerate the
+dimension dictionary rather than the fact rows. Measured: the key hierarchy's
+`{[Date].[Full Date].Members}` is All + 4,018 dates (was 2,462 Calendar
+leaves), `{[Date].[Calendar].[Month].Members}` 132 months through 2030-12-31
+(was 81), `{[Category].[Category].Members}` 21 with All (was 20),
+`{[Date].[Calendar].Members}` 4,206 across every level, and
+`{[Date].[Calendar].[All].Children}` 11 years (was one literal member — the
+frontend never mapped `.Children`). A level set has no All row, a hierarchy
+set carries it first, and cells stay sparse with the (All) cell as the total.
+Sets the request itself scopes (date windows, member ranges, label filters)
+keep the fact-driven list. The key view now renders in its own namespace
+(`[Date].[Full Date]`; the drilldown used to claim `[Date].[Calendar]`), and
+the sparse-cell lookup strips the date members' `T00:00:00` form, which had
+silently dropped every per-date cell (1 cell for 4,019 members). Five parity
+cases carry the mirror's values; the catalogue is 55/55.
 - Multi-level hierarchies name their members differently: the reference's
   non-top members are `[Dim].[Hier].[first-level].&[k1].&[k2]...` (a quarter is
   `[Date].[Calendar].[Year].&[2020].&[1]`), while the proxy emits the member's

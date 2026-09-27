@@ -963,15 +963,23 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
             if m.dim() == "Measures" {
                 return Some(SetExpr::Measures);
             }
-            Some(match m.level() {
-                Some(level) => SetExpr::LevelMembers {
-                    dim: m.dim().to_string(),
-                    level: Some(level.to_string()),
-                },
-                None => SetExpr::LevelMembers {
-                    dim: m.dim().to_string(),
-                    level: None,
-                },
+            Some(SetExpr::LevelMembers {
+                dim: m.dim().to_string(),
+                level: m.level().map(str::to_string),
+                hierarchy: m.hierarchy().map(str::to_string),
+            })
+        }
+        Expr::Children(inner) => {
+            // `[Dim].[Hier].[All].Children` — the first level under (All),
+            // Excel's expand probe (the reference answers 11 years for the
+            // Calendar hierarchy, measured 2026-09-27). Other `.Children`
+            // shapes stay with the calculated-members patterns.
+            let m = inner.as_member()?;
+            let is_all = m.level().is_some_and(|level| {
+                level.eq_ignore_ascii_case("all") || level.eq_ignore_ascii_case("(all)")
+            });
+            is_all.then(|| SetExpr::AllMembers {
+                dim: m.dim().to_string(),
             })
         }
         Expr::Range(a, b) => {
@@ -1013,6 +1021,7 @@ pub fn set_expr_from_ast(expr: &Expr) -> Option<SetExpr> {
                 Some(SetExpr::LevelMembers {
                     dim: anchor.dim().to_string(),
                     level: anchor.level().map(str::to_string),
+                    hierarchy: anchor.hierarchy().map(str::to_string),
                 })
             } else {
                 None

@@ -961,7 +961,7 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
     let total: f64 = values.iter().map(|(_, value)| *value).sum();
     let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
     for (index, member) in axis_members.iter().enumerate() {
-        let key = crate::axis_members::key_from_member_uname(&member.u_name).unwrap_or_default();
+        let key = crate::axis_members::value_key_from_uname(&member.u_name);
         let value = if member.u_name.ends_with(".[All]") {
             Some(total)
         } else {
@@ -975,7 +975,17 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
         }
     }
 
-    let axis = member_list_axis("Axis0", hierarchy_for(dim, &query.dim_props), axis_members);
+    // The key view renders in its own hierarchy namespace (`[Date].[Full
+    // Date]`), not the user hierarchy's (measured 2026-09-27).
+    let axis = member_list_axis(
+        "Axis0",
+        crate::axis_members::hierarchy_for_view(
+            dim,
+            &query.dim_props,
+            query.key_hierarchy_view.as_deref(),
+        ),
+        axis_members,
+    );
     render_response(
         finish_dim_axis(query, backend, axis),
         cells,
@@ -3311,6 +3321,217 @@ fn build_set_count<B: QueryBackend + ?Sized>(
 
 /// Render a CUBESET validation probe: the set's members on Axis0 with real
 /// values, pruned per Head/Tail wrappers.
+/// A `.Members`/`.Children` set probe enumerates the dimension dictionary,
+/// not the fact rows: the reference answers 132 months through 2030-12-31 and
+/// All + 4,018 key dates where the fact-driven list answers only the members
+/// with data (measured 2026-09-27). A level set has no `(All)` row; a
+/// hierarchy set carries it first; the key view gets its own `(All)` and its
+/// flat namespace from `apply_key_hierarchy_view`. `None` for sources the
+/// dictionary cannot answer (member ranges keep the fact-driven behaviour).
+#[allow(clippy::too_many_arguments)]
+fn build_set_members_from_dictionary<B: QueryBackend + ?Sized>(
+    query: &SemanticQuery,
+    dim: &str,
+    level_name: Option<&str>,
+    hierarchy: Option<&str>,
+    first_level_only: bool,
+    data: &[(String, f64)],
+    prunes: &[(usize, bool)],
+    backend: &B,
+) -> Option<String> {
+    let project = crate::proxy_project::project();
+    let def = project.model.dim_def_opt(dim)?;
+    let key_view = hierarchy.is_some_and(|named| def.key_hierarchy_name() == Some(named));
+    let dictionary = crate::axis_members::effective_dictionary(query, def, backend);
+    let leaf_index = def.levels.len().saturating_sub(1);
+    // A flat dimension carries no level paths: its keys live in `leaf_values`.
+    let joined = |paths: Option<&Vec<Vec<String>>>| -> Vec<String> {
+        match paths {
+            Some(paths) if !paths.is_empty() => paths.iter().map(|path| path.join("|")).collect(),
+            _ => dictionary.leaf_values.clone(),
+        }
+    };
+
+    // The source's members, in hierarchy order, and whether it carries (All).
+    let (names, carries_all, level): (Vec<String>, bool, Option<usize>) = if key_view {
+        (
+            dictionary
+                .level_paths
+                .get(leaf_index)
+                .filter(|paths| !paths.is_empty())
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|path| path.last().cloned())
+                        .collect()
+                })
+                .unwrap_or_else(|| dictionary.leaf_values.clone()),
+            true,
+            Some(leaf_index),
+        )
+    } else if let Some(level_name) = level_name {
+        let index = def.levels.iter().position(|l| l.name == level_name)?;
+        (
+            joined(dictionary.level_paths.get(index)),
+            false,
+            Some(index),
+        )
+    } else if first_level_only {
+        (joined(dictionary.level_paths.first()), false, Some(0))
+    } else if hierarchy.is_some() {
+        // `Hierarchy.Members`: every level's members, hierarchically ordered.
+        let names = if dictionary.level_paths.is_empty() {
+            dictionary.leaf_values.clone()
+        } else {
+            dictionary
+                .level_paths
+                .iter()
+                .flat_map(|paths| paths.iter().map(|path| path.join("|")))
+                .collect()
+        };
+        (names, true, None)
+    } else {
+        return None;
+    };
+
+    // Prune the member slots; the (All) row occupies the first slot when the
+    // source carries it.
+    let mut slots: Vec<Option<String>> = Vec::with_capacity(names.len() + 1);
+    if carries_all {
+        slots.push(None);
+    }
+    slots.extend(names.into_iter().map(Some));
+    for (n, is_head) in prunes.iter().rev() {
+        if *is_head {
+            slots.truncate(*n);
+        } else {
+            let start = slots.len().saturating_sub(*n);
+            slots = slots[start..].to_vec();
+        }
+    }
+    let all_survives = carries_all && slots.first().is_some_and(Option::is_none);
+    let names: Vec<String> = slots.into_iter().flatten().collect();
+
+    // A hierarchy set spans levels while `data` groups at the leaf, so its
+    // bare leaf keys are mapped onto full paths and a mid-level member sums
+    // its descendants. The other shapes key their members exactly as the
+    // aggregation does (the key view's members are the leaf keys themselves).
+    let keyed: Vec<(String, f64)> = if level.is_none() && !key_view && hierarchy.is_some() {
+        let leaf_path_by_key: std::collections::HashMap<String, String> = dictionary
+            .level_paths
+            .get(leaf_index)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .filter_map(|path| Some((path.last()?.clone(), path.join("|"))))
+                    .collect()
+            })
+            .unwrap_or_default();
+        data.iter()
+            .map(|(name, value)| {
+                (
+                    leaf_path_by_key
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| name.clone()),
+                    *value,
+                )
+            })
+            .collect()
+    } else {
+        data.to_vec()
+    };
+    let total: f64 = data.iter().map(|(_, value)| *value).sum();
+    let value_for = |name: &str| -> Option<f64> {
+        if let Some((_, value)) = keyed.iter().find(|(key, _)| key == name) {
+            return Some(*value);
+        }
+        let prefix = format!("{name}|");
+        let mut sum = 0.0;
+        let mut found = false;
+        for (key, value) in &keyed {
+            if key.starts_with(&prefix) {
+                sum += value;
+                found = true;
+            }
+        }
+        found.then_some(sum)
+    };
+
+    let mut axis_members: Vec<crate::cellset::MemberConfig> = Vec::new();
+    if !key_view && all_survives {
+        axis_members.push(crate::axis_members::all_member_for_with_backend(
+            query, dim, backend,
+        ));
+    }
+    if let Some(level) = level {
+        axis_members.extend(crate::axis_members::leaf_members_from(
+            query,
+            dim,
+            &names,
+            Some(level),
+            None,
+        ));
+    } else {
+        // A hierarchy set spans levels: each member's level is its path depth.
+        for name in &names {
+            let depth = name.split('|').count().saturating_sub(1);
+            axis_members.extend(crate::axis_members::leaf_members_from(
+                query,
+                dim,
+                std::slice::from_ref(name),
+                Some(depth),
+                None,
+            ));
+        }
+    }
+    if key_view {
+        crate::axis_members::apply_key_hierarchy_view(
+            &mut axis_members,
+            def,
+            &query.dim_props,
+            backend,
+            crate::axis_members::access_counts(query, &def.id),
+        );
+        if !all_survives && !axis_members.is_empty() {
+            // `apply_key_hierarchy_view` always prepends (All); a pruned set
+            // that dropped it must not grow it back.
+            axis_members.remove(0);
+        }
+    }
+
+    // Sparse cells: the ordinal indexes the full member list, and tuples
+    // without data carry none (the reference's shape).
+    let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
+    for (index, member) in axis_members.iter().enumerate() {
+        let value = if member.u_name.ends_with(".[All]") {
+            Some(total)
+        } else {
+            let key = crate::axis_members::value_key_from_uname(&member.u_name);
+            value_for(&key)
+        };
+        if let Some(value) = value {
+            cells.push(measurement_cell_for_query(query, index as u32, value));
+        }
+    }
+
+    let view_name = if key_view {
+        def.key_hierarchy_unique_name()
+    } else {
+        None
+    };
+    let axis = member_list_axis(
+        "Axis0",
+        crate::axis_members::hierarchy_for_view(dim, &query.dim_props, view_name.as_deref()),
+        axis_members,
+    );
+    Some(render_response(
+        vec![axis, full_slicer_axis_with_backend(query, backend)],
+        cells,
+        &query.cell_props,
+    ))
+}
+
 fn build_set_members<B: QueryBackend + ?Sized>(
     query: &SemanticQuery,
     result: &QueryResult,
@@ -3324,7 +3545,7 @@ fn build_set_members<B: QueryBackend + ?Sized>(
     // Unwrap pruning wrappers, remembering their order; the innermost source
     // defines the planned level (or an explicit member list).
     let mut prunes: Vec<(usize, bool)> = Vec::new(); // (n, is_head)
-    let (dim, group_level, member_list) = {
+    let (dim, group_level, member_list, level_name, hierarchy, first_level_only) = {
         let mut cursor = se;
         loop {
             match cursor {
@@ -3336,14 +3557,25 @@ fn build_set_members<B: QueryBackend + ?Sized>(
                     prunes.push((*n, false));
                     cursor = inner;
                 }
-                crate::mdx_parser::SetExpr::LevelMembers { dim, level } => {
+                crate::mdx_parser::SetExpr::LevelMembers {
+                    dim,
+                    level,
+                    hierarchy,
+                } => {
                     let gl = level.as_ref().and_then(|ln| {
                         crate::proxy_project::project()
                             .model
                             .dim_def_opt(dim)
                             .and_then(|def| def.levels.iter().position(|l| l.name == *ln))
                     });
-                    break (dim.clone(), gl, None);
+                    break (
+                        dim.clone(),
+                        gl,
+                        None,
+                        level.clone(),
+                        hierarchy.clone(),
+                        false,
+                    );
                 }
                 crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
                     let (dim, level, _) =
@@ -3352,16 +3584,16 @@ fn build_set_members<B: QueryBackend + ?Sized>(
                         .model
                         .dim_def_opt(&dim)
                         .and_then(|def| def.levels.iter().position(|l| l.name == level));
-                    break (dim, gl, None);
+                    break (dim, gl, None, None, None, false);
                 }
                 crate::mdx_parser::SetExpr::AllMembers { dim } => {
-                    break (dim.clone(), Some(0), None);
+                    break (dim.clone(), Some(0), None, None, None, true);
                 }
                 crate::mdx_parser::SetExpr::Measures => {
-                    break (String::new(), None, None);
+                    break (String::new(), None, None, None, None, false);
                 }
                 crate::mdx_parser::SetExpr::MemberList { unames } => {
-                    break (String::new(), None, Some(unames.clone()));
+                    break (String::new(), None, Some(unames.clone()), None, None, false);
                 }
             }
         }
@@ -3369,6 +3601,31 @@ fn build_set_members<B: QueryBackend + ?Sized>(
 
     // Materialize (uname, caption, value) triples for the set's members.
     let is_measures = matches!(se, crate::mdx_parser::SetExpr::Measures);
+    // A set the request itself scopes — a date window (`YTD(m)`), a member
+    // range, or an Excel label filter on the set's dimension — keeps the
+    // fact-driven list: those filters define the set, while slicers do not.
+    let scoped_by_filter = query.filters.iter().any(|f| {
+        f.dimension == dim && (f.date_window.is_some() || f.range.is_some() || f.label.is_some())
+    });
+    // `.Members`/`.Children` enumerate the dimension dictionary, not the fact
+    // rows (measured 2026-09-27); member ranges and explicit lists keep the
+    // fact-driven behaviour below.
+    if !is_measures
+        && !scoped_by_filter
+        && member_list.is_none()
+        && let Some(response) = build_set_members_from_dictionary(
+            query,
+            &dim,
+            level_name.as_deref(),
+            hierarchy.as_deref(),
+            first_level_only,
+            &data,
+            &prunes,
+            backend,
+        )
+    {
+        return response;
+    }
     let mut entries: Vec<(String, String, f64)> = if is_measures {
         let model = &crate::proxy_project::project().model;
         // A restricted user's `[Measures]` set lists only the measures their
