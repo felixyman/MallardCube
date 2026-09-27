@@ -111,13 +111,18 @@ pub fn sql_for_query_plan_with_context(
                 let Some(level_idx) = group_levels.get(i).copied().flatten() else {
                     return false;
                 };
-                let Some(dim) = model.dim_def_opt(dim_id) else {
+                let Some(_dim) = model.dim_def_opt(dim_id) else {
                     return false;
                 };
                 let single_parent = filters
                     .iter()
                     .any(|f| f.dimension == *dim_id && f.members.len() == 1);
-                level_idx > 0 && level_idx + 1 != dim.levels.len() && !single_parent
+                // Every level above the first groups by its full ancestor path:
+                // the reference names members that way, and the tabular rowset
+                // needs the path's per-level captions (measured 2026-09-27).
+                // A single-parent drill keeps the plain column — the renderer
+                // prefixes the parent from the filter.
+                level_idx > 0 && !single_parent
             });
             if !needs_path
                 && let Some((agg, role_predicates)) =
@@ -179,9 +184,12 @@ pub fn sql_for_query_plan_with_context(
                 let single_parent_level = single_parent
                     .and_then(|f| f.level.as_ref())
                     .and_then(|name| dim.levels.iter().position(|l| l.name == *name));
-                let is_leaf_level = level_idx + 1 == dim.levels.len();
+                // Levels above the first carry their full ancestor path: the
+                // reference names members that way and the tabular rowset needs
+                // the per-level captions (measured 2026-09-27). A single-parent
+                // drill keeps the plain column — the renderer prefixes the
+                // parent from the filter.
                 let plain_column = level_idx == 0
-                    || is_leaf_level
                     || single_parent.is_some()
                         && (single_parent_level.is_none()
                             || single_parent_level.is_some_and(|l| level_idx == l + 1));

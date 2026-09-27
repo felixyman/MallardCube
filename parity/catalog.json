@@ -1000,6 +1000,43 @@
       },
       "known_gap": "the reference lists 132 schema rowsets for any catalog value; the proxy's list is shorter (63 rows) \u2014 the behaviour (no fault) is pinned by probe-fidelity",
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
+    },
+    {
+      "id": "tabular-month-level-shape",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT [Measures].[Revenue] ON 0, [Date].[Calendar].[Month].Members ON 1 FROM [{cube}]",
+        "format": "tabular"
+      },
+      "expect": {
+        "tabular_first_row_columns": "[Date].[Calendar].[Year].[MEMBER_CAPTION]|[Date].[Calendar].[Quarter].[MEMBER_CAPTION]|[Date].[Calendar].[Month].[MEMBER_CAPTION]|[Measures].[Revenue]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the Format=Tabular rowset carries one MEMBER_CAPTION column per level up to the grouped level, ragged per member depth, and the (All) row carries the measure only"
+    },
+    {
+      "id": "tabular-category-all-row-shape",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT [Measures].[Revenue] ON 0, [Category].[Category].Members ON 1 FROM [{cube}]",
+        "format": "tabular"
+      },
+      "expect": {
+        "tabular_first_row_columns": "[Measures].[Revenue]",
+        "tabular_second_row_columns": "[Category].[Category].[Category].[MEMBER_CAPTION]|[Measures].[Revenue]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the Format=Tabular rowset carries one MEMBER_CAPTION column per level up to the grouped level, ragged per member depth, and the (All) row carries the measure only"
+    },
+    {
+      "id": "tabular-date-leaf-shape",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT [Measures].[Revenue] ON 0, NON EMPTY [Date].[Calendar].[Full Date].Members ON 1 FROM [{cube}]",
+        "format": "tabular"
+      },
+      "expect": {
+        "tabular_first_row_columns": "[Date].[Calendar].[Year].[MEMBER_CAPTION]|[Date].[Calendar].[Quarter].[MEMBER_CAPTION]|[Date].[Calendar].[Month].[MEMBER_CAPTION]|[Date].[Calendar].[Full Date].[MEMBER_CAPTION]|[Measures].[Revenue]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the Format=Tabular rowset carries one MEMBER_CAPTION column per level up to the grouped level, ragged per member depth, and the (All) row carries the measure only"
     }
   ]
 }

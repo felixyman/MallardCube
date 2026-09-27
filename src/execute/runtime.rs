@@ -570,17 +570,27 @@ pub(crate) fn render_tabular_rowset(
         ) if group_by.len() == 1 => {
             let dimension = model.dim_def(&group_by[0]);
             let level = group_levels.first().copied().flatten();
-            columns.push((tabular_member_column(dimension, level), false));
+            // One column per level up to the grouped level (every level for a
+            // dimension member set): the reference's rows carry a caption per
+            // level up to the member's own depth (measured 2026-09-27).
+            let last = level.unwrap_or_else(|| dimension.levels.len().saturating_sub(1));
+            for index in 0..=last {
+                columns.push((tabular_member_column(dimension, Some(index)), false));
+            }
             columns.push((model.meas_def(measure).measure_unique_name(), true));
-            // A dimension member set includes the (All) member; a level set
-            // does not, and the reference has no total row for it (measured
-            // 2026-09-27).
+            // A dimension member set includes the (All) member — its row
+            // carries the measure only; a level set has no total row
+            // (measured 2026-09-27).
             if level.is_none() {
                 let total: f64 = groups.iter().map(|(_, value)| value).sum();
-                rows_out.push(vec![String::new(), g9_checked(total)?]);
+                let mut row = vec![String::new(); last + 1];
+                row.push(g9_checked(total)?);
+                rows_out.push(row);
             }
             for (key, value) in groups {
-                rows_out.push(vec![key.clone(), g9_checked(*value)?]);
+                let mut row = tabular_member_captions(dimension, key, last);
+                row.push(g9_checked(*value)?);
+                rows_out.push(row);
             }
         }
         (
@@ -622,7 +632,10 @@ pub(crate) fn render_tabular_rowset(
         {
             let dimension = model.dim_def(&group_by[0]);
             let level = group_levels.first().copied().flatten();
-            columns.push((tabular_member_column(dimension, level), false));
+            let last = level.unwrap_or_else(|| dimension.levels.len().saturating_sub(1));
+            for index in 0..=last {
+                columns.push((tabular_member_column(dimension, Some(index)), false));
+            }
             for measure in measures {
                 columns.push((model.meas_def(measure).measure_unique_name(), true));
             }
@@ -634,7 +647,7 @@ pub(crate) fn render_tabular_rowset(
                         *total += value;
                     }
                 }
-                let mut all = vec![String::new()];
+                let mut all = vec![String::new(); last + 1];
                 all.extend(
                     totals
                         .iter()
@@ -644,7 +657,7 @@ pub(crate) fn render_tabular_rowset(
                 rows_out.push(all);
             }
             for (label, values) in rows {
-                let mut row = vec![label.clone()];
+                let mut row = tabular_member_captions(dimension, label, last);
                 row.extend(
                     values
                         .iter()
@@ -833,6 +846,32 @@ fn tabular_member_column(
     )
 }
 
+/// The captions a member's key path contributes, one per level up to `last`,
+/// padded with empties for the levels below the member's own depth (the row
+/// writer omits empty cells, so the reference's ragged rows come out right —
+/// a year row carries one caption, a quarter row two, measured 2026-09-27).
+fn tabular_member_captions(
+    dimension: &crate::engine::model::DimensionDef,
+    key: &str,
+    last: usize,
+) -> Vec<String> {
+    let segments: Vec<&str> = key.split('|').collect();
+    (0..=last)
+        .map(|index| {
+            segments
+                .get(index)
+                .map(|segment| {
+                    if dimension.is_date_role && crate::xmla::discover::is_iso_date(segment) {
+                        crate::xmla::discover::date_member_caption(segment)
+                    } else {
+                        (*segment).to_string()
+                    }
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// The reference writes doubles in a 9-significant-digit scientific form
 /// (`5.21586767E8`, `4.93164E6`): trailing zeros trimmed, exponent without a
 /// sign or padding (measured 2026-09-27).
@@ -852,8 +891,23 @@ fn tabular_rowset(
     rows: Vec<Vec<String>>,
     content: RowsetContent,
 ) -> String {
+    /// The reference's element-name encoding: `[`/`]`/space (and any other
+    /// character invalid in an XML name) become `_xHHHH_` — a space is
+    /// `_x0020_`, so `[Date].[Calendar].[Full Date].[MEMBER_CAPTION]` is a
+    /// valid element (measured 2026-09-27).
     fn escaped(name: &str) -> String {
-        name.replace('[', "_x005B_").replace(']', "_x005D_")
+        let mut out = String::with_capacity(name.len());
+        for character in name.chars() {
+            match character {
+                '[' => out.push_str("_x005B_"),
+                ']' => out.push_str("_x005D_"),
+                c if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '?' | '_') => {
+                    out.push(c)
+                }
+                c => out.push_str(&format!("_x{:04X}_", c as u32)),
+            }
+        }
+        out
     }
 
     let mut schema = String::new();

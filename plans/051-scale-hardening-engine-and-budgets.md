@@ -841,9 +841,29 @@ cut of this work:
   `xsi:type` follows a per-column flag rather than a name prefix, and
   non-finite measure values refuse instead of claiming `xsd:double`.
 
-Recorded, still open from that round: the member column carries the grouped
-*key* where the cellset resolves a caption (keys equal captions on the demo
-models); the `SchemaData` schema is not XSD-valid (pre-existing text); the
+**Member captions completed 2026-09-27**: measured on the reference — the
+tabular rowset carries **one caption column per level up to the grouped
+level** (`[Date].[Calendar].[Year].[MEMBER_CAPTION]`,
+`[Quarter]…`, `[Month]…`), each row filling the columns up to its member's own
+depth (a year row one, a quarter row two), the `(All)` row carrying the
+measure only, and date leaves showing the en-US short date (`1/1/2020`).
+The single-dimension arms now emit that ragged shape; three tests pin it.
+
+Two further measurements landed with it: element names use the reference's
+`_xHHHH_` encoding (`[Date].[Calendar].[Full Date].[MEMBER_CAPTION]` becomes
+`...Full_x0020_Date...`; the old escaper left a literal space, which is not a
+valid XML name), and leaf-level groupings now group by the full ancestor path
+(the reference path-names leaf members, and the tabular rowset needs the
+per-level captions) — the cellset picks up the reference's leaf unames as a
+side effect. Parity grew three shape cases (`tabular-*-shape`, 63/63) and the
+checker observes tabular rowsets and unescapes `_xHHHH_`.
+
+Recorded, still open from that round: a `.Members` level set's tabular rows
+are data-driven (81 months with facts) where the reference enumerates the
+dictionary (132 months, sparse measures) — the same dictionary-vs-fact class
+as the cellset set probes, and the dimension-set rows likewise omit the
+intermediate levels; the `SchemaData` schema is not XSD-valid (pre-existing
+text); the
 `(All)` row is the sum of the returned rows rather than the `(All)` member's
 own value (our cellset agrees, so both diverge from SSAS for ranked sets); the
 five-probe comparison is order-sensitive by construction (rows in response

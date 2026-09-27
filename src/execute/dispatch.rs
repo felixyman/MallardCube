@@ -2053,6 +2053,96 @@ mod tests {
         });
     }
 
+    /// A multi-level grouping carries one caption column per level up to the
+    /// grouped level, with the member's caption at each level — the
+    /// reference's ragged rows (measured 2026-09-27).
+    #[test]
+    fn tabular_multi_level_grouping_carries_each_level_caption() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, NON EMPTY [Date].[Calendar].[Month].Members \
+                 ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            for level in ["Year", "Quarter", "Month"] {
+                assert!(
+                    xml.contains(&format!(
+                        "_x005B_Date_x005D_._x005B_Calendar_x005D_._x005B_{level}_x005D_._x005B_MEMBER_CAPTION_x005D_"
+                    )),
+                    "the {level} caption column is present: {xml}"
+                );
+            }
+            let first = xml.split("<row>").nth(1).expect("a row");
+            assert!(
+                first.contains(">2020<") && first.contains(">1<"),
+                "the year and quarter captions lead the row: {first}"
+            );
+        });
+    }
+
+    /// A dimension member set's (All) row carries the measure only; a level
+    /// set has no total row (measured 2026-09-27).
+    #[test]
+    fn tabular_dimension_set_all_row_is_measure_only() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, [Category].[Category].Members ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            let first = xml.split("<row>").nth(1).expect("a row");
+            assert!(
+                first.contains("xsi:type=\"xsd:double\""),
+                "the (All) row carries the total: {first}"
+            );
+            assert!(
+                !first.contains("MEMBER_CAPTION"),
+                "the (All) row has no member cell: {first}"
+            );
+        });
+    }
+
+    /// A date leaf's caption is the en-US short date, not the stored ISO value
+    /// (measured 2026-09-27).
+    #[test]
+    fn tabular_date_leaf_caption_is_the_short_date() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, NON EMPTY [Date].[Calendar].[Full Date].Members \
+                 ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            let first = xml.split("<row>").nth(1).expect("a row");
+            assert!(
+                first.contains(">1/1/2020<"),
+                "the leaf caption is the short date: {first}"
+            );
+        });
+    }
+
     /// `Content` selects schema and rows: absent = SchemaData, `Schema` is
     /// schema-only, `Data` is rows-only (measured 2026-09-27).
     #[test]

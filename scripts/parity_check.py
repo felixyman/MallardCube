@@ -46,12 +46,16 @@ def soap_discover(
     )
 
 
-def soap_execute(catalog: str, mdx: str) -> str:
+def soap_execute(catalog: str, mdx: str, tabular: bool = False) -> str:
+    props = f"<Catalog>{catalog}</Catalog>"
+    if tabular:
+        # What ADODB sends: the flattened rowset instead of a cellset.
+        props += "<Format>Tabular</Format><Content>Data</Content>"
     return (
         '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>'
         '<Execute xmlns="urn:schemas-microsoft-com:xml-analysis">'
         f"<Command><Statement>{mdx}</Statement></Command>"
-        f"<Properties><PropertyList><Catalog>{catalog}</Catalog></PropertyList></Properties>"
+        f"<Properties><PropertyList>{props}</PropertyList></Properties>"
         "</Execute></soap:Body></soap:Envelope>"
     )
 
@@ -97,7 +101,30 @@ def observe_discover(xml: str, case: dict) -> dict:
     return observed
 
 
-def observe_execute(xml: str) -> dict:
+def observe_execute(xml: str, tabular: bool = False) -> dict:
+    if tabular:
+        # The flattened rowset: shape only (row counts and aggregates drift
+        # with the demo data; the column set and captions are the contract).
+        def column_name(name: str) -> str:
+            # The reference encodes invalid element-name characters as
+            # `_xHHHH_` (space -> `_x0020_`, brackets -> `_x005B_`/`_x005D_`).
+            return re.sub(
+                r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m.group(1), 16)), name
+            )
+
+        rows = re.findall(r"<row>(.*?)</row>", xml, re.S)
+        observed: dict = {"tabular_row_count": len(rows)}
+        if rows:
+            names = [column_name(name) for name in re.findall(r"<([^ >/]+)[ >/]", rows[0])]
+            observed["tabular_first_row_columns"] = "|".join(names)
+            observed["tabular_first_row_values"] = "|".join(
+                unescape(value) for value in re.findall(r">([^<]*)</", rows[0])
+            )
+        if len(rows) > 1:
+            observed["tabular_second_row_columns"] = "|".join(
+                column_name(name) for name in re.findall(r"<([^ >/]+)[ >/]", rows[1])
+            )
+        return observed
     # Only the CellData block: OlapInfo's CellInfo carries self-closing
     # `<Value name="..."/>` elements that would otherwise swallow the match.
     cell_data = re.search(r"<CellData>(.*?)</CellData>", xml, re.S)
@@ -162,7 +189,11 @@ def main() -> int:
                 catalog_name, request["type"], restrictions, request.get("properties")
             )
         else:
-            body = soap_execute(catalog_name, request["mdx"].replace("{cube}", cube))
+            body = soap_execute(
+                catalog_name,
+                request["mdx"].replace("{cube}", cube),
+                request.get("format") == "tabular",
+            )
 
         try:
             xml = post(url, body)
@@ -178,7 +209,7 @@ def main() -> int:
                 observed = (
                     observe_discover(xml, case)
                     if case["kind"] == "discover"
-                    else observe_execute(xml)
+                    else observe_execute(xml, request.get("format") == "tabular")
                 )
 
         if "error" in observed:
