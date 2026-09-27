@@ -89,6 +89,7 @@ pub fn get_levels_response(
             Some("[Measures]"),
             Some("[Measures].[MeasuresLevel]"),
         )
+        && super::name_matches(restrictions.level_name.as_deref(), &["MeasuresLevel"])
     {
         rows.push_str(&format!(
             r#"          <row>
@@ -131,7 +132,8 @@ pub fn get_levels_response(
             &d.dimension_unique_name(),
             Some(&d.hierarchy_unique_name()),
             Some(&d.all_level_unique_name()),
-        ) {
+        ) && super::name_matches(restrictions.level_name.as_deref(), &[&d.all_level_name])
+        {
             rows.push_str(&format!(
                 r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -182,7 +184,8 @@ pub fn get_levels_response(
                     &d.dimension_unique_name(),
                     Some(&d.hierarchy_unique_name()),
                     Some(&level_unique),
-                ) {
+                ) || !super::name_matches(restrictions.level_name.as_deref(), &[&level.name])
+                {
                     continue;
                 }
                 rows.push_str(&format!(
@@ -228,7 +231,8 @@ pub fn get_levels_response(
                 &d.dimension_unique_name(),
                 Some(&d.hierarchy_unique_name()),
                 Some(&d.leaf_level_unique_name()),
-            ) {
+            ) && super::name_matches(restrictions.level_name.as_deref(), &[&d.leaf_level_name])
+            {
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -286,7 +290,8 @@ pub fn get_levels_response(
                 &d.dimension_unique_name(),
                 Some(&key_hier_u),
                 Some(&key_all_unique),
-            ) {
+            ) && super::name_matches(restrictions.level_name.as_deref(), &[&d.all_level_name])
+            {
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -324,7 +329,8 @@ pub fn get_levels_response(
                 &d.dimension_unique_name(),
                 Some(&key_hier_u),
                 Some(&level_unique),
-            ) {
+            ) && super::name_matches(restrictions.level_name.as_deref(), &[&level.name])
+            {
                 rows.push_str(&format!(
                     r#"          <row>
             <CATALOG_NAME>{catalog}</CATALOG_NAME>
@@ -525,6 +531,47 @@ mod tests {
                 .split("<DIMENSION_UNIQUE_NAME>[Category]")
                 .collect::<Vec<_>>();
             assert!(cat_section.len() >= 2, "should find Category dimension");
+        });
+    }
+
+    /// LEVEL_NAME is an exact, case-insensitive name filter on every level row
+    /// site (MeasuresLevel, (All), user levels, the flat leaf, the key
+    /// hierarchy); the reference returns 0 rows for an unknown name (measured
+    /// 2026-09-27).
+    #[test]
+    fn level_name_filters_every_row_site() {
+        let p = ProxyProject::load("projects/project3/proxy-config.json").expect("load project3");
+        with_test_project(p, || {
+            let config = &crate::proxy_project::project().config;
+            let admin = crate::engine::model::UserContext::admin_default();
+            let rows = |restrictions: &Restrictions| {
+                super::get_levels_response(restrictions, &admin, config)
+                    .matches("<row>")
+                    .count()
+            };
+
+            assert!(rows(&Restrictions::default()) > 0);
+            let named = |name: &str| Restrictions {
+                level_name: Some(name.into()),
+                ..Default::default()
+            };
+            assert_eq!(rows(&named("Category")), 1, "one level named Category");
+            assert_eq!(
+                rows(&named("category")),
+                1,
+                "names match case-insensitively"
+            );
+            assert_eq!(rows(&named("Year")), 1, "the leveled site is filtered");
+            assert_eq!(
+                rows(&named("MeasuresLevel")),
+                1,
+                "the MeasuresLevel row is filtered"
+            );
+            assert_eq!(
+                rows(&named("NoSuchLevel")),
+                0,
+                "an unknown level name matches nothing"
+            );
         });
     }
 }

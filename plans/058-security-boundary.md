@@ -261,6 +261,14 @@ reverted rather than half-done — review F4). The earlier note here misdiagnose
 `Measures` hierarchy, which the name filter never saw (the reference returns 0
 rows for an unknown `HIERARCHY_NAME`), not a key-attribute hierarchy. Fixed.
 
+**LEVEL_NAME closed 2026-09-27**: measured on the mirror (MDSCHEMA_LEVELS:
+`LEVEL_NAME=Category` returns exactly one row, the match is case-insensitive,
+an unknown name returns 0 rows, `LEVEL_VISIBILITY=0` returns 0 rows), then
+applied at all six level-row sites (MeasuresLevel, the user-hierarchy `(All)`
+and levels, the flat leaf, and both key-hierarchy rows). Two parity cases carry
+the mirror's values — the catalogue is **40/40** — and the unit test covers the
+name, case, unknown and the leveled and MeasuresLevel sites.
+
 ### Measure and member probes gated on the access view, per measure (2026-09-27)
 
 The recorded probe holes are closed: a restricted user no longer counts, names
