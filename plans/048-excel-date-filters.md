@@ -638,25 +638,29 @@ keep the fact-driven list. The key view now renders in its own namespace
 the sparse-cell lookup strips the date members' `T00:00:00` form, which had
 silently dropped every per-date cell (1 cell for 4,019 members). Five parity
 cases carry the mirror's values; the catalogue is 55/55.
-- Member naming form (next slice): the reference's non-top members are
-  `[Dim].[Hier].[first-level].&[k1].&[k2]...` (a quarter is
-  `[Date].[Calendar].[Year].&[2020].&[1]`), while the proxy emits the member's
-  own level with concatenated keys (`[Date].[Calendar].[Quarter].&[2020]&[1]`).
-  The reference faults on the proxy's form ("The unique name '&[2020]&[1]' is
-  based on a compound key format, which is not supported in Tabular models"),
-  so the proxy must emit and resolve the reference's form. Recipe: (1) emit
-  `hier.[levels[0].name].&[k1].&[k2]...` in
-  `axis_members::leaf_member_for_dim` and the `members.rs` leveled builder
-  (parent unames follow the same qualifier); (2) resolve a member's level from
-  its **key path length** wherever a uname's level name maps to an index — the
-  four `parse_level_member` callers (`plan.rs::resolve_set_source`,
-  `render.rs`'s member-range branch, `semantic.rs`'s range filter) plus
-  `sql.rs`'s level-qualified filter lowering, which applies the path segments
-  to the level's key columns in order; (3) accept both forms (the old form's
-  name matches `levels[depth]`, the new one `levels[0]`, so the name stays a
-  sanity check); (4) pin the mirror's quarter/month/date unames and the
-  MDSCHEMA_MEMBERS level rows in parity. The set-probe parity cases pin counts
-  only until this lands.
+**Member naming completed 2026-09-27**: every member is now qualified with the
+hierarchy's first level and its full dotted key path (a quarter is
+`[Date].[Calendar].[Year].&[2020].&[1]`, matching the mirror exactly), in both
+MDSCHEMA_MEMBERS rows and axis members; `LEVEL_UNIQUE_NAME` keeps the member's
+own level. The parser resolves a member's level from its key path length
+(`DimensionDef::member_level_index`), so the reference's form and the old proxy
+form both work (`parse_level_member`'s callers, the semantic filter builders,
+and `member_filter_sql`). The key view still renders flat
+(`[Date].[Full Date].&[2020-01-01T00:00:00]`) — `apply_key_hierarchy_view` now
+keeps only the path's last segment. Parity pins the mirror's quarter and month
+names plus the set-probe names.
+
+Landing the form exposed three assumptions that had only known the
+concatenated spelling: `parse_member_ref` consumed one dotted key and the
+drillthrough WHERE scanner re-scanned the same member forever (an allocation
+loop — it exhausted memory until a no-progress guard was added);
+`key_from_member_uname` started at the last `.&[` and returned only the final
+segment (silently dropping every axis cell); and drill/window filters resolved
+the *named* token as the member's level, so a drilled year filtered the
+quarter column and `YTD` of a June member listed years. All three now resolve
+levels from the key path length (`DimensionDef::member_level_index`), with
+regression tests for the loop, the full key path, sparse cells, and the
+time-window levels.
 - The `NON EMPTY` drilldown count is 2468 (All + 2467 dates) against the
   mirror's 2462 (All + 2461): six `NON EMPTY`-visible dates differ, most likely
   zero-revenue dates we keep and the reference drops.

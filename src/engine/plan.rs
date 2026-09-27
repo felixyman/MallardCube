@@ -353,9 +353,19 @@ fn resolve_set_source(
         // physical grain — the leaf key — so the renderer's key view matches
         // the fact keys (`2020-01-01`, not the full ancestor path).
         crate::mdx_parser::SetExpr::LevelMembers { dim, level, .. } => (dim.clone(), level.clone()),
-        // A member range groups by the endpoints' level.
+        // A member range groups by the endpoints' level; the reference's
+        // unames qualify the member with the first level and the key path, so
+        // the path length resolves the level.
         crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
-            let (dim, level, _) = crate::mdx_parser::parse_level_member(from)?;
+            let (dim, level, key) = crate::mdx_parser::parse_level_member(from)?;
+            let level = model
+                .dim_def_opt(&dim)
+                .and_then(|def| {
+                    def.member_level_index(&level, &key)
+                        .and_then(|index| def.levels.get(index))
+                        .map(|l| l.name.clone())
+                })
+                .unwrap_or(level);
             (dim, Some(level))
         }
         // Wrappers are pruned at render time; plan on their source.

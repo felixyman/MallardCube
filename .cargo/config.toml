@@ -1,0 +1,7 @@
+# Cap build parallelism for every cargo invocation in this project, including
+# rust-analyzer's workspace checks. Uncapped jobs let the editor's check and a
+# test run compile the bundled DuckDB C++ in parallel, which exhausted memory
+# and swap (measured 2026-09-27); the debug profile keeps dependency debug info
+# off so each artifact stays small.
+[build]
+jobs = 2

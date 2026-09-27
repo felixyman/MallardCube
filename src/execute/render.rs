@@ -1049,7 +1049,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         let project = crate::proxy_project::project();
         let dim_def = project.model.dim_def_opt(dim)?;
         let key = filter_keys.first()?;
-        Some(level_member_uname(dim_def, dl - 1, key))
+        Some(level_member_uname(dim_def, key))
     });
     let mut members = leaf_members_from(
         query,
@@ -1166,7 +1166,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     continue;
                 }
                 let is_branch = *root_key == branch_year;
-                let u_name = level_member_uname(def, 0, root_key);
+                let u_name = level_member_uname(def, root_key);
                 let cc = member_child_count(query, backend, dim, 0, root_key);
                 prefix.push((
                     cellset::MemberConfig {
@@ -1194,7 +1194,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
                     continue;
                 }
                 // The drilled branch: intermediate levels, then the children.
-                let parent_uname = Some(level_member_uname(def, dl - 1, key));
+                let parent_uname = Some(level_member_uname(def, key));
                 for m in ancestor_members(query, dim, def, key, dl, backend)
                     .into_iter()
                     .skip(1)
@@ -1224,7 +1224,7 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
             if !prefix.iter().any(|(m, _)| m.l_num == 1)
                 || !prefix
                     .iter()
-                    .any(|(m, _)| m.u_name == level_member_uname(def, 0, &branch_year))
+                    .any(|(m, _)| m.u_name == level_member_uname(def, &branch_year))
             {
                 for m in ancestor_members(query, dim, def, key, dl, backend) {
                     prefix.push((m, total));
@@ -1416,7 +1416,7 @@ fn attach_parent_keys(
         if parts.len() <= dl {
             continue;
         }
-        let parent = level_member_uname(def, dl - 1, &parts[..dl].join("|"));
+        let parent = level_member_uname(def, &parts[..dl].join("|"));
         match m
             .dim_props
             .iter_mut()
@@ -1644,13 +1644,13 @@ fn preorder_drill_members<B: QueryBackend + ?Sized>(
             let parent_uname = if level == 0 {
                 def.all_member_unique_name()
             } else {
-                level_member_uname(def, level - 1, &parts[..level].join("|"))
+                level_member_uname(def, &parts[..level].join("|"))
             };
             let cc = member_child_count(query, backend, dim, level, &key);
             out.push((
                 cellset::MemberConfig {
                     hierarchy: def.hierarchy_unique_name(),
-                    u_name: level_member_uname(def, level, &key),
+                    u_name: level_member_uname(def, &key),
                     caption: caption.clone(),
                     l_name: def
                         .levels
@@ -1663,7 +1663,7 @@ fn preorder_drill_members<B: QueryBackend + ?Sized>(
                     dim_props: walk_dim_props(
                         def,
                         &caption,
-                        &level_member_uname(def, level, &key),
+                        &level_member_uname(def, &key),
                         &def.levels
                             .get(level)
                             .map(|l| format!("{}.[{}]", def.hierarchy_unique_name(), l.name))
@@ -1773,12 +1773,12 @@ fn ancestor_members_from_labels<B: QueryBackend + ?Sized>(
             let parent_uname = if i == 0 {
                 def.all_member_unique_name()
             } else {
-                level_member_uname(def, i - 1, &parts[..i].join("|"))
+                level_member_uname(def, &parts[..i].join("|"))
             };
             let cc = member_child_count(query, backend, dim, i, key);
             out.push(cellset::MemberConfig {
                 hierarchy: def.hierarchy_unique_name(),
-                u_name: level_member_uname(def, i, key),
+                u_name: level_member_uname(def, key),
                 caption: caption.clone(),
                 l_name: format!("{}.[{}]", def.hierarchy_unique_name(), level.name),
                 l_num: (i + 1) as i32,
@@ -1787,7 +1787,7 @@ fn ancestor_members_from_labels<B: QueryBackend + ?Sized>(
                 dim_props: walk_dim_props(
                     def,
                     &caption,
-                    &level_member_uname(def, i, key),
+                    &level_member_uname(def, key),
                     &format!("{}.[{}]", def.hierarchy_unique_name(), level.name),
                     key,
                     &parent_uname,
@@ -1855,13 +1855,13 @@ fn ancestor_members<B: QueryBackend + ?Sized>(
             break;
         }
         let anc_key = key_parts[..i + 1].join("|");
-        let u_name = level_member_uname(def, i, &anc_key);
+        let u_name = level_member_uname(def, &anc_key);
         let caption = anc_key.rsplit('|').next().unwrap_or(&anc_key).to_string();
         let l_name = format!("{}.[{}]", def.hierarchy_unique_name(), def.levels[i].name);
         let parent_uname = if i == 0 {
             def.all_member_unique_name()
         } else {
-            level_member_uname(def, i - 1, &key_parts[..i].join("|"))
+            level_member_uname(def, &key_parts[..i].join("|"))
         };
         let cc = member_child_count(query, backend, dim, i, &anc_key);
         let dim_props = walk_dim_props(
@@ -1891,21 +1891,18 @@ fn ancestor_members<B: QueryBackend + ?Sized>(
 /// Member unique name for a level, converting an internal pipe path to the
 /// SSAS compound-key form: `2026|4` at level `Quarter` becomes
 /// `[Date].[Calendar].[Quarter].&amp;[2026]&amp;[4]`.
-fn level_member_uname(
-    dim: &crate::engine::model::DimensionDef,
-    level_idx: usize,
-    key: &str,
-) -> String {
-    let level = dim
-        .levels
-        .get(level_idx)
-        .map(|l| l.name.as_str())
-        .unwrap_or("");
+fn level_member_uname(dim: &crate::engine::model::DimensionDef, key: &str) -> String {
+    // The reference qualifies every member with the hierarchy's first level
+    // and its full dotted key path (a quarter is `[Year].&[2020].&[1]`,
+    // measured 2026-09-27); the member's own level only appears in
+    // LEVEL_UNIQUE_NAME.
+    let qualifier = dim.levels.first().map(|l| l.name.as_str()).unwrap_or("");
     let suffix: String = key
         .split('|')
         .map(|part| format!("&amp;[{part}]"))
-        .collect();
-    format!("{}.[{}].{suffix}", dim.hierarchy_unique_name(), level)
+        .collect::<Vec<_>>()
+        .join(".");
+    format!("{}.[{}].{suffix}", dim.hierarchy_unique_name(), qualifier)
 }
 
 /// Per-member child count at `level_idx` of `dim`, scoped by the ancestor path
@@ -2069,12 +2066,12 @@ pub(crate) fn build_drilldown_multi<B: QueryBackend + ?Sized>(
     // With several expanded parents the SQL emits full ancestor paths, so the
     // renderer cannot prefix one parent key; per-member keys are attached later.
     let parent_uname = |dim: &str, drill: &Option<(usize, Vec<String>)>| -> Option<String> {
-        let (lvl, keys) = drill.as_ref()?;
+        let (_lvl, keys) = drill.as_ref()?;
         if keys.len() != 1 {
             return None;
         }
         let def = project.model.dim_def_opt(dim)?;
-        Some(level_member_uname(def, lvl - 1, &keys[0]))
+        Some(level_member_uname(def, &keys[0]))
     };
     let d0_parent_uname = parent_uname(d0, &drill0);
     let d1_parent_uname = parent_uname(d1, &drill1);
@@ -3578,12 +3575,12 @@ fn build_set_members<B: QueryBackend + ?Sized>(
                     );
                 }
                 crate::mdx_parser::SetExpr::MemberRange { from, .. } => {
-                    let (dim, level, _) =
+                    let (dim, level, key) =
                         crate::mdx_parser::parse_level_member(from).unwrap_or_default();
                     let gl = crate::proxy_project::project()
                         .model
                         .dim_def_opt(&dim)
-                        .and_then(|def| def.levels.iter().position(|l| l.name == level));
+                        .and_then(|def| def.member_level_index(&level, &key));
                     break (dim, gl, None, None, None, false);
                 }
                 crate::mdx_parser::SetExpr::AllMembers { dim } => {

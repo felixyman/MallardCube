@@ -175,24 +175,44 @@ fn leaf_member_for_dim(
     // A member at a deeper level needs a key unique within the hierarchy, so
     // prefix its ancestor path (e.g. a quarter under 2026 is &[2026]&[1]).
     // Compound path labels ("2026|1") show only their own segment as caption.
-    let member_key = parent_uname
+    let raw_leaf = name.rsplit('|').next().unwrap_or(name).to_string();
+    // A date leaf keeps the reference's `T00:00:00` key form and its
+    // short-date caption in the user hierarchy too (measured 2026-09-27);
+    // MEMBER_KEY stays the stored value.
+    let date_leaf = dim.is_date_role && crate::xmla::discover::is_iso_date(&raw_leaf);
+    let mut member_key = parent_uname
         .and_then(key_from_member_uname)
         .map(|path| format!("{path}|{name}"))
         .unwrap_or_else(|| name.to_string());
+    if date_leaf {
+        let mut parts: Vec<String> = member_key.split('|').map(str::to_string).collect();
+        if let Some(last) = parts.last_mut() {
+            *last = crate::xmla::discover::date_member_key(&raw_leaf);
+        }
+        member_key = parts.join("|");
+    }
     // MEMBER_KEY is the *leaf* key, not the pipe-joined path: the reference
     // SSAS reports the leaf key for compound members, and the pipe key made
     // Excel refuse to add hierarchy fields to a pivot built against the proxy
     // (plan 048 bisect).
-    let leaf_key = name.rsplit('|').next().unwrap_or(name).to_string();
-    let caption = leaf_key.clone();
+    let leaf_key = raw_leaf.clone();
+    let caption = if date_leaf {
+        crate::xmla::discover::date_member_caption(&raw_leaf)
+    } else {
+        raw_leaf.clone()
+    };
     let (u_name, l_name, l_num) =
         if let (Some(level_idx), true) = (drilldown_level, !dim.levels.is_empty()) {
             if let Some(level) = dim.levels.get(level_idx) {
                 (
+                    // The reference qualifies every member with the
+                    // hierarchy's first level and the full key path (a quarter
+                    // is `[Year].&[2020].&[1]`), measured 2026-09-27; `l_name`
+                    // stays the member's own level.
                     format!(
                         "{}.[{}].{}",
                         dim.hierarchy_unique_name(),
-                        level.name,
+                        dim.levels[0].name,
                         member_key_suffix(&member_key)
                     ),
                     format!("{}.[{}]", dim.hierarchy_unique_name(), level.name),
@@ -244,17 +264,39 @@ fn leaf_member_for_dim(
 /// Extract the key path from a member UName (compound aware), e.g.
 /// `[Date].[Calendar].[Year].&[2026]` -> `2026`.
 pub(crate) fn key_from_member_uname(uname: &str) -> Option<String> {
-    let start = uname.rfind(".&amp;[")? + 7;
+    // The first key segment follows the level parts at `.&[` (escaped or not);
+    // later segments are separated by `].&[` (the reference's dotted form) or
+    // `]&[` (the older concatenation). Starting at the first separator — not
+    // the last — keeps the full path: the dotted form has a dot before every
+    // key, so a `rfind` would return only the final segment.
+    let start = match (uname.find(".&amp;["), uname.find(".&[")) {
+        (Some(escaped), Some(raw)) => escaped.min(raw),
+        (Some(escaped), None) => escaped,
+        (None, Some(raw)) => raw,
+        (None, None) => return None,
+    };
     let mut rest = &uname[start..];
+    // Drop the first separator (`&[`, `&amp;[`, `.&[` or `.&amp;[`); the loop
+    // then reads key text and skips the separator before each next segment.
+    for separator in [".&amp;[", ".&[", "&amp;[", "&["] {
+        if let Some(next) = rest.strip_prefix(separator) {
+            rest = next;
+            break;
+        }
+    }
     let mut parts = Vec::new();
     loop {
-        let end = rest.find(']')?;
-        parts.push(rest[..end].to_string());
-        rest = &rest[end + 1..];
-        if let Some(next) = rest.strip_prefix("&amp;[") {
-            rest = next;
-        } else {
-            break;
+        let close = rest.find(']')?;
+        parts.push(rest[..close].to_string());
+        rest = &rest[close + 1..];
+        let next = rest
+            .strip_prefix(".&amp;[")
+            .or_else(|| rest.strip_prefix(".&["))
+            .or_else(|| rest.strip_prefix("&amp;["))
+            .or_else(|| rest.strip_prefix("&["));
+        match next {
+            Some(next) => rest = next,
+            None => break,
         }
     }
     Some(parts.join("|"))
@@ -276,7 +318,8 @@ pub(crate) fn value_key_from_uname(uname: &str) -> String {
 fn member_key_suffix(key: &str) -> String {
     key.split('|')
         .map(|part| format!("&amp;[{}]", part))
-        .collect()
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Per-level member counts for a dimension whose table a role filters, taken
@@ -698,15 +741,31 @@ pub(crate) fn apply_key_hierarchy_view<B: QueryBackend + ?Sized>(
     backend: &B,
     counts: Option<&[u32]>,
 ) {
-    let (Some(view), Some(level)) = (dim.key_hierarchy_unique_name(), dim.key_level()) else {
+    let (Some(view), Some(_level)) = (dim.key_hierarchy_unique_name(), dim.key_level()) else {
         return;
     };
     let level_uname = dim.key_level_unique_name().unwrap_or_default();
     let all_uname = format!("{view}.[All]");
-    let user_level_prefix = format!("{}.[{}]", dim.hierarchy_unique_name(), level.name);
     for m in members.iter_mut() {
         m.hierarchy = view.clone();
-        m.u_name = m.u_name.replace(&user_level_prefix, &view);
+        // The view is single-level: keep the path's last key segment and
+        // render it in the key hierarchy's own namespace (the member may carry
+        // the full ancestor path, `[Year].&[2020].&[1].&[1].&[2020-01-01]`).
+        let (leaf, escaped) = if let Some((_, rest)) = m.u_name.rsplit_once(".&amp;[") {
+            (rest.strip_suffix(']'), true)
+        } else if let Some((_, rest)) = m.u_name.rsplit_once(".&[") {
+            (rest.strip_suffix(']'), false)
+        } else {
+            (None, false)
+        };
+        let Some(leaf) = leaf else {
+            continue;
+        };
+        m.u_name = if escaped {
+            format!("{view}.&amp;[{leaf}]")
+        } else {
+            format!("{view}.&[{leaf}]")
+        };
         m.l_name = level_uname.clone();
         m.l_num = 1;
         // Date members keep the reference's naming: `&[<iso>T00:00:00]` and
@@ -1056,5 +1115,32 @@ mod tests {
             .find(|(k, _)| k == "PARENT_LEVEL")
             .expect("PARENT_LEVEL requested");
         assert_eq!(pl.1, "1");
+    }
+
+    /// The key path starts at the *first* key separator, so the reference's
+    /// dotted form keeps every segment; the older concatenated form still
+    /// works. Reading only the last segment silently dropped every axis cell
+    /// once the dotted form landed (measured 2026-09-27).
+    #[test]
+    fn member_uname_keys_keep_the_full_path() {
+        assert_eq!(
+            key_from_member_uname("[Date].[Calendar].[Year].&amp;[2020].&amp;[1]").as_deref(),
+            Some("2020|1")
+        );
+        assert_eq!(
+            key_from_member_uname("[Date].[Calendar].[Quarter].&[2020]&[1]").as_deref(),
+            Some("2020|1")
+        );
+        assert_eq!(
+            key_from_member_uname(
+                "[Date].[Calendar].[Year].&amp;[2020].&amp;[1].&amp;[1].&amp;[2020-01-01T00:00:00]"
+            )
+            .as_deref(),
+            Some("2020|1|1|2020-01-01T00:00:00")
+        );
+        assert_eq!(
+            key_from_member_uname("[Category].[Category].&amp;[Toys]").as_deref(),
+            Some("Toys")
+        );
     }
 }

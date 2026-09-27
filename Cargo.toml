@@ -29,6 +29,18 @@ jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
 ureq = { version = "3.4.0", features = ["json"] }
 yaml_serde = "0.10"
 
+# Test builds stay small: the bundled DuckDB dependency's debug info runs to
+# gigabytes per fingerprint and stale copies accumulate (154 GB of
+# target/debug was measured 2026-09-27). Dependencies carry no debug info,
+# the workspace keeps line tables for panics, and incremental artifacts
+# (their own ~8 GB) are off.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
 # The rendering path is CPU-bound and the fault-on-panic design (request-level
 # catch_unwind in main.rs) requires unwinding: state it explicitly so nobody
 # "optimises" panic to abort and silently turns every engine error into a dead

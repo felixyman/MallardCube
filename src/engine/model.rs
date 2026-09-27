@@ -421,6 +421,27 @@ impl DimensionDef {
         let level = self.levels.last()?;
         Some(format!("[{}].[{}].[{}]", self.caption, name, level.name))
     }
+
+    /// The level index a key-qualified member reference names. The tabular
+    /// reference qualifies every member with the hierarchy's *first* level and
+    /// the full key path (a quarter is `[Year].&[2020].&[1]`), while the older
+    /// proxy form names the member's own level with the keys concatenated
+    /// (`[Quarter].&[2020]&[1]`). The path length is authoritative; the name
+    /// must match the level at that depth or the hierarchy's first level
+    /// (measured 2026-09-27).
+    pub fn member_level_index(&self, level_name: &str, key_path: &str) -> Option<usize> {
+        let depth = key_path.split('|').count().saturating_sub(1);
+        if let Some(level) = self.levels.get(depth)
+            && (level.name == level_name
+                || self
+                    .levels
+                    .first()
+                    .is_some_and(|first| first.name == level_name))
+        {
+            return Some(depth);
+        }
+        self.levels.iter().position(|l| l.name == level_name)
+    }
 }
 
 pub struct MeasureDef {

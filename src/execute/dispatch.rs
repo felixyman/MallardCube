@@ -66,7 +66,7 @@ pub fn get_execute_drillthrough_response_with_predicate<B: QueryBackend + ?Sized
 
     // Extract slicer filters from WHERE-clause members like
     // [Territory].[Territory].&[North], [Date].[Calendar].[Year].&[2024], or the
-    // compound [Date].[Calendar].[Quarter].&[2024]&[1]. Filters are exact: flat
+    // compound [Date].[Calendar].[Year].&[2024].&[1]. Filters are exact: flat
     // dimensions compare by equality, multi-level dimensions scope through
     // their dim table by level (plan 033 — the old CAST+LIKE prefix match
     // also returned Northeast/Northwest rows for North).
@@ -86,7 +86,14 @@ pub fn get_execute_drillthrough_response_with_predicate<B: QueryBackend + ?Sized
                 if let Some(sql) = member_filter_sql(model, &member) {
                     where_clauses.push(sql);
                 }
-                pos = bracket + 1 + consumed;
+                let next = bracket + 1 + consumed;
+                if next <= pos {
+                    // Never re-scan the same member: a shape the parser does
+                    // not consume would loop forever, allocating every pass
+                    // (measured 2026-09-27 with the dotted key form).
+                    break;
+                }
+                pos = next;
             }
             None => pos = abs + 3,
         }
@@ -145,10 +152,20 @@ fn parse_member_ref(text: &str) -> Option<(DrillMember, usize)> {
         i += 1; // the `.` of the first `.&[key]`
     }
     let mut keys = Vec::new();
-    while text[i..].starts_with("&[") {
-        let end = i + text[i..].find(']')?;
-        keys.push(text[i + 2..end].to_string());
-        i = end + 1;
+    loop {
+        // The reference's form separates keys with dots (`&[2026].&[1]`); the
+        // older proxy form concatenates them (`&[2026]&[1]`). Both are read.
+        if let Some(rest) = text[i..].strip_prefix("&[") {
+            let end = rest.find(']')?;
+            keys.push(rest[..end].to_string());
+            i += 2 + end + 1;
+        } else if let Some(rest) = text[i..].strip_prefix(".&[") {
+            let end = rest.find(']')?;
+            keys.push(rest[..end].to_string());
+            i += 3 + end + 1;
+        } else {
+            break;
+        }
     }
     if parts.is_empty() || keys.is_empty() {
         return None;
@@ -182,10 +199,7 @@ fn member_filter_sql(model: &SemanticModel, m: &DrillMember) -> Option<String> {
 
     if !dim.levels.is_empty() {
         let target = match &m.level {
-            Some(level) => dim
-                .levels
-                .iter()
-                .position(|l| l.name.eq_ignore_ascii_case(level)),
+            Some(level) => dim.member_level_index(level, &m.keys.join("|")),
             None => Some(dim.levels.len() - 1), // bare member = leaf level
         };
         if let (Some(target), Some(rel)) = (target, rel)
@@ -1471,7 +1485,7 @@ mod tests {
 
             // SELF probe on a compound child member.
             let self_xml = crate::xmla::discover::members::get_members_response_with_backend(
-                Some("[Employee].[Employee].[Level 02].&[1]&[2]"),
+                Some("[Employee].[Employee].[Level 01].&[1].&[2]"),
                 Some(8),
                 &crate::xmla::parser::Restrictions::default(),
                 &backend,
@@ -1538,9 +1552,17 @@ mod tests {
             assert!(
                 infos[0]
                     .1
-                    .contains("[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]"),
+                    .contains("[Date].[Calendar].[Year].&amp;[2020].&amp;[1]"),
                 "compound quarter: {}",
                 infos[0].1
+            );
+            // Sparse cells: only the quarters with facts carry one. The dotted
+            // key form must still yield the full path — reading only the last
+            // segment silently dropped every cell (measured 2026-09-27).
+            assert_eq!(
+                cell_values(&xml).len(),
+                data_quarter_keys().len(),
+                "one cell per quarter with facts"
             );
         });
     }
@@ -1566,7 +1588,7 @@ mod tests {
             );
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
             assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020].&amp;[1]"));
             assert!(
                 !unames.iter().any(|u| u.contains("[Month]")),
                 "no months at a quarter-level drill"
@@ -2974,8 +2996,8 @@ mod tests {
             );
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
             assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Month].&amp;[2020]&amp;[1]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020].&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020].&amp;[1].&amp;[1]"));
 
             // Every member's parent must be on the axis.
             let mut pairs: Vec<(String, Option<String>)> = Vec::new();
@@ -3056,10 +3078,10 @@ mod tests {
                 assert!(date_unames.contains(&year), "missing {year}");
             }
             for quarter in [
-                "[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]",
-                "[Date].[Calendar].[Quarter].&amp;[2020]&amp;[4]",
-                "[Date].[Calendar].[Quarter].&amp;[2021]&amp;[1]",
-                "[Date].[Calendar].[Quarter].&amp;[2021]&amp;[4]",
+                "[Date].[Calendar].[Year].&amp;[2020].&amp;[1]",
+                "[Date].[Calendar].[Year].&amp;[2020].&amp;[4]",
+                "[Date].[Calendar].[Year].&amp;[2021].&amp;[1]",
+                "[Date].[Calendar].[Year].&amp;[2021].&amp;[4]",
             ] {
                 assert!(date_unames.contains(&quarter), "missing {quarter}");
             }
@@ -3079,7 +3101,11 @@ mod tests {
             }
             for (u, p) in &pairs {
                 for year in ["2020", "2021"] {
-                    if u.contains(&format!("[Quarter].&amp;[{year}]")) {
+                    // A quarter carries the first level and a two-segment key
+                    // path (`[Year].&[2020].&[1]`, measured 2026-09-27).
+                    if u.contains(&format!("[Year].&amp;[{year}].&amp;["))
+                        && u.matches(".&amp;[").count() == 2
+                    {
                         assert_eq!(
                             p.as_deref(),
                             Some(format!("[Date].[Calendar].[Year].&amp;[{year}]").as_str()),
@@ -3101,8 +3127,8 @@ mod tests {
             let unames: Vec<&str> = infos.iter().map(|(_, u, _, _)| u.as_str()).collect();
             assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020]"));
             assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2021]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2021]&amp;[4]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2020].&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2021].&amp;[4]"));
         });
     }
 
@@ -3135,8 +3161,8 @@ mod tests {
                 !unames.contains(&"[Date].[Calendar].[Year].&amp;[2020]"),
                 "years outside the slice are empty and omitted"
             );
-            assert!(unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2024]&amp;[1]"));
-            assert!(unames.contains(&"[Date].[Calendar].[Month].&amp;[2024]&amp;[1]&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2024].&amp;[1]"));
+            assert!(unames.contains(&"[Date].[Calendar].[Year].&amp;[2024].&amp;[1].&amp;[1]"));
             assert!(
                 !unames.iter().any(|u| u.matches("[2024]").count() > 1),
                 "keys must not repeat the year: {unames:?}"
@@ -3150,7 +3176,7 @@ mod tests {
     #[test]
     fn mixed_level_member_expand_to_month_inside_crossjoin() {
         with_project3(|| {
-            let mdx = r##"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Segment].[Segment].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026],[Date].[Calendar].[Quarter].&[2026]&[1],[Date].[Calendar].[Quarter].&[2026]&[2],[Date].[Calendar].[Quarter].&[2026]&[3],[Date].[Calendar].[Quarter].&[2026]&[4]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Calendar].[Month]CHILDREN_CARDINALITY ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
+            let mdx = r##"SELECT NON EMPTY CrossJoin(Hierarchize({DrilldownLevel({[Segment].[Segment].[All]},,,INCLUDE_CALC_MEMBERS)}), Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2026],[Date].[Calendar].[Year].&[2026].&[1],[Date].[Calendar].[Year].&[2026].&[2],[Date].[Calendar].[Year].&[2026].&[3],[Date].[Calendar].[Year].&[2026].&[4]},,,INCLUDE_CALC_MEMBERS))) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,[Date].[Calendar].[Month]CHILDREN_CARDINALITY ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE"##;
             let xml = get_execute_statement_response(mdx);
 
             let mut pairs: Vec<(String, Option<String>, u32)> = Vec::new();
@@ -3175,11 +3201,11 @@ mod tests {
                 "{unames:?}"
             );
             assert!(
-                unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2026]&amp;[1]"),
+                unames.contains(&"[Date].[Calendar].[Year].&amp;[2026].&amp;[1]"),
                 "{unames:?}"
             );
             assert!(
-                unames.contains(&"[Date].[Calendar].[Month].&amp;[2026]&amp;[1]&amp;[1]"),
+                unames.contains(&"[Date].[Calendar].[Year].&amp;[2026].&amp;[1].&amp;[1]"),
                 "months are expanded: {unames:?}"
             );
             for (u, p, cc) in &pairs {
@@ -3257,7 +3283,7 @@ mod tests {
                 "the expanded year is on the axis: {unames:?}"
             );
             assert!(
-                unames.contains(&"[Date].[Calendar].[Quarter].&amp;[2026]&amp;[1]"),
+                unames.contains(&"[Date].[Calendar].[Year].&amp;[2026].&amp;[1]"),
                 "quarters are keyed by their year: {unames:?}"
             );
             for (u, p) in &date_members {
@@ -3334,7 +3360,7 @@ mod tests {
             assert!(
                 infos[0]
                     .1
-                    .contains("[Date].[Calendar].[Quarter].&amp;[2020]&amp;[1]"),
+                    .contains("[Date].[Calendar].[Year].&amp;[2020].&amp;[1]"),
                 "compound unique name: {}",
                 infos[0].1
             );
@@ -3342,7 +3368,7 @@ mod tests {
             // with facts carry cells, so `quarters` still sizes the CellData.
             let last_uname = &infos[infos.len() - 1].1;
             assert!(
-                last_uname.contains("&amp;[2030]&amp;[4]"),
+                last_uname.contains("&amp;[2030].&amp;[4]"),
                 "last quarter of the calendar: {last_uname}"
             );
             assert_eq!(
@@ -3964,7 +3990,7 @@ mod tests {
     fn drillthrough_compound_quarter_member_scopes_exactly() {
         with_project3(|| {
             let xml = crate::execute::dispatch::get_execute_drillthrough_response(
-                "DRILLTHROUGH SELECT FROM [Sales] WHERE ([Date].[Calendar].[Quarter].&[2024]&[1])",
+                "DRILLTHROUGH SELECT FROM [Sales] WHERE ([Date].[Calendar].[Year].&[2024].&[1])",
                 Backend::test_fixture(),
             );
             let keys: Vec<&str> = xml
@@ -4476,7 +4502,7 @@ mod tests {
 
             // YTD of a month member is that year's months up to it.
             let xml = get_execute_statement_response(
-                "SELECT {YTD([Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {YTD([Date].[Calendar].[Year].&[2024].&[2].&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             for month in ["1", "2", "3", "4", "5", "6"] {
@@ -4494,7 +4520,7 @@ mod tests {
 
             // QTD of a month member is that quarter's months up to it.
             let xml = get_execute_statement_response(
-                "SELECT {QTD([Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {QTD([Date].[Calendar].[Year].&[2024].&[2].&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             for month in ["4", "5", "6"] {
@@ -4510,7 +4536,7 @@ mod tests {
 
             // MTD of a month member is the month itself.
             let xml = get_execute_statement_response(
-                "SELECT {MTD([Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {MTD([Date].[Calendar].[Year].&[2024].&[2].&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             assert!(xml.contains("<Caption>6</Caption>"), "{xml}");
@@ -4545,7 +4571,7 @@ mod tests {
 
             // PeriodsToDate(Year, month) matches YTD.
             let xml = get_execute_statement_response(
-                "SELECT {PeriodsToDate([Date].[Calendar].[Year], [Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
+                "SELECT {PeriodsToDate([Date].[Calendar].[Year], [Date].[Calendar].[Year].&[2024].&[2].&[6])} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             );
             assert!(!xml.contains("<faultstring>"), "{xml}");
             assert!(
@@ -4597,7 +4623,7 @@ mod tests {
         with_project3(|| {
             for (mdx, needle) in [
                 (
-                    "SELECT {ClosingPeriod([Date].[Calendar].[Year], [Date].[Calendar].[Month].&[2024]&[2]&[6])} ON 1 FROM [Sales]",
+                    "SELECT {ClosingPeriod([Date].[Calendar].[Year], [Date].[Calendar].[Year].&[2024].&[2].&[6])} ON 1 FROM [Sales]",
                     "ClosingPeriod()",
                 ),
                 (
@@ -4743,7 +4769,7 @@ mod tests {
     #[test]
     fn children_cardinality_is_only_emitted_when_requested() {
         with_project3(|| {
-            let two_level = "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024],[Date].[Calendar].[Quarter].&[2024]&[1]},,,INCLUDE_CALC_MEMBERS)) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE";
+            let two_level = "SELECT NON EMPTY Hierarchize(DrilldownMember({{DrilldownMember({{DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024]},,,INCLUDE_CALC_MEMBERS)}}, {[Date].[Calendar].[Year].&[2024],[Date].[Calendar].[Year].&[2024].&[1]},,,INCLUDE_CALC_MEMBERS)) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue]) CELL PROPERTIES VALUE";
             let xml = get_execute_statement_response(two_level);
             assert!(
                 !xml.contains("CHILDREN_CARDINALITY"),
@@ -5709,7 +5735,7 @@ mod tests {
     fn compound_quarter_drilldown_scopes_to_year() {
         with_project3(|| {
             let xml = get_execute_statement_response(
-                r##"SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Calendar].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Calendar].[Quarter],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Calendar].[Quarter].&[2024]&[4]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue])"##,
+                r##"SELECT NON EMPTY Hierarchize({DrilldownLevel({DrilldownLevel({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)},[Date].[Calendar].[Year],INCLUDE_CALC_MEMBERS)},[Date].[Calendar].[Quarter],INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME,HIERARCHY_UNIQUE_NAME ON COLUMNS FROM (SELECT ({[Date].[Calendar].[Year].&[2024].&[4]}) ON COLUMNS FROM [Sales]) WHERE ([Measures].[Revenue])"##,
             );
             let q4 = demo_quarter_revenue(2024, 4);
             assert_eq!(
@@ -5726,7 +5752,7 @@ mod tests {
             );
             assert!(
                 xml.contains(
-                    "<UName>[Date].[Calendar].[Month].&amp;[2024]&amp;[4]&amp;[10]</UName>"
+                    "<UName>[Date].[Calendar].[Year].&amp;[2024].&amp;[4].&amp;[10]</UName>"
                 ),
                 "month must carry the compound year path"
             );
@@ -5742,7 +5768,7 @@ mod tests {
             );
             assert!(
                 xml.contains(
-                    "<PARENT_UNIQUE_NAME>[Date].[Calendar].[Quarter].&amp;[2024]&amp;[4]</PARENT_UNIQUE_NAME>"
+                    "<PARENT_UNIQUE_NAME>[Date].[Calendar].[Year].&amp;[2024].&amp;[4]</PARENT_UNIQUE_NAME>"
                 ),
                 "month parent must be the compound quarter"
             );
@@ -6098,7 +6124,7 @@ mod tests {
                 if *year == target {
                     for quarter in ["1", "2", "3", "4"] {
                         expected.push(format!(
-                            "[Date].[Calendar].[Quarter].&amp;[{year}]&amp;[{quarter}]"
+                            "[Date].[Calendar].[Year].&amp;[{year}].&amp;[{quarter}]"
                         ));
                     }
                 }

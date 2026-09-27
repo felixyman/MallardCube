@@ -311,8 +311,35 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
             }
             for t in tuples {
                 let key = t.join("|");
-                let name = t.last().cloned().unwrap_or_default();
-                let uname = format!("{level_u}.{}", key_suffix(&key));
+                let raw_name = t.last().cloned().unwrap_or_default();
+                // Date leaves keep the reference's `T00:00:00` key form and
+                // its short-date caption in the user hierarchy too (measured
+                // 2026-09-27); MEMBER_KEY stays the stored value.
+                let date_leaf = dim.is_date_role && crate::xmla::discover::is_iso_date(&raw_name);
+                let name = if date_leaf {
+                    crate::xmla::discover::date_member_caption(&raw_name)
+                } else {
+                    raw_name.clone()
+                };
+                let uname_key = if date_leaf {
+                    let mut parts: Vec<String> = t.to_vec();
+                    if let Some(last) = parts.last_mut() {
+                        *last = crate::xmla::discover::date_member_key(&raw_name);
+                    }
+                    parts.join("|")
+                } else {
+                    key.clone()
+                };
+                // The reference qualifies every member with the hierarchy's
+                // first level and the full key path (a quarter is
+                // `[Year].&[2020].&[1]`), measured 2026-09-27. `level_u`
+                // stays the member's own level for LEVEL_UNIQUE_NAME.
+                let uname = format!(
+                    "{}.[{}].{}",
+                    hier_u,
+                    dim.levels[0].name,
+                    key_suffix(&uname_key)
+                );
                 let (parent_u, parent_level) = if i == 0 {
                     (all_member_u.clone(), 0)
                 } else {
@@ -321,7 +348,7 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                         format!(
                             "{}.[{}].{}",
                             hier_u,
-                            dim.levels[i - 1].name,
+                            dim.levels[0].name,
                             key_suffix(&parent_key)
                         ),
                         i as u32,
@@ -354,8 +381,9 @@ fn build_level_member_rows<B: QueryBackend + ?Sized>(
                     // key (e9b7ab6) breaks Excel's ability to add hierarchy
                     // fields to a pivot built against the proxy (plan 048
                     // bisect; verified by comparing MDSCHEMA_MEMBERS against
-                    // the last good commit).
-                    member_key: name.clone(),
+                    // the last good commit). A date leaf keeps the stored
+                    // value, not the `T00:00:00` uname form.
+                    member_key: raw_name.clone(),
                 });
                 ordinal += 1;
             }
@@ -646,7 +674,10 @@ fn measure_member_rows_with_backend<B: QueryBackend + ?Sized>(
 }
 
 fn key_suffix(key: &str) -> String {
-    key.split('|').map(|part| format!("&[{part}]")).collect()
+    key.split('|')
+        .map(|part| format!("&[{part}]"))
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn all_rows_with_backend<B: QueryBackend + ?Sized>(
@@ -1356,38 +1387,30 @@ mod tests {
     #[test]
     fn leveled_dim_enumerates_every_level() {
         let rows = project3_rows();
-        let years: Vec<&MemberRow> = rows
-            .iter()
-            .filter(|r| {
-                r.member_unique_name
-                    .starts_with("[Date].[Calendar].[Year].&[")
-            })
-            .collect();
+        // Every member is qualified with the hierarchy's first level and its
+        // full key path (the reference's form, measured 2026-09-27), so the
+        // level column identifies the level, not the uname prefix.
+        let level_rows = |level: &str| {
+            rows.iter()
+                .filter(|r| r.level_unique_name == level)
+                .collect::<Vec<_>>()
+        };
+        let years = level_rows("[Date].[Calendar].[Year]");
         assert_eq!(years.len(), 11, "one row per demo year");
-        let quarters: Vec<&MemberRow> = rows
-            .iter()
-            .filter(|r| {
-                r.member_unique_name
-                    .starts_with("[Date].[Calendar].[Quarter].&[")
-            })
-            .collect();
-        let months = rows
-            .iter()
-            .filter(|r| {
-                r.member_unique_name
-                    .starts_with("[Date].[Calendar].[Month].&[")
-            })
-            .count();
-        let days = rows
-            .iter()
-            .filter(|r| {
-                r.member_unique_name
-                    .starts_with("[Date].[Calendar].[Full Date].&[")
-            })
-            .count();
+        let quarters = level_rows("[Date].[Calendar].[Quarter]");
+        let months = level_rows("[Date].[Calendar].[Month]").len();
+        let days = level_rows("[Date].[Calendar].[Full Date]").len();
         assert!(!quarters.is_empty() && quarters.len().is_multiple_of(4));
         assert!(months > quarters.len());
         assert!(days > months);
+        assert!(
+            quarters.iter().all(|r| r
+                .member_unique_name
+                .starts_with("[Date].[Calendar].[Year].&[")
+                && r.member_unique_name.matches(".&[").count() == 2),
+            "quarters carry the first level and a two-segment path: {:?}",
+            quarters[0].member_unique_name
+        );
 
         // No flat unqualified Date leaves may survive next to the level tree.
         assert!(
@@ -1417,7 +1440,7 @@ mod tests {
         );
 
         // A compound-key quarter: level 2, parented by its year.
-        let quarter = find_row(&rows, "[Date].[Calendar].[Quarter].&[2024]&[2]");
+        let quarter = find_row(&rows, "[Date].[Calendar].[Year].&[2024].&[2]");
         assert_eq!(
             extract_tag(&quarter.xml(), "LEVEL_NUMBER").as_deref(),
             Some("2")
@@ -1449,7 +1472,9 @@ mod tests {
             .expect("load project3");
         with_test_project(p, || {
             let year_u = "[Date].[Calendar].[Year].&[2024]";
-            let quarter_u = "[Date].[Calendar].[Quarter].&[2024]&[2]";
+            // The reference qualifies a quarter with the hierarchy's first
+            // level and its full key path (measured 2026-09-27).
+            let quarter_u = "[Date].[Calendar].[Year].&[2024].&[2]";
             let project = proxy_project::project();
 
             // SELF on a year: exactly one row.

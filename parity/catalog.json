@@ -847,7 +847,9 @@
         "mdx": "SELECT {[Date].[Calendar].[Month].Members} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
       },
       "expect": {
-        "axis0_member_count": 132
+        "axis0_member_count": 132,
+        "axis0_first_member": "[Date].[Calendar].[Year].&[2020].&[1].&[1]",
+        "axis0_last_member": "[Date].[Calendar].[Year].&[2030].&[4].&[12]"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
     },
@@ -872,7 +874,8 @@
       },
       "expect": {
         "axis0_member_count": 4206,
-        "axis0_first_member": "[Date].[Calendar].[All]"
+        "axis0_first_member": "[Date].[Calendar].[All]",
+        "axis0_last_member": "[Date].[Calendar].[Year].&[2030].&[4].&[12].&[2030-12-31T00:00:00]"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
     },
@@ -888,6 +891,48 @@
         "axis0_last_member": "[Date].[Calendar].[Year].&[2030]"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: `.Members`/`.Children` enumerate the dimension dictionary, not the fact rows \u2014 a hierarchy set carries All first, a level set has none, and the key hierarchy answers All + 4,018 dates"
+    },
+    {
+      "id": "members-date-calendar-quarter-names",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]",
+          "LEVEL_UNIQUE_NAME": "[Date].[Calendar].[Quarter]"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 44,
+        "member_first": "[Date].[Calendar].[Year].&[2020].&[1]",
+        "member_last": "[Date].[Calendar].[Year].&[2030].&[4]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: every member is qualified with the hierarchy's first level and its full key path \u2014 a quarter is [Date].[Calendar].[Year].&[2020].&[1], a month appends .&[M]"
+    },
+    {
+      "id": "members-date-calendar-month-names",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Date].[Calendar]",
+          "LEVEL_UNIQUE_NAME": "[Date].[Calendar].[Month]"
+        }
+      },
+      "columns": {
+        "member": "MEMBER_UNIQUE_NAME"
+      },
+      "expect": {
+        "row_count": 132,
+        "member_first": "[Date].[Calendar].[Year].&[2020].&[1].&[1]",
+        "member_last": "[Date].[Calendar].[Year].&[2030].&[4].&[12]"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: every member is qualified with the hierarchy's first level and its full key path \u2014 a quarter is [Date].[Calendar].[Year].&[2020].&[1], a month appends .&[M]"
     }
   ]
 }

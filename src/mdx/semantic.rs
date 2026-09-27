@@ -106,6 +106,19 @@ pub struct AxisTuple {
     pub filters: Vec<DimensionFilter>,
 }
 
+/// The member's own level name for a key-qualified reference. The tabular
+/// reference qualifies every member with the hierarchy's first level and the
+/// full key path, so the path length identifies the level; the older proxy
+/// form names the member's own level. Both resolve here, so downstream code
+/// keeps mapping a level name to its index.
+fn member_level_name(dim: &str, level: Option<&str>, key: &str) -> Option<String> {
+    let name = level?;
+    let model = &crate::proxy_project::project().model;
+    let def = model.dim_def_opt(dim)?;
+    let index = def.member_level_index(name, key)?;
+    def.levels.get(index).map(|l| l.name.clone())
+}
+
 /// Build per-tuple filters from a tuple's members (the Leaf members only).
 fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
     let mut result: Vec<DimensionFilter> = Vec::new();
@@ -118,9 +131,9 @@ fn filters_from_tuple_members(members: &[MemberRef]) -> Vec<DimensionFilter> {
                 }
             } else {
                 result.push(DimensionFilter {
-                    dimension: dim_str,
+                    dimension: dim_str.clone(),
                     members: vec![key.clone()],
-                    level: level.clone(),
+                    level: member_level_name(&dim_str, level.as_deref(), key),
                     range: None,
                     date_window: None,
                     label: None,
@@ -172,7 +185,11 @@ fn date_windows(
         model
             .dim_def_opt(dim)
             .and_then(|d| {
-                let level_idx = d.levels.iter().position(|l| l.name == level)?;
+                // The reference's unames qualify the anchor with the
+                // hierarchy's first level and the full key path, so the path
+                // length identifies the level (`[Year].&[2024].&[2].&[6]` is a
+                // month); the older form names the member's own level.
+                let level_idx = d.member_level_index(level, &parts.join("|"))?;
                 let start = (level_idx + 1).saturating_sub(parts.len());
                 Some(
                     d.levels[start..=level_idx]
@@ -207,10 +224,22 @@ fn date_windows(
             None
         }
     }
-    fn anchor_of(m: &crate::mdx::ast::MemberRef) -> Option<(String, String, Vec<String>)> {
-        let level = m.level()?.to_string();
+    fn anchor_of(
+        m: &crate::mdx::ast::MemberRef,
+        model: &crate::engine::model::SemanticModel,
+    ) -> Option<(String, String, Vec<String>)> {
+        let token = m.level()?.to_string();
         let key = m.key.clone()?;
         let parts: Vec<String> = key.split('|').map(str::to_string).collect();
+        // The reference's dotted unames name the hierarchy's first level and
+        // carry the full key path, so the path length identifies the anchor's
+        // own level (`[Year].&[2024].&[2].&[6]` anchors at the month).
+        let level = model
+            .dim_def_opt(m.dim())
+            .and_then(|d| d.member_level_index(&token, &parts.join("|")))
+            .and_then(|index| model.dim_def(m.dim()).levels.get(index))
+            .map(|l| l.name.clone())
+            .unwrap_or(token);
         Some((m.dim().to_string(), level, parts))
     }
     fn unit_name(s: &str) -> Option<String> {
@@ -280,7 +309,7 @@ fn date_windows(
                         args.first().and_then(|a| a.as_member())
                     };
                     if let Some(m) = anchor_member
-                        && let Some((dim, level, parts)) = anchor_of(m)
+                        && let Some((dim, level, parts)) = anchor_of(m, model)
                     {
                         // Align the key path to the level chain from the
                         // anchor's level (a short key anchors at that level).
@@ -413,9 +442,9 @@ fn filters_from_parsed(parsed: &ParsedMdx) -> Vec<DimensionFilter> {
                 }
             } else {
                 result.push(DimensionFilter {
-                    dimension: dim_str,
+                    dimension: dim_str.clone(),
                     members: vec![key.to_string()],
-                    level: level.map(|s| s.to_string()),
+                    level: member_level_name(&dim_str, level, key),
                     range: None,
                     date_window: None,
                     label: None,
@@ -1060,10 +1089,20 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             None => {}
         }
         drill_members.push((dim_name.clone(), keys.clone()));
+        // The filter scopes the *member's* level (a drilled year filters the
+        // year column); the drilldown target above is the level shown below
+        // it. With the reference's dotted unames the named token is the
+        // hierarchy's first level, so resolve the first key's own level.
+        let filter_level = keys
+            .first()
+            .and_then(|key| dim.member_level_index(&level_name, key))
+            .and_then(|index| dim.levels.get(index))
+            .map(|l| l.name.clone())
+            .unwrap_or(level_name);
         extra_filters.push(DimensionFilter {
             dimension: dim_name,
             members: keys,
-            level: Some(level_name),
+            level: Some(filter_level),
             range: None,
             date_window: None,
             label: None,
@@ -1120,7 +1159,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         filters.push(DimensionFilter {
             dimension: dim_name.clone(),
             members: vec![],
-            level: Some(level_name.clone()),
+            level: member_level_name(dim_name, Some(level_name), from_key),
             range: Some((from_key.clone(), to_key.clone())),
             date_window: None,
             label: None,
@@ -1130,12 +1169,18 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         filters.push(DimensionFilter {
             dimension: dim_name.clone(),
             members: vec![],
-            level: Some(level_name.clone()),
+            level: member_level_name(dim_name, Some(level_name), from_key),
             range: Some((from_key.clone(), to_key.clone())),
             date_window: None,
             label: None,
         });
     }
+    // Kept for the time-intelligence set rewrite below (the loop consumes
+    // the windows).
+    let window_levels: Vec<(String, String)> = time_windows
+        .iter()
+        .map(|(dim, level, _)| (dim.clone(), level.clone()))
+        .collect();
     for (dim_name, level_name, window) in time_windows {
         filters.push(DimensionFilter {
             dimension: dim_name,
@@ -1197,6 +1242,20 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
     } else {
         None
     };
+    // A time-intelligence set (`YTD(m)`, `PeriodsToDate(...)`) names its anchor
+    // with the reference's first-level token; the window's level — resolved
+    // from the key path length — is the member's own level, and that is what
+    // the axis must list (months for `YTD` of a June member).
+    let set_probe = set_probe.map(|mut source| {
+        if let crate::mdx_parser::SetExpr::LevelMembers { dim, level, .. } = &mut source
+            && let Some((_, window_level)) = window_levels
+                .iter()
+                .find(|(window_dim, _)| window_dim == dim)
+        {
+            *level = Some(window_level.clone());
+        }
+        source
+    });
     if set_count.is_some() || set_probe.is_some() {
         kind = SemanticQueryKind::SetProbe;
     }
@@ -1231,9 +1290,9 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
                         crate::mdx_parser::parse_level_member(to),
                     ) {
                         filters.push(DimensionFilter {
-                            dimension: dim,
+                            dimension: dim.clone(),
                             members: vec![],
-                            level: Some(level),
+                            level: member_level_name(&dim, Some(&level), &from_key),
                             range: Some((from_key, to_key)),
                             date_window: None,
                             label: None,
