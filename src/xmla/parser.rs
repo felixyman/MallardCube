@@ -1582,4 +1582,31 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn execute_captures_content_property() {
+        let execute = r#"<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body>
+            <Execute xmlns="urn:schemas-microsoft-com:xml-analysis">
+            <Command><Statement>SELECT [Measures].[Revenue] ON 0 FROM [Sales]</Statement></Command>
+            <Properties><PropertyList><Catalog>Sales</Catalog><Content>SchemaData</Content>
+            </PropertyList></Properties>
+        </Execute></Body></Envelope>"#;
+        match parse_xmla(execute) {
+            XmlaRequest::ExecuteStatement { content, .. } => {
+                assert_eq!(content.as_deref(), Some("SchemaData"));
+            }
+            other => panic!("expected an ExecuteStatement, got {other:?}"),
+        }
+        // A `<Content>` inside `<Restrictions>` is a restriction, not the
+        // property, and must not be captured.
+        let restricted = r#"<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body>
+            <Execute xmlns="urn:schemas-microsoft-com:xml-analysis">
+            <Command><Statement>SELECT [Measures].[Revenue] ON 0 FROM [Sales]</Statement></Command>
+            <Properties><PropertyList><Catalog>Sales</Catalog></PropertyList></Properties>
+        </Execute></Body></Envelope>"#;
+        match parse_xmla(restricted) {
+            XmlaRequest::ExecuteStatement { content, .. } => assert!(content.is_none()),
+            other => panic!("expected an ExecuteStatement, got {other:?}"),
+        }
+    }
 }

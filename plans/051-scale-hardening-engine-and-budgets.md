@@ -810,11 +810,48 @@ SHA256 are identical between the proxy and the mirror.
   values `xsi:type="xsd:double"`; `Content=SchemaData` includes the schema.
   The request parser now captures `<Content>`.
 
-Still refused, deliberately: three or more grouped dimensions, and explicit
+Still refused, deliberately: three or more grouped dimensions, explicit
 multi-member tuples (the probed shape answered 0 rows on the reference, so
-there is no rowset semantics to match). The ADODB probe should be re-run once
-against this now reference-identical shape; it was verified against the
-earlier schema-bearing rowset.
+there is no rowset semantics to match), a two-dimension axis that is not a
+genuine cross-join, and mixed level/dimension cross-joins (unmeasured). The
+ADODB probe should be re-run once against this now reference-identical shape;
+it was verified against the earlier schema-bearing rowset.
+
+**Review round (2026-09-27)** found and closed two regressions in the first
+cut of this work:
+
+- A member-list axis (`{[Category].[Automotive],[Channel].[Retail]}`) and an
+  explicit two-member tuple were answered with the *unfiltered* Category x
+  Channel grid — the statement ignored, no fault — because the new
+  two-dimension arms accepted any two-dimension `GroupBy`. `SemanticQuery`
+  now carries `crossjoin_axis` (from the parsed statement) and the
+  two-dimension arms require it; the member-list and tuple shapes fault
+  (regression test), and the cellset path for those shapes is a pre-existing
+  planner issue (it faults with an internal error — recorded, not this
+  slice's).
+- Level groupings were labelled with the leaf level (`Full Date` carrying
+  Year members) because the `group_levels` guard was dropped. Measured on the
+  mirror: the column is named after the grouped level
+  (`[Date].[Calendar].[Year].[MEMBER_CAPTION]`) and a level set has **no**
+  `(All)` row (a dimension member set does, because its set includes the
+  `(All)` member). Both now match, with a test.
+- Also fixed from that round: the two-dimension aggregation is indexed once
+  (was O(pairs²); 17k pairs took 2.6 s), `Content` semantics are complete
+  (absent = SchemaData, `Schema` = schema-only, `Data` = rows-only; measured),
+  `xsi:type` follows a per-column flag rather than a name prefix, and
+  non-finite measure values refuse instead of claiming `xsd:double`.
+
+Recorded, still open from that round: the member column carries the grouped
+*key* where the cellset resolves a caption (keys equal captions on the demo
+models); the `SchemaData` schema is not XSD-valid (pre-existing text); the
+`(All)` row is the sum of the returned rows rather than the `(All)` member's
+own value (our cellset agrees, so both diverge from SSAS for ranked sets); the
+five-probe comparison is order-sensitive by construction (rows in response
+order, `name=value` joined) even though the plan text did not say so; and the
+demo dataset has drifted from the mirror's snapshot for *date-level*
+aggregates — year splits and `NON EMPTY` counts differ while totals,
+categories and channels match exactly, so date-level comparisons against the
+mirror must compare shape, not values.
 
 ### Test flake — fixed 2026-09-26
 

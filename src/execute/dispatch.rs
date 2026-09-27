@@ -1779,7 +1779,7 @@ mod tests {
             let (plain, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
                 Some("Tabular"),
-                None,
+                Some("Data"),
                 backend,
                 &user,
                 config,
@@ -1813,8 +1813,8 @@ mod tests {
                 ),
                 "the (All) row carries the typed measure only: {grouped}"
             );
-            // Content=Data (what ADODB sends, and the default here) has no
-            // schema; Content=SchemaData includes it (measured 2026-09-27).
+            // Content=Data (what ADODB sends) has no schema; SchemaData
+            // includes it (measured 2026-09-27).
             assert!(!plain.contains("<xsd:schema"), "{plain}");
             let (with_schema, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
@@ -1925,6 +1925,116 @@ mod tests {
                     && !row.contains(">Retail<")
                     && row.contains(">2.5102648E7<")),
                 "the Automotive category total is present"
+            );
+        });
+    }
+
+    /// A member list or explicit tuple on a two-dimension axis is not a
+    /// cross-join: the tabular renderer refuses it instead of answering the
+    /// unfiltered grid (plan 051 review).
+    #[test]
+    fn tabular_refuses_member_lists_and_tuples() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            for mdx in [
+                "SELECT [Measures].[Revenue] ON 0, \
+                 {[Category].[Category].[Automotive], [Channel].[Channel].[Retail]} ON 1 FROM [Sales]",
+                "SELECT {([Category].[Category].[Automotive], [Channel].[Channel].[Retail])} \
+                 ON 0 FROM [Sales]",
+            ] {
+                let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                    mdx,
+                    Some("Tabular"),
+                    None,
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                );
+                assert!(
+                    xml.contains("faultstring")
+                        && xml.contains("not supported in the tabular format"),
+                    "a member list or tuple must be refused: {xml}"
+                );
+            }
+        });
+    }
+
+    /// A level grouping is named after its level and has no (All) row — a
+    /// dimension member set does, because its set includes the (All) member
+    /// (measured 2026-09-27: 7 years, first row 2020 = 7.7866061E7).
+    #[test]
+    fn tabular_level_grouping_uses_the_level_and_no_total_row() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let (xml, _) = crate::execute_builders::get_execute_response_with_format(
+                "SELECT [Measures].[Revenue] ON 0, NON EMPTY [Date].[Calendar].[Year].Members \
+                 ON 1 FROM [Sales]",
+                Some("Tabular"),
+                Some("Data"),
+                Backend::test_fixture(),
+                &UserContext::admin_default(),
+                &crate::proxy_project::project().config,
+            );
+            assert!(!xml.contains("faultstring"), "{xml}");
+            assert_eq!(xml.matches("<row>").count(), 7, "{xml}");
+            assert!(
+                xml.contains(
+                    "_x005B_Date_x005D_._x005B_Calendar_x005D_._x005B_Year_x005D_._x005B_MEMBER_CAPTION_x005D_"
+                ),
+                "the column is named after the grouped level: {xml}"
+            );
+            assert!(
+                !xml.contains("_x005B_Full_x0020_Date_x005D_"),
+                "the leaf level must not name a level grouping: {xml}"
+            );
+            let rows: Vec<&str> = xml.split("<row>").skip(1).collect();
+            assert!(
+                rows[0].contains(">2020<")
+                    && rows[0].contains("xsi:type=\"xsd:double\"")
+                    && rows[0].contains('E'),
+                "the first row is the first year, with no (All) row before it: {}",
+                rows[0]
+            );
+        });
+    }
+
+    /// `Content` selects schema and rows: absent = SchemaData, `Schema` is
+    /// schema-only, `Data` is rows-only (measured 2026-09-27).
+    #[test]
+    fn tabular_content_selects_schema_and_rows() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        with_project3(|| {
+            let run = |content: Option<&str>| {
+                crate::execute_builders::get_execute_response_with_format(
+                    "SELECT [Measures].[Revenue] ON 0 FROM [Sales]",
+                    Some("Tabular"),
+                    content,
+                    Backend::test_fixture(),
+                    &UserContext::admin_default(),
+                    &crate::proxy_project::project().config,
+                )
+                .0
+            };
+            let absent = run(None);
+            assert!(
+                absent.contains("<xsd:schema") && absent.matches("<row>").count() == 1,
+                "absent Content is SchemaData: {absent}"
+            );
+            let schema_only = run(Some("Schema"));
+            assert!(
+                schema_only.contains("<xsd:schema") && schema_only.matches("<row>").count() == 0,
+                "Content=Schema is schema-only: {schema_only}"
+            );
+            let data_only = run(Some("Data"));
+            assert!(
+                !data_only.contains("<xsd:schema") && data_only.matches("<row>").count() == 1,
+                "Content=Data is rows-only: {data_only}"
             );
         });
     }

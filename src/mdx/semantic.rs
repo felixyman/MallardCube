@@ -592,6 +592,11 @@ pub struct SemanticQuery {
     /// single-level namespace — (All) + the date members — as the tabular
     /// reference does (plan 048).
     pub key_hierarchy_view: Option<String>,
+    /// Whether the statement's axes include a cross-join (Excel's nested field
+    /// layout). The tabular renderer requires it before flattening two
+    /// dimensions; a member list or explicit tuple is refused instead (plan
+    /// 051 review).
+    pub crossjoin_axis: bool,
     /// Measure/member names parsed from strtomember() probe (CUBEVALUE metadata query).
     pub metadata_probe_targets: Vec<String>,
     /// Requested properties: e.g. "UniqueName", "caption", "level.UniqueName".
@@ -860,6 +865,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             drilldown_levels: vec![],
             level_drag: false,
             key_hierarchy_view: None,
+            crossjoin_axis: false,
             metadata_probe_targets: targets,
             metadata_probe_properties: props,
             member_only_unames: vec![],
@@ -1290,6 +1296,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_levels,
         level_drag,
         key_hierarchy_view,
+        crossjoin_axis: parsed.has_crossjoin,
         metadata_probe_targets: vec![],
         metadata_probe_properties: vec![],
         member_only_unames,
