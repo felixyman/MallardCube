@@ -298,5 +298,29 @@ Parity cases for the `3a10f91` fixes landed with the mirror's values
 `catalogs-foreign-property-faults`, `drillthrough-empty-cube-faults` with the
 double-space message); the catalogue is 67/67.
 
+**Review round 2026-09-28** (qualifier batch) found and closed:
+
+- The parent-child checks were unreachable for the documented configuration —
+  the table was resolved from `fact_table`/date role, which that config does
+  not set, while the serving path uses the relationship's `dim_table`. They
+  resolve the same way now, an unresolved dimension reports "cannot check"
+  instead of silently skipping, and a real-config test pins the wiring.
+- `--json` returned before strict mode, so `--json --strict` reported READY
+  for a project `--strict` rejects. Strict findings fold into the verdict
+  before either output, and `ok` (verdict == READY) joins the JSON contract.
+- The parent-child predicates now mirror the materializer exactly
+  (string-cast joins, `''` and self-parents as roots — no false blocks), and
+  the cycle walk is one O(rows) descent from the roots (unreachable nodes and
+  a >64-level hierarchy block) instead of an O(N²) per-node walk.
+- The grain invariant uses fixed-arity scalar calls: the multi-column
+  `query_rows` derives its arity by scraping the statement, which a nested
+  query breaks (a 2-column fact table blocked a valid project).
+- The three foreign-property parity cases pin the refusal phrase
+  (`fault_contains`), so a fault for the wrong reason no longer satisfies
+  them; each case has its own source line.
+
 Recorded, not fixed: a generation counter so a timed-out request's abandoned
-worker cannot fault the next request.
+worker cannot fault the next request; the pre-existing dimension-key check
+still uses `query_rows` (its two-column select satisfies the scrape for
+tables with at least two columns — a single-column table would mis-read), and
+the statement-arity scraping itself is the underlying landmine.

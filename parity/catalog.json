@@ -956,7 +956,8 @@
         "properties": "<Catalog>WrongCatalog</Catalog>"
       },
       "expect": {
-        "fault": true
+        "fault": true,
+        "fault_contains": "does not have access to the 'WrongCatalog' database"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the <Catalog> property's treatment is per rowset \u2014 DISCOVER_PROPERTIES/DBSCHEMA_TABLES fault a foreign value, DISCOVER_LITERALS/DISCOVER_SCHEMA_ROWSETS ignore it, and a property in a foreign XML namespace faults structurally"
     },
@@ -1050,9 +1051,10 @@
         "properties": "<Catalog>WrongCatalog</Catalog>"
       },
       "expect": {
-        "fault": true
+        "fault": true,
+        "fault_contains": "does not have access to the 'WrongCatalog' database"
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: MDSCHEMA_MEMBERS faults a foreign <Catalog> property with the catalog refusal (the rowset must not answer from the default catalog)"
     },
     {
       "id": "mdschema-properties-foreign-property-faults",
@@ -1065,9 +1067,10 @@
         "properties": "<Catalog>WrongCatalog</Catalog>"
       },
       "expect": {
-        "fault": true
+        "fault": true,
+        "fault_contains": "does not have access to the 'WrongCatalog' database"
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: MDSCHEMA_PROPERTIES faults a foreign <Catalog> property with the catalog refusal"
     },
     {
       "id": "catalogs-foreign-property-faults",
@@ -1078,9 +1081,10 @@
         "properties": "<Catalog>WrongCatalog</Catalog>"
       },
       "expect": {
-        "fault": true
+        "fault": true,
+        "fault_contains": "does not have access to the 'WrongCatalog' database"
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: DBSCHEMA_CATALOGS faults a foreign <Catalog> property with the catalog refusal"
     },
     {
       "id": "drillthrough-empty-cube-faults",
@@ -1091,7 +1095,7 @@
       "expect": {
         "fault": "The  cube does not exist."
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: an empty cube name faults the drillthrough with the double-space message \"The  cube does not exist.\""
     }
   ]
 }

@@ -161,6 +161,12 @@ def compare(expected: dict, observed: dict) -> list[tuple[str, object, object]]:
     mismatches = []
     for key, want in expected.items():
         got = observed.get(key)
+        if key.endswith("_contains"):
+            # A substring assertion: the observed text must carry the phrase.
+            if isinstance(want, str) and isinstance(got, str) and want in got:
+                continue
+            mismatches.append((key, want, got))
+            continue
         if normalise(want) != normalise(got):
             mismatches.append((key, want, got))
     return mismatches
@@ -201,10 +207,16 @@ def main() -> int:
             observed = {"error": str(error)}
         else:
             fault = case["expect"].get("fault")
-            if fault:
+            fault_contains = case["expect"].get("fault_contains")
+            if fault or fault_contains:
                 message = re.search(r"<faultstring[^>]*>(.*?)</faultstring>", xml, re.S)
                 text = unescape(message.group(1)) if message else ""
                 observed = {"fault": text if isinstance(fault, str) else bool(message)}
+                if fault_contains:
+                    # A fault for the wrong reason must not satisfy the case:
+                    # the message must carry the expected phrase (compare treats
+                    # a `*_contains` key as a substring test).
+                    observed["fault_contains"] = text
             else:
                 observed = (
                     observe_discover(xml, case)
