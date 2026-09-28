@@ -249,6 +249,9 @@ enum Command {
         config: String,
         /// Optional path to xmla-trace.jsonl for replay validation
         trace: Option<String>,
+        /// Check a source-neutral contract against the same database (plan 057-A)
+        #[arg(long)]
+        contract: Option<String>,
         /// Fail when the proxy carries semantic-layer logic (fallback SQL, untranslated DAX)
         #[arg(long)]
         strict: bool,
@@ -399,12 +402,17 @@ async fn main() {
         Command::Qualify {
             config,
             trace,
+            contract,
             strict,
             json,
         } => {
             let mut args = vec!["qualify".into(), config];
             if let Some(t) = trace {
                 args.push(t);
+            }
+            if let Some(contract) = contract {
+                args.push("--contract".into());
+                args.push(contract);
             }
             if strict {
                 args.push("--strict".into());

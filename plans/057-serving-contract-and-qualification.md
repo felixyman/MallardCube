@@ -279,6 +279,25 @@ features (060), live attach and object-store intake (061), aggregate design
   dimensions (attribute on the fact table, no relationship) are refused — the
   runtime's fallback is only sound when the query's fact is the primary one.
 
+- **2026-09-28 — section A, step 3: the qualifier's `--contract` mode.**
+  `mallard qualify <config> --contract <contract.yaml>` validates the contract
+  and runs its declarations against the same database
+  (`src/tools/contract_qualify.rs`), folded into the verdict with a
+  `contract:` prefix and reported as `contract_file` in the JSON: every
+  declared grain key must be unique in its table (NULL keys are a partial
+  finding), every `valid_grain` must be unique in the source table (the
+  identity-aggregate hazard), every measure's projected SQL must bind
+  (`EXPLAIN`), every dimension attribute/level column and every
+  time_intelligence flag must exist, and the served config must be the
+  projection of the contract — a stale or hand-edited config is blocked with
+  "regenerate the projection", while extra served entries are partial
+  findings. Deployment-specific parts (`auth`, catalog/cube/db path, extra
+  role bindings) are deliberately not compared. Tests build a synthetic
+  DuckDB and also rebuild the upstream demo from its SQL files, so the
+  fixture's contract is qualified end-to-end in CI without the duckdb CLI.
+  This closes the recorded leftover that `valid_grain` was checked by nothing.
+  Next in section A: the generators (D).
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

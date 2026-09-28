@@ -111,6 +111,24 @@ nothing. The fixture's projection round-trips — a test projects
 not a hand-picked subset), and the projected config passes `qualify --strict`
 with the same verdict and notes as the checked-in one.
 
+## Qualifying against the data
+
+```bash
+# The qualifier's own checks come from the served config; --contract adds the
+# declarations the config cannot carry and verifies the config is the
+# projection of the contract.
+mallard qualify proxy-config.yaml \
+  --contract contracts/upstream_marts/contract.yaml --strict
+```
+
+Contract checks are blockers, not notes: every declared grain key must be
+unique in its table, every `valid_grain` must be unique in the source table
+(or the identity aggregate would re-aggregate across grains), every declared
+column must exist, every declared expression must bind, and the served config
+must be the projection of the contract — a stale or hand-edited config refuses
+with "regenerate the projection". `--json` carries `contract_file`, and the
+findings are prefixed `contract:` so the verdict says where they came from.
+
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the
 contract's compatibility policy and the generator roadmap.

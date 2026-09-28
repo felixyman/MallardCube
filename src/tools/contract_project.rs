@@ -279,7 +279,7 @@ pub fn project(contract: &Contract, deployment: &Deployment) -> Result<ProxyConf
 /// The SQL expression a measure projects to: the declared expression verbatim,
 /// or the declared aggregation applied to the declared column. The window
 /// filter itself is the engine's; `time_window` aggregates additively.
-fn measure_sql(measure: &Measure) -> Result<String, String> {
+pub(crate) fn measure_sql(measure: &Measure) -> Result<String, String> {
     if let Some(expression) = measure
         .expression
         .as_deref()

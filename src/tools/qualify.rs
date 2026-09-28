@@ -22,7 +22,7 @@ pub(crate) enum Readiness {
 }
 
 impl Readiness {
-    fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         match self {
             Readiness::Ready => "READY",
             Readiness::Partial(_) => "PARTIAL",
@@ -38,7 +38,7 @@ impl Readiness {
         }
     }
 
-    fn reasons(&self) -> &[String] {
+    pub(crate) fn reasons(&self) -> &[String] {
         match self {
             Readiness::Ready => &[],
             Readiness::Partial(r) => r.as_slice(),
@@ -47,7 +47,28 @@ impl Readiness {
     }
 }
 
+/// Findings from one scope, labelled so the verdict says where they came from.
+fn prefixed(scope: &str, findings: impl IntoIterator<Item = String>) -> Vec<String> {
+    findings
+        .into_iter()
+        .map(|finding| format!("{scope}: {finding}"))
+        .collect()
+}
+
+/// Test-only convenience: `qualify_with_contract` without a contract.
+#[cfg(test)]
 pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness {
+    qualify_with_contract(config_path, trace_path, None)
+}
+
+/// `qualify` with the contract-sourced checks (plan 057-A): the contract's
+/// grain keys, identity aggregates, declared SQL and named columns are checked
+/// against the same database, and the served config must be its projection.
+pub(crate) fn qualify_with_contract(
+    config_path: &str,
+    trace_path: Option<&str>,
+    contract_path: Option<&str>,
+) -> Readiness {
     // Step 1: load the project
     let p = match crate::proxy_project::ProxyProject::load(config_path) {
         Ok(p) => p,
@@ -55,6 +76,10 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
             return Readiness::Blocked(vec![format!("cannot load project: {e}")]);
         }
     };
+
+    // The contract is validated once; its data checks share the config's
+    // connection below, and an unreadable contract blocks either way.
+    let contract = contract_path.map(crate::tools::contract::validate_file);
 
     let mut blocked = Vec::new();
     let mut partial = Vec::new();
@@ -227,12 +252,38 @@ pub(crate) fn qualify(config_path: &str, trace_path: Option<&str>) -> Readiness 
                     Ok(None) => {}
                     Err(message) => blocked.push(message),
                 }
+
+                // Contract-sourced checks (plan 057-A): the declarations the
+                // config cannot carry, checked against the same data.
+                match &contract {
+                    Some(Ok(contract)) => {
+                        let (contract_blocked, contract_partial) =
+                            crate::tools::contract_qualify::contract_findings(
+                                source.checkout().as_ref(),
+                                contract,
+                                &p,
+                            );
+                        blocked.extend(prefixed("contract", contract_blocked));
+                        partial.extend(prefixed("contract", contract_partial));
+                    }
+                    Some(Err(reasons)) => blocked.extend(prefixed("contract", reasons.clone())),
+                    None => {}
+                }
             }
             Err(error) => {
                 blocked.push(format!("cannot open the database for data checks: {error}"))
             }
         },
-        _ => partial.push("db_path is not usable: data-side checks skipped".into()),
+        _ => {
+            partial.push("db_path is not usable: data-side checks skipped".into());
+            match &contract {
+                Some(Err(reasons)) => blocked.extend(prefixed("contract", reasons.clone())),
+                Some(Ok(_)) => {
+                    partial.push("contract checks skipped: db_path is not usable".into())
+                }
+                None => {}
+            }
+        }
     }
 
     // --- optional replay ---
@@ -987,12 +1038,18 @@ pub(crate) fn non_additive_measures(p: &crate::proxy_project::ProxyProject) -> V
 }
 
 /// The machine-readable verdict (plan 057-B): a stable shape CI can consume.
-fn verdict_json(verdict: &Readiness, config_path: &str, notes: &[String]) -> String {
+fn verdict_json(
+    verdict: &Readiness,
+    config_path: &str,
+    contract_path: Option<&str>,
+    notes: &[String],
+) -> String {
     serde_json::json!({
         "contract": "mallardcube.qualify/1",
         "verdict": verdict.label(),
         "ok": matches!(verdict, Readiness::Ready),
         "config": config_path,
+        "contract_file": contract_path,
         "reasons": verdict.reasons(),
         "notes": notes,
         "exit_code": verdict.exit_code(),
@@ -1001,22 +1058,35 @@ fn verdict_json(verdict: &Readiness, config_path: &str, notes: &[String]) -> Str
 }
 
 pub fn run(args: Vec<String>) -> i32 {
-    // args: ["qualify", "<config-path>", "<optional-trace-path>", "--strict", "--json"]
-    let strict = args.iter().any(|a| a == "--strict");
-    let json = args.iter().any(|a| a == "--json");
-    let positional: Vec<&str> = args
-        .iter()
-        .skip(1)
-        .map(|s| s.as_str())
-        .filter(|a| !a.starts_with("--"))
-        .collect();
+    // args: ["qualify", "<config-path>", "<optional-trace-path>",
+    //        "--contract", "<path>", "--strict", "--json"]
+    let mut strict = false;
+    let mut json = false;
+    let mut contract_path: Option<&str> = None;
+    let mut positional: Vec<&str> = Vec::new();
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--strict" => strict = true,
+            "--json" => json = true,
+            "--contract" => {
+                let Some(path) = iter.next() else {
+                    eprintln!("qualify: --contract needs a path");
+                    return 2;
+                };
+                contract_path = Some(path.as_str());
+            }
+            other if other.starts_with("--") => {}
+            other => positional.push(other),
+        }
+    }
     let config_path = positional
         .first()
         .copied()
         .unwrap_or("projects/project3/proxy-config.json");
     let trace_path = positional.get(1).copied();
 
-    let mut verdict = qualify(config_path, trace_path);
+    let mut verdict = qualify_with_contract(config_path, trace_path, contract_path);
     // Boundary notes are not findings: the project can be READY while a role
     // hides a table whose columns a measure still reads (plan 058-F).
     let notes = crate::proxy_project::ProxyProject::load(config_path)
@@ -1051,7 +1121,10 @@ pub fn run(args: Vec<String>) -> i32 {
     }
 
     if json {
-        println!("{}", verdict_json(&verdict, config_path, &notes));
+        println!(
+            "{}",
+            verdict_json(&verdict, config_path, contract_path, &notes)
+        );
         return verdict.exit_code();
     }
 
@@ -1420,21 +1493,28 @@ mod tests {
     #[test]
     fn json_verdict_is_a_stable_shape() {
         let blocked = Readiness::Blocked(vec!["a reason".into()]);
-        let json = verdict_json(&blocked, "cfg.json", &["a note".into()]);
+        let json = verdict_json(
+            &blocked,
+            "cfg.json",
+            Some("contract.yaml"),
+            &["a note".into()],
+        );
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(value["contract"], "mallardcube.qualify/1");
         assert_eq!(value["verdict"], "BLOCKED");
         assert_eq!(value["ok"], false);
         assert_eq!(value["config"], "cfg.json");
+        assert_eq!(value["contract_file"], "contract.yaml");
         assert_eq!(value["reasons"][0], "a reason");
         assert_eq!(value["notes"][0], "a note");
         assert_eq!(value["exit_code"], 1);
 
-        let ready = verdict_json(&Readiness::Ready, "cfg.json", &[]);
+        let ready = verdict_json(&Readiness::Ready, "cfg.json", None, &[]);
         let value: serde_json::Value = serde_json::from_str(&ready).expect("valid json");
         assert_eq!(value["verdict"], "READY");
         assert_eq!(value["ok"], true);
         assert_eq!(value["exit_code"], 0);
+        assert_eq!(value["contract_file"], serde_json::Value::Null);
         assert_eq!(value["reasons"].as_array().map(Vec::len), Some(0));
 
         // PARTIAL is not ok and not a failure: CI must key on `ok`/verdict,
@@ -1442,6 +1522,7 @@ mod tests {
         let partial = verdict_json(
             &Readiness::Partial(vec!["demo data".into()]),
             "cfg.json",
+            None,
             &[],
         );
         let value: serde_json::Value = serde_json::from_str(&partial).expect("valid json");
