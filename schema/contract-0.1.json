@@ -17,7 +17,7 @@
   "properties": {
     "contract_version": {
       "type": "string",
-      "pattern": "^0\\.1\\.[0-9]+$",
+      "pattern": "^0\\.1\\.(0|[1-9][0-9]*)$",
       "description": "Semver of the contract line this file follows."
     },
     "model": { "$ref": "#/$defs/model" },
@@ -41,6 +41,10 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/measure" }
+    },
+    "time_intelligence": {
+      "$ref": "#/$defs/time_intelligence",
+      "description": "The date-role flag catalogue the engine serves windows from; optional when no window measures exist."
     },
     "security": { "$ref": "#/$defs/security" },
     "provenance": { "$ref": "#/$defs/provenance" },
@@ -66,7 +70,17 @@
       "additionalProperties": false,
       "properties": {
         "table": { "type": "string", "minLength": 1 },
-        "key": { "$ref": "#/$defs/key" }
+        "key": { "$ref": "#/$defs/key" },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Serving id relationships and measures bind to; defaults to the table name."
+        },
+        "measure_group": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Measure-group caption in Excel; defaults to the table name."
+        }
       }
     },
     "key": {
@@ -82,15 +96,25 @@
     },
     "dimension": {
       "type": "object",
-      "required": ["id", "table", "key"],
+      "required": ["id", "table", "key", "attribute"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "table": { "type": "string", "minLength": 1 },
         "key": { "$ref": "#/$defs/key" },
+        "attribute": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The member value column Excel names members by; for a date role this is the leaf (key attribute)."
+        },
+        "hierarchy_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The user hierarchy's name; defaults to the caption."
+        },
         "date_role": {
           "type": "boolean",
-          "description": "A date dimension: levels carry calendar columns and the key hierarchy is the leaf."
+          "description": "A date dimension: the attribute is the leaf, and the levels' columns are the calendar columns."
         },
         "caption": { "type": "string" },
         "ordinal": { "type": "integer", "minimum": 0 },
@@ -98,6 +122,7 @@
         "cardinality_hint": { "type": "integer", "minimum": 0 },
         "levels": {
           "type": "array",
+          "description": "The user hierarchy's levels, leaf last; level numbers derive from order.",
           "items": { "$ref": "#/$defs/level" }
         }
       }
@@ -108,7 +133,8 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "column": { "type": "string", "minLength": 1 }
+        "column": { "type": "string", "minLength": 1 },
+        "cardinality_hint": { "type": "integer", "minimum": 0 }
       }
     },
     "relationship": {
@@ -120,7 +146,7 @@
         "dimension": { "type": "string", "minLength": 1 },
         "columns": {
           "type": "array",
-          "description": "[fact column, dimension column]",
+          "description": "[fact column, dimension column]; the dimension column must be part of the dimension's key.",
           "minItems": 2,
           "maxItems": 2,
           "items": { "type": "string", "minLength": 1 }
@@ -158,12 +184,14 @@
         },
         "expression": {
           "type": "string",
+          "minLength": 1,
           "description": "Source-neutral expression when a declaration plus a column is not enough (ratios of sums)."
         },
         "time_window": { "$ref": "#/$defs/time_window" },
         "valid_grain": {
           "type": "array",
-          "description": "The grain a per-grain mart value is valid at (identity aggregates).",
+          "description": "The grain a per-grain mart value is valid at; requires an identity aggregation (min or max).",
+          "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
         }
       }
@@ -177,6 +205,7 @@
         "column": { "type": "string", "minLength": 1 },
         "reference": {
           "type": "string",
+          "minLength": 1,
           "description": "An upstream artifact reference (a model or mart id) instead of a column."
         }
       }
@@ -189,7 +218,29 @@
         "dimension": { "type": "string", "minLength": 1 },
         "flag": {
           "type": "string",
+          "minLength": 1,
           "description": "The upstream column the proxy only filters on (e.g. ytd_flag)."
+        }
+      }
+    },
+    "time_intelligence": {
+      "type": "object",
+      "required": ["date_dimension", "flags"],
+      "additionalProperties": false,
+      "properties": {
+        "date_dimension": { "type": "string", "minLength": 1 },
+        "flags": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "The windows the engine serves, bound to upstream flag columns.",
+          "additionalProperties": false,
+          "properties": {
+            "ytd": { "type": "string", "minLength": 1 },
+            "qtd": { "type": "string", "minLength": 1 },
+            "mtd": { "type": "string", "minLength": 1 },
+            "prior_year_ytd": { "type": "string", "minLength": 1 },
+            "current_year": { "type": "string", "minLength": 1 }
+          }
         }
       }
     },

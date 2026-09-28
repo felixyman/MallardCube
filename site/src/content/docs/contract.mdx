@@ -28,11 +28,13 @@ qualification failure, never a guess.
 contract_version: "0.1.0"
 model: { name: upstream_marts, description: "Thin projection of the marts" }
 grain:
-  - { table: fact_orders, key: order_id }
-  - { table: mart_lead_time_median_month, key: [year, month, product_key] }
+  - { table: fact_orders, key: order_id, id: orders, measure_group: Orders }
+  - { table: mart_lead_time_median_month, key: [year, month, product_key], id: lead_time_median }
 dimensions:
-  - { id: Date, table: dim_date, key: date_key, date_role: true,
-      levels: [ { name: Year, column: year }, { name: Month, column: month } ] }
+  - { id: Date, table: dim_date, key: date_key, attribute: full_date, hierarchy_name: Calendar,
+      date_role: true,
+      levels: [ { name: Year, column: year }, { name: Month, column: month },
+                { name: Full Date, column: full_date } ] }
 relationships:
   - { fact: fact_orders, dimension: Date, columns: [order_date_key, date_key] }
 measures:
@@ -41,13 +43,20 @@ measures:
       expression: "sum(is_within_sla) * 100.0 / nullif(sum(is_order), 0)" }
   - { id: Median lead time, source: { table: mart_lead_time_median_month, column: median_lead_time },
       aggregation: max, valid_grain: [year, month, product_key] }
+time_intelligence:
+  date_dimension: Date
+  flags: { ytd: ytd_flag, qtd: qtd_flag }
 provenance: { source_system: sqlmesh, generator: mallard-contract/0.1.0 }
 annotations: { note: "prototype fields live here until a check exists" }
 ```
 
-Only `many_to_one` relationships are expressible: anything else multiplies fact
-rows. Aggregations are **declared**, not inferred, so a ratio is never emitted
-as if it were additive.
+`attribute` is the member value column Excel names members by (for a date role,
+the leaf); `key` is the join key. Only `many_to_one` relationships are
+expressible: anything else multiplies fact rows. Aggregations are **declared**,
+not inferred, so a ratio is never emitted as if it were additive, and a
+`valid_grain` value is an identity aggregate (`min`/`max`) that must never be
+re-aggregated. `time_intelligence` binds the windows the engine serves (YTD,
+QTD, MTD, prior-year YTD, current year) to upstream flag columns.
 
 ## Validating
 
@@ -58,9 +67,13 @@ mallard contract validate contracts/upstream_marts/contract.yaml
 mallard contract validate contracts/upstream_marts/contract.yaml --json
 ```
 
-Version rules fail closed: an unknown core field is a hard error, a contract
-newer than the build supports refuses with an upgrade hint, and an older
-version routes through an explicit migration — never silent tolerance.
+Version rules and shape checks fail closed: an unknown core field is a hard
+error, a duplicate mapping key is refused (YAML's last-wins would silently
+rewrite the contract), a contract newer than the build supports refuses with an
+upgrade hint, and an older version routes through an explicit migration — never
+silent tolerance. The checked-in JSON Schema is the published shape; the
+validator is the enforcement, and the two are kept at least as strict as each
+other.
 
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the

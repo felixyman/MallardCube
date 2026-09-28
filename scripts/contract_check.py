@@ -43,6 +43,8 @@ def main() -> int:
             for error in errors[:10]:
                 where = ".".join(str(part) for part in error.path) or "(root)"
                 print(f"     {where}: {error.message}")
+            if len(errors) > 10:
+                print(f"     ... and {len(errors) - 10} more")
         else:
             print(f"PASS {fixture.relative_to(ROOT)}")
 

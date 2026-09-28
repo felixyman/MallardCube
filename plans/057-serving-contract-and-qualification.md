@@ -84,14 +84,17 @@ One source-neutral file (`contract.yaml`, JSON Schema checked in CI) with only
 the fields that are stable across sources and engines:
 
 - `contract_version` (semver) and `model` (name, description);
-- `grain` (fact table, key) and `dimensions` (id, key column, table, hierarchy
-  levels or flat, date role, cardinality hint);
+- `grain` (fact table, key, serving id, measure group) and `dimensions` (id,
+  table, key, attribute — the member value column Excel names members by; for
+  a date role, the leaf — hierarchy name, caption, ordinal, visibility, date
+  role, cardinality hint, levels with their cardinality hints);
 - `relationships` (fact, dimension, columns, cardinality: `many_to_one` only,
   active flag);
 - `measures` (expression or upstream reference, declared aggregation:
   `sum` / `min` / `max` / `count` / `distinct_count` / `ratio` / `time_window`,
-  format string, description);
-- `display` (captions, ordinals, visibility) and `security` (role references);
+  format string, description, `valid_grain` for identity aggregates);
+- `time_intelligence` (date dimension plus the flag columns for the windows the
+  engine serves) and `security` (role references);
 - `provenance` (source system, source hash, generator name/version, timestamp).
 
 ### Compatibility policy — changeable while pre-alpha
@@ -172,15 +175,33 @@ features (060), live attach and object-store intake (061), aggregate design
   `schema/contract-0.1.json` (JSON Schema draft 2020-12, `additionalProperties:
   false` on core objects, `annotations` free), a hand-written fixture
   (`contracts/upstream_marts/contract.yaml`) mirroring the thin projection's
-  grain, keys, relationships and measure declarations with no SQL, and
-  `mallard contract validate <file> [--json]` (serde `deny_unknown_fields`
-  plus the version rules: an unknown core field is a hard error, a newer
-  version refuses with an upgrade hint, an older one routes through an
-  explicit migration). The CI test job validates every fixture against the
-  schema (`scripts/contract_check.py`) and runs the Rust validator; the docs
-  page is marked unstable; six tests pin the fixture and each refusal. Next in
-  section A: the projection to a proxy config, then the qualifier's
-  `--contract` mode, then the generators.
+  grain, keys, serving names, relationships, measure declarations and flag
+  catalogue with no SQL, and `mallard contract validate <file> [--json]`
+  (serde `deny_unknown_fields`, duplicate-mapping-key refusal, the version
+  rules, and cross-field shape checks). The CI test job validates every
+  fixture against the schema (`scripts/contract_check.py`) and runs the Rust
+  validator; the docs page is marked unstable; twelve tests pin the fixture
+  and each refusal.
+  Review round (reviewer subagent) found and this slice fixed: the fixture
+  dropped the median mart's Category join and both gates blessed it; a
+  `valid_grain` measure could be declared additive (`sum` on the median);
+  duplicate YAML keys were last-wins in both gates (now refused by walking the
+  document before the typed parse); the Rust validator was weaker than the
+  schema (empty collections/keys, short join pairs, empty names); version
+  parsing accepted `0.1`/`00.1.0`/`0.1.0-beta` and mislabelled an unparsable
+  minor as older; the dimension attribute column (`physical_field`), the
+  serving names and the model-level flag catalogue were inexpressible (now
+  `attribute`, `hierarchy_name`, grain `id`/`measure_group`, and typed
+  `time_intelligence` flags); the Date key contradicted the key attribute (now
+  `attribute: full_date`, `key: date_key`); cross-references (time_window
+  dimension, valid_grain columns, join column vs key, one-table-one-key) were
+  unchecked. Recorded leftovers: `expression` text is not parsed — the
+  qualifier's `--contract` mode is where it becomes checkable —
+  `security.roles` binds only at projection/deployment time, and an
+  `active: false` relationship is declared but not yet consumed (the
+  projection decides how an inactive join is served). Next in section
+  A: the projection to a proxy config, then the qualifier's `--contract` mode,
+  then the generators.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

@@ -219,12 +219,10 @@ enum Command {
     },
     /// Validate a source-neutral contract.yaml (plan 057-A)
     Contract {
-        /// Action to perform
-        #[arg(default_value = "validate")]
-        action: String,
-        /// Path to contract.yaml
-        #[arg(default_value = "contracts/upstream_marts/contract.yaml")]
-        file: String,
+        /// Action to perform (default: validate)
+        action: Option<String>,
+        /// Path to contract.yaml (default: contracts/upstream_marts/contract.yaml)
+        file: Option<String>,
         /// Emit the machine-readable verdict
         #[arg(long)]
         json: bool,
@@ -355,7 +353,13 @@ async fn main() {
             std::process::exit(mallardcube::tools::auto_model::run(args));
         }
         Command::Contract { action, file, json } => {
-            let mut args = vec!["contract".into(), action, file];
+            let mut args = vec!["contract".to_string()];
+            if let Some(action) = action {
+                args.push(action);
+                if let Some(file) = file {
+                    args.push(file);
+                }
+            }
             if json {
                 args.push("--json".into());
             }
