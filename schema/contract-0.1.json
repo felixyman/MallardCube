@@ -194,7 +194,48 @@
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["valid_grain"] },
+          "then": {
+            "properties": { "aggregation": { "enum": ["min", "max"] } },
+            "description": "A per-grain value is an identity aggregate; never re-aggregated."
+          }
+        },
+        {
+          "if": {
+            "properties": { "aggregation": { "const": "ratio" } },
+            "required": ["aggregation"]
+          },
+          "then": { "required": ["expression"] }
+        },
+        {
+          "if": {
+            "properties": { "aggregation": { "const": "time_window" } },
+            "required": ["aggregation"]
+          },
+          "then": { "required": ["time_window"] }
+        },
+        {
+          "if": {
+            "properties": {
+              "aggregation": {
+                "enum": ["sum", "min", "max", "distinct_count", "time_window"]
+              }
+            },
+            "required": ["aggregation"]
+          },
+          "then": {
+            "description": "An aggregate must declare what it aggregates.",
+            "anyOf": [
+              { "required": ["expression"] },
+              { "properties": { "source": { "required": ["column"] } } },
+              { "properties": { "source": { "required": ["reference"] } } }
+            ]
+          }
+        }
+      ]
     },
     "source": {
       "type": "object",

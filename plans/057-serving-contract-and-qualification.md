@@ -199,7 +199,25 @@ features (060), live attach and object-store intake (061), aggregate design
   qualifier's `--contract` mode is where it becomes checkable —
   `security.roles` binds only at projection/deployment time, and an
   `active: false` relationship is declared but not yet consumed (the
-  projection decides how an inactive join is served). Next in section
+  projection decides how an inactive join is served).
+  Second review round (reviewer subagent on the fix commit) found the
+  "validator ≥ schema" claim false for five fields the schema refuses and the
+  validator accepted (empty `expression`/`reference`/`valid_grain`, empty
+  grain `id`/`measure_group`), and that a window measure could bind to any
+  flag with no catalogue (or to another date role's catalogue). Fixed:
+  emptiness-aware checks, `valid_grain` distinguishes declared-empty from
+  absent, a `time_window` now requires the flag catalogue and must name the
+  catalogue's date role, YAML merge keys (`<<`) are refused with a clear
+  message (the schema checker expands them and the validator would not, so
+  the gates would read different documents), and the schema now carries the
+  additivity rules as `if`/`then`. `scripts/contract_check.py` grew a
+  19-case conformance corpus that runs both gates over the same cases and
+  fails on any divergence, so "at least as strict" is enforced by
+  construction. One known bounded divergence, recorded rather than papered
+  over: custom YAML tags (e.g. `!foo`) are refused by the schema checker
+  (standard YAML) but `yaml_serde` strips tags before the validator sees them,
+  and its public API exposes no event stream to detect them; standard tags
+  (`!!str`, `!!int`) behave identically in both gates. Next in section
   A: the projection to a proxy config, then the qualifier's `--contract` mode,
   then the generators.
 

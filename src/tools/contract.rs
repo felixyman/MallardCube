@@ -152,8 +152,17 @@ pub struct Measure {
     pub expression: Option<String>,
     #[serde(default)]
     pub time_window: Option<TimeWindow>,
+    /// The grain a per-grain mart value is valid at; `Some([])` is a declared
+    /// empty list and is refused, `None` means absent.
     #[serde(default)]
-    pub valid_grain: Vec<String>,
+    pub valid_grain: Option<Vec<String>>,
+}
+
+impl Measure {
+    /// The declared valid grain, when present and non-empty.
+    pub fn valid_grain(&self) -> &[String] {
+        self.valid_grain.as_deref().unwrap_or_default()
+    }
 }
 
 /// Declared, not inferred: a ratio is never emitted as if it were additive.
@@ -309,6 +318,13 @@ impl<'de> Visitor<'de> for NoDuplicateKeysVisitor {
     {
         let mut seen: HashSet<yaml_serde::Value> = HashSet::new();
         while let Some(key) = map.next_key::<yaml_serde::Value>()? {
+            if matches!(&key, yaml_serde::Value::String(name) if name == "<<") {
+                return Err(de::Error::custom(
+                    "YAML merge keys (`<<`) are not supported: the schema checker expands them and \
+                     the validator does not, so the two gates would read different documents; write \
+                     the fields explicitly",
+                ));
+            }
             if !seen.insert(key.clone()) {
                 return Err(de::Error::custom(format!("duplicate mapping key {key:?}")));
             }
@@ -439,6 +455,22 @@ fn consistency(contract: &Contract) -> Vec<String> {
         }
         if grain_keys.insert(grain.table.as_str(), columns).is_some() {
             findings.push(format!("duplicate grain table '{}'", grain.table));
+        }
+        if grain.id.as_deref().is_some_and(|id| id.trim().is_empty()) {
+            findings.push(format!(
+                "grain table '{}' declares an empty serving id",
+                grain.table
+            ));
+        }
+        if grain
+            .measure_group
+            .as_deref()
+            .is_some_and(|group| group.trim().is_empty())
+        {
+            findings.push(format!(
+                "grain table '{}' declares an empty measure group",
+                grain.table
+            ));
         }
     }
     let tables: HashSet<&str> = grain_keys.keys().copied().collect();
@@ -581,12 +613,53 @@ fn consistency(contract: &Contract) -> Vec<String> {
                 measure.id, measure.source.table
             ));
         }
-        let declared_source = measure.expression.is_some()
-            || measure.source.column.is_some()
-            || measure.source.reference.is_some();
+        if measure
+            .expression
+            .as_deref()
+            .is_some_and(|expression| expression.trim().is_empty())
+        {
+            findings.push(format!(
+                "measure '{}' declares an empty expression",
+                measure.id
+            ));
+        }
+        if measure
+            .source
+            .column
+            .as_deref()
+            .is_some_and(|column| column.trim().is_empty())
+        {
+            findings.push(format!("measure '{}' source column is empty", measure.id));
+        }
+        if measure
+            .source
+            .reference
+            .as_deref()
+            .is_some_and(|reference| reference.trim().is_empty())
+        {
+            findings.push(format!(
+                "measure '{}' source reference is empty",
+                measure.id
+            ));
+        }
+        let declared_expression = measure
+            .expression
+            .as_deref()
+            .is_some_and(|expression| !expression.trim().is_empty());
+        let declared_source = declared_expression
+            || measure
+                .source
+                .column
+                .as_deref()
+                .is_some_and(|column| !column.trim().is_empty())
+            || measure
+                .source
+                .reference
+                .as_deref()
+                .is_some_and(|reference| !reference.trim().is_empty());
         match measure.aggregation {
             Aggregation::Ratio => {
-                if measure.expression.is_none() {
+                if !declared_expression {
                     findings.push(format!(
                         "measure '{}' is a ratio but declares no expression",
                         measure.id
@@ -610,27 +683,49 @@ fn consistency(contract: &Contract) -> Vec<String> {
                 measure.id
             ));
         }
-        if !measure.valid_grain.is_empty() {
-            if !matches!(measure.aggregation, Aggregation::Min | Aggregation::Max) {
+        if let Some(valid_grain) = &measure.valid_grain {
+            if valid_grain.is_empty() {
                 findings.push(format!(
-                    "measure '{}' declares valid_grain but its aggregation is '{}'; a per-grain value \
-                     is an identity aggregate (min or max)",
-                    measure.id,
-                    measure.aggregation.label()
+                    "measure '{}' declares an empty valid_grain",
+                    measure.id
                 ));
-            }
-            if let Some(grain_key) = grain_keys.get(measure.source.table.as_str()) {
-                for column in &measure.valid_grain {
-                    if !grain_key.contains(&column.as_str()) {
-                        findings.push(format!(
-                            "measure '{}' valid_grain names '{}', which is not part of the grain of '{}' {:?}",
-                            measure.id, column, measure.source.table, grain_key
-                        ));
+            } else {
+                if !matches!(measure.aggregation, Aggregation::Min | Aggregation::Max) {
+                    findings.push(format!(
+                        "measure '{}' declares valid_grain but its aggregation is '{}'; a per-grain value \
+                         is an identity aggregate (min or max)",
+                        measure.id,
+                        measure.aggregation.label()
+                    ));
+                }
+                if let Some(grain_key) = grain_keys.get(measure.source.table.as_str()) {
+                    for column in valid_grain {
+                        if !grain_key.contains(&column.as_str()) {
+                            findings.push(format!(
+                                "measure '{}' valid_grain names '{}', which is not part of the grain of '{}' {:?}",
+                                measure.id, column, measure.source.table, grain_key
+                            ));
+                        }
                     }
                 }
             }
         }
         if let Some(window) = &measure.time_window {
+            match &contract.time_intelligence {
+                None => findings.push(format!(
+                    "measure '{}' declares a time_window but the contract has no time_intelligence \
+                     flag catalogue",
+                    measure.id
+                )),
+                Some(time_intelligence) => {
+                    if window.dimension != time_intelligence.date_dimension {
+                        findings.push(format!(
+                            "measure '{}' time_window names '{}' but the flag catalogue serves '{}'",
+                            measure.id, window.dimension, time_intelligence.date_dimension
+                        ));
+                    }
+                }
+            }
             match contract
                 .dimensions
                 .iter()
@@ -897,7 +992,11 @@ provenance: { source_system: manual, generator: test/0.1.0 }
             .find(|measure| measure.id == "Median lead time")
             .expect("median measure");
         assert_eq!(median.aggregation, Aggregation::Max);
-        assert_eq!(median.valid_grain, vec!["year", "month", "product_key"]);
+        let valid_grain = median.valid_grain();
+        assert_eq!(valid_grain.len(), 3);
+        assert_eq!(valid_grain[0], "year");
+        assert_eq!(valid_grain[1], "month");
+        assert_eq!(valid_grain[2], "product_key");
         // The median mart joins Category too; a projection without it would
         // lose the dimension from every median pivot.
         assert!(
@@ -1200,6 +1299,85 @@ provenance: { source_system: manual, generator: test/0.1.0 }
             validate_text(&bound).is_ok(),
             "the bound flag must validate"
         );
+    }
+
+    /// Every declared-but-empty field the schema refuses is refused here too:
+    /// the validator is never the weaker gate.
+    #[test]
+    fn empty_declarations_are_refused() {
+        refused_for(
+            &minimal().replace("aggregation: sum", "aggregation: sum, expression: \"\""),
+            "empty expression",
+        );
+        refused_for(
+            &minimal().replace("column: revenue", "column: \"\""),
+            "source column is empty",
+        );
+        refused_for(
+            &minimal().replace("column: revenue", "reference: \"\""),
+            "source reference is empty",
+        );
+        refused_for(
+            &minimal().replace("aggregation: sum", "aggregation: sum, valid_grain: []"),
+            "empty valid_grain",
+        );
+        refused_for(
+            &minimal().replace("key: order_id", "key: order_id, id: \"\""),
+            "empty serving id",
+        );
+        refused_for(
+            &minimal().replace("key: order_id", "key: order_id, measure_group: \"\""),
+            "empty measure group",
+        );
+    }
+
+    /// A window measure must bind to the declared flag catalogue, and to the
+    /// catalogue's date role — not to an arbitrary flag the model never serves.
+    #[test]
+    fn window_measures_require_the_flag_catalogue() {
+        let windowed = minimal().replace(
+            "aggregation: sum",
+            "aggregation: sum, time_window: { dimension: Date, flag: ytd_flag }",
+        );
+        refused_for(&windowed, "no time_intelligence flag catalogue");
+        let mismatch = minimal()
+            .replace(
+                "relationships:",
+                "  - { id: Other, table: dim_date, key: date_key, attribute: full_date, \
+                 date_role: true, levels: [ { name: Full Date, column: full_date } ] }\nrelationships:",
+            )
+            .replace(
+                "aggregation: sum",
+                "aggregation: sum, time_window: { dimension: Other, flag: ytd_flag }",
+            )
+            .replace(
+                "provenance:",
+                "time_intelligence: { date_dimension: Date, flags: { ytd: ytd_flag } }\nprovenance:",
+            );
+        refused_for(&mismatch, "flag catalogue serves 'Date'");
+    }
+
+    /// YAML merge keys would make the two gates read different documents (the
+    /// schema checker expands them, the validator does not), so they refuse.
+    #[test]
+    fn yaml_merge_keys_are_refused() {
+        let text = r#"
+contract_version: "0.1.0"
+model: { name: demo }
+grain:
+  - { table: fact_orders, key: order_id }
+dimensions:
+  - { id: Date, table: dim_date, key: date_key, attribute: full_date, date_role: true,
+      levels: [ { name: Full Date, column: full_date } ] }
+relationships:
+  - { fact: fact_orders, dimension: Date, columns: [order_date_key, date_key] }
+measures:
+  - &base { id: Revenue, source: { table: fact_orders, column: revenue }, aggregation: sum }
+  - <<: *base
+    id: Revenue copy
+provenance: { source_system: manual, generator: test/0.1.0 }
+"#;
+        refused_for(text, "merge keys");
     }
 
     /// The CLI's exit codes and default path (one source of truth).

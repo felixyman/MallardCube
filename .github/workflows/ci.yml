@@ -60,10 +60,8 @@ jobs:
         run: |
           python3 -m venv .venv-contract
           .venv-contract/bin/pip install --quiet jsonschema pyyaml
-          .venv-contract/bin/python scripts/contract_check.py
-          for fixture in contracts/*/contract.yaml; do
-            cargo run --release --bin mallard -- contract validate "$fixture"
-          done
+          cargo build --release --bin mallard
+          .venv-contract/bin/python scripts/contract_check.py --binary target/release/mallard
 
   docs:
     runs-on: ubuntu-latest

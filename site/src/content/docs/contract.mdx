@@ -71,9 +71,10 @@ Version rules and shape checks fail closed: an unknown core field is a hard
 error, a duplicate mapping key is refused (YAML's last-wins would silently
 rewrite the contract), a contract newer than the build supports refuses with an
 upgrade hint, and an older version routes through an explicit migration — never
-silent tolerance. The checked-in JSON Schema is the published shape; the
-validator is the enforcement, and the two are kept at least as strict as each
-other.
+silent tolerance. The checked-in JSON Schema is the published shape and
+carries the additivity rules as `if`/`then`; the validator is the enforcement,
+and a 19-case conformance corpus runs both gates over the same contracts so
+drift fails CI rather than shipping.
 
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the
