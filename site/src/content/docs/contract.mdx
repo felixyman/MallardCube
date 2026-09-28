@@ -95,12 +95,14 @@ specifics — catalog, cube, database path — are parameters, not contract fiel
 Shapes the config cannot express are refused, never guessed: an upstream
 `reference` nobody expanded, an inactive relationship, a composite date key, a
 dimension no relationship binds (the runtime would guess the primary fact
-table), and a second date role on another table (the config serves one date
-table globally). `valid_grain` is a qualification declaration, so the runtime
-config cannot carry it — the qualifier's `--contract` mode (next slice) checks
-it against the data instead. The config cannot carry the fact grain keys, the
-model description or the contract's provenance either; those exist for
-qualification and for the generators.
+table), relationships for one dimension that disagree on the join columns (the
+engine joins through the first), and a second date role that names another
+table or full-date column (the config serves one calendar globally).
+`valid_grain` is a qualification declaration, so the runtime config cannot
+carry it — the qualifier's `--contract` mode (next slice) checks it against
+the data instead. The config cannot carry the fact grain keys, the model
+description or the contract's provenance either; those exist for qualification
+and for the generators.
 
 The emitted file is the canonical `mallard fmt` form: reloading it changes
 nothing. The fixture's projection round-trips — a test projects

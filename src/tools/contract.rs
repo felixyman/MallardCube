@@ -971,7 +971,16 @@ pub fn run(args: Vec<String>) -> i32 {
                 || parsed.db_path.is_some()
                 || parsed.out.is_some()
             {
-                eprintln!("contract: --catalog/--cube/--db-path/--out need the project action");
+                let file = parsed.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
+                let reason = "--catalog/--cube/--db-path/--out need the project action".to_string();
+                if parsed.json {
+                    println!(
+                        "{}",
+                        verdict_json("error", false, file, None, None, &[reason], 2)
+                    );
+                } else {
+                    eprintln!("contract: {reason}");
+                }
                 return 2;
             }
             run_validate(&parsed)

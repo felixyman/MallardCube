@@ -261,6 +261,23 @@ features (060), live attach and object-store intake (061), aggregate design
   `fmt` rewrites drop comments, so a header would break `fmt --check`
   canonicality; the config cannot carry provenance, grain keys or the model
   description, and the docs now say so.
+  Third review round (verification of the fix commit) confirmed the binding,
+  date-table, canonical-form and verdict fixes, and found three surviving
+  gaps, all now closed: the output format followed YAML regardless of the
+  target path (`--out x.json` wrote YAML that the loader then refused — the
+  format now follows the extension, like `fmt`); a second date role on the
+  same table but a different full-date column would filter the global column
+  (now refused alongside the table check); and a dimension joined differently
+  on two facts was accepted although the engine joins through the first
+  relationship (disagreeing joins are now refused). The security note now says
+  the file has no `auth` block and the roles enforce nothing until the
+  deployment adds auth and table permissions; `--json` keeps its key set on
+  the usage-error paths too and carries the notes on write failure; `--out`
+  warns when it overwrites an existing file; and the new refusals are pinned
+  by tests (join arity, unknown dimension, disagreeing joins, date-role
+  column, verdict key set, a `.json` target). Recorded leftover: degenerate
+  dimensions (attribute on the fact table, no relationship) are refused — the
+  runtime's fallback is only sound when the query's fact is the primary one.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
