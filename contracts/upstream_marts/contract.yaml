@@ -1,0 +1,152 @@
+# The 0.1 contract fixture for the thin projection (plan 057-A).
+#
+# This file mirrors projects/upstream_marts/proxy-config.yaml: the same grain,
+# keys, relationships and measure declarations, without any SQL. It is
+# hand-written today so the schema, the validator and the CI gate exist before
+# the generators; the sqlmesh/dbt generators replace it in a later slice.
+#
+# Prove it:  cargo run --bin mallard -- contract validate contracts/upstream_marts/contract.yaml
+
+contract_version: "0.1.0"
+
+model:
+  name: upstream_marts
+  description: >-
+    Thin projection of the governed marts: additive sums and ratio-of-sums over
+    fact_orders, and identity aggregates over the per-grain marts. No measure
+    logic lives in the proxy.
+
+grain:
+  - table: fact_orders
+    key: order_id
+  - table: mart_lead_time_median_month
+    key: [year, month, product_key]
+  - table: mart_cumulative_month
+    key: [year, month]
+
+dimensions:
+  - id: Date
+    table: dim_date
+    key: date_key
+    date_role: true
+    caption: Date
+    ordinal: 1
+    cardinality_hint: 1200
+    levels:
+      - { name: Year, column: year }
+      - { name: Quarter, column: quarter }
+      - { name: Month, column: month }
+      - { name: Full Date, column: full_date }
+  - id: Category
+    table: dim_product
+    key: product_key
+    caption: Category
+    ordinal: 2
+  - id: Product
+    table: dim_product
+    key: product_key
+    caption: Product
+    ordinal: 3
+  - id: Customer
+    table: dim_customer
+    key: customer_key
+    caption: Customer
+    ordinal: 4
+  - id: Region
+    table: dim_customer
+    key: customer_key
+    caption: Region
+    ordinal: 5
+  - id: Segment
+    table: dim_customer
+    key: customer_key
+    caption: Segment
+    ordinal: 6
+
+relationships:
+  - { fact: fact_orders, dimension: Date, columns: [order_date_key, date_key] }
+  - { fact: fact_orders, dimension: Product, columns: [product_key, product_key] }
+  - { fact: fact_orders, dimension: Category, columns: [product_key, product_key] }
+  - { fact: fact_orders, dimension: Customer, columns: [customer_key, customer_key] }
+  - { fact: fact_orders, dimension: Region, columns: [customer_key, customer_key] }
+  - { fact: fact_orders, dimension: Segment, columns: [customer_key, customer_key] }
+  - { fact: mart_lead_time_median_month, dimension: Date, columns: [order_date_key, date_key] }
+  - { fact: mart_lead_time_median_month, dimension: Product, columns: [product_key, product_key] }
+  - { fact: mart_cumulative_month, dimension: Date, columns: [order_date_key, date_key] }
+
+measures:
+  - id: Revenue
+    caption: Revenue
+    source: { table: fact_orders, column: revenue }
+    aggregation: sum
+    format: "#,##0"
+  - id: Revenue YTD
+    caption: Revenue YTD
+    source: { table: fact_orders, column: revenue }
+    aggregation: sum
+    time_window: { dimension: Date, flag: ytd_flag }
+    format: "#,##0"
+  - id: Orders
+    caption: Orders
+    source: { table: fact_orders, column: is_order }
+    aggregation: sum
+    format: "#,##0"
+  - id: Open orders
+    caption: Open orders
+    source: { table: fact_orders, column: is_open }
+    aggregation: sum
+    format: "#,##0"
+  - id: Cancelled orders
+    caption: Cancelled orders
+    source: { table: fact_orders, column: is_cancelled }
+    aggregation: sum
+    format: "#,##0"
+  - id: Late orders
+    caption: Late orders
+    source: { table: fact_orders, column: is_late }
+    aggregation: sum
+    format: "#,##0"
+  - id: On-time %
+    caption: On-time %
+    source: { table: fact_orders }
+    aggregation: ratio
+    expression: "sum(is_within_sla) * 100.0 / nullif(sum(is_order), 0)"
+    format: "0.0"
+  - id: Average lead time
+    caption: Average lead time (days)
+    source: { table: fact_orders }
+    aggregation: ratio
+    expression: "sum(sum_lead_time) / nullif(sum(count_lead_time), 0)"
+    format: "0.0"
+  - id: Median lead time
+    caption: Median lead time (days)
+    source: { table: mart_lead_time_median_month, column: median_lead_time }
+    aggregation: max
+    valid_grain: [year, month, product_key]
+    description: "A median is valid only at the mart's grain; never re-aggregated."
+    format: "0.0"
+  - id: Cumulative revenue CY
+    caption: Cumulative revenue CY
+    source: { table: mart_cumulative_month, column: cumulative_revenue_cy }
+    aggregation: max
+    valid_grain: [year, month]
+    format: "#,##0"
+  - id: Cumulative revenue CY-1
+    caption: Cumulative revenue CY-1
+    source: { table: mart_cumulative_month, column: cumulative_revenue_cy_minus_1 }
+    aggregation: max
+    valid_grain: [year, month]
+    format: "#,##0"
+
+provenance:
+  source_system: manual
+  source_hash: "sha256:d22d01cfdbb75257a39b6bf7"
+  generator: mallard-contract/0.1.0
+  generated_at: "2026-09-28T00:00:00Z"
+
+annotations:
+  note: >-
+    Hand-written fixture mirroring projects/upstream_marts/proxy-config.yaml
+    (its sha256 prefix is the source_hash); the projection and the sqlmesh/dbt
+    generators follow in later slices.
+  plan: "057-A"

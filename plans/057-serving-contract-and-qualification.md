@@ -168,6 +168,20 @@ features (060), live attach and object-store intake (061), aggregate design
 
 ## Progress
 
+- **2026-09-28 — section A, first slice: the contract exists at 0.1.**
+  `schema/contract-0.1.json` (JSON Schema draft 2020-12, `additionalProperties:
+  false` on core objects, `annotations` free), a hand-written fixture
+  (`contracts/upstream_marts/contract.yaml`) mirroring the thin projection's
+  grain, keys, relationships and measure declarations with no SQL, and
+  `mallard contract validate <file> [--json]` (serde `deny_unknown_fields`
+  plus the version rules: an unknown core field is a hard error, a newer
+  version refuses with an upgrade hint, an older one routes through an
+  explicit migration). The CI test job validates every fixture against the
+  schema (`scripts/contract_check.py`) and runs the Rust validator; the docs
+  page is marked unstable; six tests pin the fixture and each refusal. Next in
+  section A: the projection to a proxy config, then the qualifier's
+  `--contract` mode, then the generators.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

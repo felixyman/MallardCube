@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mallardcube.dev/schema/contract-0.1.json",
+  "title": "MallardCube serving contract (0.1, unstable)",
+  "description": "Source-neutral description of a model's meaning: grain, keys, relationships and measure declarations. The runtime never reads this file; generators write it, the qualifier validates it, and it projects to a proxy config. 0.x is unstable: core fields may change between minor versions until 1.0.",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "model",
+    "grain",
+    "dimensions",
+    "relationships",
+    "measures",
+    "provenance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "pattern": "^0\\.1\\.[0-9]+$",
+      "description": "Semver of the contract line this file follows."
+    },
+    "model": { "$ref": "#/$defs/model" },
+    "grain": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Every served fact table and the key that is unique within it.",
+      "items": { "$ref": "#/$defs/grain" }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/dimension" }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Fact-to-dimension joins. Only many_to_one is expressible: anything else multiplies rows.",
+      "items": { "$ref": "#/$defs/relationship" }
+    },
+    "measures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/measure" }
+    },
+    "security": { "$ref": "#/$defs/security" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "annotations": {
+      "type": "object",
+      "description": "Escape hatch the proxy ignores and generators preserve; a field earns core status only with a qualifier check behind it.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "grain": {
+      "type": "object",
+      "required": ["table", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "table": { "type": "string", "minLength": 1 },
+        "key": { "$ref": "#/$defs/key" }
+      }
+    },
+    "key": {
+      "description": "A single key column or a composite key.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "dimension": {
+      "type": "object",
+      "required": ["id", "table", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "table": { "type": "string", "minLength": 1 },
+        "key": { "$ref": "#/$defs/key" },
+        "date_role": {
+          "type": "boolean",
+          "description": "A date dimension: levels carry calendar columns and the key hierarchy is the leaf."
+        },
+        "caption": { "type": "string" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "visible": { "type": "boolean" },
+        "cardinality_hint": { "type": "integer", "minimum": 0 },
+        "levels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/level" }
+        }
+      }
+    },
+    "level": {
+      "type": "object",
+      "required": ["name", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "column": { "type": "string", "minLength": 1 }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["fact", "dimension", "columns"],
+      "additionalProperties": false,
+      "properties": {
+        "fact": { "type": "string", "minLength": 1 },
+        "dimension": { "type": "string", "minLength": 1 },
+        "columns": {
+          "type": "array",
+          "description": "[fact column, dimension column]",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "cardinality": {
+          "enum": ["many_to_one"],
+          "description": "Only many_to_one exists: any other cardinality multiplies fact rows."
+        },
+        "active": { "type": "boolean" }
+      }
+    },
+    "measure": {
+      "type": "object",
+      "required": ["id", "source", "aggregation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "caption": { "type": "string" },
+        "description": { "type": "string" },
+        "format": { "type": "string" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "visible": { "type": "boolean" },
+        "source": { "$ref": "#/$defs/source" },
+        "aggregation": {
+          "enum": [
+            "sum",
+            "min",
+            "max",
+            "count",
+            "distinct_count",
+            "ratio",
+            "time_window"
+          ],
+          "description": "Declared, not inferred: a ratio is never emitted as if it were additive."
+        },
+        "expression": {
+          "type": "string",
+          "description": "Source-neutral expression when a declaration plus a column is not enough (ratios of sums)."
+        },
+        "time_window": { "$ref": "#/$defs/time_window" },
+        "valid_grain": {
+          "type": "array",
+          "description": "The grain a per-grain mart value is valid at (identity aggregates).",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["table"],
+      "additionalProperties": false,
+      "properties": {
+        "table": { "type": "string", "minLength": 1 },
+        "column": { "type": "string", "minLength": 1 },
+        "reference": {
+          "type": "string",
+          "description": "An upstream artifact reference (a model or mart id) instead of a column."
+        }
+      }
+    },
+    "time_window": {
+      "type": "object",
+      "required": ["dimension", "flag"],
+      "additionalProperties": false,
+      "properties": {
+        "dimension": { "type": "string", "minLength": 1 },
+        "flag": {
+          "type": "string",
+          "description": "The upstream column the proxy only filters on (e.g. ytd_flag)."
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "array",
+          "description": "Role references; the deployment's auth config binds them.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_system", "generator"],
+      "additionalProperties": false,
+      "properties": {
+        "source_system": { "enum": ["sqlmesh", "dbt", "manual", "cube"] },
+        "source_hash": { "type": "string" },
+        "generator": { "type": "string", "minLength": 1 },
+        "generated_at": { "type": "string" }
+      }
+    }
+  }
+}

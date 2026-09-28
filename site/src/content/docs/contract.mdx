@@ -1,0 +1,67 @@
+---
+title: Serving contract (0.1, unstable)
+description: The source-neutral contract.yaml — what it expresses, and why it carries no SQL
+---
+
+The serving contract describes a model's **meaning** — grain, keys,
+relationships and measure declarations — in one source-neutral file. It is the
+format generators write (sqlmesh, dbt), the qualifier checks, and the source
+the proxy config projects from.
+
+**It is unstable.** At `0.x`, core fields may change between minor versions
+with a changelog entry and no deprecation window; `1.0` is the commitment
+point, tied to the certification matrix. Prototype new fields under
+`annotations:`, which the proxy ignores and generators preserve — a field earns
+core status only once a qualifier check exists behind it.
+
+## What it deliberately does not contain
+
+No SQL, and no engine specifics. The contract states intent — "revenue is a sum
+at the order grain", "this median is valid only at month × product" — while
+execution lives in the generated proxy config. Anything engine-specific is a
+declared serving hint, and a hint that is required but unused is a
+qualification failure, never a guess.
+
+## The shape
+
+```yaml
+contract_version: "0.1.0"
+model: { name: upstream_marts, description: "Thin projection of the marts" }
+grain:
+  - { table: fact_orders, key: order_id }
+  - { table: mart_lead_time_median_month, key: [year, month, product_key] }
+dimensions:
+  - { id: Date, table: dim_date, key: date_key, date_role: true,
+      levels: [ { name: Year, column: year }, { name: Month, column: month } ] }
+relationships:
+  - { fact: fact_orders, dimension: Date, columns: [order_date_key, date_key] }
+measures:
+  - { id: Revenue, source: { table: fact_orders, column: revenue }, aggregation: sum }
+  - { id: On-time %, source: { table: fact_orders }, aggregation: ratio,
+      expression: "sum(is_within_sla) * 100.0 / nullif(sum(is_order), 0)" }
+  - { id: Median lead time, source: { table: mart_lead_time_median_month, column: median_lead_time },
+      aggregation: max, valid_grain: [year, month, product_key] }
+provenance: { source_system: sqlmesh, generator: mallard-contract/0.1.0 }
+annotations: { note: "prototype fields live here until a check exists" }
+```
+
+Only `many_to_one` relationships are expressible: anything else multiplies fact
+rows. Aggregations are **declared**, not inferred, so a ratio is never emitted
+as if it were additive.
+
+## Validating
+
+```bash
+# The schema (JSON Schema draft 2020-12) is checked in at schema/contract-0.1.json.
+python3 scripts/contract_check.py                 # every fixture against the schema
+mallard contract validate contracts/upstream_marts/contract.yaml
+mallard contract validate contracts/upstream_marts/contract.yaml --json
+```
+
+Version rules fail closed: an unknown core field is a hard error, a contract
+newer than the build supports refuses with an upgrade hint, and an older
+version routes through an explicit migration — never silent tolerance.
+
+The runtime **never reads the contract**; it serves the projected config. See
+the [model reference](/MallardCube/model/) for that format, and `plans/057` for the
+contract's compatibility policy and the generator roadmap.

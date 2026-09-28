@@ -56,6 +56,12 @@ jobs:
       - name: Test
         run: cargo test --lib --release
 
+      - name: Validate the contract fixtures
+        run: |
+          python3 -m pip install --quiet jsonschema pyyaml
+          python3 scripts/contract_check.py
+          cargo run --release --bin mallard -- contract validate contracts/upstream_marts/contract.yaml
+
   docs:
     runs-on: ubuntu-latest
     steps:
