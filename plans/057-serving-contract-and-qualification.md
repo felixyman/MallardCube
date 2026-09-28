@@ -282,11 +282,21 @@ first; NULL fact keys are reported as their own finding; tolerances carry a 0.01
 floor; an identifier containing a double quote is a configuration error rather
 than a data defect.
 
-Recorded, not fixed: composite and parent-child key checks (a duplicate
-`(key, parent)` pair still slips), a generation counter so a timed-out
-request's abandoned worker cannot fault the next request, parity cases for the
-three `3a10f91` fixes (they need mirror probes: `MDSCHEMA_MEMBERS` with a
-foreign cube/property, `DBSCHEMA_CATALOGS` and `MDSCHEMA_PROPERTIES` with a
-foreign catalog, `DRILLTHROUGH FROM [Other]`, empty restriction values, and the
-`DISCOVER_*`/`TMSCHEMA_*` property behaviour), the JSON verdict, and computing
-the additivity invariant in SQL rather than pulling every group into Rust.
+**Qualifier batch completed 2026-09-28**: parent-child integrity checks
+(duplicate keys, orphan parents, self-parents and a depth-capped cycle walk —
+`parent_child_defects_are_blocked`), the machine-readable verdict
+(`mallard qualify --json`, contract `mallardcube.qualify/1`: verdict, config,
+reasons, notes, exit code; a test pins the shape), and the additivity
+invariant computed in one SQL row (total, grouped sum, group count) instead of
+pulling every group into Rust. Composite *relationship* keys have no
+configuration surface yet (relationships are single-column), so there is
+nothing to check there.
+
+Parity cases for the `3a10f91` fixes landed with the mirror's values
+(`members-foreign-property-faults`,
+`mdschema-properties-foreign-property-faults`,
+`catalogs-foreign-property-faults`, `drillthrough-empty-cube-faults` with the
+double-space message); the catalogue is 67/67.
+
+Recorded, not fixed: a generation counter so a timed-out request's abandoned
+worker cannot fault the next request.

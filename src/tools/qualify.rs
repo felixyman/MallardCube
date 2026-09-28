@@ -505,8 +505,17 @@ pub(crate) fn grain_findings<B: QueryBackend + ?Sized>(
             continue;
         }
 
+        // The invariant runs in SQL: one row with the total, the grouped sum
+        // and the group count (the subquery's columns are aliased so the
+        // measure expression can be referenced). Pulling every group into Rust
+        // does not scale past a small model (plan 057-B).
+        let invariant_sql = format!(
+            "SELECT ({total_sql}) AS total, \
+             COALESCE((SELECT SUM(v) FROM ({group_sql}) AS g(k, v)), 0) AS sum_v, \
+             (SELECT COUNT(*) FROM ({group_sql}) AS g(k, v)) AS groups"
+        );
         let _ = backend.take_failure();
-        let total = backend.query_scalar(&total_sql);
+        let rows = backend.query_rows(&invariant_sql);
         if let Some(failure) = backend.take_failure() {
             blocked.push(format!(
                 "grain check for '{}' cannot run: {failure}",
@@ -514,22 +523,24 @@ pub(crate) fn grain_findings<B: QueryBackend + ?Sized>(
             ));
             continue;
         }
-        let groups = backend.query_grouped_1d(&group_sql);
-        if let Some(failure) = backend.take_failure() {
+        let number = |index: usize| {
+            rows.first()
+                .and_then(|row| row.get(index))
+                .and_then(|value| value.parse::<f64>().ok())
+        };
+        let (Some(total), Some(sum), Some(groups)) = (number(0), number(1), number(2)) else {
             blocked.push(format!(
-                "grain check for '{}' cannot run: {failure}",
+                "grain check for '{}' returned no row",
                 measure.caption
             ));
             continue;
-        }
-        let sum: f64 = groups.iter().map(|(_, value)| value).sum();
+        };
         let tolerance = total.abs() * 1e-6 + 0.01;
         if (sum - total).abs() > tolerance {
             blocked.push(format!(
                 "measure '{}' is not additive over '{dimension}': total {total}, \
-                 sum of {} groups {sum} (difference {:.2})",
+                 sum of {groups} groups {sum} (difference {:.2})",
                 measure.caption,
-                groups.len(),
                 sum - total
             ));
         }
@@ -545,6 +556,8 @@ pub(crate) struct DataShape {
     pub dimension_keys: Vec<(String, String)>,
     /// `(fact table, fact column, dimension table, dimension column)`.
     pub relationships: Vec<(String, String, String, String)>,
+    /// `(table, key column, parent column)` — one per parent-child dimension.
+    pub parent_child: Vec<(String, String, String)>,
 }
 
 /// Build the shape from a loaded model.
@@ -594,6 +607,7 @@ pub(crate) fn data_shape(p: &crate::proxy_project::ProxyProject) -> DataShape {
             rel.dim_column.clone(),
         ));
     }
+    let mut parent_child: Vec<(String, String, String)> = Vec::new();
     for d in &model.dimensions {
         // The table can still be checked for existence…
         if let Some(table) = d.table_name.as_deref() {
@@ -603,11 +617,24 @@ pub(crate) fn data_shape(p: &crate::proxy_project::ProxyProject) -> DataShape {
         // dimension without a relationship has no reliable key to check. Keys
         // come from relationships only (their `dim_column` is the join key).
     }
+    // A parent-child dimension's (key, parent) pair is a key of its own: the
+    // recursion that materializes its levels silently misplaces duplicates,
+    // orphan parents and cycles (plan 057-B).
+    for dc in &p.config.dimensions {
+        let Some(pc) = &dc.parent_child else { continue };
+        let Some(table) = model.dim_def_opt(&dc.id).and_then(|d| d.table_name.clone()) else {
+            continue;
+        };
+        if !table.is_empty() && !pc.key_column.is_empty() && !pc.parent_column.is_empty() {
+            parent_child.push((table, pc.key_column.clone(), pc.parent_column.clone()));
+        }
+    }
 
     DataShape {
         tables,
         dimension_keys,
         relationships,
+        parent_child,
     }
 }
 
@@ -722,6 +749,96 @@ pub(crate) fn data_findings<B: QueryBackend + ?Sized>(
         }
     }
 
+    // Parent-child (key, parent) integrity: the recursion that materializes
+    // the levels misplaces duplicate keys, orphan parents, self-parents and
+    // cycles (plan 057-B).
+    for (table, key, parent) in &shape.parent_child {
+        if table.contains('"') || key.contains('"') || parent.contains('"') {
+            blocked.push(format!(
+                "parent-child '{table}.{key}' contains a double quote; fix the configuration"
+            ));
+            continue;
+        }
+        let _ = backend.take_failure();
+        let rows = backend.query_rows(&format!(
+            "SELECT COUNT(*), COUNT(DISTINCT \"{key}\") FROM \"{table}\""
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "parent-child '{table}.{key}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        let number = |index: usize| {
+            rows.first()
+                .and_then(|row| row.get(index))
+                .and_then(|value| value.parse::<i64>().ok())
+        };
+        if let (Some(total), Some(distinct)) = (number(0), number(1))
+            && total > 0
+            && distinct < total
+        {
+            blocked.push(format!(
+                "parent-child key '{table}.{key}' is not unique: {total} rows, {distinct} distinct \
+                 values ({} duplicates)",
+                total - distinct
+            ));
+        }
+        let orphans = backend.query_scalar(&format!(
+            "SELECT COUNT(*) FROM \"{table}\" AS c WHERE c.\"{parent}\" IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM \"{table}\" AS p WHERE p.\"{key}\" = c.\"{parent}\")"
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "parent-child '{table}.{parent}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        if orphans as i64 > 0 {
+            blocked.push(format!(
+                "parent-child '{table}' has {orphans} rows whose parent is not a key; the \
+                 hierarchy would lose them"
+            ));
+        }
+        let self_parent = backend.query_scalar(&format!(
+            "SELECT COUNT(*) FROM \"{table}\" WHERE \"{key}\" = \"{parent}\""
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "parent-child '{table}.{parent}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        if self_parent as i64 > 0 {
+            blocked.push(format!(
+                "parent-child '{table}' has {self_parent} rows that are their own parent"
+            ));
+        }
+        // A cycle is any node that reaches itself; the walk is capped at the
+        // table's row count so a cycle cannot spin the query.
+        let cycles = backend.query_scalar(&format!(
+            "WITH RECURSIVE walk(start, node, depth) AS ( \
+               SELECT \"{key}\", \"{parent}\", 1 FROM \"{table}\" WHERE \"{parent}\" IS NOT NULL \
+               UNION ALL \
+               SELECT walk.start, t.\"{parent}\", walk.depth + 1 FROM walk \
+                 JOIN \"{table}\" AS t ON t.\"{key}\" = walk.node \
+                 WHERE t.\"{parent}\" IS NOT NULL AND walk.depth < (SELECT COUNT(*) FROM \"{table}\") \
+             ) SELECT COUNT(*) FROM walk WHERE node = start"
+        ));
+        if let Some(failure) = backend.take_failure() {
+            blocked.push(format!(
+                "parent-child '{table}.{parent}' cannot be checked: {failure}"
+            ));
+            continue;
+        }
+        if cycles as i64 > 0 {
+            blocked.push(format!(
+                "parent-child '{table}' has {cycles} nodes in a parent cycle; the hierarchy \
+                 cannot be materialized"
+            ));
+        }
+    }
+
     (blocked, partial)
 }
 
@@ -818,9 +935,23 @@ pub(crate) fn non_additive_measures(p: &crate::proxy_project::ProxyProject) -> V
         .collect()
 }
 
+/// The machine-readable verdict (plan 057-B): a stable shape CI can consume.
+fn verdict_json(verdict: &Readiness, config_path: &str, notes: &[String]) -> String {
+    serde_json::json!({
+        "contract": "mallardcube.qualify/1",
+        "verdict": verdict.label(),
+        "config": config_path,
+        "reasons": verdict.reasons(),
+        "notes": notes,
+        "exit_code": verdict.exit_code(),
+    })
+    .to_string()
+}
+
 pub fn run(args: Vec<String>) -> i32 {
-    // args: ["qualify", "<config-path>", "<optional-trace-path>", "--strict"]
+    // args: ["qualify", "<config-path>", "<optional-trace-path>", "--strict", "--json"]
     let strict = args.iter().any(|a| a == "--strict");
+    let json = args.iter().any(|a| a == "--json");
     let positional: Vec<&str> = args
         .iter()
         .skip(1)
@@ -834,6 +965,15 @@ pub fn run(args: Vec<String>) -> i32 {
     let trace_path = positional.get(1).copied();
 
     let verdict = qualify(config_path, trace_path);
+    // Boundary notes are not findings: the project can be READY while a role
+    // hides a table whose columns a measure still reads (plan 058-F).
+    let notes = crate::proxy_project::ProxyProject::load(config_path)
+        .map(|project| column_security_warnings(&project))
+        .unwrap_or_default();
+    if json {
+        println!("{}", verdict_json(&verdict, config_path, &notes));
+        return verdict.exit_code();
+    }
 
     // Print summary
     println!("=== Qualification Report ===");
@@ -845,12 +985,8 @@ pub fn run(args: Vec<String>) -> i32 {
     if verdict.reasons().is_empty() {
         println!("  No issues found.");
     }
-    // Boundary notes are not findings: the project can be READY while a role
-    // hides a table whose columns a measure still reads (plan 058-F).
-    if let Ok(p) = crate::proxy_project::ProxyProject::load(config_path) {
-        for warning in column_security_warnings(&p) {
-            println!("  [NOTE] {warning}");
-        }
+    for warning in &notes {
+        println!("  [NOTE] {warning}");
     }
 
     if strict {
@@ -1185,6 +1321,7 @@ mod tests {
             tables: vec!["fact".into(), "dim".into(), "missing_table".into()],
             dimension_keys: vec![("dim".into(), "id".into())],
             relationships: vec![("fact".into(), "id".into(), "dim".into(), "id".into())],
+            parent_child: Vec::new(),
         };
         let (blocked, partial) = data_findings(backend.as_ref(), &shape);
         assert!(
@@ -1202,6 +1339,75 @@ mod tests {
         assert!(
             partial.iter().any(|m| m.contains("no matching")),
             "{partial:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The JSON verdict is a stable shape CI can consume (plan 057-B).
+    #[test]
+    fn json_verdict_is_a_stable_shape() {
+        let blocked = Readiness::Blocked(vec!["a reason".into()]);
+        let json = verdict_json(&blocked, "cfg.json", &["a note".into()]);
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(value["contract"], "mallardcube.qualify/1");
+        assert_eq!(value["verdict"], "BLOCKED");
+        assert_eq!(value["config"], "cfg.json");
+        assert_eq!(value["reasons"][0], "a reason");
+        assert_eq!(value["notes"][0], "a note");
+        assert_eq!(value["exit_code"], 1);
+
+        let ready = verdict_json(&Readiness::Ready, "cfg.json", &[]);
+        let value: serde_json::Value = serde_json::from_str(&ready).expect("valid json");
+        assert_eq!(value["verdict"], "READY");
+        assert_eq!(value["exit_code"], 0);
+        assert_eq!(value["reasons"].as_array().map(Vec::len), Some(0));
+    }
+
+    /// A parent-child table's own key defects are blocked: duplicate keys,
+    /// orphan parents, self-parents and cycles (plan 057-B).
+    #[test]
+    fn parent_child_defects_are_blocked() {
+        let path = std::env::temp_dir().join(format!(
+            "mallardcube-qualify-pc-{}.duckdb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = duckdb::Connection::open(&path).expect("open temp db");
+            conn.execute_batch(
+                "CREATE TABLE bad(k INTEGER, p INTEGER);
+                 INSERT INTO bad VALUES (1, NULL), (1, 2), (2, 3), (3, 3), (4, 9);
+                 CREATE TABLE good(k INTEGER, p INTEGER);
+                 INSERT INTO good VALUES (1, NULL), (2, 1), (3, 1);",
+            )
+            .expect("seed temp db");
+        }
+        let source = crate::backend::BackendSource::file(&path).expect("open seeded db");
+        let backend = source.checkout();
+        let shape = DataShape {
+            tables: vec!["bad".into(), "good".into()],
+            dimension_keys: Vec::new(),
+            relationships: Vec::new(),
+            parent_child: vec![
+                ("bad".into(), "k".into(), "p".into()),
+                ("good".into(), "k".into(), "p".into()),
+            ],
+        };
+        let (blocked, _) = data_findings(backend.as_ref(), &shape);
+        for needle in [
+            "not unique",
+            "parent is not a key",
+            "their own parent",
+            "parent cycle",
+        ] {
+            assert!(
+                blocked.iter().any(|message| message.contains(needle)),
+                "{needle}: {blocked:?}"
+            );
+        }
+        assert!(
+            !blocked.iter().any(|message| message.contains("'good'")),
+            "the clean table reports nothing: {blocked:?}"
         );
         let _ = std::fs::remove_file(&path);
     }

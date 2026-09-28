@@ -1037,6 +1037,61 @@
         "tabular_first_row_columns": "[Date].[Calendar].[Year].[MEMBER_CAPTION]|[Date].[Calendar].[Quarter].[MEMBER_CAPTION]|[Date].[Calendar].[Month].[MEMBER_CAPTION]|[Date].[Calendar].[Full Date].[MEMBER_CAPTION]|[Measures].[Revenue]"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-27: the Format=Tabular rowset carries one MEMBER_CAPTION column per level up to the grouped level, ragged per member depth, and the (All) row carries the measure only"
+    },
+    {
+      "id": "members-foreign-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_MEMBERS",
+        "restrictions": {
+          "CUBE_NAME": "{cube}",
+          "HIERARCHY_UNIQUE_NAME": "[Category].[Category]"
+        },
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+    },
+    {
+      "id": "mdschema-properties-foreign-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "MDSCHEMA_PROPERTIES",
+        "restrictions": {
+          "CUBE_NAME": "{cube}"
+        },
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+    },
+    {
+      "id": "catalogs-foreign-property-faults",
+      "kind": "discover",
+      "request": {
+        "type": "DBSCHEMA_CATALOGS",
+        "restrictions": {},
+        "properties": "<Catalog>WrongCatalog</Catalog>"
+      },
+      "expect": {
+        "fault": true
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
+    },
+    {
+      "id": "drillthrough-empty-cube-faults",
+      "kind": "execute",
+      "request": {
+        "mdx": "DRILLTHROUGH SELECT FROM []"
+      },
+      "expect": {
+        "fault": "The  cube does not exist."
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: a foreign <Catalog> property faults on the member/properties/catalog rowsets, and an empty cube name faults the drillthrough with the double-space message"
     }
   ]
 }

@@ -219,6 +219,9 @@ enum Command {
     },
     /// Qualify a converted project for Excel readiness
     Qualify {
+        /// Emit the machine-readable JSON verdict instead of the summary
+        #[arg(long)]
+        json: bool,
         /// Path to proxy-config.json
         #[arg(default_value = "projects/project3/proxy-config.json")]
         config: String,
@@ -343,6 +346,7 @@ async fn main() {
             config,
             trace,
             strict,
+            json,
         } => {
             let mut args = vec!["qualify".into(), config];
             if let Some(t) = trace {
@@ -350,6 +354,9 @@ async fn main() {
             }
             if strict {
                 args.push("--strict".into());
+            }
+            if json {
+                args.push("--json".into());
             }
             std::process::exit(mallardcube::tools::qualify::run(args));
         }
