@@ -234,9 +234,33 @@ features (060), live attach and object-store intake (061), aggregate design
   the fixture and asserts it reproduces
   `projects/upstream_marts/proxy-config.yaml` semantically; the projected
   config passes `qualify --strict` with the same verdict and notes as the
-  checked-in one. Next in section
-  A: the projection to a proxy config, then the qualifier's `--contract` mode,
-  then the generators.
+  checked-in one. Next in section A: the qualifier's `--contract` mode, then
+  the generators.
+  Review round (reviewer subagent on the projection commit) found and this
+  slice fixed: a dimension's declared table survived only through a
+  relationship, so an unbound dimension was silently served from the primary
+  fact table and a second date role from the global date table (both now
+  refused with messages); the flag-column defaults were misread as inventing
+  names for omitted slots (the field-level default actually wins over the
+  container default, so a missing key inside a present block is unavailable —
+  now pinned by a test, and the real non-idempotence was a format-less
+  measure: `format_string: ''` became the default on reload, fixed by
+  emitting the canonical `normalize` → `deminimize` form, with an idempotence
+  test); the round-trip test compared five sections and missed
+  roles/auth/dialect/section files (now the whole config, plus a
+  display-field test); `--json` was absent on the serialize/write failure
+  paths and one verdict label conflated invalid contracts with
+  config-inexpressible shapes (now `invalid`/`refused`/`error` on every path,
+  notes included); the projection refuses project-only flags under `validate`
+  and an empty `--out`, guards relationship arity and unknown dimensions for
+  library callers, and notes role references without bindings and a missing
+  `--db-path`. Recorded leftover: DISCOVER MEASURE_AGGREGATOR is pinned to
+  Sum for every measure — the count/min/max/distinct_count codes need the
+  reference oracle (the VM was down), after which the projection maps them
+  and the checked-in config follows. The provenance-header idea was dropped:
+  `fmt` rewrites drop comments, so a header would break `fmt --check`
+  canonicality; the config cannot carry provenance, grain keys or the model
+  description, and the docs now say so.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

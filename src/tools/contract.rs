@@ -965,7 +965,17 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     };
     match parsed.action.as_str() {
-        "validate" => run_validate(&parsed),
+        "validate" => {
+            if parsed.catalog.is_some()
+                || parsed.cube.is_some()
+                || parsed.db_path.is_some()
+                || parsed.out.is_some()
+            {
+                eprintln!("contract: --catalog/--cube/--db-path/--out need the project action");
+                return 2;
+            }
+            run_validate(&parsed)
+        }
         "project" => crate::tools::contract_project::run(&parsed),
         other => {
             let file = parsed.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
@@ -1463,6 +1473,17 @@ provenance: { source_system: manual, generator: test/0.1.0 }
         assert_eq!(
             run(vec!["contract".into(), "validate".into(), FIXTURE.into()]),
             0
+        );
+        assert_eq!(
+            run(vec![
+                "contract".into(),
+                "validate".into(),
+                FIXTURE.into(),
+                "--out".into(),
+                "x.yaml".into()
+            ]),
+            2,
+            "project-only flags must not be silently ignored by validate"
         );
         assert_eq!(
             run(vec![

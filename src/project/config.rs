@@ -700,6 +700,55 @@ mod tests {
         assert_eq!(dd.flag_columns.ytd_flag_column, "ytd_flag"); // default
     }
 
+    /// The flag-column semantics, pinned because they are easy to misread:
+    /// an *absent* block keeps the conventional names (backward compat), while
+    /// a *present* block that omits a key means "this column does not exist
+    /// upstream" — the field-level default wins over the container default, so
+    /// nothing is ever invented for a declared block.
+    #[test]
+    fn flag_columns_distinguish_absent_from_missing_keys() {
+        let absent: ProxyConfig = serde_json::from_str(
+            r#"{
+                "catalog": "TEST",
+                "cube": "TestCube",
+                "time_intelligence": { "date_dimension": { "dimension_id": "Date" } }
+            }"#,
+        )
+        .expect("parse");
+        let absent = absent
+            .time_intelligence
+            .expect("time_intelligence present")
+            .date_dimension
+            .flag_columns;
+        assert_eq!(
+            absent.year_column, "year",
+            "an absent block keeps conventions"
+        );
+        assert_eq!(absent.ytd_flag_column, "ytd_flag");
+
+        let partial: ProxyConfig = serde_json::from_str(
+            r#"{
+                "catalog": "TEST",
+                "cube": "TestCube",
+                "time_intelligence": { "date_dimension": {
+                    "dimension_id": "Date",
+                    "flag_columns": { "year_column": "cal_year" }
+                } }
+            }"#,
+        )
+        .expect("parse");
+        let partial = partial
+            .time_intelligence
+            .expect("time_intelligence present")
+            .date_dimension
+            .flag_columns;
+        assert_eq!(partial.year_column, "cal_year");
+        assert!(
+            partial.ytd_flag_column.is_empty(),
+            "a missing key inside a present block is unavailable, never a guess"
+        );
+    }
+
     #[test]
     fn time_intelligence_defaults_backward_compat() {
         let json = r#"{

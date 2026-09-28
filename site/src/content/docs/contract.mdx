@@ -93,13 +93,21 @@ aggregates), and `time_intelligence` becomes the flag catalogue. Deployment
 specifics — catalog, cube, database path — are parameters, not contract fields.
 
 Shapes the config cannot express are refused, never guessed: an upstream
-`reference` nobody expanded, an inactive relationship, a composite date key.
-`valid_grain` is a qualification declaration, so the runtime config cannot
-carry it — the qualifier checks it against the data instead. The fixture's
-projection round-trips: a test projects `contracts/upstream_marts/contract.yaml`
-and asserts it reproduces `projects/upstream_marts/proxy-config.yaml`
-semantically, and the projected config passes `qualify --strict` with the same
-verdict and notes as the checked-in one.
+`reference` nobody expanded, an inactive relationship, a composite date key, a
+dimension no relationship binds (the runtime would guess the primary fact
+table), and a second date role on another table (the config serves one date
+table globally). `valid_grain` is a qualification declaration, so the runtime
+config cannot carry it — the qualifier's `--contract` mode (next slice) checks
+it against the data instead. The config cannot carry the fact grain keys, the
+model description or the contract's provenance either; those exist for
+qualification and for the generators.
+
+The emitted file is the canonical `mallard fmt` form: reloading it changes
+nothing. The fixture's projection round-trips — a test projects
+`contracts/upstream_marts/contract.yaml` and asserts it reproduces
+`projects/upstream_marts/proxy-config.yaml` semantically (the whole config,
+not a hand-picked subset), and the projected config passes `qualify --strict`
+with the same verdict and notes as the checked-in one.
 
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the

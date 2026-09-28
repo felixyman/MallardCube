@@ -4,7 +4,11 @@
 //! specifics (catalog, cube, database path) are parameters, not contract
 //! fields; everything the contract declares maps mechanically, and shapes the
 //! config cannot express (an upstream reference, an inactive relationship, a
-//! composite date key) are refused rather than guessed.
+//! composite date key, an unbound dimension, a second date table) are refused
+//! rather than guessed. The config cannot carry the fact grain keys, the model
+//! description or the contract's provenance — those exist for qualification
+//! and for the generators. The emitted file is the canonical `mallard fmt`
+//! form, so reloading it changes nothing.
 
 use crate::project::config::{
     DateDimensionConfig, DateFlagColumns, DimensionConfig, FactTableConfig, HierarchyLevelConfig,
@@ -96,21 +100,68 @@ pub fn project(contract: &Contract, deployment: &Deployment) -> Result<ProxyConf
                 ));
                 return None;
             }
-            let dim_table = contract
+            if relationship.columns.len() != 2 {
+                findings.push(format!(
+                    "relationship on '{}' must name exactly [fact column, dimension column]",
+                    relationship.fact
+                ));
+                return None;
+            }
+            let Some(dimension) = contract
                 .dimensions
                 .iter()
                 .find(|dimension| dimension.id == relationship.dimension)
-                .map(|dimension| dimension.table.clone())
-                .unwrap_or_default();
+            else {
+                findings.push(format!(
+                    "relationship on '{}' names unknown dimension '{}'",
+                    relationship.fact, relationship.dimension
+                ));
+                return None;
+            };
             Some(RelationshipConfig {
                 fact_table: fact_id(&relationship.fact),
                 fact_column: relationship.columns[0].clone(),
                 dimension_id: relationship.dimension.clone(),
-                dim_table,
+                dim_table: dimension.table.clone(),
                 dim_column: relationship.columns[1].clone(),
             })
         })
         .collect();
+
+    // The config binds a dimension to its table only through a relationship
+    // (or, for a date role, the global date table). Without one the runtime
+    // guesses the primary fact table — a plausible wrong answer, not a fault.
+    for dimension in &contract.dimensions {
+        if !contract
+            .relationships
+            .iter()
+            .any(|relationship| relationship.dimension == dimension.id && relationship.active)
+        {
+            findings.push(format!(
+                "dimension '{}' has no relationship; the config binds a dimension to its table only \
+                 through a join, and without one the runtime guesses the primary fact table",
+                dimension.id
+            ));
+        }
+        let date_table = contract
+            .time_intelligence
+            .as_ref()
+            .and_then(|time_intelligence| {
+                contract
+                    .dimensions
+                    .iter()
+                    .find(|candidate| candidate.id == time_intelligence.date_dimension)
+            })
+            .map(|date| date.table.as_str())
+            .unwrap_or_default();
+        if dimension.date_role && !date_table.is_empty() && date_table != dimension.table {
+            findings.push(format!(
+                "date role '{}' is on '{}' but the config serves one date table globally ('{}'); \
+                 a second date table would enumerate members from it",
+                dimension.id, dimension.table, date_table
+            ));
+        }
+    }
 
     let measures = contract
         .measures
@@ -317,22 +368,95 @@ fn project_time_intelligence(
 
 /// The machine-readable verdict (house shape): a stable key set on every path.
 fn verdict_json(
+    verdict: &str,
     ok: bool,
     file: &str,
     out: Option<&str>,
     reasons: &[String],
+    notes: &[String],
     exit_code: i32,
 ) -> String {
     serde_json::json!({
         "contract": "mallardcube.contract/1",
-        "verdict": if ok { "projected" } else { "invalid" },
+        "verdict": verdict,
         "ok": ok,
         "file": file,
         "out": out,
         "reasons": reasons,
+        "notes": notes,
         "exit_code": exit_code,
     })
     .to_string()
+}
+
+/// A failure path that keeps the JSON verdict shape (house rule: the key set
+/// does not change with the outcome).
+fn fail(args: &Args, verdict: &str, file: &str, reasons: &[String], exit_code: i32) -> i32 {
+    if args.json {
+        println!(
+            "{}",
+            verdict_json(
+                verdict,
+                false,
+                file,
+                args.out.as_deref(),
+                reasons,
+                &[],
+                exit_code
+            )
+        );
+    } else {
+        for reason in reasons {
+            println!("  [FAIL] {reason}");
+        }
+    }
+    exit_code
+}
+
+/// The canonical minimal YAML: normalize (fill derived defaults) then
+/// deminimize (omit them again) — exactly what `mallard fmt` writes, so a
+/// projected file is `fmt`-stable and reloading it changes nothing.
+fn canonical_yaml(config: &ProxyConfig) -> Result<String, String> {
+    let mut config = config.clone();
+    config.normalize();
+    config.deminimize();
+    config_io::serialize(&config, ConfigFormat::Yaml)
+}
+
+/// What the operator should know about the emitted file.
+fn projection_notes(contract: &Contract, config: &ProxyConfig, args: &Args) -> Vec<String> {
+    let mut notes = Vec::new();
+    if !config.roles.is_empty() {
+        notes.push(format!(
+            "{} security role reference(s) projected without members or filters; the deployment's \
+             auth config binds them",
+            config.roles.len()
+        ));
+    }
+    if args.db_path.is_none() {
+        notes.push("no --db-path: the config will use the runtime's demo database".to_string());
+    }
+    let unmeasured = contract
+        .measures
+        .iter()
+        .filter(|measure| {
+            matches!(
+                measure.aggregation,
+                Aggregation::Count
+                    | Aggregation::Min
+                    | Aggregation::Max
+                    | Aggregation::DistinctCount
+            )
+        })
+        .count();
+    if unmeasured > 0 {
+        notes.push(format!(
+            "{unmeasured} measure(s) declare count/min/max/distinct_count; DISCOVER \
+             MEASURE_AGGREGATOR is pinned to Sum until the reference codes are measured \
+             (plan 057 leftover)"
+        ));
+    }
+    notes
 }
 
 /// `mallard contract project <file> [--catalog X] [--cube Y] [--db-path P]
@@ -345,22 +469,14 @@ pub fn run(args: &Args) -> i32 {
         );
         return 2;
     }
+    if args.out.as_deref() == Some("") {
+        eprintln!("contract: --out needs a path");
+        return 2;
+    }
     let file = args.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
     let contract = match contract::validate_file(file) {
         Ok(contract) => contract,
-        Err(reasons) => {
-            if args.json {
-                println!(
-                    "{}",
-                    verdict_json(false, file, args.out.as_deref(), &reasons, 1)
-                );
-            } else {
-                for reason in &reasons {
-                    println!("  [FAIL] {reason}");
-                }
-            }
-            return 1;
-        }
+        Err(reasons) => return fail(args, "invalid", file, &reasons, 1),
     };
     let deployment = Deployment {
         catalog: args
@@ -373,39 +489,32 @@ pub fn run(args: &Args) -> i32 {
             .unwrap_or_else(|| contract.model.name.clone()),
         db_path: args.db_path.clone(),
     };
-    let mut config = match project(&contract, &deployment) {
+    let config = match project(&contract, &deployment) {
         Ok(config) => config,
-        Err(reasons) => {
-            if args.json {
-                println!(
-                    "{}",
-                    verdict_json(false, file, args.out.as_deref(), &reasons, 1)
-                );
-            } else {
-                for reason in &reasons {
-                    println!("  [FAIL] {reason}");
-                }
-            }
-            return 1;
-        }
+        Err(reasons) => return fail(args, "refused", file, &reasons, 1),
     };
-    // Emit only what the contract declared: derived values stay omitted.
-    config.deminimize();
-    let yaml = match config_io::serialize(&config, ConfigFormat::Yaml) {
+    let yaml = match canonical_yaml(&config) {
         Ok(yaml) => yaml,
         Err(error) => {
-            eprintln!("contract: cannot serialize the projection: {error}");
-            return 1;
+            let reason = format!("cannot serialize the projection: {error}");
+            return fail(args, "error", file, &[reason], 1);
         }
     };
+    let notes = projection_notes(&contract, &config, args);
+    for note in &notes {
+        eprintln!("  [NOTE] {note}");
+    }
     match args.out.as_deref() {
         Some(out) => {
             if let Err(error) = std::fs::write(out, &yaml) {
-                eprintln!("contract: cannot write {out}: {error}");
-                return 1;
+                let reason = format!("cannot write {out}: {error}");
+                return fail(args, "error", file, &[reason], 1);
             }
             if args.json {
-                println!("{}", verdict_json(true, file, Some(out), &[], 0));
+                println!(
+                    "{}",
+                    verdict_json("projected", true, file, Some(out), &[], &notes, 0)
+                );
             } else {
                 println!("Projected {file} -> {out}");
             }
@@ -446,9 +555,7 @@ mod tests {
     /// checked-in config semantically (comments and key order aside).
     #[test]
     fn the_fixture_projects_to_the_checked_in_config() {
-        let mut projected = project_fixture();
-        projected.deminimize();
-        let yaml = config_io::serialize(&projected, ConfigFormat::Yaml).expect("serialize");
+        let yaml = canonical_yaml(&project_fixture()).expect("serialize");
         let mut projected: ProxyConfig = yaml_serde::from_str(&yaml).expect("reparse");
         projected.normalize();
         let checked_in =
@@ -486,19 +593,123 @@ mod tests {
         ] {
             assert_eq!(projected, checked_in, "section '{label}' differs");
         }
+        // And nothing outside the named sections drifts (roles, auth, dialect,
+        // section files, source/table names).
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap(),
+            serde_json::to_value(&checked_in).unwrap(),
+            "the whole config differs"
+        );
+    }
+
+    /// The emitted file is the canonical minimal form: reloading and
+    /// re-emitting it changes nothing. A contract that omits a calendar slot,
+    /// a flag or a format must carry the explicit emptiness, because the
+    /// loader would otherwise refill conventional names.
+    #[test]
+    fn the_canonical_form_is_idempotent() {
+        let mut contract = fixture_contract();
+        let time_intelligence = contract.time_intelligence.as_mut().expect("catalogue");
+        time_intelligence.flags.qtd = None;
+        contract
+            .dimensions
+            .iter_mut()
+            .find(|dimension| dimension.id == "Date")
+            .expect("Date")
+            .levels
+            .retain(|level| level.name != "Quarter");
+        contract.measures[0].format.clear();
+
+        let first = canonical_yaml(&project(&contract, &deployment()).expect("projection"))
+            .expect("serialize");
+        assert!(
+            !first.contains("quarter_column"),
+            "an omitted slot must not be written as a guessed name:\n{first}"
+        );
+        let mut reloaded: ProxyConfig = yaml_serde::from_str(&first).expect("reparse");
+        reloaded.normalize();
+        let reloaded_flags = &reloaded
+            .time_intelligence
+            .as_ref()
+            .expect("catalogue")
+            .date_dimension
+            .flag_columns;
+        assert!(
+            reloaded_flags.quarter_column.is_empty(),
+            "reloading must keep the omitted slot unavailable"
+        );
+        let second = canonical_yaml(&reloaded).expect("serialize");
+        assert_eq!(first, second);
+    }
+
+    /// Display fields survive the projection.
+    #[test]
+    fn display_fields_are_carried() {
+        let mut contract = fixture_contract();
+        contract.measures[0].visible = false;
+        contract.measures[0].ordinal = Some(9);
+        contract.dimensions[0].visible = false;
+        let config = project(&contract, &deployment()).expect("projection");
+        assert!(!config.measures[0].visible);
+        assert_eq!(config.measures[0].ordinal, 9);
+        assert!(!config.dimensions[0].visible);
+    }
+
+    /// The config binds a dimension to its table only through a relationship,
+    /// and serves one date table globally: both gaps are refused.
+    #[test]
+    fn unbound_dimensions_and_second_date_tables_are_refused() {
+        let mut unbound = fixture_contract();
+        unbound
+            .relationships
+            .retain(|relationship| relationship.dimension != "Category");
+        let findings = project(&unbound, &deployment()).expect_err("unbound dimension");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("has no relationship")),
+            "{findings:?}"
+        );
+
+        let mut second_date = fixture_contract();
+        second_date.dimensions.push(contract::Dimension {
+            id: "Ship Date".into(),
+            table: "dim_ship_date".into(),
+            key: contract::Key::Single("ship_date_key".into()),
+            attribute: "ship_date".into(),
+            hierarchy_name: None,
+            date_role: true,
+            caption: "Ship Date".into(),
+            ordinal: None,
+            visible: true,
+            cardinality_hint: None,
+            levels: vec![contract::Level {
+                name: "Full Date".into(),
+                column: "ship_date".into(),
+                cardinality_hint: None,
+            }],
+        });
+        second_date.relationships.push(contract::Relationship {
+            fact: "fact_orders".into(),
+            dimension: "Ship Date".into(),
+            columns: vec!["ship_date_key".into(), "ship_date_key".into()],
+            cardinality: contract::Cardinality::ManyToOne,
+            active: true,
+        });
+        let findings = project(&second_date, &deployment()).expect_err("second date table");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("one date table globally")),
+            "{findings:?}"
+        );
     }
 
     /// Same contract, same bytes — the projection is a pure function.
     #[test]
     fn projection_is_deterministic() {
         let contract = fixture_contract();
-        let render = || {
-            config_io::serialize(
-                &project(&contract, &deployment()).unwrap(),
-                ConfigFormat::Yaml,
-            )
-            .unwrap()
-        };
+        let render = || canonical_yaml(&project(&contract, &deployment()).unwrap()).unwrap();
         assert_eq!(render(), render());
     }
 
@@ -608,5 +819,35 @@ mod tests {
         assert_eq!(config.cube, "Orders");
         assert_eq!(config.dimensions.len(), 6);
         let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            run(&Args {
+                action: "project".into(),
+                file: Some(FIXTURE.into()),
+                out: Some(String::new()),
+                ..Args::default()
+            }),
+            2,
+            "an empty --out must be refused"
+        );
+
+        // Without --catalog/--cube the deployment names default to the model.
+        let default_path = std::env::temp_dir().join(format!(
+            "mallard-projection-{}-defaults.yaml",
+            std::process::id()
+        ));
+        assert_eq!(
+            run(&Args {
+                action: "project".into(),
+                file: Some(FIXTURE.into()),
+                out: Some(default_path.to_string_lossy().into_owned()),
+                ..Args::default()
+            }),
+            0
+        );
+        let config = config_io::load(&default_path).expect("the defaulted config loads");
+        assert_eq!(config.catalog, "UPSTREAM_MARTS");
+        assert_eq!(config.cube, "upstream_marts");
+        let _ = std::fs::remove_file(&default_path);
     }
 }
