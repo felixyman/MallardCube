@@ -296,6 +296,20 @@ features (060), live attach and object-store intake (061), aggregate design
   DuckDB and also rebuild the upstream demo from its SQL files, so the
   fixture's contract is qualified end-to-end in CI without the duckdb CLI.
   This closes the recorded leftover that `valid_grain` was checked by nothing.
+  Review round (reviewer subagent on the qualification commit) found and this
+  slice fixed: the projection check was gated behind a usable database, so a
+  stale config passed with exit 0 on a fresh checkout (correspondence now runs
+  unconditionally, with a test); the whole-entry comparison blocked on
+  presentation fields the contract cannot express (`display_name`, `units`,
+  numeric precision/scale, dimension descriptions, All/leaf names, a fact's
+  `source_name`) — those are excluded and documented as the deployment's; an
+  identifier containing a quote produced a misleading SQL error (the
+  `data_findings` guard is ported); an empty grain table qualified vacuously
+  (now a partial finding); and the NULL-key partial's narrowness plus the
+  valid_grain NULL reasoning are documented in code. Recorded: role
+  *permissions* are the deployment's (the check verifies declared role names
+  are served, not what they filter); `provenance.source_hash` is not verified;
+  the relationship-cardinality declaration has no config counterpart.
   Next in section A: the generators (D).
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look

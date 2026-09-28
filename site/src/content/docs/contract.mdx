@@ -121,13 +121,26 @@ mallard qualify proxy-config.yaml \
   --contract contracts/upstream_marts/contract.yaml --strict
 ```
 
-Contract checks are blockers, not notes: every declared grain key must be
-unique in its table, every `valid_grain` must be unique in the source table
-(or the identity aggregate would re-aggregate across grains), every declared
-column must exist, every declared expression must bind, and the served config
-must be the projection of the contract — a stale or hand-edited config refuses
-with "regenerate the projection". `--json` carries `contract_file`, and the
-findings are prefixed `contract:` so the verdict says where they came from.
+The contract checks run in two groups. The **projection check** needs no
+database and runs even when the data is unreachable: the served config must be
+the projection of the contract, and a stale or hand-edited config blocks with
+"regenerate the projection". Presentation and serving hints the contract
+cannot express — `display_name`, `units`, numeric precision/scale, dimension
+descriptions, All-member and leaf names, a fact's `source_name` — belong to the
+deployment and are not compared.
+
+The **data checks** need the database: every declared grain key must be unique
+in its table, every `valid_grain` must be unique in the source table (or the
+identity aggregate would re-aggregate across grains), every declared expression
+must bind, and every dimension attribute, level column, date key and flag
+column must exist. Duplicate keys, unbound SQL and missing columns block; a
+lone NULL key row, an empty grain table and an extra served entry are partial
+findings, which do not fail `--strict`. Role *permissions* belong to the
+deployment: the contract declares references, and `--contract` checks that they
+are served, not what they filter.
+
+`--json` carries `contract_file`, and the findings are prefixed `contract:` so
+the verdict says where they came from.
 
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the

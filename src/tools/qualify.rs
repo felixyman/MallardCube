@@ -84,6 +84,20 @@ pub(crate) fn qualify_with_contract(
     let mut blocked = Vec::new();
     let mut partial = Vec::new();
 
+    // The correspondence check needs no database: the served config must be
+    // the contract's projection even when the data is unreachable, so it runs
+    // here rather than inside the data-side arm.
+    match &contract {
+        Some(Ok(contract)) => {
+            let (correspondence_blocked, correspondence_partial) =
+                crate::tools::contract_qualify::correspondence_findings(contract, &p);
+            blocked.extend(prefixed("contract", correspondence_blocked));
+            partial.extend(prefixed("contract", correspondence_partial));
+        }
+        Some(Err(reasons)) => blocked.extend(prefixed("contract", reasons.clone())),
+        None => {}
+    }
+
     // --- check db_path ---
     if p.config.db_path.is_none() {
         partial.push(
@@ -254,20 +268,17 @@ pub(crate) fn qualify_with_contract(
                 }
 
                 // Contract-sourced checks (plan 057-A): the declarations the
-                // config cannot carry, checked against the same data.
-                match &contract {
-                    Some(Ok(contract)) => {
-                        let (contract_blocked, contract_partial) =
-                            crate::tools::contract_qualify::contract_findings(
-                                source.checkout().as_ref(),
-                                contract,
-                                &p,
-                            );
-                        blocked.extend(prefixed("contract", contract_blocked));
-                        partial.extend(prefixed("contract", contract_partial));
-                    }
-                    Some(Err(reasons)) => blocked.extend(prefixed("contract", reasons.clone())),
-                    None => {}
+                // config cannot carry, checked against the same data. The
+                // correspondence check already ran above.
+                if let Some(Ok(contract)) = &contract {
+                    let (contract_blocked, contract_partial) =
+                        crate::tools::contract_qualify::contract_data_findings(
+                            source.checkout().as_ref(),
+                            contract,
+                            &p,
+                        );
+                    blocked.extend(prefixed("contract", contract_blocked));
+                    partial.extend(prefixed("contract", contract_partial));
                 }
             }
             Err(error) => {
@@ -276,12 +287,8 @@ pub(crate) fn qualify_with_contract(
         },
         _ => {
             partial.push("db_path is not usable: data-side checks skipped".into());
-            match &contract {
-                Some(Err(reasons)) => blocked.extend(prefixed("contract", reasons.clone())),
-                Some(Ok(_)) => {
-                    partial.push("contract checks skipped: db_path is not usable".into())
-                }
-                None => {}
+            if matches!(contract, Some(Ok(_))) {
+                partial.push("contract data checks skipped: db_path is not usable".into());
             }
         }
     }
