@@ -217,12 +217,24 @@ enum Command {
         #[arg(long)]
         fact: Option<String>,
     },
-    /// Validate a source-neutral contract.yaml (plan 057-A)
+    /// Validate or project a source-neutral contract.yaml (plan 057-A)
     Contract {
-        /// Action to perform (default: validate)
+        /// Action: validate (default) or project
         action: Option<String>,
         /// Path to contract.yaml (default: contracts/upstream_marts/contract.yaml)
         file: Option<String>,
+        /// project: catalog name (default: the model name uppercased)
+        #[arg(long)]
+        catalog: Option<String>,
+        /// project: cube name (default: the model name)
+        #[arg(long)]
+        cube: Option<String>,
+        /// project: DuckDB path to embed in the config
+        #[arg(long)]
+        db_path: Option<String>,
+        /// project: write the config here instead of stdout
+        #[arg(long)]
+        out: Option<String>,
         /// Emit the machine-readable verdict
         #[arg(long)]
         json: bool,
@@ -352,12 +364,31 @@ async fn main() {
             }
             std::process::exit(mallardcube::tools::auto_model::run(args));
         }
-        Command::Contract { action, file, json } => {
+        Command::Contract {
+            action,
+            file,
+            catalog,
+            cube,
+            db_path,
+            out,
+            json,
+        } => {
             let mut args = vec!["contract".to_string()];
             if let Some(action) = action {
                 args.push(action);
-                if let Some(file) = file {
-                    args.push(file);
+            }
+            if let Some(file) = file {
+                args.push(file);
+            }
+            for (flag, value) in [
+                ("--catalog", catalog),
+                ("--cube", cube),
+                ("--db-path", db_path),
+                ("--out", out),
+            ] {
+                if let Some(value) = value {
+                    args.push(flag.into());
+                    args.push(value);
                 }
             }
             if json {

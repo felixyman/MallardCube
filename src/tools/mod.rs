@@ -1,5 +1,6 @@
 pub mod auto_model;
 pub mod contract;
+pub mod contract_project;
 pub mod convert_tabular;
 pub mod data_loader;
 pub mod extract_trace_mdx;

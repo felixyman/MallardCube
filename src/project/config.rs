@@ -614,13 +614,13 @@ pub struct MeasureConfig {
     pub fallback_capability: Option<String>,
 }
 
-fn default_aggregator() -> u32 {
+pub fn default_aggregator() -> u32 {
     1
 }
-fn default_precision() -> u16 {
+pub fn default_precision() -> u16 {
     18
 }
-fn default_scale() -> i16 {
+pub fn default_scale() -> i16 {
     2
 }
 

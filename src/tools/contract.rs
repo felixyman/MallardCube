@@ -845,70 +845,132 @@ fn verdict_json(
     .to_string()
 }
 
-/// `mallard contract validate <file> [--json]`.
-pub fn run(args: Vec<String>) -> i32 {
-    let json = args.iter().any(|arg| arg == "--json");
-    let positional: Vec<&str> = args
-        .iter()
-        .skip(1)
-        .filter(|arg| !arg.starts_with("--"))
-        .map(String::as_str)
-        .collect();
-    let action = positional.first().copied().unwrap_or("validate");
-    let file = positional.get(1).copied().unwrap_or(DEFAULT_CONTRACT_PATH);
+/// Parsed `mallard contract` arguments. The house entry point is
+/// `run(Vec<String>)`; `parse_args` keeps value flags and positionals apart so
+/// `project` can take deployment parameters.
+#[derive(Debug, Default)]
+pub struct Args {
+    pub action: String,
+    pub file: Option<String>,
+    pub json: bool,
+    pub catalog: Option<String>,
+    pub cube: Option<String>,
+    pub db_path: Option<String>,
+    pub out: Option<String>,
+}
 
-    match action {
-        "validate" => match validate_file(file) {
-            Ok(contract) => {
-                if json {
-                    println!(
-                        "{}",
-                        verdict_json(
-                            "valid",
-                            true,
-                            file,
-                            Some(&contract.contract_version),
-                            Some(&contract.model.name),
-                            &[],
-                            0,
-                        )
-                    );
-                } else {
-                    println!("=== Contract {file} ===");
-                    println!("  version:  {}", contract.contract_version);
-                    println!("  model:    {}", contract.model.name);
-                    println!(
-                        "  shape:    {} grain table(s), {} dimension(s), {} relationship(s), {} measure(s)",
-                        contract.grain.len(),
-                        contract.dimensions.len(),
-                        contract.relationships.len(),
-                        contract.measures.len()
-                    );
-                    println!();
-                    println!("Contract: VALID");
-                }
-                0
+/// Parse `["contract", <action>, <file>, --flag <value> ...]`.
+pub fn parse_args(args: &[String]) -> Result<Args, String> {
+    let mut parsed = Args {
+        action: "validate".to_string(),
+        ..Args::default()
+    };
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--json" => parsed.json = true,
+            "--catalog" => parsed.catalog = Some(flag_value(&mut iter, "--catalog")?),
+            "--cube" => parsed.cube = Some(flag_value(&mut iter, "--cube")?),
+            "--db-path" => parsed.db_path = Some(flag_value(&mut iter, "--db-path")?),
+            "--out" => parsed.out = Some(flag_value(&mut iter, "--out")?),
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag '{other}'"));
             }
-            Err(reasons) => {
-                if json {
-                    println!(
-                        "{}",
-                        verdict_json("invalid", false, file, None, None, &reasons, 1)
-                    );
-                } else {
-                    println!("=== Contract {file} ===");
-                    for reason in &reasons {
-                        println!("  [FAIL] {reason}");
-                    }
-                    println!();
-                    println!("Contract: INVALID ({} finding(s))", reasons.len());
-                }
-                1
-            }
-        },
-        other => {
-            let reason = format!("unknown action '{other}' (expected: validate)");
+            other => positionals.push(other),
+        }
+    }
+    if let Some(action) = positionals.first() {
+        parsed.action = (*action).to_string();
+    }
+    if let Some(file) = positionals.get(1) {
+        parsed.file = Some((*file).to_string());
+    }
+    if let Some(extra) = positionals.get(2) {
+        return Err(format!("unexpected argument '{extra}'"));
+    }
+    Ok(parsed)
+}
+
+fn flag_value<'a>(
+    iter: &mut impl Iterator<Item = &'a String>,
+    flag: &str,
+) -> Result<String, String> {
+    iter.next()
+        .cloned()
+        .ok_or_else(|| format!("{flag} needs a value"))
+}
+
+/// `mallard contract validate <file> [--json]`.
+fn run_validate(args: &Args) -> i32 {
+    let json = args.json;
+    let file = args.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
+    match validate_file(file) {
+        Ok(contract) => {
             if json {
+                println!(
+                    "{}",
+                    verdict_json(
+                        "valid",
+                        true,
+                        file,
+                        Some(&contract.contract_version),
+                        Some(&contract.model.name),
+                        &[],
+                        0,
+                    )
+                );
+            } else {
+                println!("=== Contract {file} ===");
+                println!("  version:  {}", contract.contract_version);
+                println!("  model:    {}", contract.model.name);
+                println!(
+                    "  shape:    {} grain table(s), {} dimension(s), {} relationship(s), {} measure(s)",
+                    contract.grain.len(),
+                    contract.dimensions.len(),
+                    contract.relationships.len(),
+                    contract.measures.len()
+                );
+                println!();
+                println!("Contract: VALID");
+            }
+            0
+        }
+        Err(reasons) => {
+            if json {
+                println!(
+                    "{}",
+                    verdict_json("invalid", false, file, None, None, &reasons, 1)
+                );
+            } else {
+                println!("=== Contract {file} ===");
+                for reason in &reasons {
+                    println!("  [FAIL] {reason}");
+                }
+                println!();
+                println!("Contract: INVALID ({} finding(s))", reasons.len());
+            }
+            1
+        }
+    }
+}
+
+/// `mallard contract <action> ...`: `validate` (default) or `project`.
+pub fn run(args: Vec<String>) -> i32 {
+    let parsed = match parse_args(&args) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            eprintln!("contract: {reason}");
+            return 2;
+        }
+    };
+    match parsed.action.as_str() {
+        "validate" => run_validate(&parsed),
+        "project" => crate::tools::contract_project::run(&parsed),
+        other => {
+            let file = parsed.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
+            let reason = format!("unknown action '{other}' (expected: validate, project)");
+            if parsed.json {
                 println!(
                     "{}",
                     verdict_json("error", false, file, None, None, &[reason], 2)
@@ -1397,6 +1459,11 @@ provenance: { source_system: manual, generator: test/0.1.0 }
             1
         );
         assert_eq!(run(vec!["contract".into(), "bogus".into()]), 2);
+        assert_eq!(run(vec!["contract".into(), "--bogus".into()]), 2);
+        assert_eq!(
+            run(vec!["contract".into(), "validate".into(), FIXTURE.into()]),
+            0
+        );
         assert_eq!(
             run(vec![
                 "contract".into(),

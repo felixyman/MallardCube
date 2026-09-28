@@ -135,20 +135,21 @@ measures:
     caption: On-time %
     source: { table: fact_orders }
     aggregation: ratio
-    expression: "sum(is_within_sla) * 100.0 / nullif(sum(is_order), 0)"
+    expression: "SUM(is_within_sla) * 100.0 / NULLIF(SUM(is_order), 0)"
     format: "0.0"
   - id: Average lead time
     caption: Average lead time (days)
     source: { table: fact_orders }
     aggregation: ratio
-    expression: "sum(sum_lead_time) / nullif(sum(count_lead_time), 0)"
+    expression: "SUM(sum_lead_time) / NULLIF(SUM(count_lead_time), 0)"
     format: "0.0"
+  # Identity aggregate over the per-grain mart: a median is valid only at the
+  # mart's grain and is never re-aggregated.
   - id: Median lead time
     caption: Median lead time (days)
     source: { table: mart_lead_time_median_month, column: median_lead_time }
     aggregation: max
     valid_grain: [year, month, product_key]
-    description: "A median is valid only at the mart's grain; never re-aggregated."
     format: "0.0"
   - id: Cumulative revenue CY
     caption: Cumulative revenue CY

@@ -217,7 +217,24 @@ features (060), live attach and object-store intake (061), aggregate design
   over: custom YAML tags (e.g. `!foo`) are refused by the schema checker
   (standard YAML) but `yaml_serde` strips tags before the validator sees them,
   and its public API exposes no event stream to detect them; standard tags
-  (`!!str`, `!!int`) behave identically in both gates. Next in section
+  (`!!str`, `!!int`) behave identically in both gates.
+
+- **2026-09-28 — section A, step 2: the projection.**
+  `mallard contract project <file> [--catalog X] [--cube Y] [--db-path P]
+  [--out PATH] [--json]` turns a validated contract into the proxy config the
+  runtime reads (`src/tools/contract_project.rs`): grain becomes fact tables
+  (serving id, measure group), `attribute`/`key` become the dimension's member
+  and join columns, relationships become joins, declarations become SQL
+  expressions (`sum` → `SUM(col)`, ratios verbatim, `max`/`min` over a
+  per-grain mart for identity aggregates), and `time_intelligence` becomes the
+  flag catalogue (calendar slots from levels named Year/Quarter/Month).
+  Deployment specifics are parameters, never contract fields. Shapes the
+  config cannot express are refused: an unexpanded upstream `reference`, an
+  inactive relationship, a composite date key. The round-trip test projects
+  the fixture and asserts it reproduces
+  `projects/upstream_marts/proxy-config.yaml` semantically; the projected
+  config passes `qualify --strict` with the same verdict and notes as the
+  checked-in one. Next in section
   A: the projection to a proxy config, then the qualifier's `--contract` mode,
   then the generators.
 
