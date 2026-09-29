@@ -2275,6 +2275,13 @@ mod tests {
         use crate::engine::model::UserContext;
 
         with_project3(|| {
+            // The demo's fact window ends "today", so the expectation is
+            // derived from the same fixture (the `demo_scalar` convention).
+            // `.Members` lists the `(All)` member first (the multi-measure
+            // test pins that shape), then the fact-driven dates — not the
+            // calendar's levels.
+            let distinct_dates =
+                demo_scalar("SELECT COUNT(DISTINCT date_key) FROM sales_fact") as usize;
             let (xml, _) = crate::execute_builders::get_execute_response_with_format(
                 "SELECT [Measures].[Revenue] ON 0, [Date].[Full Date].Members ON 1 FROM [Sales]",
                 Some("Tabular"),
@@ -2286,7 +2293,7 @@ mod tests {
             assert!(!xml.contains("faultstring"), "{xml}");
             assert_eq!(
                 xml.matches("<row>").count(),
-                2463,
+                distinct_dates + 1,
                 "the key hierarchy's fact-driven rows, not the calendar levels"
             );
         });
