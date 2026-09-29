@@ -1,0 +1,6 @@
+2026-09-29 12:05:17,594 - MainThread - root - INFO - Shutting down the event dispatcher (dispatcher.py:159)
+2026-09-29 12:05:17,805 - MainThread - sqlmesh.core.config.connection - INFO - Creating new DuckDB adapter for data files: {'data/upstream_marts_sqlmesh.duckdb'} (connection.py:513)
+2026-09-29 12:05:18,493 - MainThread - sqlmesh.core.config.connection - INFO - Using existing DuckDB adapter due to overlapping data file: data/upstream_marts_sqlmesh.duckdb (connection.py:503)
+2026-09-29 12:05:18,552 - MainThread - sqlmesh.core.state_sync.db.migrator - INFO - Applying migration <module 'sqlmesh.migrations.v0000_baseline' from '/home/felix/code/MallardCube/oracles/sqlmesh/.venv/lib/python3.11/site-packages/sqlmesh/migrations/v0000_baseline.py'> (migrator.py:185)
+2026-09-29 12:05:18,555 - MainThread - sqlmesh.core.engine_adapter.base - WARNING - Failed to create schema 'sqlmesh': IO Error: Cannot open file "/home/felix/code/MallardCube/oracles/sqlmesh/data/upstream_marts_sqlmesh.duckdb": No such file or directory (base.py:1450)
+2026-09-29 12:05:18,559 - MainThread - sqlmesh.core.state_sync.db.migrator - INFO - Starting migration rollback. (migrator.py:132)

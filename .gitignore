@@ -32,5 +32,10 @@ projects/*
 !projects/project3/
 !projects/project4/
 !projects/upstream_marts/
+!projects/upstream_marts_sqlmesh/
+projects/upstream_marts_sqlmesh/data/
+projects/upstream_marts_sqlmesh/logs/
+projects/upstream_marts_sqlmesh/.cache/
 
 __pycache__/
+oracles/sqlmesh/.venv/

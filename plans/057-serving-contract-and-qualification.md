@@ -330,6 +330,22 @@ features (060), live attach and object-store intake (061), aggregate design
   called out. Known remaining difference: the reference also emits its hidden
   `__Default measure` (127, invisible to Excel); the proxy does not.
 
+- **2026-09-29 — section D, oracle round: SQLMesh measured, not guessed.**
+  `oracles/sqlmesh` is a uv-managed environment (SQLMesh 0.236.2, pinned by
+  `uv.lock`; nothing in the product or CI depends on it) and
+  `projects/upstream_marts_sqlmesh` is a real SQLMesh project with the same
+  surface as `projects/upstream_marts` — dimensions, conformed fact, per-grain
+  marts, metrics — materialising the same data (1,500 orders, revenue
+  801,339.50, 264/33 mart rows) into DuckDB views under `upstream_marts.*` via
+  `physical_schema_mapping`. Measured: model files carry `grain`/`columns`/
+  `kind`/audits and metrics carry SQL expressions; there is **no built-in
+  `relationships` audit** (that name is dbt's — a custom audit called from the
+  model files is the convention); audit queries are not rewritten to physical
+  tables and the logical views do not exist during apply, so the FK audit
+  carries the declaration with `skip true` and the check runs in
+  `qualify --contract`; `physical_schema_override` is deprecated. The
+  generator (next) parses the files — no Python at generation time.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

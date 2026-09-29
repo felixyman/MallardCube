@@ -1,0 +1,30 @@
+# SQLMesh project for the upstream marts fixture (plan 057-A, generators).
+#
+# This is the same model surface as projects/upstream_marts (dimensions,
+# conformed fact, per-grain marts), expressed as a real SQLMesh project so the
+# contract generator can be built and measured against it. Run it with the
+# uv-managed environment in oracles/sqlmesh:
+#
+#   cd oracles/sqlmesh && uv run sqlmesh -p ../../projects/upstream_marts_sqlmesh plan --auto-apply
+#
+# The database is generated under data/ and is not checked in.
+
+gateways:
+  local:
+    connection:
+      type: duckdb
+      database: data/upstream_marts_sqlmesh.duckdb
+
+default_gateway: local
+
+# No phone-home: the oracle runs offline.
+disable_anonymized_analytics: true
+
+model_defaults:
+  dialect: duckdb
+
+# The fixture's custom relationships audit references the parent model by its
+# logical name (audit queries are not rewritten to physical tables in 0.236),
+# so keep the physical schema identical to the logical one.
+physical_schema_mapping:
+  upstream_marts: upstream_marts
