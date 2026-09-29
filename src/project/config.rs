@@ -616,7 +616,7 @@ pub struct MeasureConfig {
 
 /// The default `MEASURE_AGGREGATOR`: 0 (`MDMEASURE_AGGR_UNKNOWN`).
 ///
-/// Measured 2026-09-29 against the reference tabular engine (four deployed
+/// Measured 2026-09-29 against the reference tabular engine (five deployed
 /// models, compatibility 1600 and 1700): every explicit measure reports 0,
 /// whatever its DAX — plain `SUM(FactSales[Amount])`, `COUNTROWS`, `MAX`,
 /// `DISTINCTCOUNT`, a bare column reference. The 1/2/3/4/8 values in the spec

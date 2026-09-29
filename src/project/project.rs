@@ -240,7 +240,7 @@ impl ProxyProject {
                     ordinal: 1,
                     visible: true,
                     fact_table: None,
-                    aggregator: 1,
+                    aggregator: 0,
                     measure_group_name: "FactTable".into(),
                     numeric_precision: 18,
                     numeric_scale: 2,

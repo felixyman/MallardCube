@@ -456,7 +456,9 @@ pub struct MeasureDef {
     pub description: String,
     /// XMLA MEASURE_IS_VISIBLE
     pub visible: bool,
-    /// XMLA MEASURE_AGGREGATOR (1=sum)
+    /// XMLA MEASURE_AGGREGATOR. Measured 2026-09-29: the reference tabular
+    /// engine reports 0 (Unknown) for every explicit measure, whatever its
+    /// DAX; the 1/2/3/4/8 values are the multidimensional enumeration.
     pub aggregator: u32,
     /// XMLA MEASURE_UNITS
     pub units: String,
@@ -766,7 +768,7 @@ pub fn default_model() -> SemanticModel {
             display_name: "Total Sales (SEK)".into(),
             description: "Total sales".into(),
             visible: true,
-            aggregator: 1,
+            aggregator: 0,
             units: "SEK".into(),
             format_string: "#,##0.00 SEK".into(),
             measure_group_name: "FactTable".into(),

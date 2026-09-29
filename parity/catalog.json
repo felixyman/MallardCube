@@ -245,9 +245,13 @@
           "[Measures].[Revenue YTD]",
           "[Measures].[Revenue]",
           "[Measures].[Units]"
-        ]
+        ],
+        "aggregator": "0"
       },
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-24"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-29 (MEASURE_AGGREGATOR: every explicit measure reports 0; the 1/2/3/4/8 values are the multidimensional enumeration)",
+      "single": {
+        "aggregator": "MEASURE_AGGREGATOR"
+      }
     },
     {
       "id": "cell-revenue-total",
