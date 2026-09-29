@@ -988,6 +988,21 @@ pub fn run(args: Vec<String>) -> i32 {
             return 2;
         }
     };
+    let usage_error = |reason: String| -> i32 {
+        let file = parsed
+            .file
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CONTRACT_PATH.to_string());
+        if parsed.json {
+            println!(
+                "{}",
+                verdict_json("error", false, &file, None, None, &[reason], 2)
+            );
+        } else {
+            eprintln!("contract: {reason}");
+        }
+        2
+    };
     match parsed.action.as_str() {
         "validate" => {
             if parsed.catalog.is_some()
@@ -995,28 +1010,22 @@ pub fn run(args: Vec<String>) -> i32 {
                 || parsed.db_path.is_some()
                 || parsed.out.is_some()
             {
-                let file = parsed.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
-                let reason = "--catalog/--cube/--db-path/--out need the project action".to_string();
-                if parsed.json {
-                    println!(
-                        "{}",
-                        verdict_json("error", false, file, None, None, &[reason], 2)
-                    );
-                } else {
-                    eprintln!("contract: {reason}");
-                }
-                return 2;
+                return usage_error(
+                    "--catalog/--cube/--db-path/--out need the project action".to_string(),
+                );
             }
             if parsed.from.is_some() || parsed.overlay.is_some() || parsed.check {
-                eprintln!("contract: --from/--overlay/--check need the generate action");
-                return 2;
+                return usage_error(
+                    "--from/--overlay/--check need the generate action".to_string(),
+                );
             }
             run_validate(&parsed)
         }
         "project" => {
             if parsed.from.is_some() || parsed.overlay.is_some() || parsed.check {
-                eprintln!("contract: --from/--overlay/--check need the generate action");
-                return 2;
+                return usage_error(
+                    "--from/--overlay/--check need the generate action".to_string(),
+                );
             }
             crate::tools::contract_project::run(&parsed)
         }

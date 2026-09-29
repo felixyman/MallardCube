@@ -241,7 +241,7 @@ time_intelligence:
     current_year: current_year_flag
 provenance:
   source_system: sqlmesh
-  source_hash: fnv1a64:6e969c0d5dadb0f1
+  source_hash: fnv1a64:ddfeb5e1f5bf00d9
   generator: mallard-contract/0.1.0
 annotations:
   note: Generated from the SQLMesh project beside this file; edit the models, metrics and contract.overlay.yaml, then regenerate.
