@@ -1,0 +1,248 @@
+contract_version: 0.1.0
+model:
+  name: upstream_marts
+  description: 'Thin projection of the governed marts: additive sums and ratio-of-sums over fact_orders, and identity aggregates over the per-grain marts. No measure logic lives in the proxy.'
+grain:
+- table: fact_orders
+  key: order_id
+  id: orders
+  measure_group: Orders
+- table: mart_cumulative_month
+  key:
+  - year
+  - month
+  id: cumulative
+  measure_group: Revenue (cumulative, monthly)
+- table: mart_lead_time_median_month
+  key:
+  - year
+  - month
+  - product_key
+  id: lead_time_median
+  measure_group: Lead time (median, monthly)
+dimensions:
+- id: Date
+  table: dim_date
+  key: date_key
+  attribute: full_date
+  hierarchy_name: Calendar
+  date_role: true
+  caption: Date
+  ordinal: 1
+  cardinality_hint: 1200
+  levels:
+  - name: Year
+    column: year
+    cardinality_hint: 3
+  - name: Quarter
+    column: quarter
+    cardinality_hint: 12
+  - name: Month
+    column: month
+    cardinality_hint: 36
+  - name: Full Date
+    column: full_date
+    cardinality_hint: 1200
+- id: Category
+  table: dim_product
+  key: product_key
+  attribute: category
+  caption: Category
+  ordinal: 2
+  cardinality_hint: 3
+- id: Product
+  table: dim_product
+  key: product_key
+  attribute: product_name
+  caption: Product
+  ordinal: 3
+  cardinality_hint: 12
+- id: Customer
+  table: dim_customer
+  key: customer_key
+  attribute: customer_name
+  caption: Customer
+  ordinal: 4
+  cardinality_hint: 24
+- id: Region
+  table: dim_customer
+  key: customer_key
+  attribute: region
+  caption: Region
+  ordinal: 5
+  cardinality_hint: 4
+- id: Segment
+  table: dim_customer
+  key: customer_key
+  attribute: segment
+  caption: Segment
+  ordinal: 6
+  cardinality_hint: 2
+relationships:
+- fact: fact_orders
+  dimension: Date
+  columns:
+  - order_date_key
+  - date_key
+- fact: fact_orders
+  dimension: Category
+  columns:
+  - product_key
+  - product_key
+- fact: fact_orders
+  dimension: Product
+  columns:
+  - product_key
+  - product_key
+- fact: fact_orders
+  dimension: Customer
+  columns:
+  - customer_key
+  - customer_key
+- fact: fact_orders
+  dimension: Region
+  columns:
+  - customer_key
+  - customer_key
+- fact: fact_orders
+  dimension: Segment
+  columns:
+  - customer_key
+  - customer_key
+- fact: mart_cumulative_month
+  dimension: Date
+  columns:
+  - order_date_key
+  - date_key
+- fact: mart_lead_time_median_month
+  dimension: Date
+  columns:
+  - order_date_key
+  - date_key
+- fact: mart_lead_time_median_month
+  dimension: Category
+  columns:
+  - product_key
+  - product_key
+- fact: mart_lead_time_median_month
+  dimension: Product
+  columns:
+  - product_key
+  - product_key
+measures:
+- id: Average lead time
+  caption: Average lead time (days)
+  description: Average lead time in days (ratio of sums)
+  format: '0.0'
+  source:
+    table: fact_orders
+  aggregation: ratio
+  expression: SUM(sum_lead_time) / NULLIF(SUM(count_lead_time), 0)
+- id: Cancelled orders
+  caption: Cancelled orders
+  description: Cancelled orders
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: is_cancelled
+  aggregation: sum
+- id: Cumulative revenue CY
+  caption: Cumulative revenue CY
+  description: Cumulative revenue for the current year, period-end value
+  format: '#,##0'
+  source:
+    table: mart_cumulative_month
+    column: cumulative_revenue_cy
+  aggregation: max
+  valid_grain:
+  - year
+  - month
+- id: Cumulative revenue CY-1
+  caption: Cumulative revenue CY-1
+  description: Cumulative revenue for the same month last year, period-end value
+  format: '#,##0'
+  source:
+    table: mart_cumulative_month
+    column: cumulative_revenue_cy_minus_1
+  aggregation: max
+  valid_grain:
+  - year
+  - month
+- id: Late orders
+  caption: Late orders
+  description: Late orders
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: is_late
+  aggregation: sum
+- id: Median lead time
+  caption: Median lead time (days)
+  description: Median lead time in days, valid at month x product only
+  format: '0.0'
+  source:
+    table: mart_lead_time_median_month
+    column: median_lead_time
+  aggregation: max
+  valid_grain:
+  - year
+  - month
+  - product_key
+- id: On-time %
+  caption: On-time %
+  description: On-time percentage (ratio of sums)
+  format: '0.0'
+  source:
+    table: fact_orders
+  aggregation: ratio
+  expression: SUM(is_within_sla) * 100.0 / NULLIF(SUM(is_order), 0)
+- id: Open orders
+  caption: Open orders
+  description: Open orders
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: is_open
+  aggregation: sum
+- id: Orders
+  caption: Orders
+  description: Order count
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: is_order
+  aggregation: sum
+- id: Revenue
+  caption: Revenue
+  description: Total revenue
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: revenue
+  aggregation: sum
+- id: Revenue YTD
+  caption: Revenue YTD
+  description: Revenue year-to-date
+  format: '#,##0'
+  source:
+    table: fact_orders
+    column: revenue
+  aggregation: sum
+  time_window:
+    dimension: Date
+    flag: ytd_flag
+time_intelligence:
+  date_dimension: Date
+  flags:
+    ytd: ytd_flag
+    qtd: qtd_flag
+    mtd: mtd_flag
+    prior_year_ytd: prior_year_ytd_flag
+    current_year: current_year_flag
+provenance:
+  source_system: sqlmesh
+  source_hash: fnv1a64:6e969c0d5dadb0f1
+  generator: mallard-contract/0.1.0
+annotations:
+  note: Generated from the SQLMesh project beside this file; edit the models, metrics and contract.overlay.yaml, then regenerate.
+  plan: 057-A

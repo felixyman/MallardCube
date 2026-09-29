@@ -142,6 +142,35 @@ are served, not what they filter.
 `--json` carries `contract_file`, and the findings are prefixed `contract:` so
 the verdict says where they came from.
 
+## Generating from upstream metadata
+
+The contract is a projection target, so it can be generated from the metadata a
+governed stack already keeps. The first source is SQLMesh:
+
+```bash
+mallard contract generate --from sqlmesh projects/upstream_marts_sqlmesh \
+  --out projects/upstream_marts_sqlmesh/contract.yaml
+```
+
+Generation reads the checked-in project files — no Python and no SQLMesh at
+generation time — and maps what the metadata mechanically carries: the declared
+`grain`, relationships from the custom `relationships` audit, tables and
+columns, and `metrics/*.sql` (`SUM(column)` → `sum`, a ratio of sums → `ratio`,
+`MAX(column)` over a per-grain mart → `max` with `valid_grain` from that mart's
+grain). A sibling `contract.overlay.yaml` carries what SQLMesh cannot: dimension
+ids, member attributes, hierarchy levels, date roles, display and time
+intelligence. Anything ambiguous is refused with the overlay named as the
+escape hatch, and the generated file goes through the same validation as a
+hand-written one; `--check` compares instead of writing so a checked-in
+contract can be asserted equal to its source.
+
+The SQLMesh fixture `projects/upstream_marts_sqlmesh` mirrors the hand-written
+`contracts/upstream_marts/contract.yaml` — a test asserts the generated
+contract is semantically the same (grain, dimensions, relationships, measures
+and the flag catalogue). The uv-managed environment that runs the fixture for
+real, and the measurements behind the mapping, live in `oracles/sqlmesh`; it is
+not part of the product or CI.
+
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the
 contract's compatibility policy and the generator roadmap.

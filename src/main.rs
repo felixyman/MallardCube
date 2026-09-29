@@ -217,11 +217,11 @@ enum Command {
         #[arg(long)]
         fact: Option<String>,
     },
-    /// Validate or project a source-neutral contract.yaml (plan 057-A)
+    /// Validate, project or generate a source-neutral contract.yaml (plan 057-A)
     Contract {
-        /// Action: validate (default) or project
+        /// Action: validate (default), project or generate
         action: Option<String>,
-        /// Path to contract.yaml (default: contracts/upstream_marts/contract.yaml)
+        /// Path to contract.yaml (validate/project) or the project directory (generate)
         file: Option<String>,
         /// project: catalog name (default: the model name uppercased)
         #[arg(long)]
@@ -235,6 +235,15 @@ enum Command {
         /// project: write the config here instead of stdout
         #[arg(long)]
         out: Option<String>,
+        /// generate: metadata source (sqlmesh)
+        #[arg(long)]
+        from: Option<String>,
+        /// generate: path to the overlay (default: <project>/contract.overlay.yaml)
+        #[arg(long)]
+        overlay: Option<String>,
+        /// generate: compare with --out instead of writing
+        #[arg(long)]
+        check: bool,
         /// Emit the machine-readable verdict
         #[arg(long)]
         json: bool,
@@ -374,6 +383,9 @@ async fn main() {
             cube,
             db_path,
             out,
+            from,
+            overlay,
+            check,
             json,
         } => {
             let mut args = vec!["contract".to_string()];
@@ -388,11 +400,16 @@ async fn main() {
                 ("--cube", cube),
                 ("--db-path", db_path),
                 ("--out", out),
+                ("--from", from),
+                ("--overlay", overlay),
             ] {
                 if let Some(value) = value {
                     args.push(flag.into());
                     args.push(value);
                 }
+            }
+            if check {
+                args.push("--check".into());
             }
             if json {
                 args.push("--json".into());

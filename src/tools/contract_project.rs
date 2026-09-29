@@ -979,6 +979,7 @@ mod tests {
             cube: Some("Orders".into()),
             db_path: Some("data/upstream_marts.duckdb".into()),
             out: Some(path.to_string_lossy().into_owned()),
+            ..Args::default()
         };
         assert_eq!(run(&args), 0);
         let config = config_io::load(&path).expect("the projected config loads");

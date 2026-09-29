@@ -346,6 +346,26 @@ features (060), live attach and object-store intake (061), aggregate design
   `qualify --contract`; `physical_schema_override` is deprecated. The
   generator (next) parses the files — no Python at generation time.
 
+- **2026-09-29 — section D, the SQLMesh generator.**
+  `mallard contract generate --from sqlmesh <project> [--overlay <file>]
+  [--out <file>] [--check]` parses the checked-in files and maps what the
+  metadata carries: `grain` (or a `unique_combination_of_columns` audit),
+  relationships from the custom `relationships` audit calls, tables and
+  columns, and `metrics/*.sql` (`SUM(column)` → sum; `COUNT(*)`/`COUNT(DISTINCT
+  …)`; `MIN`/`MAX` with `valid_grain` from the source model's grain; a ratio of
+  sums over one model → `ratio` with the expression normalised to
+  source-neutral form). The sibling `contract.overlay.yaml` carries dimension
+  ids/attributes/levels/date roles/display/time intelligence and per-measure
+  extras; unknown models, missing grains, unclassifiable expressions and
+  overlay typos refuse with the overlay named as the escape hatch. Output is
+  validated like a hand-written file, `--check` compares instead of writing,
+  and generation is byte-deterministic (`source_hash: fnv1a64:…` over the
+  parsed inputs). The fixture generates
+  `projects/upstream_marts_sqlmesh/contract.yaml`, whose semantics (grain,
+  dimensions, relationships, measures, flag catalogue) equal the hand-written
+  `contracts/upstream_marts/contract.yaml` — a test asserts both. CI wiring is
+  deferred per the user's call; next in section D: dbt, then explicit YAML.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

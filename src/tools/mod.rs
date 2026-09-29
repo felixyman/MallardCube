@@ -1,5 +1,6 @@
 pub mod auto_model;
 pub mod contract;
+pub mod contract_generate;
 pub mod contract_project;
 pub mod contract_qualify;
 pub mod convert_tabular;

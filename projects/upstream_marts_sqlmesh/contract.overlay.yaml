@@ -1,0 +1,69 @@
+# The semantic layer SQLMesh cannot carry (plan 057-A, section D): dimension
+# ids, member attributes, hierarchy levels, date roles, display and time
+# intelligence. The generator merges this with the SQLMesh metadata (grain,
+# relationships from the custom `relationships` audit, tables, columns,
+# metrics) and refuses anything it cannot derive.
+#
+# Regenerate with:
+#   mallard contract generate --from sqlmesh projects/upstream_marts_sqlmesh \
+#     --out projects/upstream_marts_sqlmesh/contract.yaml
+
+model:
+  name: upstream_marts
+  description: >-
+    Thin projection of the governed marts: additive sums and ratio-of-sums over
+    fact_orders, and identity aggregates over the per-grain marts. No measure
+    logic lives in the proxy.
+
+grain:
+  - { model: upstream_marts.fact_orders, id: orders, measure_group: Orders }
+  - { model: upstream_marts.mart_lead_time_median_month, id: lead_time_median, measure_group: "Lead time (median, monthly)" }
+  - { model: upstream_marts.mart_cumulative_month, id: cumulative, measure_group: "Revenue (cumulative, monthly)" }
+
+dimensions:
+  - model: upstream_marts.dim_date
+    id: Date
+    attribute: full_date
+    hierarchy_name: Calendar
+    date_role: true
+    caption: Date
+    ordinal: 1
+    cardinality_hint: 1200
+    levels:
+      - { name: Year, column: year, cardinality_hint: 3 }
+      - { name: Quarter, column: quarter, cardinality_hint: 12 }
+      - { name: Month, column: month, cardinality_hint: 36 }
+      - { name: Full Date, column: full_date, cardinality_hint: 1200 }
+  - { model: upstream_marts.dim_product, id: Category, attribute: category, caption: Category, ordinal: 2, cardinality_hint: 3 }
+  - { model: upstream_marts.dim_product, id: Product, attribute: product_name, caption: Product, ordinal: 3, cardinality_hint: 12 }
+  - { model: upstream_marts.dim_customer, id: Customer, attribute: customer_name, caption: Customer, ordinal: 4, cardinality_hint: 24 }
+  - { model: upstream_marts.dim_customer, id: Region, attribute: region, caption: Region, ordinal: 5, cardinality_hint: 4 }
+  - { model: upstream_marts.dim_customer, id: Segment, attribute: segment, caption: Segment, ordinal: 6, cardinality_hint: 2 }
+
+measures:
+  - { metric: revenue, id: Revenue, caption: Revenue, format: "#,##0" }
+  - { metric: revenue_ytd, id: Revenue YTD, caption: Revenue YTD, format: "#,##0", time_window: { dimension: Date, flag: ytd_flag } }
+  - { metric: orders, id: Orders, caption: Orders, format: "#,##0" }
+  - { metric: open_orders, id: Open orders, caption: Open orders, format: "#,##0" }
+  - { metric: cancelled_orders, id: Cancelled orders, caption: Cancelled orders, format: "#,##0" }
+  - { metric: late_orders, id: Late orders, caption: Late orders, format: "#,##0" }
+  - { metric: on_time_pct, id: "On-time %", caption: "On-time %", format: "0.0" }
+  - { metric: avg_lead_time, id: Average lead time, caption: Average lead time (days), format: "0.0" }
+  - { metric: median_lead_time, id: Median lead time, caption: Median lead time (days), format: "0.0" }
+  - { metric: cumulative_revenue_cy, id: Cumulative revenue CY, caption: Cumulative revenue CY, format: "#,##0" }
+  - { metric: cumulative_revenue_cy_minus_1, id: Cumulative revenue CY-1, caption: Cumulative revenue CY-1, format: "#,##0" }
+
+time_intelligence:
+  date_dimension: Date
+  flags:
+    ytd: ytd_flag
+    qtd: qtd_flag
+    mtd: mtd_flag
+    prior_year_ytd: prior_year_ytd_flag
+    current_year: current_year_flag
+
+annotations:
+  note: >-
+    Generated from the SQLMesh project beside this file; edit the models,
+    metrics and contract.overlay.yaml, then regenerate.
+  plan: "057-A"

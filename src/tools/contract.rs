@@ -7,7 +7,7 @@
 //! core status only with a qualifier check behind it.
 
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
@@ -19,7 +19,7 @@ pub const SUPPORTED_VERSION: &str = "0.1";
 /// The one place the CLI's default path lives.
 pub const DEFAULT_CONTRACT_PATH: &str = "contracts/upstream_marts/contract.yaml";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Contract {
     pub contract_version: String,
@@ -28,38 +28,38 @@ pub struct Contract {
     pub dimensions: Vec<Dimension>,
     pub relationships: Vec<Relationship>,
     pub measures: Vec<Measure>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_intelligence: Option<TimeIntelligence>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<Security>,
     pub provenance: Provenance,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelInfo {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grain {
     pub table: String,
     pub key: Key,
     /// Serving id relationships and measures bind to; defaults to the table name.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Measure-group caption in Excel; defaults to the table name.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measure_group: Option<String>,
 }
 
 /// A single key column or a composite key.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Serialize, Clone)]
 #[serde(untagged)]
 pub enum Key {
     Single(String),
@@ -75,7 +75,7 @@ impl Key {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Dimension {
     pub id: String,
@@ -85,32 +85,32 @@ pub struct Dimension {
     /// the leaf (key attribute).
     pub attribute: String,
     /// The user hierarchy's name; defaults to the caption.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hierarchy_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub date_role: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub caption: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<u32>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub visible: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cardinality_hint: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub levels: Vec<Level>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Level {
     pub name: String,
     pub column: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cardinality_hint: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Relationship {
     pub fact: String,
@@ -118,43 +118,43 @@ pub struct Relationship {
     /// `[fact column, dimension column]`; the dimension column must be part of
     /// the dimension's key.
     pub columns: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_many_to_one")]
     pub cardinality: Cardinality,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub active: bool,
 }
 
 /// Only `many_to_one` exists: any other cardinality multiplies fact rows.
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Deserialize, Default, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cardinality {
     #[default]
     ManyToOne,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Measure {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub caption: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub format: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<u32>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub visible: bool,
     pub source: Source,
     pub aggregation: Aggregation,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_window: Option<TimeWindow>,
     /// The grain a per-grain mart value is valid at; `Some([])` is a declared
     /// empty list and is refused, `None` means absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_grain: Option<Vec<String>>,
 }
 
@@ -166,7 +166,7 @@ impl Measure {
 }
 
 /// Declared, not inferred: a ratio is never emitted as if it were additive.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Sum,
@@ -192,18 +192,18 @@ impl Aggregation {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
     pub table: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
     /// An upstream artifact reference (a model or mart id) instead of a column.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TimeWindow {
     pub dimension: String,
@@ -211,7 +211,7 @@ pub struct TimeWindow {
     pub flag: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TimeIntelligence {
     pub date_dimension: String,
@@ -220,7 +220,7 @@ pub struct TimeIntelligence {
 
 /// The windows the engine serves, bound to upstream flag columns. Typed, so an
 /// invented window is an unknown field rather than a silently ignored one.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TimeIntelligenceFlags {
     #[serde(default)]
@@ -254,7 +254,7 @@ impl TimeIntelligenceFlags {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
     /// Role references; the deployment's auth config binds them.
@@ -262,18 +262,18 @@ pub struct Security {
     pub roles: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
     pub source_system: SourceSystem,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
     pub generator: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceSystem {
     Sqlmesh,
@@ -284,6 +284,18 @@ pub enum SourceSystem {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_many_to_one(value: &Cardinality) -> bool {
+    *value == Cardinality::ManyToOne
 }
 
 /// Reject duplicate mapping keys.
@@ -803,12 +815,18 @@ fn consistency(contract: &Contract) -> Vec<String> {
 pub fn validate_file(path: &str) -> Result<Contract, Vec<String>> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| vec![format!("cannot read {path}: {error}")])?;
+    validate_text(path, &text)
+}
+
+/// Validate contract text (the generator's output goes through the same gate
+/// as a hand-written file). `origin` names the source in error messages.
+pub(crate) fn validate_text(origin: &str, text: &str) -> Result<Contract, Vec<String>> {
     // Duplicate keys first: they change meaning before serde sees the fields.
-    if let Err(error) = yaml_serde::from_str::<NoDuplicateKeys>(&text) {
-        return Err(vec![format!("{path} is not a valid contract: {error}")]);
+    if let Err(error) = yaml_serde::from_str::<NoDuplicateKeys>(text) {
+        return Err(vec![format!("{origin} is not a valid contract: {error}")]);
     }
-    let contract: Contract = yaml_serde::from_str(&text)
-        .map_err(|error| vec![format!("{path} is not a valid contract: {error}")])?;
+    let contract: Contract = yaml_serde::from_str(text)
+        .map_err(|error| vec![format!("{origin} is not a valid contract: {error}")])?;
     let mut findings = Vec::new();
     if let Err(reason) = check_version(&contract.contract_version) {
         findings.push(reason);
@@ -857,6 +875,9 @@ pub struct Args {
     pub cube: Option<String>,
     pub db_path: Option<String>,
     pub out: Option<String>,
+    pub from: Option<String>,
+    pub overlay: Option<String>,
+    pub check: bool,
 }
 
 /// Parse `["contract", <action>, <file>, --flag <value> ...]`.
@@ -870,10 +891,13 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--json" => parsed.json = true,
+            "--check" => parsed.check = true,
             "--catalog" => parsed.catalog = Some(flag_value(&mut iter, "--catalog")?),
             "--cube" => parsed.cube = Some(flag_value(&mut iter, "--cube")?),
             "--db-path" => parsed.db_path = Some(flag_value(&mut iter, "--db-path")?),
             "--out" => parsed.out = Some(flag_value(&mut iter, "--out")?),
+            "--from" => parsed.from = Some(flag_value(&mut iter, "--from")?),
+            "--overlay" => parsed.overlay = Some(flag_value(&mut iter, "--overlay")?),
             other if other.starts_with("--") => {
                 return Err(format!("unknown flag '{other}'"));
             }
@@ -983,12 +1007,24 @@ pub fn run(args: Vec<String>) -> i32 {
                 }
                 return 2;
             }
+            if parsed.from.is_some() || parsed.overlay.is_some() || parsed.check {
+                eprintln!("contract: --from/--overlay/--check need the generate action");
+                return 2;
+            }
             run_validate(&parsed)
         }
-        "project" => crate::tools::contract_project::run(&parsed),
+        "project" => {
+            if parsed.from.is_some() || parsed.overlay.is_some() || parsed.check {
+                eprintln!("contract: --from/--overlay/--check need the generate action");
+                return 2;
+            }
+            crate::tools::contract_project::run(&parsed)
+        }
+        "generate" => crate::tools::contract_generate::run(&parsed),
         other => {
             let file = parsed.file.as_deref().unwrap_or(DEFAULT_CONTRACT_PATH);
-            let reason = format!("unknown action '{other}' (expected: validate, project)");
+            let reason =
+                format!("unknown action '{other}' (expected: validate, project, generate)");
             if parsed.json {
                 println!(
                     "{}",
