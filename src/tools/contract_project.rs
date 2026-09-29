@@ -452,7 +452,7 @@ fn canonical_text(config: &ProxyConfig, format: ConfigFormat) -> Result<String, 
 }
 
 /// What the operator should know about the emitted file.
-fn projection_notes(contract: &Contract, config: &ProxyConfig, args: &Args) -> Vec<String> {
+fn projection_notes(config: &ProxyConfig, args: &Args) -> Vec<String> {
     let mut notes = Vec::new();
     if !config.roles.is_empty() {
         notes.push(format!(
@@ -464,26 +464,6 @@ fn projection_notes(contract: &Contract, config: &ProxyConfig, args: &Args) -> V
     }
     if args.db_path.is_none() {
         notes.push("no --db-path: the config will use the runtime's demo database".to_string());
-    }
-    let unmeasured = contract
-        .measures
-        .iter()
-        .filter(|measure| {
-            matches!(
-                measure.aggregation,
-                Aggregation::Count
-                    | Aggregation::Min
-                    | Aggregation::Max
-                    | Aggregation::DistinctCount
-            )
-        })
-        .count();
-    if unmeasured > 0 {
-        notes.push(format!(
-            "{unmeasured} measure(s) declare count/min/max/distinct_count; DISCOVER \
-             MEASURE_AGGREGATOR is pinned to Sum until the reference codes are measured \
-             (plan 057 leftover)"
-        ));
     }
     notes
 }
@@ -544,7 +524,7 @@ pub fn run(args: &Args) -> i32 {
             return fail(args, "error", file, &[reason], &[], 1);
         }
     };
-    let mut notes = projection_notes(&contract, &config, args);
+    let mut notes = projection_notes(&config, args);
     if let Some(out) = args
         .out
         .as_deref()
@@ -808,6 +788,20 @@ mod tests {
                 .iter()
                 .any(|finding| finding.contains("joined differently")),
             "{findings:?}"
+        );
+    }
+
+    /// The reference tabular engine reports 0 (Unknown) for explicit measures;
+    /// the projection follows the measured default rather than guessing codes.
+    #[test]
+    fn the_aggregator_default_follows_the_reference() {
+        let config = project_fixture();
+        assert!(
+            config
+                .measures
+                .iter()
+                .all(|measure| measure.aggregator == 0),
+            "every explicit measure reports 0 like the reference"
         );
     }
 

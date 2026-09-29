@@ -614,8 +614,16 @@ pub struct MeasureConfig {
     pub fallback_capability: Option<String>,
 }
 
+/// The default `MEASURE_AGGREGATOR`: 0 (`MDMEASURE_AGGR_UNKNOWN`).
+///
+/// Measured 2026-09-29 against the reference tabular engine (four deployed
+/// models, compatibility 1600 and 1700): every explicit measure reports 0,
+/// whatever its DAX — plain `SUM(FactSales[Amount])`, `COUNTROWS`, `MAX`,
+/// `DISTINCTCOUNT`, a bare column reference. The 1/2/3/4/8 values in the spec
+/// are the multidimensional enumeration, and 127 is the engine's hidden
+/// `__Default measure`. An operator can still set the field explicitly.
 pub fn default_aggregator() -> u32 {
-    1
+    0
 }
 pub fn default_precision() -> u16 {
     18
@@ -698,6 +706,20 @@ mod tests {
         assert_eq!(dd.table_name, "date_dim"); // default
         assert_eq!(dd.flag_columns.year_column, "year"); // default
         assert_eq!(dd.flag_columns.ytd_flag_column, "ytd_flag"); // default
+    }
+
+    /// Measured 2026-09-29: the reference tabular engine reports 0 (Unknown)
+    /// for every explicit measure, whatever its DAX, so the proxy's default
+    /// follows it. The 1/2/3/4/8 values are the multidimensional enumeration.
+    #[test]
+    fn measure_aggregator_defaults_to_unknown() {
+        let json = r#"{
+            "catalog": "TEST",
+            "cube": "TestCube",
+            "measures": [ { "id": "M", "caption": "M", "sql_expr": "SUM(x)" } ]
+        }"#;
+        let cfg: ProxyConfig = serde_json::from_str(json).expect("parse");
+        assert_eq!(cfg.measures[0].aggregator, 0);
     }
 
     /// The flag-column semantics, pinned because they are easy to misread:

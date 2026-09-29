@@ -187,8 +187,9 @@ const INEXPRESSIBLE_MEASURE: &[&str] = &[
     "units",
     "numeric_precision",
     "numeric_scale",
-    // Pinned to Sum until the reference oracle measures the aggregator codes
-    // (plan 057 leftover); a deployment may set it without diverging.
+    // The reference tabular engine reports 0 (Unknown) for every explicit
+    // measure (measured 2026-09-29), so the projection emits the default and
+    // the contract cannot say otherwise; a deployment may set it.
     "aggregator",
 ];
 

@@ -257,7 +257,8 @@ features (060), live attach and object-store intake (061), aggregate design
   `--db-path`. Recorded leftover: DISCOVER MEASURE_AGGREGATOR is pinned to
   Sum for every measure — the count/min/max/distinct_count codes need the
   reference oracle (the VM was down), after which the projection maps them
-  and the checked-in config follows. The provenance-header idea was dropped:
+  and the checked-in config follows (resolved 2026-09-29 by measurement; see
+  the entry below). The provenance-header idea was dropped:
   `fmt` rewrites drop comments, so a header would break `fmt --check`
   canonicality; the config cannot carry provenance, grain keys or the model
   description, and the docs now say so.
@@ -311,6 +312,23 @@ features (060), live attach and object-store intake (061), aggregate design
   are served, not what they filter); `provenance.source_hash` is not verified;
   the relationship-cardinality declaration has no config counterpart.
   Next in section A: the generators (D).
+
+- **2026-09-29 — the aggregator leftover, resolved by measurement (VM up).**
+  Deployed five reference models covering `SUM`, `SUMX`, `COUNTROWS`,
+  `COUNT`, `DISTINCTCOUNT`, `MIN`, `MAX`, `AVERAGE`, `DIVIDE`, `TOTALYTD` and
+  a bare column reference at compatibility 1600 and 1700: every explicit
+  tabular measure reports `MEASURE_AGGREGATOR` **0 (Unknown)**, whatever its
+  DAX; only the hidden `__Default measure` reports 127 (Calculated) with
+  `MEASURE_IS_VISIBLE=false`. The spec's 1/2/3/4/8 values are the
+  multidimensional enumeration. Fixed: the config default follows the
+  measurement (`default_aggregator() -> 0`), auto-model stops writing 1/2,
+  the projection's "pinned to Sum" note is gone, and the proxy's DISCOVER now
+  matches the reference (`0` for every measure, verified live on the upstream
+  project). Recorded as a measured fact in `reference/claims.jsonl`
+  (`measure-aggregator`) and referenced from the Excel-metadata page; the
+  developer guide's aggregator row now says 0 with the multidimensional values
+  called out. Known remaining difference: the reference also emits its hidden
+  `__Default measure` (127, invisible to Excel); the proxy does not.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

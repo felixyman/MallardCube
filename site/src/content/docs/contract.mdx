@@ -125,9 +125,9 @@ The contract checks run in two groups. The **projection check** needs no
 database and runs even when the data is unreachable: the served config must be
 the projection of the contract, and a stale or hand-edited config blocks with
 "regenerate the projection". Presentation and serving hints the contract
-cannot express — `display_name`, `units`, numeric precision/scale, dimension
-descriptions, All-member and leaf names, a fact's `source_name` — belong to the
-deployment and are not compared.
+cannot express — `display_name`, `units`, numeric precision/scale, the
+aggregator code, dimension descriptions, All-member and leaf names, a fact's
+`source_name` — belong to the deployment and are not compared.
 
 The **data checks** need the database: every declared grain key must be unique
 in its table, every `valid_grain` must be unique in the source table (or the

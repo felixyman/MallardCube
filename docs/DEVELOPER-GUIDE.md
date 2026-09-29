@@ -394,7 +394,7 @@ When `fact_tables` is non-empty, all measures must declare `fact_table`.
 | `units` | string | required | Unit label (e.g. `"USD"`, `""`) |
 | `ordinal` | u32 | required | Sort order in Excel field list |
 | `visible` | bool | required | Show in Excel field list |
-| `aggregator` | u32 | `1` | XMLA MEASURE_AGGREGATOR (1=sum) |
+| `aggregator` | u32 | `0` | XMLA MEASURE_AGGREGATOR. Measured 2026-09-29: the reference tabular engine reports `0` (`MDMEASURE_AGGR_UNKNOWN`) for every explicit measure, whatever its DAX; the `1`/`2`/`3`/`4`/`8` values are the multidimensional enumeration. Set explicitly only to emulate one. |
 | `measure_group_name` | string | required | SSAS measure group name |
 | `numeric_precision` | u16 | `18` | XMLA NUMERIC_PRECISION |
 | `numeric_scale` | i16 | `2` | XMLA NUMERIC_SCALE |

@@ -12,7 +12,7 @@
 ///   serve time (see `detect_config(.., seed_dates=true)`).
 use crate::proxy_config::{
     DateDimensionConfig, DateFlagColumns, DimensionConfig, HierarchyLevelConfig, MeasureConfig,
-    ProxyConfig, RelationshipConfig, TimeIntelligenceConfig,
+    ProxyConfig, RelationshipConfig, TimeIntelligenceConfig, default_aggregator,
 };
 use duckdb::{Connection, params};
 use std::path::Path;
@@ -508,7 +508,10 @@ fn measure(col: &Column, ordinal: u32, group: &str) -> MeasureConfig {
         ordinal,
         visible: true,
         fact_table: None,
-        aggregator: 1,
+        // The reference tabular engine reports 0 (Unknown) for every explicit
+        // measure; the declared aggregation lives in `sql_expr` (measured
+        // 2026-09-29, see `default_aggregator`).
+        aggregator: default_aggregator(),
         measure_group_name: group.to_string(),
         numeric_precision: 18,
         numeric_scale: scale,
@@ -531,7 +534,8 @@ fn count_measure(group: &str) -> MeasureConfig {
         ordinal: 1,
         visible: true,
         fact_table: None,
-        aggregator: 2,
+        // As above: the reference reports 0 for every explicit measure.
+        aggregator: default_aggregator(),
         measure_group_name: group.to_string(),
         numeric_precision: 18,
         numeric_scale: 0,
