@@ -396,6 +396,23 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     timings.cache_hit = cache_hit;
     timings.sql_execute_us = sql_execute_us;
 
+    // The renderers synthesize the `(All)` cell of a drilldown axis from the
+    // axis members; the reference evaluates the measure in the `(All)`
+    // context instead (measured 2026-09-30). Inject the engine's values. A
+    // set-op axis keeps its summed `(All)` — the reference aggregates the
+    // *returned subset* there (verified against the mirror) — so it is left
+    // alone, and a hidden fact table yields no values at all.
+    if !matches!(plan, crate::engine::plan::QueryPlan::Empty)
+        && query.axis_set_op.is_none()
+        && matches!(
+            query.kind,
+            crate::mdx_semantic::SemanticQueryKind::DrilldownCategories
+                | crate::mdx_semantic::SemanticQueryKind::DrilldownMemberProbe
+        )
+    {
+        query.drilldown_all_values = drilldown_all_values(&query, model, user, config, backend);
+    }
+
     let t0 = Instant::now();
     let tabular = format.is_some_and(|format| format.eq_ignore_ascii_case("tabular"));
     // `Content` selects schema and/or rows: absent means `SchemaData`,
@@ -558,6 +575,63 @@ fn is_measure_property_or_set(name: &str) -> bool {
             | "member_caption"
             | "member_name"
     )
+}
+
+/// The measure's value at the drilldown's input `(All)`, per measure.
+///
+/// The reference evaluates the *measure* in the `(All)` context — measured
+/// 2026-09-30 on a ratio measure (`DIVIDE(SUM(amount), SUM(units))`): the
+/// `(All)` cell is the ratio of sums (18.1818…), not the sum of the members'
+/// ratios (110). The renderers summed the axis members instead; this gives
+/// them the engine's own value. The query is built through the context-aware
+/// SQL builder, so the user's row filter still applies.
+/// An All-rooted drilldown (`DrilldownLevel({[Dim].[Hier].[All]})`): the
+/// reference answers the `(All)` member first, unlike a level set
+/// (`level_drag`), which has no total row (both measured).
+fn all_rooted_drilldown(query: &crate::mdx_semantic::SemanticQuery) -> bool {
+    !query.level_drag && query.drilldown_level() == Some(0)
+}
+
+fn drilldown_all_values<B: QueryBackend + ?Sized>(
+    query: &crate::mdx_semantic::SemanticQuery,
+    model: &crate::engine::model::SemanticModel,
+    user: &UserContext,
+    config: &ProxyConfig,
+    backend: &B,
+) -> Vec<(String, f64)> {
+    use crate::engine::plan::{QueryPlan, filters_with_time_flag, typed_filters};
+    let names: Vec<String> = if query.measures.is_empty() {
+        query.measure.iter().cloned().collect()
+    } else {
+        query.measures.clone()
+    };
+    // The drill's own member filter must not constrain the input set; real
+    // slicers on the same dimension are kept (as in `level0_member_values`).
+    let is_drill_filter = |filter: &crate::mdx_semantic::DimensionFilter| {
+        query
+            .drill_members
+            .iter()
+            .any(|(dim, keys)| filter.dimension == *dim && filter.members == *keys)
+    };
+    let slicers: Vec<crate::mdx_semantic::DimensionFilter> = query
+        .filters
+        .iter()
+        .filter(|filter| !is_drill_filter(filter))
+        .cloned()
+        .collect();
+    let mut values = Vec::new();
+    for name in &names {
+        let Some(measure) = model.lookup_measure(name) else {
+            continue;
+        };
+        let plan = QueryPlan::Total {
+            measure: measure.id.clone(),
+            filters: filters_with_time_flag(model, &measure.id, &typed_filters(&slicers)),
+        };
+        let sql = crate::engine::sql::sql_for_query_plan_with_context(model, &plan, user, config);
+        values.push((measure.id.clone(), backend.query_scalar(&sql)));
+    }
+    values
 }
 
 /// The member set Excel's filter idiom selects: the dimension's leaf members
@@ -744,8 +818,13 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
             // A dimension member set includes the (All) member — its row
             // carries the measure only; a level set has no total row
             // (measured 2026-09-27).
-            if level.is_none() {
-                let total: f64 = groups.iter().map(|(_, value)| value).sum();
+            if level.is_none() || all_rooted_drilldown(query) {
+                let summed: f64 = groups.iter().map(|(_, value)| value).sum();
+                let total = crate::execute::render::all_value(
+                    query,
+                    &crate::execute::axis_members::measure_id_for_query(query),
+                    summed,
+                );
                 let mut row = vec![String::new(); last + 1];
                 row.push(g9_checked(total)?);
                 rows_out.push(row);
@@ -828,13 +907,20 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
                     .map(|(key, values)| (key.clone(), Some(values.clone())))
                     .collect()
             };
-            if level.is_none() {
-                let mut totals = vec![0.0f64; n];
+            if level.is_none() || all_rooted_drilldown(query) {
+                let mut summed = vec![0.0f64; n];
                 for (_, values) in rows {
-                    for (total, value) in totals.iter_mut().zip(values) {
+                    for (total, value) in summed.iter_mut().zip(values) {
                         *total += value;
                     }
                 }
+                let totals: Vec<f64> = measures
+                    .iter()
+                    .zip(&summed)
+                    .map(|(measure, value)| {
+                        crate::execute::render::all_value(query, measure, *value)
+                    })
+                    .collect();
                 let mut all = vec![String::new(); last + 1];
                 all.extend(
                     totals
@@ -2131,6 +2217,84 @@ mod tests {
                 response.contains("faultstring")
                     && response.contains("member was not found in the cube"),
                 "{response}"
+            );
+        });
+    }
+
+    /// A drilldown's `(All)` cell is the measure *evaluated in that context*,
+    /// not the sum of the axis members. Measured on the reference 2026-09-30
+    /// with a ratio measure: `(All)` is the ratio of sums (18.1818…), not the
+    /// sum of the members' ratios (110).
+    #[test]
+    fn drilldown_all_cell_evaluates_non_additive_measures() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+        use crate::project::config::ProxyConfig;
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        let mut config: ProxyConfig = project.config.clone();
+        config.measures.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "Revenue per unit",
+                "sql_expr": "SUM(revenue) / NULLIF(SUM(units), 0)",
+                "caption": "Revenue per unit",
+                "measure_group_name": "Sales",
+                "format_string": "0.0000"
+            }))
+            .expect("ratio measure config"),
+        );
+        let project =
+            crate::proxy_project::ProxyProject::from_config(config, std::path::Path::new("."))
+                .expect("build project");
+        crate::project::project::with_test_project(project, || {
+            let config = &crate::proxy_project::project().config;
+            let user = UserContext::admin_default();
+            let backend = Backend::test_fixture();
+            let expected = backend.query_scalar("SELECT SUM(revenue) / SUM(units) FROM sales_fact");
+            assert!(expected > 0.0, "fixture must have units");
+
+            // Native cellset: ordinal 0 is Revenue, 1 the ratio, both on the
+            // (All) row that the drilldown puts first.
+            let mdx = "SELECT {[Measures].[Revenue],[Measures].[Revenue per unit]} ON 0, \
+                 NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) \
+                 ON 1 FROM [Sales] CELL PROPERTIES VALUE";
+            let (xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx, backend, &user, config,
+                );
+            let all_ratio_cell = xml
+                .split(r#"<Cell CellOrdinal="1">"#)
+                .nth(1)
+                .unwrap_or_default();
+            assert!(
+                all_ratio_cell.contains(&expected.to_string()),
+                "the (All) ratio cell must be the ratio of sums ({expected}): {all_ratio_cell}"
+            );
+
+            // Tabular: the (All) row comes first and carries the measures only.
+            let mdx_tabular = "SELECT {[Measures].[Revenue],[Measures].[Revenue per unit]} ON 0, \
+                 NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) \
+                 ON 1 FROM [Sales]";
+            let (xml, _) = crate::execute::runtime::get_execute_response_with_format(
+                mdx_tabular,
+                Some("tabular"),
+                Some("Data"),
+                backend,
+                &user,
+                config,
+            );
+            let first_row = xml.split("<row>").nth(1).unwrap_or_default();
+            assert!(
+                !first_row.contains("MEMBER_CAPTION"),
+                "the (All) row carries the measures only: {first_row}"
+            );
+            // Tabular cells render in the reference's G9 form.
+            let rendered = format_g9(expected);
+            assert!(
+                first_row.contains(&rendered),
+                "the tabular (All) row must be the ratio of sums ({rendered}): {first_row}"
             );
         });
     }

@@ -486,6 +486,30 @@ features (060), live attach and object-store intake (061), aggregate design
   evaluated (pre-existing, the exemption test covers the guard, not the value);
   the drillthrough scan reads bracketed `[Measures].[Name]` tokens only.
 
+- **2026-09-30 — the drilldown `(All)` cell now evaluates the measure.** The
+  reference was measured on a purpose-built oracle model (`MallardRatio`,
+  `DIVIDE(SUM(amount), SUM(units))` over engineered rows): the `(All)` cell is
+  the ratio of sums — **18.1818**, not the sum of the yearly ratios (110) —
+  and `(All)` comes first, before the level's members. The proxy summed the
+  axis members (`render.rs` `total`/`grand_total` sites and the tabular
+  renderer), so Excel showed Average discount's Grand Total as 0,3500 where the
+  model's own value is 0,0500. Fix: the runtime evaluates each measure in the
+  `(All)` context through the *context-aware* SQL builder (so the role's row
+  filter still applies) and injects the values
+  (`SemanticQuery::drilldown_all_values`); the native builders and both tabular
+  branches use them, and the tabular path now emits the `(All)` row (the
+  parity case `drilldown-all-member-kept` is promoted from known-gap to a
+  passing case with `tabular_row_count: 8` + `tabular_first_row_columns`).
+  A regression test adds a ratio measure to the demo model and asserts the
+  `(All)` cell equals the ratio of sums in both formats. Verified live: TPC-H
+  Native Average discount `(All)` = 0.0500028 (was 0.34998…), tabular `(All)`
+  row = 5.00028028E-2 / 2.05350723E10 / 1.5E5. Still recorded: the ancestor
+  cells of a *branch* drill (the `data.sum()` at the subquery-slice path) keep
+  their summed value — the measured reference semantics for that shape are
+  open; the injection is skipped for set-op axes, whose `(All)` aggregates the
+  *returned subset* (verified against the mirror), and is a no-op for a hidden
+  fact table.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

@@ -1109,10 +1109,10 @@
         "format": "tabular"
       },
       "expect": {
-        "tabular_row_count": 8
+        "tabular_row_count": 8,
+        "tabular_first_row_columns": "[Measures].[Revenue]"
       },
-      "known_gap": "the reference keeps the (All) member in DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS) (All + the level's members: 8 rows); the proxy returns the level's members only (7 rows), so Excel computes the grand total client-side and a ratio shows the sum of its children instead of the ratio of sums",
-      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30 (found while validating the TPC-H pivot in Excel)"
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30 (found while validating the TPC-H pivot in Excel): the (All) member stays in DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS) \u2014 (All) plus the level's members \u2014 and its tabular row carries the measure only, the members' rows carry captions. The proxy dropped the row (Excel then rolled the ratio's grand total up client-side: 0,3500 instead of ~0,0500)."
     },
     {
       "id": "unknown-measure-faults",

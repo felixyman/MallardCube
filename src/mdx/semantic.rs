@@ -615,6 +615,12 @@ pub struct SemanticQuery {
     pub measure_references: Vec<(String, bool)>,
     /// Measure names the statement defines itself (`WITH MEMBER [Measures].[X]`).
     pub defined_measures: Vec<String>,
+    /// Runtime-injected: `(measure id, value)` for the drilldown's input
+    /// `(All)`, evaluated by the engine in that context (RLS-aware). The
+    /// renderers used to sum the axis members, which is wrong for a
+    /// non-additive measure — measured 2026-09-30 on the reference: a ratio
+    /// measure's `(All)` is the ratio of sums, not the sum of the ratios.
+    pub drilldown_all_values: Vec<(String, f64)>,
     /// When drilling a multi-level hierarchy, which level index to group by —
     /// one entry per `axis_dimensions` entry (`None` = leaf/physical grain).
     pub drilldown_levels: Vec<Option<usize>>,
@@ -913,6 +919,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             measures: vec![],
             measure_references: vec![],
             defined_measures: vec![],
+            drilldown_all_values: vec![],
             drilldown_levels: vec![],
             level_drag: false,
             key_hierarchy_view: None,
@@ -1407,6 +1414,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         measures: parsed.selected_measures.clone(),
         measure_references: parsed.measure_references.clone(),
         defined_measures: parsed.defined_measures.clone(),
+        drilldown_all_values: vec![],
         drilldown_levels,
         level_drag,
         key_hierarchy_view,

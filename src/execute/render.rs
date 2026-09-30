@@ -714,7 +714,16 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
             (None, Some(b)) => total_b
                 .get(b)
                 .map(|values| values.get(mi).copied().unwrap_or(0.0)),
-            (None, None) => (!rows.is_empty()).then(|| grand_total[mi]),
+            (None, None) => (!rows.is_empty()).then(|| {
+                all_value(
+                    query,
+                    measure_ids_for(query, &specs, &measure_members)
+                        .get(mi)
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                    grand_total[mi],
+                )
+            }),
         }
     };
 
@@ -958,7 +967,9 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
 
     // Sparse cells: the ordinal indexes the full member list, and tuples
     // without data simply have none (the reference's shape).
-    let total: f64 = values.iter().map(|(_, value)| *value).sum();
+    let summed: f64 = values.iter().map(|(_, value)| *value).sum();
+    let measure_id = crate::execute::axis_members::measure_id_for_query(query);
+    let total = all_value(query, &measure_id, summed);
     let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
     for (index, member) in axis_members.iter().enumerate() {
         let key = crate::axis_members::value_key_from_uname(&member.u_name);
@@ -991,6 +1002,20 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
         cells,
         &query.cell_props,
     )
+}
+
+/// The value of a `(All)` cell: the measure evaluated in that context by the
+/// engine (`SemanticQuery::drilldown_all_values`, injected at serve time),
+/// falling back to the summed axis when nothing was injected (direct render
+/// calls in tests). The reference evaluates the measure — measured 2026-09-30:
+/// a ratio measure answers its ratio of sums at `(All)`.
+pub(crate) fn all_value(query: &SemanticQuery, measure_id: &str, summed: f64) -> f64 {
+    query
+        .drilldown_all_values
+        .iter()
+        .find(|(id, _)| id == measure_id)
+        .map(|(_, value)| *value)
+        .unwrap_or(summed)
 }
 
 pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
@@ -1101,7 +1126,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         // members) alongside the expanded branch; include it.
         let extra_roots = level0_member_values(query, dim, backend);
         let tree = preorder_drill_members(query, dim, &labels, dl, &extra_roots, backend);
-        let total: f64 = data.iter().map(|(_, v)| *v).sum();
+        let summed: f64 = data.iter().map(|(_, v)| *v).sum();
+        let total = all_value(
+            query,
+            &crate::execute::axis_members::measure_id_for_query(query),
+            summed,
+        );
         let mut members: Vec<cellset::MemberConfig> = Vec::new();
         let mut cells: Vec<crate::cellset::CellConfig> = Vec::new();
         for (member, data_idx) in tree {
@@ -1146,7 +1176,12 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     // input set — `DrilldownLevel({All})` = (All) plus every level-0 member —
     // followed by the drilled branch's intermediate levels and its children.
     let mut prefix: Vec<(cellset::MemberConfig, f64)> = Vec::new();
-    let total: f64 = data.iter().map(|(_, v)| *v).sum();
+    let summed: f64 = data.iter().map(|(_, v)| *v).sum();
+    let total = all_value(
+        query,
+        &crate::execute::axis_members::measure_id_for_query(query),
+        summed,
+    );
     if let Some(dl) = query.drilldown_level()
         && !query.level_drag
         && dl > 0
@@ -1359,6 +1394,9 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
     // One cell per axis tuple. Each ancestor carries the branch total (the
     // subquery restricts the slice to a single branch, so (All), the year, and
     // the quarter all aggregate to the same value as the visible children).
+    // For a non-additive measure this sums the branch's members' values, which
+    // is only right when the branch is the whole slice; the measured
+    // reference semantics for that shape are still open (recorded).
     let mut cells = Vec::new();
     let total: f64 = data.iter().map(|(_, v)| *v).sum();
     for ord in 0..num_ancestors {
@@ -2729,7 +2767,12 @@ pub(crate) fn build_drilldown_member<B: QueryBackend + ?Sized>(
     // `(parent, child.All)` aggregate followed by the children with data.
     // Emitting only the leaf pairs left Excel with no parent rows and no
     // totals (plan 049).
-    let grand_total: f64 = all_data.iter().map(|(_, _, v)| *v).sum();
+    let summed_root: f64 = all_data.iter().map(|(_, _, v)| *v).sum();
+    let grand_total = all_value(
+        query,
+        &crate::execute::axis_members::measure_id_for_query(query),
+        summed_root,
+    );
     let root = ordered_pair(
         dims,
         d0,
@@ -2883,10 +2926,14 @@ fn build_multi_measure_by_category<B: QueryBackend + ?Sized>(
     if !query.level_drag {
         let all = all_member_for_with_backend(query, dim, backend);
         for (mi, measure_id) in measure_ids.iter().enumerate() {
-            let total: f64 = merged
+            let summed: f64 = merged
                 .iter()
                 .map(|(_, values)| values.get(mi).copied().unwrap_or(0.0))
                 .sum();
+            // The (All) cell is the measure evaluated in that context, not the
+            // sum of the members (measured 2026-09-30: a ratio measure answers
+            // its ratio of sums there).
+            let total = all_value(query, measure_id, summed);
             cells.push(measurement_cell_for(ordinal, total, measure_id));
             ordinal += 1;
         }
@@ -3453,7 +3500,12 @@ fn build_set_members_from_dictionary<B: QueryBackend + ?Sized>(
     } else {
         data.to_vec()
     };
-    let total: f64 = data.iter().map(|(_, value)| *value).sum();
+    let summed: f64 = data.iter().map(|(_, value)| *value).sum();
+    let total = all_value(
+        query,
+        &crate::execute::axis_members::measure_id_for_query(query),
+        summed,
+    );
     let value_for = |name: &str| -> Option<f64> {
         if let Some((_, value)) = keyed.iter().find(|(key, _)| key == name) {
             return Some(*value);
