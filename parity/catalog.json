@@ -1100,6 +1100,19 @@
         "fault": "The  cube does not exist."
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-28: an empty cube name faults the drillthrough with the double-space message \"The  cube does not exist.\""
+    },
+    {
+      "id": "drilldown-all-member-kept",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Measures].[Revenue]} DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON COLUMNS, NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) DIMENSION PROPERTIES PARENT_UNIQUE_NAME ON ROWS FROM [Sales] CELL PROPERTIES VALUE, FORMAT_STRING",
+        "properties": "<Catalog>{catalog}</Catalog><Format>Tabular</Format><Content>Data</Content>"
+      },
+      "expect": {
+        "row_count": 8
+      },
+      "known_gap": "the reference keeps the (All) member in DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS) (All + the level's members: 8 rows); the proxy returns the level's members only (7 rows), so Excel computes the grand total client-side and a ratio shows the sum of its children instead of the ratio of sums",
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30 (found while validating the TPC-H pivot in Excel)"
     }
   ]
 }

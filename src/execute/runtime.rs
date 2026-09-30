@@ -1235,15 +1235,19 @@ fn tabular_rowset(
                 <xsd:element name="root">
                   <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
                 </xsd:element>
-                <xsd:complexType name="row">
-                  <xsd:sequence>
 "#,
         );
         // The reference's schema preamble (measured 2026-09-27): the `uuid`
-        // and `xmlDocument` helper types ride along even when unused.
+        // and `xmlDocument` helper types ride along even when unused — as
+        // *siblings* of the row type, before it. Nesting them inside the row
+        // sequence is invalid XSD and MSOLAP refuses the whole response
+        // ("xsd:restriction … cannot appear under …/complexType/sequence/(any)",
+        // measured 2026-09-30 while validating in Excel).
         schema.push_str(
             r#"                <xsd:simpleType name="uuid"><xsd:restriction base="xsd:string"><xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/></xsd:restriction></xsd:simpleType>
                 <xsd:complexType name="xmlDocument"><xsd:sequence><xsd:any/></xsd:sequence></xsd:complexType>
+                <xsd:complexType name="row">
+                  <xsd:sequence>
 "#,
         );
         for (column, is_measure) in &columns {

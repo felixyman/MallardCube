@@ -401,6 +401,24 @@ features (060), live attach and object-store intake (061), aggregate design
   a reference measurement of the empty-cell encoding. Next: explicit YAML
   (dbt deferred per the user).
 
+- **2026-09-30 — TPC-H validated in Excel; two serving bugs found.**
+  Excel on the VM connected to the proxy (`http://ssasproxy:8080/xmla`, catalog
+  `TPCH`, cube `Sales`) and pivoted Revenue / Order count / Average discount by
+  `Date.Calendar`; the year numbers match the SQL oracle to the cent (Grand
+  Total `20,535,072,329.05`, 150,000 orders). Found and fixed: the tabular
+  response's inline XSD nested the `uuid`/`xmlDocument` helper types *inside*
+  the row complexType's sequence, which is invalid XSD — MSOLAP rejected every
+  such response ("xsd:restriction … cannot appear under …/complexType/sequence/
+  (any)"), so no real client could read the proxy's rowsets before. Found and
+  recorded (parity `known_gap` `drilldown-all-member-kept`): the proxy drops
+  the `(All)` member from Excel's `DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS)`
+  shape (reference 8 rows, proxy 7), so Excel computes the grand total
+  client-side and a ratio's total shows the sum of its children (0.35 instead
+  of 0.05). Also observed: `Execute` with a `SELECT * FROM $SYSTEM…` statement
+  is not supported (the parser rejects it as MDX); Excel does not need it, DMV
+  tooling does. Next: fix the drilldown `(All)` shape with the measured
+  reference comparison, then the explicit-YAML generator.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,
