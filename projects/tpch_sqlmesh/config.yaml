@@ -1,0 +1,26 @@
+# TPC-H SQLMesh project (plan 057-A, generator trial on a real schema).
+#
+# The raw TPC-H tables live in the DuckDB schema `raw` of data/tpch.duckdb and
+# are declared as EXTERNAL models; everything else is materialised as views in
+# `tpch.*` (physical_schema_mapping). Run it with the uv environment in
+# oracles/sqlmesh:
+#
+#   duckdb data/tpch.duckdb -c "INSTALL tpch; LOAD tpch; CREATE SCHEMA raw; CALL dbgen(sf=0.1, schema='raw')"
+#   cd projects/tpch_sqlmesh && uv run --project ../../oracles/sqlmesh sqlmesh plan --auto-apply
+
+gateways:
+  local:
+    connection:
+      type: duckdb
+      database: data/tpch.duckdb
+
+default_gateway: local
+disable_anonymized_analytics: true
+
+model_defaults:
+  dialect: duckdb
+
+# Materialised models are served as views in schema `tpch` over the physical
+# tables, so the same DuckDB file is proxy-ready.
+physical_schema_mapping:
+  main: main

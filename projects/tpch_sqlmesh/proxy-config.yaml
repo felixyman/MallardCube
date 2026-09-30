@@ -1,0 +1,191 @@
+catalog: TPCH
+cube: Sales
+db_path: data/tpch.duckdb
+fact_tables:
+- id: sales
+  table_name: fact_sales
+  measure_group_name: Sales
+- id: monthly
+  table_name: mart_monthly_revenue
+  measure_group_name: Revenue (monthly)
+relationships:
+- fact_column: order_date_key
+  dimension_id: Date
+  dim_table: dim_date
+  dim_column: date_key
+- fact_column: customer_key
+  dimension_id: Customer
+  dim_table: dim_customer
+  dim_column: c_custkey
+- fact_column: part_key
+  dimension_id: Part
+  dim_table: dim_part
+  dim_column: p_partkey
+- fact_column: supplier_key
+  dimension_id: Supplier
+  dim_table: dim_supplier
+  dim_column: s_suppkey
+- fact_column: nation_key
+  dimension_id: Nation
+  dim_table: dim_nation
+  dim_column: n_nationkey
+time_intelligence:
+  date_dimension:
+    dimension_id: Date
+    date_key_column: date_key
+    full_date_column: full_date
+    table_name: dim_date
+    flag_columns:
+      year_column: year
+      quarter_column: quarter
+      month_column: month
+      ytd_flag_column: ytd_flag
+      prior_year_ytd_flag_column: prior_year_ytd_flag
+      current_year_flag_column: current_year_flag
+      qtd_flag_column: qtd_flag
+      mtd_flag_column: mtd_flag
+dimensions:
+- id: Date
+  physical_field: full_date
+  caption: Date
+  hierarchy_name: Calendar
+  cardinality_hint: 2600
+  is_date_role: true
+  hierarchy_levels:
+  - name: Year
+    column: year
+    level_number: 0
+    cardinality: 7
+  - name: Quarter
+    column: quarter
+    level_number: 1
+    cardinality: 28
+  - name: Month
+    column: month
+    level_number: 2
+    cardinality: 84
+  - name: Full Date
+    column: full_date
+    level_number: 3
+    cardinality: 2600
+  parent_child: null
+- id: Customer
+  physical_field: c_name
+  caption: Customer
+  cardinality_hint: 15000
+  parent_child: null
+- id: Part
+  physical_field: p_name
+  caption: Part
+  cardinality_hint: 20000
+  parent_child: null
+- id: Supplier
+  physical_field: s_name
+  caption: Supplier
+  cardinality_hint: 1000
+  parent_child: null
+- id: Nation
+  physical_field: n_name
+  caption: Nation
+  cardinality_hint: 25
+  parent_child: null
+measures:
+- id: Average discount
+  sql_expr: SUM(l_extendedprice * l_discount) / NULLIF(SUM(l_extendedprice), 0)
+  caption: Average discount
+  description: Average discount (ratio of sums)
+  format_string: '0.0000'
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Cumulative revenue
+  sql_expr: MAX(cumulative_revenue_cy)
+  caption: Cumulative revenue
+  description: Cumulative revenue for the year
+  fact_table: monthly
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Line count
+  sql_expr: COUNT(*)
+  caption: Line count
+  description: Line count
+  format_string: '#,##0'
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Monthly revenue
+  sql_expr: MAX(month_revenue)
+  caption: Monthly revenue
+  description: Revenue for the month
+  fact_table: monthly
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Order count
+  sql_expr: COUNT(DISTINCT l_orderkey)
+  caption: Order count
+  description: Distinct orders
+  format_string: '#,##0'
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Quantity
+  sql_expr: SUM(l_quantity)
+  caption: Quantity
+  description: Total quantity
+  format_string: '#,##0'
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Revenue
+  sql_expr: SUM(net_revenue)
+  caption: Revenue
+  description: Total revenue
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Revenue per unit
+  sql_expr: SUM(net_revenue) / NULLIF(SUM(l_quantity), 0)
+  caption: Revenue per unit
+  description: Revenue per unit (ratio of sums)
+  format_string: '0.00'
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence: null
+  fallback_capability: null
+- id: Revenue YTD
+  sql_expr: SUM(net_revenue)
+  caption: Revenue YTD
+  description: Revenue year-to-date
+  numeric_precision: 18
+  numeric_scale: 2
+  expression: ''
+  sql_fallback_file: null
+  time_intelligence:
+    flag_column: ytd_flag
+    dimension_id: Date
+  fallback_capability: null

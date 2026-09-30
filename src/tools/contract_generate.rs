@@ -1181,26 +1181,26 @@ fn measure(
         && let (Some(aggregation), Some(source)) =
             (entry.aggregation.clone(), entry.source.as_ref())
     {
-        // The declared source must be a known model with declared columns.
-        match by_name.get(source.table.as_str()) {
-            Some(model) => {
-                if let Some(column) = &source.column
-                    && !model.columns.is_empty()
-                    && !model.columns.iter().any(|declared| declared == column)
-                {
-                    return Err(format!(
-                        "metric '{}' names column '{column}', which is not declared in the \
-                         columns of '{}'",
-                        metric.name, model.name
-                    ));
-                }
-            }
-            None => {
-                return Err(format!(
-                    "metric '{}' declares source table '{}', which is not a model",
-                    metric.name, source.table
-                ));
-            }
+        // The declared source names a model (by full name or table) and the
+        // contract carries its physical table name.
+        let resolved = models
+            .iter()
+            .find(|model| model.name == source.table || model.table() == source.table);
+        let Some(model) = resolved else {
+            return Err(format!(
+                "metric '{}' declares source table '{}', which is not a model",
+                metric.name, source.table
+            ));
+        };
+        if let Some(column) = &source.column
+            && !model.columns.is_empty()
+            && !model.columns.iter().any(|declared| declared == column)
+        {
+            return Err(format!(
+                "metric '{}' names column '{column}', which is not declared in the \
+                 columns of '{}'",
+                metric.name, model.name
+            ));
         }
         return Ok(contract::Measure {
             id,
@@ -1213,7 +1213,7 @@ fn measure(
             ordinal: entry.ordinal,
             visible: entry.visible,
             source: contract::Source {
-                table: source.table.clone(),
+                table: model.table().to_string(),
                 column: source.column.clone(),
                 reference: source.reference.clone(),
             },

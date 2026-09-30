@@ -1,0 +1,191 @@
+contract_version: 0.1.0
+model:
+  name: tpch_sales
+  description: 'Thin projection of TPC-H: a conformed line-item fact joined to customer, part, supplier, nation and order-date dimensions, plus a monthly revenue mart for cumulative values.'
+grain:
+- table: fact_sales
+  key:
+  - l_orderkey
+  - l_linenumber
+  id: sales
+  measure_group: Sales
+- table: mart_monthly_revenue
+  key:
+  - year
+  - month
+  id: monthly
+  measure_group: Revenue (monthly)
+dimensions:
+- id: Date
+  table: dim_date
+  key: date_key
+  attribute: full_date
+  hierarchy_name: Calendar
+  date_role: true
+  caption: Date
+  ordinal: 1
+  cardinality_hint: 2600
+  levels:
+  - name: Year
+    column: year
+    cardinality_hint: 7
+  - name: Quarter
+    column: quarter
+    cardinality_hint: 28
+  - name: Month
+    column: month
+    cardinality_hint: 84
+  - name: Full Date
+    column: full_date
+    cardinality_hint: 2600
+- id: Customer
+  table: dim_customer
+  key: c_custkey
+  attribute: c_name
+  caption: Customer
+  ordinal: 2
+  cardinality_hint: 15000
+- id: Part
+  table: dim_part
+  key: p_partkey
+  attribute: p_name
+  caption: Part
+  ordinal: 3
+  cardinality_hint: 20000
+- id: Supplier
+  table: dim_supplier
+  key: s_suppkey
+  attribute: s_name
+  caption: Supplier
+  ordinal: 4
+  cardinality_hint: 1000
+- id: Nation
+  table: dim_nation
+  key: n_nationkey
+  attribute: n_name
+  caption: Nation
+  ordinal: 5
+  cardinality_hint: 25
+relationships:
+- fact: fact_sales
+  dimension: Date
+  columns:
+  - order_date_key
+  - date_key
+- fact: fact_sales
+  dimension: Customer
+  columns:
+  - customer_key
+  - c_custkey
+- fact: fact_sales
+  dimension: Part
+  columns:
+  - part_key
+  - p_partkey
+- fact: fact_sales
+  dimension: Supplier
+  columns:
+  - supplier_key
+  - s_suppkey
+- fact: fact_sales
+  dimension: Nation
+  columns:
+  - nation_key
+  - n_nationkey
+measures:
+- id: Average discount
+  caption: Average discount
+  description: Average discount (ratio of sums)
+  format: '0.0000'
+  source:
+    table: fact_sales
+  aggregation: ratio
+  expression: SUM(l_extendedprice * l_discount) / NULLIF(SUM(l_extendedprice), 0)
+- id: Cumulative revenue
+  caption: Cumulative revenue
+  description: Cumulative revenue for the year
+  format: '#,##0.00'
+  source:
+    table: mart_monthly_revenue
+    column: cumulative_revenue_cy
+  aggregation: max
+  valid_grain:
+  - year
+  - month
+- id: Line count
+  caption: Line count
+  description: Line count
+  format: '#,##0'
+  source:
+    table: fact_sales
+  aggregation: count
+- id: Monthly revenue
+  caption: Monthly revenue
+  description: Revenue for the month
+  format: '#,##0.00'
+  source:
+    table: mart_monthly_revenue
+    column: month_revenue
+  aggregation: max
+  valid_grain:
+  - year
+  - month
+- id: Order count
+  caption: Order count
+  description: Distinct orders
+  format: '#,##0'
+  source:
+    table: fact_sales
+    column: l_orderkey
+  aggregation: distinct_count
+- id: Quantity
+  caption: Quantity
+  description: Total quantity
+  format: '#,##0'
+  source:
+    table: fact_sales
+    column: l_quantity
+  aggregation: sum
+- id: Revenue
+  caption: Revenue
+  description: Total revenue
+  format: '#,##0.00'
+  source:
+    table: fact_sales
+    column: net_revenue
+  aggregation: sum
+- id: Revenue per unit
+  caption: Revenue per unit
+  description: Revenue per unit (ratio of sums)
+  format: '0.00'
+  source:
+    table: fact_sales
+  aggregation: ratio
+  expression: SUM(net_revenue) / NULLIF(SUM(l_quantity), 0)
+- id: Revenue YTD
+  caption: Revenue YTD
+  description: Revenue year-to-date
+  format: '#,##0.00'
+  source:
+    table: fact_sales
+    column: net_revenue
+  aggregation: sum
+  time_window:
+    dimension: Date
+    flag: ytd_flag
+time_intelligence:
+  date_dimension: Date
+  flags:
+    ytd: ytd_flag
+    qtd: qtd_flag
+    mtd: mtd_flag
+    prior_year_ytd: prior_year_ytd_flag
+    current_year: current_year_flag
+provenance:
+  source_system: sqlmesh
+  source_hash: fnv1a64:8033d560e66aa1e0
+  generator: mallard-contract/0.1.0
+annotations:
+  dataset: TPC-H SF=0.1 (DuckDB tpch extension)
+  note: Generated from the SQLMesh project beside this file; edit the models, metrics and contract.overlay.yaml, then regenerate.
+  plan: 057-A

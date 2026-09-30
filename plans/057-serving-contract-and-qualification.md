@@ -364,7 +364,25 @@ features (060), live attach and object-store intake (061), aggregate design
   `projects/upstream_marts_sqlmesh/contract.yaml`, whose semantics (grain,
   dimensions, relationships, measures, flag catalogue) equal the hand-written
   `contracts/upstream_marts/contract.yaml` — a test asserts both. CI wiring is
-  deferred per the user's call; next in section D: dbt, then explicit YAML.
+  deferred per the user's call.
+
+- **2026-09-30 — section D, the generator on a real schema (TPC-H).**
+  `projects/tpch_sqlmesh` runs the pipeline over TPC-H SF=0.1 (600,572 line
+  items) generated locally by DuckDB's `tpch` extension: raw tables as
+  EXTERNAL models (excluded from the contract), a conformed fact with a
+  composite grain and five relationships, customer/part/supplier/nation/date
+  dimensions, a monthly revenue mart, and nine metrics (sums, ratios of sums,
+  `COUNT(*)` via the overlay's declared source, `COUNT(DISTINCT …)`, a
+  `time_window` YTD). The contract generated on the first run;
+  `qualify --contract` is READY in ~2.3 s at 600k rows; the served pivot
+  matches direct SQL exactly (revenue by year, order counts, average discount,
+  `Revenue YTD` = the `ytd_flag` slice). Findings: SQLMesh EXTERNAL models
+  need a query body (a self-named `SELECT * FROM raw.<table>` works), and
+  MallardCube serves bare table names, so materialised models must land in the
+  connection's default schema (`main`); the overlay's declared-source path
+  needed the model-name → table resolution this trial exposed (fixed). Next:
+  the same run at SF=1 for the qualifier's scale behaviour, then explicit YAML
+  (dbt deferred per the user).
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

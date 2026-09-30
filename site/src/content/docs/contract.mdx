@@ -169,7 +169,7 @@ The SQLMesh fixture `projects/upstream_marts_sqlmesh` mirrors the hand-written
 contract is semantically the same (grain, dimensions, relationships, measures
 and the flag catalogue). The uv-managed environment that runs the fixture for
 real, and the measurements behind the mapping, live in `oracles/sqlmesh`; it is
-not part of the product or CI.
+not part of the product or CI. A second fixture, `projects/tpch_sqlmesh`, runs the same pipeline over TPC-H (600k line items at SF=0.1); its README records the measured qualification and the pivot checks against direct SQL.
 
 The runtime **never reads the contract**; it serves the projected config. See
 the [model reference](/MallardCube/model/) for that format, and `plans/057` for the
