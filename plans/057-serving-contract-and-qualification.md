@@ -460,6 +460,32 @@ features (060), live attach and object-store intake (061), aggregate design
   (`drilldown-all-member-kept`, still a known gap). Next slice; measure the
   reference's ratio-at-`(All)` on a tiny oracle model first.
 
+- **2026-09-30 — review round on the unknown-measure guard: three live holes
+  closed.** The reviewer reproduced silent substitutions the first fix missed:
+  a *case variant* of a real measure (`[Measures].[units]`) passed the
+  case-insensitive guard but missed the planner's case-sensitive lookup and got
+  the default measure — the reference resolves case-insensitively (measured:
+  `[Measures].[revenue]` answers Revenue); a second measure in a slicer tuple
+  (`WHERE ([Measures].[Revenue],[Measures].[Bogus])`) slipped the parser's
+  first-measure extraction — the reference faults (measured); and the
+  `DRILLTHROUGH` entry bypassed the guard entirely, answering 1000 rows — the
+  reference faults (measured). Also measured: the reference faults for a
+  *named* `[Measures].[All]`/`[Measures].[Members]` (the postfix set forms
+  answer) and for a measure in a `Filter` predicate or a `FROM (SELECT …)`
+  subselect. Fixes: `lookup_measure` resolves case-insensitively; the guard
+  validates `frontend::referenced_measures` — one walk over axes, slicer,
+  subselect and `WITH` bodies — with statement-defined names exempt by
+  provenance (`defined_measure_names`), not by a name list; the drillthrough
+  entry carries the same refusal (a `[Measures].[Name]` text scan, since that
+  statement does not parse as MDX); the filter-subselect refusal uses the
+  reference's phrasing. Parity gains `measure-name-case-insensitive` and
+  `drillthrough-unknown-measure-faults`. Still recorded: a measure predicate
+  inside `Filter(<set>, [Measures].[X] > n)` is *ignored* even for known
+  measures (the reference filters, we answer unfiltered — a separate
+  wrong-answer gap, new parity case to come); `WITH MEMBER` bodies are not
+  evaluated (pre-existing, the exemption test covers the guard, not the value);
+  the drillthrough scan reads bracketed `[Measures].[Name]` tokens only.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

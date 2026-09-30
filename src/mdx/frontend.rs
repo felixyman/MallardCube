@@ -1408,6 +1408,101 @@ pub fn axis_presence(sel: &Select) -> (bool, bool) {
 }
 
 /// Measures referenced on the axes, axis order (0 first), deduplicated.
+/// Measure references in a statement, read from the text: `[Measures].[Name]`
+/// (bracketed — the *named member* form) and `[Measures].Name` (bare — a
+/// property function like `.currentmember`, a postfix set function like
+/// `.Members`, or a calculated member name). Quoted string bodies are skipped:
+/// their MDX is evaluated by the reference only when it evaluates the member.
+///
+/// The two forms behave differently on the reference (measured 2026-09-30): a
+/// bracketed `[Measures].[All]` / `[Measures].[Members]` faults ("… was not
+/// found in the cube …") while the bare postfix set forms answer. Reading the
+/// text rather than the AST keeps that distinction, which the parser collapses
+/// (`[Measures].currentmember` and `[Measures].[currentmember]` both become
+/// `Expr::Measure`).
+pub fn measure_references_in_text(mdx: &str) -> Vec<(String, bool)> {
+    let marker = "[measures]";
+    let characters: Vec<char> = mdx.chars().collect();
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut index = 0;
+    let mut in_quote = false;
+    while index < characters.len() {
+        let c = characters[index];
+        if c == '\'' {
+            in_quote = !in_quote;
+            index += 1;
+            continue;
+        }
+        if in_quote {
+            index += 1;
+            continue;
+        }
+        let slice: String = characters[index..]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if !slice.starts_with(marker) {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + marker.len();
+        if characters.get(cursor) != Some(&'.') {
+            index = cursor;
+            continue;
+        }
+        cursor += 1;
+        if characters.get(cursor) == Some(&'[') {
+            let name_start = cursor + 1;
+            match characters[name_start..].iter().position(|c| *c == ']') {
+                Some(offset) => {
+                    let name: String = characters[name_start..name_start + offset].iter().collect();
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        out.push((name.to_string(), true));
+                    }
+                    index = name_start + offset + 1;
+                }
+                None => index = cursor,
+            }
+            continue;
+        }
+        let name_start = cursor;
+        while cursor < characters.len()
+            && (characters[cursor].is_ascii_alphanumeric() || characters[cursor] == '_')
+        {
+            cursor += 1;
+        }
+        let name: String = characters[name_start..cursor].iter().collect();
+        let name = name.trim();
+        if !name.is_empty() {
+            out.push((name.to_string(), false));
+        }
+        index = cursor.max(index + marker.len());
+    }
+    out
+}
+
+/// The measure names the statement defines itself with `WITH MEMBER
+/// [Measures].[X] AS …` (Excel's calculation members), which are legitimate
+/// even though the model does not define them.
+pub fn defined_measure_names(sel: &Select) -> Vec<String> {
+    sel.with_members
+        .iter()
+        .filter_map(|(name, _)| {
+            let lowered = name.to_ascii_lowercase();
+            let start = lowered.find("measures")?;
+            let rest = &name[start..];
+            let rest = match rest.find(']') {
+                Some(index) => &rest[index + 1..],
+                None => rest,
+            };
+            let rest = rest.strip_prefix('.').unwrap_or(rest);
+            let tail = rest.trim().trim_matches(|c| c == '[' || c == ']');
+            (!tail.is_empty()).then(|| tail.to_string())
+        })
+        .collect()
+}
+
 pub fn selected_measures(sel: &Select) -> Vec<String> {
     let mut axes: Vec<&Axis> = sel.axes.iter().collect();
     axes.sort_by_key(|a| a.ordinal);

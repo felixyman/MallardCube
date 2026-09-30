@@ -720,6 +720,14 @@ pub struct ParsedMdx {
     /// Multiple entries mean Excel batched several CUBEVALUE cells into one
     /// multi-measure query (e.g. `{[Measures].[Revenue],[Measures].[Units]}`).
     pub selected_measures: Vec<String>,
+    /// Every measure the statement references anywhere — any axis, the
+    /// slicer, a subselect or an unquoted `WITH` body — as `(name, bracketed)`
+    /// from frontend::measure_references_in_text. This is what the
+    /// unknown-measure guard validates.
+    pub measure_references: Vec<(String, bool)>,
+    /// Measure names the statement defines itself with `WITH MEMBER
+    /// [Measures].[X] AS …`, which the model need not define.
+    pub defined_measures: Vec<String>,
     /// The cube name extracted from `FROM [cubeName]` (e.g. "Sales").
     pub cube_name: Option<String>,
     /// Positionally-ordered dimension IDs from the select clause.
@@ -1007,10 +1015,18 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
 
     // All measures referenced in the SELECT clause, in order. A single cell
     // holds one measure; batched CUBEVALUE cells produce several.
-    let select_measures = match &frontend {
-        Ok(sel) => crate::mdx::frontend::selected_measures(sel),
-        Err(_) => Vec::new(),
+    let (select_measures, defined_measures) = match &frontend {
+        Ok(sel) => (
+            crate::mdx::frontend::selected_measures(sel),
+            crate::mdx::frontend::defined_measure_names(sel),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
     };
+    // From the text, not the AST: the bracketed `[Measures].[X]` (named member)
+    // and bare `[Measures].X` (property/set function or calculated member)
+    // forms behave differently on the reference (measured 2026-09-30) and the
+    // parser collapses them.
+    let measure_references = crate::mdx::frontend::measure_references_in_text(input);
     let axis_presence = match &frontend {
         Ok(sel) => crate::mdx::frontend::axis_presence(sel),
         Err(_) => (false, false),
@@ -1049,6 +1065,8 @@ pub fn parse_mdx(input: &str) -> ParsedMdx {
         calculated_members_pat,
         selected_measure,
         selected_measures: select_measures,
+        measure_references,
+        defined_measures,
         cube_name,
         axis_dimension_ids,
         excluded_members,

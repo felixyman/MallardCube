@@ -611,12 +611,12 @@ impl SemanticModel {
     pub fn lookup_measure(&self, text: &str) -> Option<&MeasureDef> {
         let clean = text.trim_matches(|c: char| c == '[' || c == ']');
         self.measures.iter().find(|m| {
-            m.id == text
-                || m.id == clean
-                || m.caption == text
-                || m.caption == clean
-                || m.display_name == text
-                || m.display_name == clean
+            m.id.eq_ignore_ascii_case(text)
+                || m.id.eq_ignore_ascii_case(clean)
+                || m.caption.eq_ignore_ascii_case(text)
+                || m.caption.eq_ignore_ascii_case(clean)
+                || m.display_name.eq_ignore_ascii_case(text)
+                || m.display_name.eq_ignore_ascii_case(clean)
         })
     }
 

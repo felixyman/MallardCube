@@ -1124,6 +1124,30 @@
         "fault_contains": "The '[Bogus]' member was not found in the cube"
       },
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30: an unknown measure is a parse error \u2014 \"Query (1, 9) The '[Bogus]' member was not found in the cube when the string, [Measures].[Bogus], was parsed.\" The proxy used to drop unknown names from a measure set and answer the model's first measure (wrong answer)."
+    },
+    {
+      "id": "measure-name-case-insensitive",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Measures].[units]} ON 0 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "cell_values": [
+          "4931640"
+        ]
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30: measure names resolve case-insensitively \u2014 [Measures].[units] answers Units (the reference's raw value 4.93164E6 = 4931640). The proxy used to substitute the model's first measure for a case variant its case-sensitive lookup missed (wrong answer)."
+    },
+    {
+      "id": "drillthrough-unknown-measure-faults",
+      "kind": "execute",
+      "request": {
+        "mdx": "DRILLTHROUGH FROM [{cube}] (SELECT ([Measures].[Bogus]) ON 0 FROM [{cube}])"
+      },
+      "expect": {
+        "fault_contains": "The '[Bogus]' member was not found in the cube"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30: a drillthrough naming an unknown measure faults (\"\u2026 was not found in the cube when the string, [Measures].[Bogus], was parsed.\"); the proxy answered 1000 rows because the drillthrough entry bypassed the cellset guard."
     }
   ]
 }

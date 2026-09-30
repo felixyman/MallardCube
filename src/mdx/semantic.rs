@@ -610,6 +610,11 @@ pub struct SemanticQuery {
     /// All measures requested on the SELECT axis, in order. Multiple entries
     /// mean a multi-measure query (batched CUBEVALUE cells).
     pub measures: Vec<String>,
+    /// Every measure the statement references, for the unknown-measure guard:
+    /// `(name, bracketed)` from frontend::measure_references_in_text.
+    pub measure_references: Vec<(String, bool)>,
+    /// Measure names the statement defines itself (`WITH MEMBER [Measures].[X]`).
+    pub defined_measures: Vec<String>,
     /// When drilling a multi-level hierarchy, which level index to group by —
     /// one entry per `axis_dimensions` entry (`None` = leaf/physical grain).
     pub drilldown_levels: Vec<Option<usize>>,
@@ -906,6 +911,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             drilldown_member_hierarchy: None,
             measure: None,
             measures: vec![],
+            measure_references: vec![],
+            defined_measures: vec![],
             drilldown_levels: vec![],
             level_drag: false,
             key_hierarchy_view: None,
@@ -1398,6 +1405,8 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         drilldown_member_hierarchy: parsed.drilldown_member_hierarchy.clone(),
         measure: parsed.selected_measure.clone(),
         measures: parsed.selected_measures.clone(),
+        measure_references: parsed.measure_references.clone(),
+        defined_measures: parsed.defined_measures.clone(),
         drilldown_levels,
         level_drag,
         key_hierarchy_view,

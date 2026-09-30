@@ -64,6 +64,15 @@ pub fn get_execute_drillthrough_response_with_predicate<B: QueryBackend + ?Sized
     let model = &project.model;
     let table = model.primary_table_name();
 
+    // A measure this entry names that the model does not define faults like
+    // every other Execute path; the drillthrough route bypasses the cellset
+    // guard (measured 2026-09-30: the reference faults, we answered 1000 rows).
+    if let Some(fault) =
+        crate::execute::runtime::unknown_drillthrough_measure_fault(statement, model)
+    {
+        return fault;
+    }
+
     // Extract slicer filters from WHERE-clause members like
     // [Territory].[Territory].&[North], [Date].[Calendar].[Year].&[2024], or the
     // compound [Date].[Calendar].[Year].&[2024].&[1]. Filters are exact: flat
