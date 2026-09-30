@@ -525,6 +525,48 @@ features (060), live attach and object-store intake (061), aggregate design
   / crossjoin / tuple-set `(All)` sites, `is_drill_filter` semantics for a
   `DrilldownMember` shape, tabular row-shape coverage) are open.
 
+  Focused follow-up audit (same reviewer) settled what was open and found the
+  same wrong-sum class in the shapes whose values the injection's gate does not
+  cover:
+  - **Correct, verified live**: `is_drill_filter` drops exactly the drill's own
+    member filter and keeps real slicers — a `DrilldownMember(…{2024}…)` root
+    answers the whole input set (521586767) while its branch cells stay the
+    2024 slice, and a *slicer* on the same year is kept (76896157). The
+    tabular row-shape condition adds no `(All)` where the reference has none
+    (All-rooted drilldown 8 rows with `(All)` first; a level-0 level set 11
+    rows without one; a multi-level crossjoin refused). The three duplicated
+    `is_drill_filter` copies (`runtime.rs:614`, `render.rs:1524`, `:1574`)
+    should become one helper.
+  - **Wrong sums remain in the cross-tab/pivot family** (`kind` is
+    `MeasureByCategory`/`SlicerOnly`, so the gate never injects):
+    `build_cross_tab`'s `(a,All)`/`(All,b)` roll-ups (`render.rs:690-714`),
+    `build_multi_dim_pivot`'s per-coordinate `(All)` bucket sums
+    (`render.rs:331`, `coords.rs:60-78`), and `tabular_two_dim_rows_n`
+    (`runtime.rs:1061-1097`, which has no `all_value` at all). Repro:
+    `SELECT {[Measures].[Average discount]} ON COLUMNS,
+    CrossJoin([Category].Members, [Territory].Members) ON ROWS FROM [Sales]`
+    (TPC-H) — the `(All,All)`/`(a,All)` cells sum 69 per-cell ratios instead of
+    0.0500028. Fixing it needs a per-coordinate measure evaluation (a
+    `GroupBy` with no dimension), not one `QueryPlan::Total`, and the gate
+    should key on "the renderer will emit an `(All)`" rather than on `kind`.
+  - **Coverage gaps** (no wrong total, but summed subtotals for a ratio):
+    `build_drilldown_multi` never calls `all_value` (`render.rs:2059-2721`,
+    `first_totals`/`second_totals` and the pre-order ancestors), and
+    `build_drilldown_member`'s parent and `(All, child)` rows still sum
+    (`render.rs:2757-2767`, `:2805`) — the recorded branch-ancestor gap,
+    widened to two dimensions.
+  - **Missing total**: `build_multi_measure_crossjoin` emits no `(All)`
+    coordinates for the same two dimensions `build_cross_tab` does
+    (`render.rs:2990-3059`; live: 20 tuples, no `(All)`).
+  - **Cost**: the gate matches any axis `.Members` set (classified
+    `DrilldownCategories`), so a plain field drag and a leveled-dimension drag
+    pay one aggregate per measure and discard it, and a cache hit pays too
+    (the injection runs after the cache lookup and is not cached).
+  - **Unmeasured**: the key-hierarchy view (`[Date].[Full Date].All`) — the
+    native dictionary path emits its own `(All)` (`render.rs:947-962`) while
+    the tabular branches set `level_drag` and emit none; project3 has no key
+    hierarchy to test on. One mirror query decides it.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,
