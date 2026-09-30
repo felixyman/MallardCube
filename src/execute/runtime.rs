@@ -97,6 +97,20 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     let t0 = Instant::now();
     let model = &crate::proxy_project::project().model;
 
+    // A measure the statement names but the model does not define is a parse
+    // error in the reference ("The '[Bogus]' member was not found in the cube
+    // when the string, [Measures].[Bogus], was parsed.", measured 2026-09-30).
+    // The planner used to drop unknown names from a measure set and fall back
+    // to the model's first measure, silently answering a different measure.
+    if let Some(fault) = unknown_measure_fault(mdx, &query, model) {
+        let timings = Timings::new(
+            RuntimePath::DirectSql,
+            "unknown-measure".to_string(),
+            mdx_parse_us,
+        );
+        return (fault, timings);
+    }
+
     // The renderer's slicer axis lists every dimension a query does not name.
     // A dimension hidden by OLS must not appear there, and the Measures
     // hierarchy follows its measures (plan 051 RLS review).
@@ -456,6 +470,79 @@ pub fn mdx_cube_scope_fault(mdx: &str, config: &ProxyConfig) -> Option<String> {
     Some(crate::xmla::response::fault_response(&format!(
         "The {cube} cube does not exist."
     )))
+}
+
+/// A measure the statement asks for that the model does not define.
+///
+/// The reference faults — "The '[Bogus]' member was not found in the cube when
+/// the string, [Measures].[Bogus], was parsed." (measured 2026-09-30, SSAS 2025
+/// tabular) — while the planner dropped unknown names from a measure set and
+/// fell back to the model's first measure, silently answering a different
+/// measure. Two names are legitimate without a model definition: the
+/// reference's hidden `__Default measure` (measured: it answers), and members
+/// the statement defines itself with `WITH MEMBER [Measures].[X] AS …`
+/// (Excel's calculation members).
+pub fn unknown_measure_fault(
+    mdx: &str,
+    query: &crate::mdx_semantic::SemanticQuery,
+    model: &crate::engine::model::SemanticModel,
+) -> Option<String> {
+    let defined = statement_defined_measures(mdx);
+    for name in query.measures.iter().chain(query.measure.iter()) {
+        let name = name.trim();
+        if name.is_empty()
+            || is_measure_marker(name)
+            || name.eq_ignore_ascii_case("__Default measure")
+            || defined
+                .iter()
+                .any(|defined| defined.eq_ignore_ascii_case(name))
+            || model.measures.iter().any(|measure| {
+                measure.id.eq_ignore_ascii_case(name)
+                    || measure.caption.eq_ignore_ascii_case(name)
+                    || measure.display_name.eq_ignore_ascii_case(name)
+            })
+        {
+            continue;
+        }
+        return Some(crate::xmla::response::fault_response(&format!(
+            "The '[{name}]' member was not found in the cube when the string, [Measures].[{name}], was parsed."
+        )));
+    }
+    None
+}
+
+/// The measure names a statement defines itself with `WITH MEMBER`.
+fn statement_defined_measures(mdx: &str) -> Vec<String> {
+    let Ok(select) = crate::mdx::frontend::parse_select(mdx) else {
+        return Vec::new();
+    };
+    select
+        .with_members
+        .iter()
+        .filter_map(|(name, _)| measure_name_from_with_member(name))
+        .collect()
+}
+
+/// `[Measures].[XL_SD]` / `[Measures].cChildren` → the measure name alone.
+fn measure_name_from_with_member(name: &str) -> Option<String> {
+    let lowered = name.to_ascii_lowercase();
+    let start = lowered.find("measures")?;
+    let rest = &name[start..];
+    let rest = match rest.find(']') {
+        Some(index) => &rest[index + 1..],
+        None => rest,
+    };
+    let rest = rest.strip_prefix('.').unwrap_or(rest);
+    let tail = rest.trim().trim_matches(|c| c == '[' || c == ']');
+    (!tail.is_empty()).then(|| tail.to_string())
+}
+
+/// `[Measures].Members` and friends name a *set*, not a measure.
+fn is_measure_marker(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "members" | "allmembers" | "children" | "all" | "currentmember" | "defaultmember"
+    )
 }
 
 /// The member set Excel's filter idiom selects: the dimension's leaf members
@@ -1942,5 +2029,64 @@ mod tests {
             ),
             "{xml}"
         );
+    }
+
+    /// A measure the model does not define faults like the reference ("The
+    /// '[Bogus]' member was not found in the cube …", measured 2026-09-30); the
+    /// planner used to drop unknown names from a measure set and answer the
+    /// model's first measure, silently returning a different measure's numbers.
+    #[test]
+    fn unknown_measures_fault_like_the_reference() {
+        use crate::backend::Backend;
+        use crate::engine::model::UserContext;
+
+        let project =
+            crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
+                .expect("load project3");
+        crate::project::project::with_test_project(project, || {
+            let config = &crate::proxy_project::project().config;
+            let user = UserContext::admin_default();
+            let execute = |mdx: &str| {
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx,
+                    Backend::test_fixture(),
+                    &user,
+                    config,
+                )
+                .0
+            };
+
+            let response = execute(
+                "SELECT {[Measures].[Bogus]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
+            );
+            assert!(
+                response.contains("faultstring")
+                    && response.contains("The '[Bogus]' member was not found in the cube"),
+                "{response}"
+            );
+
+            // An unknown measure in the slicer faults too: the reference parses
+            // the whole statement.
+            let response = execute(
+                "SELECT [Date].[Calendar].[Year].Members ON 0 FROM [Sales] WHERE ([Measures].[Nope])",
+            );
+            assert!(response.contains("faultstring"), "{response}");
+
+            // The reference's hidden default measure answers (measured), and a
+            // measure the statement defines itself is not a model measure.
+            for mdx in [
+                "SELECT {[Measures].[__Default measure]} ON 0 FROM [Sales]",
+                "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
+            ] {
+                let response = execute(mdx);
+                assert!(!response.contains("faultstring"), "{mdx}\n{response}");
+            }
+
+            // A known measure that is not the model's first still answers.
+            let response = execute(
+                "SELECT {[Measures].[Units]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
+            );
+            assert!(!response.contains("faultstring"), "{response}");
+        });
     }
 }

@@ -434,6 +434,32 @@ features (060), live attach and object-store intake (061), aggregate design
   drilldown gap itself. Next: fix the drilldown `(All)` shape with the measured
   reference comparison, then the explicit-YAML generator.
 
+- **2026-09-30 — the unknown-measure silent substitution.** While preparing the
+  drilldown fix, the demo proxy answered `{[Measures].[Average discount]}`
+  (not a project3 measure) with Revenue's numbers, and a three-measure set with
+  a one-measure response: the planner dropped names it could not resolve and
+  fell back to the model's first measure. The reference faults — "Query (1, 9)
+  The '[Bogus]' member was not found in the cube when the string,
+  [Measures].[Bogus], was parsed." (measured on SSAS 2025 tabular). Fixed:
+  `runtime::unknown_measure_fault` refuses any named measure the model does not
+  define, before planning. `[Measures].[__Default measure]` (the reference's
+  hidden default, measured to answer) and names the statement defines with
+  `WITH MEMBER [Measures].[X] AS …` stay legitimate. Our message omits the
+  reference's `Query (1, 9)` coordinates (recorded, not matched). Parity gains
+  `unknown-measure-faults`.
+- **2026-09-30 — the `(All)` row's value is summed, not evaluated.** With the
+  TPC-H model (all three pivot measures exist, so nothing is substituted) the
+  Native response for Excel's `DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS)`
+  shape carries the `(All)` row — but its cell for a non-additive measure is
+  the **sum of the children's values**: Average discount `0.34998…` where the
+  ratio of sums is `0.05`. The deep-drill renderer computes members with no
+  data row (the `(All)` root, ancestors) by summing their subtree
+  (`render.rs`, `total` / ancestor arms). Fixing it means evaluating the
+  measure at the member — an engine query, RLS-aware — which is also what the
+  *tabular* path needs to carry the `(All)` row it currently drops
+  (`drilldown-all-member-kept`, still a known gap). Next slice; measure the
+  reference's ratio-at-`(All)` on a tiny oracle model first.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

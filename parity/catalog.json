@@ -1113,6 +1113,17 @@
       },
       "known_gap": "the reference keeps the (All) member in DrilldownLevel({All},,,INCLUDE_CALC_MEMBERS) (All + the level's members: 8 rows); the proxy returns the level's members only (7 rows), so Excel computes the grand total client-side and a ratio shows the sum of its children instead of the ratio of sums",
       "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30 (found while validating the TPC-H pivot in Excel)"
+    },
+    {
+      "id": "unknown-measure-faults",
+      "kind": "execute",
+      "request": {
+        "mdx": "SELECT {[Measures].[Bogus]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [{cube}] CELL PROPERTIES VALUE"
+      },
+      "expect": {
+        "fault_contains": "The '[Bogus]' member was not found in the cube"
+      },
+      "source": "SSAS 2025 tabular, MallardDemo/Model, 2026-09-30: an unknown measure is a parse error \u2014 \"Query (1, 9) The '[Bogus]' member was not found in the cube when the string, [Measures].[Bogus], was parsed.\" The proxy used to drop unknown names from a measure set and answer the model's first measure (wrong answer)."
     }
   ]
 }
