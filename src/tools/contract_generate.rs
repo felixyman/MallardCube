@@ -1181,16 +1181,14 @@ fn measure(
         && let (Some(aggregation), Some(source)) =
             (entry.aggregation.clone(), entry.source.as_ref())
     {
-        // The declared source names a model (by full name or table) and the
-        // contract carries its physical table name.
-        let resolved = models
-            .iter()
-            .find(|model| model.name == source.table || model.table() == source.table);
-        let Some(model) = resolved else {
-            return Err(format!(
-                "metric '{}' declares source table '{}', which is not a model",
-                metric.name, source.table
-            ));
+        // The declared source names a model: the full name, or a bare table
+        // name only when exactly one model carries it. The contract carries
+        // the physical table name.
+        let model = match resolve_source(models, &source.table) {
+            Ok(model) => model,
+            Err(reason) => {
+                return Err(format!("metric '{}' source {reason}", metric.name));
+            }
         };
         if let Some(column) = &source.column
             && !model.columns.is_empty()
@@ -1293,6 +1291,24 @@ fn measure(
     })
 }
 
+/// Resolve a declared source: the full model name first, then a bare table
+/// name only when exactly one model carries it (an ambiguous table part would
+/// otherwise silently pick the first file in path order).
+fn resolve_source<'a>(models: &'a [ModelFile], name: &str) -> Result<&'a ModelFile, String> {
+    if let Some(model) = models.iter().find(|model| model.name == name) {
+        return Ok(model);
+    }
+    let mut matches = models.iter().filter(|model| model.table() == name);
+    match (matches.next(), matches.next()) {
+        (Some(model), None) => Ok(model),
+        (None, _) => Err(format!("names '{name}', which is not a model")),
+        (Some(model), Some(other)) => Err(format!(
+            "names '{name}', which is ambiguous between '{}' and '{}'; use the full model name",
+            model.name, other.name
+        )),
+    }
+}
+
 /// `SUM(model.column)` and friends, or a ratio of sums over one model.
 ///
 /// The aggregate forms only match a *plain* column reference: a `SUM(` whose
@@ -1375,6 +1391,7 @@ mod tests {
     use super::*;
 
     const PROJECT: &str = "projects/upstream_marts_sqlmesh";
+    const PROJECT_TPCH: &str = "projects/tpch_sqlmesh";
     const HAND_WRITTEN: &str = "contracts/upstream_marts/contract.yaml";
 
     fn generate_fixture() -> String {
@@ -1791,6 +1808,48 @@ mod tests {
         )
         .expect("absolute");
         assert_eq!(relative, absolute);
+    }
+
+    /// The TPC-H fixture (a real schema) generates its checked-in contract
+    /// byte for byte; the project files are checked in, so this needs no data.
+    #[test]
+    fn the_tpch_fixture_generates_its_checked_in_contract() {
+        let project = Path::new(PROJECT_TPCH);
+        let text =
+            generate(project, &project.join("contract.overlay.yaml")).expect("TPC-H generates");
+        let checked_in =
+            std::fs::read_to_string(project.join("contract.yaml")).expect("checked-in contract");
+        assert_eq!(text, checked_in);
+    }
+
+    /// Declared sources resolve by full name first, then by a unique table
+    /// part; ambiguous and unknown names refuse.
+    #[test]
+    fn declared_sources_are_resolved_strictly() {
+        let models = load_models(Path::new(PROJECT)).expect("models");
+        let by_name = resolve_source(&models, "upstream_marts.fact_orders").expect("full name");
+        assert_eq!(by_name.table(), "fact_orders");
+        let by_table = resolve_source(&models, "fact_orders").expect("unique table part");
+        assert_eq!(by_table.name, "upstream_marts.fact_orders");
+        assert!(resolve_source(&models, "nope").is_err());
+
+        let mut collided = models.clone();
+        collided.push(ModelFile {
+            name: "staging.fact_orders".into(),
+            kind: "FULL".into(),
+            grain: vec![],
+            columns: vec![],
+            audits: vec![],
+        });
+        let error = resolve_source(&collided, "fact_orders").expect_err("ambiguous");
+        assert!(error.contains("ambiguous"), "{error}");
+        // The full name still resolves when the table part collides.
+        assert_eq!(
+            resolve_source(&collided, "staging.fact_orders")
+                .expect("full name wins")
+                .name,
+            "staging.fact_orders"
+        );
     }
 
     /// The parser respects both quote styles and refuses multiple blocks.

@@ -71,4 +71,4 @@ annotations:
     Generated from the SQLMesh project beside this file; edit the models,
     metrics and contract.overlay.yaml, then regenerate.
   plan: "057-A"
-  dataset: "TPC-H SF=0.1 (DuckDB tpch extension)"
+  dataset: "TPC-H (DuckDB tpch extension; SF 0.1 and 1 measured)"

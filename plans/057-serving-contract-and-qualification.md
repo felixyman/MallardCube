@@ -384,12 +384,22 @@ features (060), live attach and object-store intake (061), aggregate design
   SF=1 (6,001,215 line items): dbgen 12 s, materialise 9 s,
   `contract generate --check` byte-identical, `qualify --contract` READY in
   11.2 s (SF=0.1: 2.3 s), and the pivot matches SQL again (1992
-  `33,009,798,732.77`, 1998 `19,433,822,171.60`; `Revenue YTD` = the 1998
-  slice). Recorded gap, found only with real data: a windowed measure over a
-  period with no matching rows renders `0` where the reference returns an
-  empty cell (Excel blank) — the value path carries `f64`, not `Option<f64>`;
-  deserves its own slice with a reference measurement of the empty-cell
-  encoding. Next: explicit YAML (dbt deferred per the user).
+  `33,009,798,587.52`, 1998 `19,433,822,086.61`; `Revenue YTD` = the 1998
+  slice). Scale factors are not revenue-equivalent: TPC-H part prices grow
+  with the part-key range (1409.5 over the first 20k parts vs 1499.5 over
+  200k), so per-line revenue rises with SF — totals 20.54e9 (SF=0.1) vs
+  218.10e9 (SF=1), a factor of 10.62 while order counts scale 10.00. The
+  fixture also gained `oracles.json` (recorded SQL expectations for every
+  non-additive measure: totals, a Nation slice, both ratios, the monthly and
+  cumulative maxima, the YTD slice), so `qualify` re-checks the semantics
+  rather than trusting prose. Recorded gap, found only with real data: in the
+  two-axis/total render path (`render.rs` `value_for`/`root_value` and the
+  read boundary's `unwrap_or(0.0)`), a measure whose SQL returns NULL (a
+  window filter matching no rows, a total over an empty slice) renders `0`
+  where the reference returns an empty cell (Excel blank); the 1-d drilldown
+  path instead shrinks its axis under NON EMPTY. Deserves its own slice with
+  a reference measurement of the empty-cell encoding. Next: explicit YAML
+  (dbt deferred per the user).
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

@@ -417,6 +417,10 @@ pub(crate) fn oracle_findings<B: QueryBackend + ?Sized>(
                 continue;
             }
         };
+        // A measure that declares a time window must be checked with its flag
+        // filter applied — the TPC-H trial caught the oracle path comparing the
+        // unflagged total against a flagged expectation.
+        let filters = crate::engine::plan::filters_with_time_flag(model, &measure.id, &filters);
         let plan = QueryPlan::Total {
             measure: measure.id.clone(),
             filters,
@@ -1749,6 +1753,7 @@ mod tests {
     fn oracles_compare_against_the_engine() {
         let p = crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
             .expect("load project3");
+        let fixture_scalar = |sql: &str| crate::backend::Backend::test_fixture().query_scalar(sql);
         let file = OracleFile {
             oracles: vec![
                 Oracle {
@@ -1772,6 +1777,18 @@ mod tests {
                     expected: 1.0,
                     tolerance: None,
                 },
+                // A time-flagged measure: the oracle must run the flagged SQL,
+                // or it compares the unflagged total (the TPC-H trial's bug).
+                Oracle {
+                    measure: "RevenueYTD".into(),
+                    dimension: None,
+                    member: None,
+                    expected: fixture_scalar(
+                        "SELECT COALESCE(SUM(f.revenue), 0) FROM sales_fact f \
+                         WHERE f.date_key IN (SELECT date_key FROM date_dim WHERE ytd_flag = true)",
+                    ),
+                    tolerance: None,
+                },
                 Oracle {
                     measure: "NoSuchMeasure".into(),
                     dimension: None,
@@ -1781,6 +1798,15 @@ mod tests {
                 },
             ],
         };
+        let total = fixture_scalar("SELECT COALESCE(SUM(revenue), 0) FROM sales_fact");
+        let ytd = fixture_scalar(
+            "SELECT COALESCE(SUM(f.revenue), 0) FROM sales_fact f \
+             WHERE f.date_key IN (SELECT date_key FROM date_dim WHERE ytd_flag = true)",
+        );
+        assert!(
+            ytd > 0.0 && ytd < total,
+            "the YTD slice must be a real subset"
+        );
         let (blocked, partial) = oracle_findings(
             crate::backend::Backend::test_fixture(),
             &p.model,
@@ -1789,11 +1815,16 @@ mod tests {
             &file,
         );
         assert_eq!(blocked.len(), 2, "{blocked:?}");
-        // Revenue YTD/QTD/MTD/Prior Year are not additive and have no oracle in
-        // this file: the file exists, so coverage is required.
+        // Revenue QTD/MTD/Prior Year are not additive and have no oracle in
+        // this file: once the file exists, coverage is required. Revenue YTD
+        // *is* covered (with the flag applied) and must not be reported.
         assert!(
-            partial.iter().any(|m| m.contains("Revenue YTD")),
+            partial.iter().any(|m| m.contains("Revenue QTD")),
             "uncovered non-additive measures are reported: {partial:?}"
+        );
+        assert!(
+            !partial.iter().any(|m| m.contains("Revenue YTD")),
+            "a covered measure must not be reported: {partial:?}"
         );
         assert!(
             blocked.iter().any(|m| m.contains("expected 1")),

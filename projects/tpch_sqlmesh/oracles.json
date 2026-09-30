@@ -1,0 +1,40 @@
+{
+  "_note": "Hand-written expectations recorded from the TPC-H SF=0.1 data (DuckDB tpch extension) by direct SQL, not from this proxy. qualify compares them against the SQL the proxy emits (plan 057-B). Regenerating the data at another scale factor changes the values: TPC-H part prices grow with the part-key range, so per-line revenue rises with SF.",
+  "oracles": [
+    {
+      "measure": "Revenue",
+      "expected": 20535072329.05
+    },
+    {
+      "measure": "Revenue",
+      "dimension": "Nation",
+      "member": "GERMANY",
+      "expected": 827839247.6
+    },
+    {
+      "measure": "Order count",
+      "expected": 150000
+    },
+    {
+      "measure": "Revenue YTD",
+      "expected": 1859264398.88
+    },
+    {
+      "measure": "Average discount",
+      "expected": 0.0500028
+    },
+    {
+      "measure": "Revenue per unit",
+      "expected": 1339.115584,
+      "tolerance": 0.001
+    },
+    {
+      "measure": "Monthly revenue",
+      "expected": 275091712.18
+    },
+    {
+      "measure": "Cumulative revenue",
+      "expected": 3150697585.36
+    }
+  ]
+}

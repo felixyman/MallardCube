@@ -183,9 +183,9 @@ time_intelligence:
     current_year: current_year_flag
 provenance:
   source_system: sqlmesh
-  source_hash: fnv1a64:8033d560e66aa1e0
+  source_hash: fnv1a64:f42db89a0a92b8ea
   generator: mallard-contract/0.1.0
 annotations:
-  dataset: TPC-H SF=0.1 (DuckDB tpch extension)
+  dataset: TPC-H (DuckDB tpch extension; SF 0.1 and 1 measured)
   note: Generated from the SQLMesh project beside this file; edit the models, metrics and contract.overlay.yaml, then regenerate.
   plan: 057-A
