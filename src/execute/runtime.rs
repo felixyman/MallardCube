@@ -600,10 +600,14 @@ fn drilldown_all_values<B: QueryBackend + ?Sized>(
     backend: &B,
 ) -> Vec<(String, f64)> {
     use crate::engine::plan::{QueryPlan, filters_with_time_flag, typed_filters};
-    let names: Vec<String> = if query.measures.is_empty() {
-        query.measure.iter().cloned().collect()
-    } else {
+    let names: Vec<String> = if !query.measures.is_empty() {
         query.measures.clone()
+    } else if let Some(single) = &query.measure {
+        vec![single.clone()]
+    } else {
+        // A measure-less drilldown (Excel's field discovery) answers the
+        // model's default measure — the same resolution the renderers use.
+        vec![crate::execute::axis_members::measure_id_for_query(query)]
     };
     // The drill's own member filter must not constrain the input set; real
     // slicers on the same dimension are kept (as in `level0_member_values`).
@@ -2235,7 +2239,8 @@ mod tests {
             crate::proxy_project::ProxyProject::load("projects/project3/proxy-config.json")
                 .expect("load project3");
         let mut config: ProxyConfig = project.config.clone();
-        config.measures.push(
+        config.measures.insert(
+            0,
             serde_json::from_value(serde_json::json!({
                 "id": "Revenue per unit",
                 "sql_expr": "SUM(revenue) / NULLIF(SUM(units), 0)",
@@ -2272,6 +2277,30 @@ mod tests {
                 all_ratio_cell.contains(&expected.to_string()),
                 "the (All) ratio cell must be the ratio of sums ({expected}): {all_ratio_cell}"
             );
+
+            // The single-measure shape (Excel with one value field) and the
+            // measure-less discovery shape (which answers the model's default
+            // measure — set to the ratio above) both get the evaluated (All).
+            for mdx in [
+                "SELECT {[Measures].[Revenue per unit]} ON 0, \
+                 NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) \
+                 ON 1 FROM [Sales] CELL PROPERTIES VALUE",
+                "SELECT NON EMPTY Hierarchize({DrilldownLevel({[Date].[Calendar].[All]},,,INCLUDE_CALC_MEMBERS)}) \
+                 ON 0 FROM [Sales] CELL PROPERTIES VALUE",
+            ] {
+                let (xml, _) =
+                    crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                        mdx, backend, &user, config,
+                    );
+                let first_cell = xml
+                    .split(r#"<Cell CellOrdinal="0">"#)
+                    .nth(1)
+                    .unwrap_or_default();
+                assert!(
+                    first_cell.contains(&expected.to_string()),
+                    "the (All) cell must be the ratio of sums ({expected}): {mdx}\n{first_cell}"
+                );
+            }
 
             // Tabular: the (All) row comes first and carries the measures only.
             let mdx_tabular = "SELECT {[Measures].[Revenue],[Measures].[Revenue per unit]} ON 0, \

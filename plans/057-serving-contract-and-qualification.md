@@ -509,6 +509,21 @@ features (060), live attach and object-store intake (061), aggregate design
   open; the injection is skipped for set-op axes, whose `(All)` aggregates the
   *returned subset* (verified against the mirror), and is a no-op for a hidden
   fact table.
+  Review round on this fix found two live gaps the first cut missed: the
+  *single-measure* native drilldown (Excel with one value field — the reported
+  shape) still summed, because its cells come from `build_drilldown`'s
+  ancestor loop rather than the multi-measure builder; and a *measure-less*
+  drilldown (Excel's field discovery) skipped the injection entirely. Both
+  fixed — the ancestor loop uses the injected value for the `(All)` member
+  only (a branch drill's intermediate ancestors keep the summed slice value,
+  recorded), and the injection resolves the model's default measure when the
+  statement names none. Measured live on TPC-H: the single-measure Native
+  `(All)` = 0.0500028, and the measure-less first row carries the default
+  measure's own value. The regression test now covers the two-measure,
+  single-measure, measure-less and tabular shapes, with the ratio as the
+  model's default. The reviewer's remaining audits (the `build_multi_measure`
+  / crossjoin / tuple-set `(All)` sites, `is_drill_filter` semantics for a
+  `DrilldownMember` shape, tabular row-shape coverage) are open.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

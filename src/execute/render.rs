@@ -1391,16 +1391,25 @@ pub(crate) fn build_drilldown<B: QueryBackend + ?Sized>(
         prev_parent = parent;
     }
 
-    // One cell per axis tuple. Each ancestor carries the branch total (the
-    // subquery restricts the slice to a single branch, so (All), the year, and
-    // the quarter all aggregate to the same value as the visible children).
-    // For a non-additive measure this sums the branch's members' values, which
-    // is only right when the branch is the whole slice; the measured
-    // reference semantics for that shape are still open (recorded).
+    // One cell per axis tuple. A *branch* drill's ancestors carry the branch
+    // total (the subquery restricts the slice to a single branch), whose
+    // reference semantics for a non-additive measure are still open
+    // (recorded). The `(All)` root is the measure evaluated in that context —
+    // measured 2026-09-30 — injected at serve time; summing the members is
+    // wrong there for a ratio.
     let mut cells = Vec::new();
-    let total: f64 = data.iter().map(|(_, v)| *v).sum();
+    let summed: f64 = data.iter().map(|(_, v)| *v).sum();
+    let all_root = all_value(
+        query,
+        &crate::execute::axis_members::measure_id_for_query(query),
+        summed,
+    );
     for ord in 0..num_ancestors {
-        cells.push(measurement_cell_for_query(query, ord, total));
+        let is_all = members
+            .get(ord as usize)
+            .is_some_and(|m| m.u_name.ends_with(".[All]") || m.u_name.ends_with(".[(All)]"));
+        let value = if is_all { all_root } else { summed };
+        cells.push(measurement_cell_for_query(query, ord, value));
     }
     for (i, (_name, value)) in data.iter().enumerate() {
         cells.push(measurement_cell_for_query(
