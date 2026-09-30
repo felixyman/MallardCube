@@ -5390,9 +5390,14 @@ mod tests {
                     crate::engine::plan::execute_plan_with_backend(&plan, &project.model, backend);
                 match result {
                     crate::engine::plan::QueryResult::Scalar(v) => {
+                        // YTD/PriorYTD always cover past months; QTD/MTD can be
+                        // empty on the window's first days (the clock rolls
+                        // over), so only their sign is asserted.
+                        let strict = label == "YTD" || label == "PriorYTD";
                         assert!(
-                            v > 0.0,
-                            "{label} revenue should be non-zero against demo data, got {v}"
+                            if strict { v > 0.0 } else { v >= 0.0 },
+                            "{label} revenue should be {} against demo data, got {v}",
+                            if strict { "non-zero" } else { "non-negative" }
                         );
                     }
                     other => panic!("{label} expected Scalar result, got {other:?}"),
@@ -5468,7 +5473,8 @@ mod tests {
                 }
                 match execute_plan_with_backend(&plan, &project.model, backend) {
                     QueryResult::Scalar(v) => {
-                        assert!(v > 0.0, "{label} should be non-zero, got {v}");
+                        // QTD/MTD can be empty on the window's first days.
+                        assert!(v >= 0.0, "{label} should be non-negative, got {v}");
                         assert!(
                             v < total,
                             "{label} should be a strict subset of total {total}, got {v}"

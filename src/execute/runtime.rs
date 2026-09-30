@@ -402,15 +402,22 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     // set-op axis keeps its summed `(All)` — the reference aggregates the
     // *returned subset* there (verified against the mirror) — so it is left
     // alone, and a hidden fact table yields no values at all.
+    let drill_shaped = matches!(
+        query.kind,
+        crate::mdx_semantic::SemanticQueryKind::DrilldownCategories
+            | crate::mdx_semantic::SemanticQueryKind::DrilldownMemberProbe
+    );
+    // The cross-tab family (measures against two dimensions) rolls its
+    // `(All)`-side cells up per dimension, so it needs the grouped values too.
+    let cross_tab_shaped = query.axis_dimensions.len() >= 2 || query.crossjoin_axis;
     if !matches!(plan, crate::engine::plan::QueryPlan::Empty)
         && query.axis_set_op.is_none()
-        && matches!(
-            query.kind,
-            crate::mdx_semantic::SemanticQueryKind::DrilldownCategories
-                | crate::mdx_semantic::SemanticQueryKind::DrilldownMemberProbe
-        )
+        && (drill_shaped || cross_tab_shaped)
     {
         query.drilldown_all_values = drilldown_all_values(&query, model, user, config, backend);
+        if cross_tab_shaped {
+            query.dimension_values = dimension_values(&query, model, user, config, backend);
+        }
     }
 
     let t0 = Instant::now();
@@ -585,6 +592,54 @@ fn is_measure_property_or_set(name: &str) -> bool {
 /// ratios (110). The renderers summed the axis members instead; this gives
 /// them the engine's own value. The query is built through the context-aware
 /// SQL builder, so the user's row filter still applies.
+/// Per-dimension member values for the cross-tab family's `(All)` roll-ups:
+/// each axis measure grouped by each axis dimension within the query's
+/// slicers, through the context-aware executor so the role's row filter
+/// applies. One `GroupBy` per (dimension, measure) — the cross-tab shapes are
+/// two flat dimensions, so this stays a handful of cheap aggregations.
+fn dimension_values<B: QueryBackend + ?Sized>(
+    query: &crate::mdx_semantic::SemanticQuery,
+    model: &crate::engine::model::SemanticModel,
+    user: &UserContext,
+    config: &ProxyConfig,
+    backend: &B,
+) -> Vec<(String, String, String, f64)> {
+    use crate::engine::plan::{
+        QueryPlan, QueryResult, execute_plan_with_backend_and_context, filters_with_time_flag,
+        typed_filters,
+    };
+    let names: Vec<String> = if !query.measures.is_empty() {
+        query.measures.clone()
+    } else if let Some(single) = &query.measure {
+        vec![single.clone()]
+    } else {
+        vec![crate::execute::axis_members::measure_id_for_query(query)]
+    };
+    let mut out = Vec::new();
+    for dim in &query.axis_dimensions {
+        for name in &names {
+            let Some(measure) = model.lookup_measure(name) else {
+                continue;
+            };
+            let plan = QueryPlan::GroupBy {
+                measure: measure.id.clone(),
+                group_by: vec![dim.clone()],
+                filters: filters_with_time_flag(model, &measure.id, &typed_filters(&query.filters)),
+                group_levels: vec![None],
+                set_op: None,
+            };
+            if let QueryResult::Grouped(rows) =
+                execute_plan_with_backend_and_context(&plan, model, backend, user, config)
+            {
+                for (key, value) in rows {
+                    out.push((dim.clone(), key, measure.id.clone(), value));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// An All-rooted drilldown (`DrilldownLevel({[Dim].[Hier].[All]})`): the
 /// reference answers the `(All)` member first, unlike a level set
 /// (`level_drag`), which has no total row (both measured).
@@ -858,7 +913,9 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
             columns.push((tabular_member_column(d0, None), false));
             columns.push((tabular_member_column(d1, None), false));
             columns.push((model.meas_def(measure).measure_unique_name(), true));
-            for (k0, k1, value) in tabular_two_dim_rows(pairs) {
+            for (k0, k1, value) in
+                tabular_two_dim_rows(query, (&group_by[0], &group_by[1]), measure, pairs)
+            {
                 rows_out.push(vec![
                     k0.unwrap_or_default(),
                     k1.unwrap_or_default(),
@@ -974,7 +1031,9 @@ pub(crate) fn render_tabular_rowset<B: QueryBackend + ?Sized>(
             for measure in measures {
                 columns.push((model.meas_def(measure).measure_unique_name(), true));
             }
-            for (k0, k1, values) in tabular_two_dim_rows_n(pairs) {
+            for (k0, k1, values) in
+                tabular_two_dim_rows_n(query, (&group_by[0], &group_by[1]), measures, pairs)
+            {
                 let mut row = vec![k0.unwrap_or_default(), k1.unwrap_or_default()];
                 row.extend(
                     values
@@ -1044,13 +1103,16 @@ fn g9_checked(value: f64) -> Result<String, String> {
 /// coordinate with `(All)` on one side, then the pairs that carry data. A
 /// `None` coordinate means the `(All)` member and its column is omitted.
 fn tabular_two_dim_rows(
+    query: &crate::mdx_semantic::SemanticQuery,
+    dimensions: (&str, &str),
+    measure: &str,
     pairs: &[(String, String, f64)],
 ) -> Vec<(Option<String>, Option<String>, f64)> {
     let triples: Vec<(String, String, Vec<f64>)> = pairs
         .iter()
         .map(|(a, b, value)| (a.clone(), b.clone(), vec![*value]))
         .collect();
-    tabular_two_dim_rows_n(&triples)
+    tabular_two_dim_rows_n(query, dimensions, &[measure.to_string()], &triples)
         .into_iter()
         .map(|(a, b, values)| (a, b, values[0]))
         .collect()
@@ -1059,6 +1121,9 @@ fn tabular_two_dim_rows(
 /// [`tabular_two_dim_rows`] for several measures per coordinate. Coordinates
 /// are indexed once (a two-field axis can carry thousands of pairs).
 fn tabular_two_dim_rows_n(
+    query: &crate::mdx_semantic::SemanticQuery,
+    dimensions: (&str, &str),
+    measure_ids: &[String],
     triples: &[(String, String, Vec<f64>)],
 ) -> Vec<(Option<String>, Option<String>, Vec<f64>)> {
     use std::collections::BTreeMap;
@@ -1090,13 +1155,46 @@ fn tabular_two_dim_rows_n(
         }
     }
 
+    // The `(All)`-side rows are the measure evaluated in that context, not the
+    // sum of the cells (measured 2026-09-30; wrong for a ratio measure). The
+    // injected per-dimension values supply the grouped member values, and the
+    // injected totals supply the grand total, with the summed maps as fallback.
+    let per_measure = |values: &[f64], pick: &dyn Fn(&str, f64) -> f64| -> Vec<f64> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(mi, summed)| {
+                let id = measure_ids.get(mi).map(String::as_str).unwrap_or_default();
+                pick(id, *summed)
+            })
+            .collect()
+    };
+    let (d0, d1) = dimensions;
     let mut rows: Vec<(Option<String>, Option<String>, Vec<f64>)> = Vec::new();
-    rows.push((None, None, total));
+    rows.push((
+        None,
+        None,
+        per_measure(&total, &|id, summed| {
+            crate::execute::render::all_value(query, id, summed)
+        }),
+    ));
     for (second, values) in &by_second {
-        rows.push((None, Some((*second).to_string()), values.clone()));
+        rows.push((
+            None,
+            Some((*second).to_string()),
+            per_measure(values, &|id, summed| {
+                crate::execute::render::dimension_value(query, d1, second, id).unwrap_or(summed)
+            }),
+        ));
     }
     for (first, (first_total, seconds)) in &by_first {
-        rows.push((Some((*first).to_string()), None, first_total.clone()));
+        rows.push((
+            Some((*first).to_string()),
+            None,
+            per_measure(first_total, &|id, summed| {
+                crate::execute::render::dimension_value(query, d0, first, id).unwrap_or(summed)
+            }),
+        ));
         for (second, values) in seconds {
             rows.push((
                 Some((*first).to_string()),
@@ -2318,6 +2416,31 @@ mod tests {
             assert!(
                 !first_row.contains("MEMBER_CAPTION"),
                 "the (All) row carries the measures only: {first_row}"
+            );
+            // A cross-tab's (All)-side cells are evaluated per dimension, not
+            // summed: (All, All) is the ratio of sums and (a, All)/(All, b) the
+            // measure grouped by the other dimension.
+            let mdx_cross = "SELECT [Category].Members ON 0, [Territory].Members ON 1 FROM [Sales] \
+                 WHERE ([Measures].[Revenue per unit]) CELL PROPERTIES VALUE";
+            let (xml, _) =
+                crate::execute_builders::get_execute_cellset_response_with_backend_and_context(
+                    mdx_cross, backend, &user, config,
+                );
+            assert!(
+                xml.contains(&expected.to_string()),
+                "the (All, All) cell must be the ratio of sums ({expected}): {xml}"
+            );
+            let category = backend
+                .query_rows("SELECT DISTINCT category FROM sales_fact LIMIT 1")
+                .first()
+                .and_then(|row| row.first().cloned())
+                .unwrap_or_default();
+            let grouped = backend.query_scalar(&format!(
+                "SELECT SUM(revenue) / SUM(units) FROM sales_fact WHERE category = '{category}'"
+            ));
+            assert!(
+                xml.contains(&grouped.to_string()),
+                "(a, All) for {category} must be the grouped ratio ({grouped}): {xml}"
             );
             // Tabular cells render in the reference's G9 form.
             let rendered = format_g9(expected);

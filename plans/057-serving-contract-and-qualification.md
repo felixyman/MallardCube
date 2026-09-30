@@ -567,6 +567,25 @@ features (060), live attach and object-store intake (061), aggregate design
     the tabular branches set `level_drag` and emit none; project3 has no key
     hierarchy to test on. One mirror query decides it.
 
+- **2026-10-01 — the cross-tab family's `(All)` cells evaluated.** The audit's
+  F1 is closed for the two reachable renderers: the runtime now also injects
+  `dimension_values` — the measure grouped by each axis dimension within the
+  query's slicers, through the context-aware executor (one `GroupBy` per
+  dimension/measure, RLS-aware) — and `build_cross_tab`'s `(a, All)`/`(All, b)`
+  roll-ups and `tabular_two_dim_rows_n`'s grand-total and roll-up rows read
+  them (`render::dimension_value`, with the summed maps as fallback for direct
+  render calls). The injection gate now covers cross-tab shapes
+  (`axis_dimensions.len() >= 2 || crossjoin_axis`) in addition to the
+  drilldown kinds. Measured live on TPC-H: the tabular measure-on-columns
+  crossjoin's grand-total row is `5.00028028E-2` (was the summed cells), and
+  the regression test asserts `(All, All)`, `(a, All)` and the tabular total
+  equal the engine's grouped ratios over the fixture. Still recorded:
+  `build_multi_dim_pivot`'s per-coordinate `(All)` buckets and
+  `build_multi_measure_crossjoin`'s missing `(All)` coordinates (F3),
+  `build_drilldown_multi`/`build_drilldown_member`'s summed subtotals (F2),
+  the cost of injecting for shapes that discard it, and the unmeasured
+  key-hierarchy view.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

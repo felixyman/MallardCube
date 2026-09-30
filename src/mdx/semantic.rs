@@ -621,6 +621,12 @@ pub struct SemanticQuery {
     /// non-additive measure — measured 2026-09-30 on the reference: a ratio
     /// measure's `(All)` is the ratio of sums, not the sum of the ratios.
     pub drilldown_all_values: Vec<(String, f64)>,
+    /// Runtime-injected `(All)` support for the cross-tab family:
+    /// `(dimension, member key, measure id, value)` rows, the measure grouped
+    /// by that dimension within the query's slicers (RLS-aware). The
+    /// `(All)`-side roll-ups read these instead of summing the cells, which is
+    /// wrong for a non-additive measure (measured 2026-09-30).
+    pub dimension_values: Vec<(String, String, String, f64)>,
     /// When drilling a multi-level hierarchy, which level index to group by —
     /// one entry per `axis_dimensions` entry (`None` = leaf/physical grain).
     pub drilldown_levels: Vec<Option<usize>>,
@@ -920,6 +926,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
             measure_references: vec![],
             defined_measures: vec![],
             drilldown_all_values: vec![],
+            dimension_values: vec![],
             drilldown_levels: vec![],
             level_drag: false,
             key_hierarchy_view: None,
@@ -1385,6 +1392,7 @@ pub fn semantic_query_from_mdx(mdx: &str) -> SemanticQuery {
         access: None,
         kind,
         dim_props: parsed.dim_props.clone(),
+        dimension_values: vec![],
         time_window_set_dim,
         shape_refusal,
         dimension_member_sets: parsed.axis_dimension_members.clone(),

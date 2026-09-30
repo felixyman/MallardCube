@@ -80,7 +80,8 @@ echo "== time intelligence (flag filters) =="
 for pair in "YTD:RevenueYTD:ytd_flag" "QTD:RevenueQTD:qtd_flag" "MTD:RevenueMTD:mtd_flag"; do
   label="${pair%%:*}"; rest="${pair#*:}"; meas="${rest%%:*}"; flag="${rest#*:}"
   val="$(mdx_value "SELECT {[Measures].[$meas]} ON COLUMNS FROM [Sales]")"
-  if [ -n "$val" ] && [ "$val" -gt 0 ] 2>/dev/null && [ "$val" -lt 521586767 ] 2>/dev/null; then
+  # QTD/MTD can be 0 on the window's first days (the clock rolls over).
+  if [ -n "$val" ] && [ "$val" -ge 0 ] 2>/dev/null && [ "$val" -lt 521586767 ] 2>/dev/null; then
     echo "  PASS  Revenue$label ($flag) = $val (strict subset of total)"
     pass=$((pass + 1))
   else

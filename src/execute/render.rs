@@ -699,31 +699,33 @@ fn build_cross_tab<B: QueryBackend + ?Sized>(
             b_bucket[mi] += *value;
         }
     }
-    // (All, b) sums over dim0, (a, All) sums over dim1, (All, All) is the
-    // total. `None` means the combination has no data: the reference omits
-    // those cells (sparse cell data) instead of sending a zero, so Excel shows
-    // a blank rather than 0.
+    let measure_ids = measure_ids_for(query, &specs, &measure_members);
+    let measure_id =
+        |mi: usize| -> &str { measure_ids.get(mi).map(String::as_str).unwrap_or_default() };
+    // (All, b) is the measure grouped by dim1, (a, All) by dim0, (All, All) is
+    // the total — the injected per-dimension values supply the first two, the
+    // injected totals the third; summing the cells is only right for additive
+    // measures (measured 2026-09-30). `None` means the combination has no
+    // data: the reference omits those cells (sparse cell data) instead of
+    // sending a zero, so Excel shows a blank rather than 0.
     let cell_value = |a: Option<&str>, b: Option<&str>, mi: usize| -> Option<f64> {
         match (a, b) {
             (Some(a), Some(b)) => values_by_pair
                 .get(&(a, b))
                 .and_then(|values| values.get(mi).copied()),
-            (Some(a), None) => total_a
-                .get(a)
-                .map(|values| values.get(mi).copied().unwrap_or(0.0)),
-            (None, Some(b)) => total_b
-                .get(b)
-                .map(|values| values.get(mi).copied().unwrap_or(0.0)),
-            (None, None) => (!rows.is_empty()).then(|| {
-                all_value(
-                    query,
-                    measure_ids_for(query, &specs, &measure_members)
-                        .get(mi)
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                    grand_total[mi],
-                )
+            (Some(a), None) => dimension_value(query, &d0, a, measure_id(mi)).or_else(|| {
+                total_a
+                    .get(a)
+                    .map(|values| values.get(mi).copied().unwrap_or(0.0))
             }),
+            (None, Some(b)) => dimension_value(query, &d1, b, measure_id(mi)).or_else(|| {
+                total_b
+                    .get(b)
+                    .map(|values| values.get(mi).copied().unwrap_or(0.0))
+            }),
+            (None, None) => {
+                (!rows.is_empty()).then(|| all_value(query, measure_id(mi), grand_total[mi]))
+            }
         }
     };
 
@@ -1009,6 +1011,26 @@ fn build_drilldown_dictionary<B: QueryBackend + ?Sized>(
 /// falling back to the summed axis when nothing was injected (direct render
 /// calls in tests). The reference evaluates the measure — measured 2026-09-30:
 /// a ratio measure answers its ratio of sums at `(All)`.
+/// The injected per-dimension value for a member (`(dimension, key, measure)`)
+/// — the engine's own value for a cross-tab `(All)`-side roll-up, where
+/// summing the cells is wrong for a non-additive measure (measured
+/// 2026-09-30). `None` when the runtime injected nothing (direct render calls
+/// in tests), so callers keep their summed fallback.
+pub(crate) fn dimension_value(
+    query: &SemanticQuery,
+    dimension: &str,
+    key: &str,
+    measure_id: &str,
+) -> Option<f64> {
+    query
+        .dimension_values
+        .iter()
+        .find(|(dim, member, measure, _)| {
+            dim == dimension && member == key && measure == measure_id
+        })
+        .map(|(_, _, _, value)| *value)
+}
+
 pub(crate) fn all_value(query: &SemanticQuery, measure_id: &str, summed: f64) -> f64 {
     query
         .drilldown_all_values
