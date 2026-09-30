@@ -1209,47 +1209,10 @@ fn tabular_rowset(
     rows: Vec<Vec<String>>,
     content: RowsetContent,
 ) -> String {
-    /// The reference's element-name encoding: `[`/`]`/space (and any other
-    /// character invalid in an XML name) become `_xHHHH_` — a space is
-    /// `_x0020_`, so `[Date].[Calendar].[Full Date].[MEMBER_CAPTION]` is a
-    /// valid element (measured 2026-09-27).
-    fn escaped(name: &str) -> String {
-        let mut out = String::with_capacity(name.len());
-        for character in name.chars() {
-            match character {
-                '[' => out.push_str("_x005B_"),
-                ']' => out.push_str("_x005D_"),
-                c if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '?' | '_') => {
-                    out.push(c)
-                }
-                c => out.push_str(&format!("_x{:04X}_", c as u32)),
-            }
-        }
-        out
-    }
-
     let mut schema = String::new();
     if content.includes_schema() {
-        schema.push_str(
-            r#"              <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql" elementFormDefault="qualified">
-                <xsd:element name="root">
-                  <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
-                </xsd:element>
-"#,
-        );
-        // The reference's schema preamble (measured 2026-09-27): the `uuid`
-        // and `xmlDocument` helper types ride along even when unused — as
-        // *siblings* of the row type, before it. Nesting them inside the row
-        // sequence is invalid XSD and MSOLAP refuses the whole response
-        // ("xsd:restriction … cannot appear under …/complexType/sequence/(any)",
-        // measured 2026-09-30 while validating in Excel).
-        schema.push_str(
-            r#"                <xsd:simpleType name="uuid"><xsd:restriction base="xsd:string"><xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/></xsd:restriction></xsd:simpleType>
-                <xsd:complexType name="xmlDocument"><xsd:sequence><xsd:any/></xsd:sequence></xsd:complexType>
-                <xsd:complexType name="row">
-                  <xsd:sequence>
-"#,
-        );
+        schema.push_str(crate::xmla::response::ROWSET_SCHEMA_PREAMBLE);
+        schema.push_str(crate::xmla::response::ROWSET_SCHEMA_ROW_OPEN);
         for (column, is_measure) in &columns {
             // A member column is typed `xsd:string`; a measure carries no type
             // (its cells tag `xsi:type="xsd:double"`), as the reference does.
@@ -1261,10 +1224,10 @@ fn tabular_rowset(
             schema.push_str(&format!(
                 "                    <xsd:element sql:field=\"{}\" name=\"{}\"{column_type} minOccurs=\"0\"/>\n",
                 crate::response::xml_escape(column),
-                escaped(column)
+                crate::xmla::response::encoded_element_name(column)
             ));
         }
-        schema.push_str("                  </xsd:sequence>\n                </xsd:complexType>\n              </xsd:schema>\n");
+        schema.push_str(crate::xmla::response::ROWSET_SCHEMA_CLOSE);
     }
 
     let mut body = String::new();
@@ -1276,7 +1239,7 @@ fn tabular_rowset(
                 if value.is_empty() {
                     continue;
                 }
-                let name = escaped(column);
+                let name = crate::xmla::response::encoded_element_name(column);
                 let attribute = if *typed {
                     " xsi:type=\"xsd:double\""
                 } else {
@@ -1947,5 +1910,37 @@ mod tests {
         assert!(!user_is_restricted(&config, &unrelated));
 
         assert!(!user_is_restricted(&config, &UserContext::admin_default()));
+    }
+
+    /// The schema must place the helper types as siblings *before* the row
+    /// complexType: nesting them inside the row sequence is invalid XSD and
+    /// made MSOLAP reject every tabular response (measured 2026-09-30).
+    #[test]
+    fn rowset_schema_helper_types_are_siblings_of_row() {
+        let xml = tabular_rowset(
+            vec![
+                ("[Date].[Calendar].[Year].[MEMBER_CAPTION]".into(), false),
+                ("[Measures].[Revenue]".into(), true),
+            ],
+            vec![vec!["1992".into(), "3.1E9".into()]],
+            RowsetContent::SchemaData,
+        );
+        let schema = &xml[xml.find("<xsd:schema").expect("schema")..];
+        let root = schema.find("name=\"root\"").expect("root");
+        let uuid = schema.find("name=\"uuid\"").expect("uuid");
+        let xml_document = schema.find("name=\"xmlDocument\"").expect("xmlDocument");
+        let row = schema
+            .find("<xsd:complexType name=\"row\">")
+            .expect("row type");
+        assert!(
+            root < uuid && uuid < xml_document && xml_document < row,
+            "helper types must precede the row type: {schema}"
+        );
+        assert!(
+            xml.contains(
+                "_x005B_Date_x005D_._x005B_Calendar_x005D_._x005B_Year_x005D_._x005B_MEMBER_CAPTION_x005D_"
+            ),
+            "{xml}"
+        );
     }
 }

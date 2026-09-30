@@ -107,6 +107,49 @@ pub fn empty_discover_response() -> String {
 /// The rowset envelope split into `<rows>`-less halves: everything up to where
 /// the row elements start, and the closing tags. Callers that write rows
 /// incrementally (plan 051-C) avoid building a second full copy of the payload.
+/// The reference's rowset-schema preamble: the root element, then the `uuid`
+/// and `xmlDocument` helper types every reference rowset schema carries — as
+/// *siblings* of the row type, before it (measured 2026-09-28).
+///
+/// Nesting them inside the row type's sequence is invalid XSD; MSOLAP then
+/// rejects the whole response ("xsd:restriction … cannot appear under
+/// …/complexType/sequence/(any)", measured 2026-09-30 while validating the
+/// TPC-H model from Excel/ADODB).
+pub(crate) const ROWSET_SCHEMA_PREAMBLE: &str = r#"              <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql" elementFormDefault="qualified">
+                <xsd:element name="root">
+                  <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
+                </xsd:element>
+                <xsd:simpleType name="uuid"><xsd:restriction base="xsd:string"><xsd:pattern value="[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}"/></xsd:restriction></xsd:simpleType>
+                <xsd:complexType name="xmlDocument"><xsd:sequence><xsd:any/></xsd:sequence></xsd:complexType>
+"#;
+
+/// The row complexType opening, written after [`ROWSET_SCHEMA_PREAMBLE`] and
+/// before the column elements.
+pub(crate) const ROWSET_SCHEMA_ROW_OPEN: &str = r#"                <xsd:complexType name="row">
+                  <xsd:sequence>
+"#;
+
+/// The row complexType and schema closing.
+pub(crate) const ROWSET_SCHEMA_CLOSE: &str = r#"                  </xsd:sequence>
+                </xsd:complexType>
+              </xsd:schema>
+"#;
+
+/// Encode a column name as an XML element name the way the reference does:
+/// `[`/`]` and every other non-name character become `_xHHHH_`.
+pub(crate) fn encoded_element_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for character in name.chars() {
+        match character {
+            c if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '?' | '_') => {
+                out.push(c)
+            }
+            c => out.push_str(&format!("_x{:04X}_", c as u32)),
+        }
+    }
+    out
+}
+
 pub fn discover_rowset_parts(extra_schema: &str, row_fields: &str) -> (String, String) {
     // Every reference rowset schema carries the `uuid` and `xmlDocument`
     // helper types (measured 2026-09-28). A caller-supplied `uuid` — the

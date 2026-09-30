@@ -244,7 +244,7 @@ fn build_drillthrough_rowset(
         xml_rows.push_str("          <row>\n");
         for (i, col) in col_names.iter().enumerate() {
             let val = row.get(i).map(|s| s.as_str()).unwrap_or("");
-            let safe_col = col.replace(' ', "_x0020_").replace('.', "_x002E_");
+            let safe_col = crate::xmla::response::encoded_element_name(col);
             xml_rows.push_str(&format!(
                 "            <{safe_col}>{}</{safe_col}>\n",
                 crate::response::xml_escape(val),
@@ -254,26 +254,20 @@ fn build_drillthrough_rowset(
     }
 
     let mut schema = String::new();
-    schema.push_str(r#"              <xsd:schema targetNamespace="urn:schemas-microsoft-com:xml-analysis:rowset" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql" elementFormDefault="qualified">
-                <xsd:element name="root">
-                  <xsd:complexType><xsd:sequence minOccurs="0" maxOccurs="unbounded"><xsd:element name="row" type="row"/></xsd:sequence></xsd:complexType>
-                </xsd:element>
-                <xsd:complexType name="row">
-                  <xsd:sequence>
-"#);
+    // Every reference rowset schema carries the `uuid` and `xmlDocument`
+    // helper types as siblings before the row type (measured 2026-09-28);
+    // the drillthrough rowset is what Excel reads on a double-click, so it
+    // uses the same shared preamble as the tabular cellset.
+    schema.push_str(crate::xmla::response::ROWSET_SCHEMA_PREAMBLE);
+    schema.push_str(crate::xmla::response::ROWSET_SCHEMA_ROW_OPEN);
     for col in col_names {
-        let safe_col = col.replace(' ', "_x0020_").replace('.', "_x002E_");
         schema.push_str(&format!(
-            r#"                    <xsd:element sql:field="{col}" name="{safe_col}" type="xsd:string" minOccurs="0"/>
-"#,
+            "                    <xsd:element sql:field=\"{}\" name=\"{}\" type=\"xsd:string\" minOccurs=\"0\"/>\n",
+            crate::response::xml_escape(col),
+            crate::xmla::response::encoded_element_name(col),
         ));
     }
-    schema.push_str(
-        r#"                  </xsd:sequence>
-                </xsd:complexType>
-              </xsd:schema>
-"#,
-    );
+    schema.push_str(crate::xmla::response::ROWSET_SCHEMA_CLOSE);
 
     let inner = format!(
         r#"    <ExecuteResponse xmlns="urn:schemas-microsoft-com:xml-analysis">
@@ -6634,5 +6628,25 @@ mod tests {
                 "must not return the unfiltered grand total"
             );
         });
+    }
+
+    /// The drillthrough rowset — what Excel reads on a pivot double-click —
+    /// carries the same schema preamble as the tabular cellset: the helper
+    /// types as siblings before the row complexType (measured 2026-09-30).
+    #[test]
+    fn drillthrough_rowset_carries_the_helper_types() {
+        let xml = crate::execute::dispatch::get_execute_drillthrough_response(
+            "DRILLTHROUGH SELECT ([Date].[Calendar].[Year].&[2024]) ON COLUMNS FROM [Sales] CELL PROPERTIES VALUE",
+            Backend::test_fixture(),
+        );
+        let uuid = xml.find("name=\"uuid\"").expect("uuid");
+        let xml_document = xml.find("name=\"xmlDocument\"").expect("xmlDocument");
+        let row = xml
+            .find("<xsd:complexType name=\"row\">")
+            .expect("row type");
+        assert!(
+            uuid < xml_document && xml_document < row,
+            "helper types must precede the row type: {xml}"
+        );
     }
 }

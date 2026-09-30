@@ -416,7 +416,22 @@ features (060), live attach and object-store intake (061), aggregate design
   client-side and a ratio's total shows the sum of its children (0.35 instead
   of 0.05). Also observed: `Execute` with a `SELECT * FROM $SYSTEM…` statement
   is not supported (the parser rejects it as MDX); Excel does not need it, DMV
-  tooling does. Next: fix the drilldown `(All)` shape with the measured
+  tooling does.
+  Review round on the XSD fix corrected the record and closed three gaps: the
+  Excel *pivot* actually used the Native cellset format (8 Native requests in
+  the proxy log), so the fix repaired the **tabular** path that ADODB and
+  tabular consumers use — Excel's own path was structurally sound and likely
+  worked all along (unverified before the fix). The parity case for the
+  drilldown gap was mis-wired (`kind: execute` without `format: tabular`, so
+  the harness observed cell counts and the gap could never self-heal) — fixed.
+  The drillthrough rowset (what Excel reads on a double-click) lacked the
+  helper types, interpolated `sql:field` unescaped (a column like `Qty & Units`
+  would have produced malformed XML) and used a partial element-name encoder —
+  all three fixed via a shared preamble/encoder, with structural tests for
+  both the tabular cellset and the drillthrough rowset. Still recorded:
+  drillthrough and Multidimensional cellsets ignore `Content` (a `Content=Schema`
+  request gets rows anyway — fails open, not wrong), and the `(All)`-member
+  drilldown gap itself. Next: fix the drilldown `(All)` shape with the measured
   reference comparison, then the explicit-YAML generator.
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
