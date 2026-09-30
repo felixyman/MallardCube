@@ -380,9 +380,16 @@ features (060), live attach and object-store intake (061), aggregate design
   need a query body (a self-named `SELECT * FROM raw.<table>` works), and
   MallardCube serves bare table names, so materialised models must land in the
   connection's default schema (`main`); the overlay's declared-source path
-  needed the model-name → table resolution this trial exposed (fixed). Next:
-  the same run at SF=1 for the qualifier's scale behaviour, then explicit YAML
-  (dbt deferred per the user).
+  needed the model-name → table resolution this trial exposed (fixed).
+  SF=1 (6,001,215 line items): dbgen 12 s, materialise 9 s,
+  `contract generate --check` byte-identical, `qualify --contract` READY in
+  11.2 s (SF=0.1: 2.3 s), and the pivot matches SQL again (1992
+  `33,009,798,732.77`, 1998 `19,433,822,171.60`; `Revenue YTD` = the 1998
+  slice). Recorded gap, found only with real data: a windowed measure over a
+  period with no matching rows renders `0` where the reference returns an
+  empty cell (Excel blank) — the value path carries `f64`, not `Option<f64>`;
+  deserves its own slice with a reference measurement of the empty-cell
+  encoding. Next: explicit YAML (dbt deferred per the user).
 
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every

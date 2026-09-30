@@ -48,3 +48,19 @@ the same shape at ten times the size.
 The checker also confirmed the wiring end to end: the checked-in
 `contract.yaml` is byte-stable (`--check`), and `proxy-config.yaml` is the
 projection of it.
+
+## SF=1 (2026-09-30)
+
+dbgen 12 s, SQLMesh materialise 9 s for 6,001,215 fact rows.
+
+- `contract generate --check` still matches byte for byte: the contract is
+  data-independent.
+- `qualify --contract` is READY in **11.2 s** (SF=0.1: 2.3 s).
+- The pivot matches the SQL oracle again: 1992 revenue `33,009,798,732.77`,
+  1998 `19,433,822,171.60`; `Revenue YTD` is the 1998 slice and zero for the
+  earlier years.
+- **Recorded gap** (visible only with real data): a windowed measure over a
+  period with no matching rows returns `0`, where the reference returns an
+  empty cell and Excel shows blank — the value path carries `f64`, not
+  `Option<f64>`. Recorded in plan 057 for a slice of its own, with a reference
+  measurement of the empty-cell encoding.
