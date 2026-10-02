@@ -2132,15 +2132,23 @@ mod tests {
             };
             let all = run("");
             assert_eq!(all.matches("<row>").count(), 132, "every month is a row");
+            // The months with facts depend on the generated dates (the clock
+            // moves the span), so derive the expectation from the fact table.
+            let with_facts = Backend::test_fixture()
+                .query_rows("SELECT COUNT(DISTINCT CAST(date_key / 100 AS BIGINT)) FROM sales_fact")
+                .first()
+                .and_then(|row| row.first().cloned())
+                .and_then(|value| value.parse::<usize>().ok())
+                .expect("a month count");
             assert_eq!(
                 all.matches("xsi:type=\"xsd:double\"").count(),
-                81,
+                with_facts,
                 "only the months with facts carry the measure"
             );
             let non_empty = run("NON EMPTY ");
             assert_eq!(
                 non_empty.matches("<row>").count(),
-                81,
+                with_facts,
                 "NON EMPTY keeps the fact-driven rows"
             );
         });

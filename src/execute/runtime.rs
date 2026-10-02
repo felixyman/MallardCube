@@ -2261,13 +2261,14 @@ mod tests {
             };
 
             for mdx in [
-                // Axis, slicer, a second slicer measure, a mixed set, a filter
-                // predicate, a subselect and a named `[Measures].[All]`.
+                // Axis, slicer, a second slicer measure, a mixed set, a
+                // subselect and a named `[Measures].[All]`. A *measure filter*
+                // in the slicer is refused earlier (its own refusal — measured
+                // 2026-10-03), so it is asserted separately below.
                 "SELECT {[Measures].[Bogus]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
                 "SELECT [Date].[Calendar].[Year].Members ON 0 FROM [Sales] WHERE ([Measures].[Nope])",
                 "SELECT [Date].[Calendar].[Year].Members ON 0 FROM [Sales] WHERE ([Measures].[Revenue],[Measures].[Bogus])",
                 "SELECT {[Measures].[Revenue],[Measures].[Bogus],[Measures].[Units]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
-                "SELECT {[Measures].[Revenue]} ON 0, NON EMPTY [Date].[Calendar].[Year].Members ON 1 FROM [Sales] WHERE Filter([Date].[Calendar].[Year].Members, [Measures].[Bogus] > 5)",
                 "SELECT {[Measures].[Revenue]} ON 0 FROM (SELECT {[Measures].[Bogus]} ON 0 FROM [Sales])",
                 "SELECT {[Measures].[All]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
             ] {
@@ -2308,6 +2309,17 @@ mod tests {
                 assert!(!response.contains("faultstring"), "{mdx}\n{response}");
                 assert!(response.contains(wanted), "{mdx}\n{response}");
             }
+
+            // A measure predicate inside a slicer `Filter` is refused (the
+            // lowering never reached the slicer — measured 2026-10-03).
+            let response = execute(
+                "SELECT {[Measures].[Revenue]} ON 0, NON EMPTY [Date].[Calendar].[Year].Members ON 1 FROM [Sales] WHERE Filter([Date].[Calendar].[Year].Members, [Measures].[Bogus] > 5)",
+            );
+            assert!(
+                response.contains("faultstring")
+                    && response.contains("measure filters in a WHERE clause"),
+                "{response}"
+            );
 
             // The drillthrough route bypasses the cellset path; it carries the
             // same refusal.

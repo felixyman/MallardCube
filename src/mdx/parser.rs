@@ -95,6 +95,18 @@ pub fn unsupported_features(mdx: &str) -> Option<String> {
                 .into(),
         );
     }
+    // A measure predicate in the *slicer* (`WHERE Filter(<set>, [Measures].[X]
+    // > n)`) is dropped: the axis only lowers measure filters, so the members
+    // came back unfiltered while Excel showed the filter as applied (measured
+    // 2026-09-30). The reference filters; faulting beats the silent wrong
+    // answer (the same rule as the label filters above).
+    if fe::slicer_measure_filter_count(&sel) > 0 {
+        return Some(
+            "measure filters in a WHERE clause (`WHERE Filter(<set>, [Measures].[X] > n)`) are \
+             not supported yet — use a value filter on the axis or Keep Only Selected Items"
+                .into(),
+        );
+    }
     // Member ranges inside a quoted calculated-member body (`COUNT({a : b})`)
     // are not handled yet; axis and slicer ranges are.
     if fe::bodies_contain_range(&sel) {
@@ -1177,7 +1189,6 @@ mod tests {
             "SELECT [Category].[Category].Members ON ROWS, {[Measures].[Revenue]} ON COLUMNS FROM [Sales]",
             "SELECT {HEAD([Date].[Calendar].[Year].Members,1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
             "WITH MEMBER [Measures].[XL_SD] AS 'COUNT([Date].[Calendar].[Year].Members)' SELECT {[Measures].[XL_SD]} ON 0 FROM [Sales]",
-            "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)",
             // Excel's Label Filters lower to caption predicates.
             "SELECT NON EMPTY Hierarchize({Filter({DrilldownLevel({[Category].[Category].[All]},,,INCLUDE_CALC_MEMBERS)}, InStr([Category].[Category].CurrentMember.MEMBER_CAPTION, \"Bo\") > 0)}) ON COLUMNS FROM [Sales] WHERE ([Measures].[Revenue])",
             "SELECT {HEAD({[Date].[Calendar].[Year].&[2022] : [Date].[Calendar].[Year].&[2024]},1)} ON 0 FROM [Sales] CELL PROPERTIES CELL_ORDINAL",
@@ -1192,6 +1203,20 @@ mod tests {
         ] {
             assert!(unsupported_features(mdx).is_none(), "false positive: {mdx}");
         }
+
+        // The *axis* measure filter lowers (`Filter(<set>, [Measures].[X] >
+        // n)` on an axis); the same predicate in the **slicer** was expected to
+        // lower but never did — measured 2026-10-03: `WHERE Filter(<set>,
+        // [Measures].[Revenue] > 3200000000)` answered every member, identical
+        // to no filter. It faults now instead of answering unfiltered.
+        assert!(
+            unsupported_features(
+                "SELECT {[Measures].[Revenue]} ON 0 FROM [Sales] \
+                 WHERE FILTER([Category].[Category].Members, [Measures].[Revenue] > 100)"
+            )
+            .is_some(),
+            "a slicer measure filter must be refused, not dropped"
+        );
     }
 
     #[test]
@@ -1444,5 +1469,33 @@ mod set_expr_tests {
             parse_calculated_count(&crate::mdx::frontend::parse_select(mdx).expect("parse")),
             None
         );
+    }
+
+    /// A measure predicate inside a WHERE-clause `Filter` used to be dropped —
+    /// the members came back unfiltered (measured 2026-09-30); it faults now.
+    #[test]
+    fn slicer_measure_filters_fault_instead_of_being_dropped() {
+        let mdx = "SELECT {[Measures].[Revenue]} ON 0, NON EMPTY \
+             [Date].[Calendar].[Year].Members ON 1 FROM [Sales] \
+             WHERE Filter([Date].[Calendar].[Year].Members, [Measures].[Revenue] > 3200000000)";
+        let reason = crate::mdx::parser::unsupported_features(mdx);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|r| r.contains("measure filters in a WHERE clause")),
+            "{reason:?}"
+        );
+
+        // A slicer without such a filter, and a measure filter on an *axis*
+        // (which lowers), stay accepted.
+        for accepted in [
+            "SELECT {[Measures].[Revenue]} ON 0, [Date].[Calendar].[Year].Members ON 1 FROM [Sales]",
+            "SELECT Filter([Date].[Calendar].[Year].Members, [Measures].[Revenue] > 3200000000) ON 0 FROM [Sales]",
+        ] {
+            assert!(
+                crate::mdx::parser::unsupported_features(accepted).is_none(),
+                "{accepted}"
+            );
+        }
     }
 }

@@ -586,6 +586,22 @@ features (060), live attach and object-store intake (061), aggregate design
   the cost of injecting for shapes that discard it, and the unmeasured
   key-hierarchy view.
 
+- **2026-10-03 — a measure filter in a WHERE clause faults instead of being
+  dropped.** Measured on the demo proxy: `WHERE Filter(<set>,
+  [Measures].[Revenue] > 3200000000)` answered every member (byte-identical to
+  the same statement without the filter) while Excel shows the filter as
+  applied — a silent wrong answer. The *axis* case lowers to a SQL value filter
+  (`unsupported_filter_count` treats measure-vs-number as lowered); the
+  *slicer* case kept only member restrictions and dropped the predicate. Per
+  the label-filter precedent ("faulting beats returning the unfiltered set
+  while Excel shows the filter as applied"), the statement now faults:
+  "measure filters in a WHERE clause (`WHERE Filter(<set>, [Measures].[X] >
+  n)`) are not supported yet — use a value filter on the axis or Keep Only
+  Selected Items". `frontend::slicer_measure_filter_count` is the check; a
+  parser test pins the refusal and the accepted shapes (a plain slicer, an
+  axis measure filter). Lowering the slicer case for real is a feature, not
+  this slice.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

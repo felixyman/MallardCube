@@ -2003,6 +2003,38 @@ pub fn label_filters(sel: &Select) -> Vec<(String, crate::mdx::ast::LabelFilter)
 /// showed the filter as applied (plan 048). `Member_Value`/`Member_Key`
 /// comparisons lower to date windows; measure-vs-number comparisons lower to
 /// SQL value filters.
+/// `Filter(<set>, <condition>)` calls in the **slicer** whose condition
+/// references a measure.
+///
+/// The axis case lowers to a SQL value filter (see
+/// [`unsupported_filter_count`]), but a WHERE-clause filter is dropped: the
+/// slicer keeps only member restrictions, so the axis comes back unfiltered
+/// while Excel shows the filter as applied — measured 2026-09-30:
+/// `WHERE Filter(<set>, [Measures].[Revenue] > 3200000000)` answered every
+/// member. Faulting beats that (the same rule as the label filters).
+pub fn slicer_measure_filter_count(sel: &Select) -> usize {
+    let mut count = 0;
+    if let Some(where_clause) = &sel.where_clause {
+        walk_expr(where_clause, &mut |e| {
+            if let Expr::Call { name, args } = e
+                && name.eq_ignore_ascii_case("Filter")
+                && args.iter().any(|arg| {
+                    let mut found = false;
+                    walk_expr(arg, &mut |inner| {
+                        if matches!(inner, Expr::Measure(_)) {
+                            found = true;
+                        }
+                    });
+                    found
+                })
+            {
+                count += 1;
+            }
+        });
+    }
+    count
+}
+
 pub fn unsupported_filter_count(sel: &Select) -> usize {
     fn is_member_property(e: &Expr) -> bool {
         e.as_member().is_some_and(|m| {
