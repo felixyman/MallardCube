@@ -602,6 +602,16 @@ features (060), live attach and object-store intake (061), aggregate design
   axis measure filter). Lowering the slicer case for real is a feature, not
   this slice.
 
+- **2026-10-03 — the `(All)` injection skips shapes that never read it.** The
+  audit's cost note: the injection ran for every drill/cross-tab shape,
+  including explicit *level* sets (a field-list level drag), where no renderer
+  emits an `(All)` row — one aggregate per measure computed and discarded. The
+  gate now skips those, except the key-hierarchy view (which adds its own
+  `(All)`) and cross-tabs (whose `build_cross_tab` emits `(All)` coordinates
+  for every dimension, so skipping would reintroduce the summed ratios there).
+  The level-set tests — 132-row month enumeration with sparse measures, the
+  dimension-set `(All)` row, both tabular branches — pass unchanged.
+
 - **2026-09-25 — section C, first slice: a failed query can no longer look
   like a number.** `Backend` records the first failure per connection in every
   query method (`query_scalar`, `query_count`, `query_grouped_1d`, `pairs`,

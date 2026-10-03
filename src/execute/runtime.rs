@@ -410,9 +410,18 @@ pub(crate) fn get_execute_response_with_format_and_cache<B: QueryBackend + ?Size
     // The cross-tab family (measures against two dimensions) rolls its
     // `(All)`-side cells up per dimension, so it needs the grouped values too.
     let cross_tab_shaped = query.axis_dimensions.len() >= 2 || query.crossjoin_axis;
+    // A *level* set (a field-list level drag) emits no `(All)` row — the
+    // native dictionary path skips it for `level_drag` — except in the
+    // key-hierarchy view, which adds its own. Computing values that no
+    // consumer reads is pure cost, so skip those shapes (review cost note,
+    // 2026-10-01). Cross-tabs never skip: `build_cross_tab` emits `(All)`
+    // coordinates for every dimension whatever the drag.
+    let level_set_only =
+        query.level_drag && query.key_hierarchy_view.is_none() && !cross_tab_shaped;
     if !matches!(plan, crate::engine::plan::QueryPlan::Empty)
         && query.axis_set_op.is_none()
         && (drill_shaped || cross_tab_shaped)
+        && !level_set_only
     {
         query.drilldown_all_values = drilldown_all_values(&query, model, user, config, backend);
         if cross_tab_shaped {
